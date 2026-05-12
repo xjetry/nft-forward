@@ -1,0 +1,77 @@
+{{template "header" (mkmap "Title" "概览" "User" .User "Flash" .Flash)}}
+<h1>概览</h1>
+<div class="section-split">
+<div class="card">
+<h2>节点（{{len .Nodes}}）</h2>
+{{if .Nodes}}
+<table>
+<thead><tr><th>名称</th><th>地址</th><th>状态</th></tr></thead>
+<tbody>
+{{range .Nodes}}
+<tr>
+<td><a href="/nodes/{{.ID}}">{{.Name}}</a></td>
+<td class="mono">{{.Address}}</td>
+<td>
+{{if .Disabled}}<span class="pill warn">禁用</span>
+{{else if nullstr .LastError}}<span class="pill err">错误</span>
+{{else if .LastApplyAt.Valid}}<span class="pill ok">在线</span>
+{{else}}<span class="pill warn">未同步</span>{{end}}
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">无</div>{{end}}
+</div>
+<div class="card">
+<h2>用户（{{len .Tenants}}）</h2>
+{{if .Tenants}}
+<table>
+<thead><tr><th>名称</th><th>已用 / 配额</th><th>状态</th></tr></thead>
+<tbody>
+{{range .Tenants}}
+<tr>
+<td><a href="/tenants/{{.ID}}">{{.Name}}</a></td>
+<td>{{div .TrafficUsedBytes 1048576}} / {{if eq .TrafficQuotaBytes 0}}∞{{else}}{{div .TrafficQuotaBytes 1048576}}{{end}} MB</td>
+<td>{{if .Disabled}}<span class="pill warn">禁用</span>{{else}}<span class="pill ok">正常</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">无</div>{{end}}
+</div>
+</div>
+
+<div class="section-split">
+<div class="card">
+<h2>通道（{{len .Tunnels}}）</h2>
+{{if .Tunnels}}
+<table>
+<thead><tr><th>名称</th><th>节点</th><th>端口段</th></tr></thead>
+<tbody>
+{{range .Tunnels}}<tr><td>{{.Name}}</td><td>#{{.NodeID}}</td><td class="mono">{{.PortStart}}-{{.PortEnd}}</td></tr>{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">无</div>{{end}}
+</div>
+<div class="card">
+<h2>转发（{{len .Forwards}}）</h2>
+{{if .Forwards}}
+<table>
+<thead><tr><th>节点</th><th>用户</th><th>协议</th><th>监听</th><th>目标</th></tr></thead>
+<tbody>
+{{range .Forwards}}
+<tr>
+<td>#{{.NodeID}}</td>
+<td>{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}admin{{end}}</td>
+<td>{{upper .Proto}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">无</div>{{end}}
+</div>
+</div>
+{{template "footer" .}}

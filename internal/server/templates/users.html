@@ -1,0 +1,28 @@
+{{template "header" (mkmap "Title" "用户" "User" .User "Flash" .Flash)}}
+<h1>用户</h1>
+<div class="card">
+<h2>账号列表</h2>
+<table>
+<thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>用户记录</th><th>状态</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Users}}
+<tr>
+<td>{{.ID}}</td>
+<td>{{.Username}}</td>
+<td>{{.Role}}</td>
+<td>{{if .TenantID.Valid}}{{with index $.TenantByID .TenantID.Int64}}{{.Name}}{{end}}{{else}}—{{end}}</td>
+<td>{{if .Disabled}}<span class="pill warn">禁用</span>{{else}}<span class="pill ok">正常</span>{{end}}</td>
+<td>
+{{if ne .ID $.User.ID}}
+<form method="post" action="/users/{{.ID}}/toggle" class="inline"><button class="ghost" type="submit">{{if .Disabled}}启用{{else}}禁用{{end}}</button></form>
+<form method="post" action="/users/{{.ID}}/reset-password" class="inline" onsubmit="return confirm('重置该用户密码？新密码会一次性显示。');"><button class="ghost" type="submit">重置密码</button></form>
+<form method="post" action="/users/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该账号？若是用户记录账号且为其唯一账号，用户记录与转发会一并清除。');"><button class="danger" type="submit">删除</button></form>
+{{else}}<span style="color:#86868b">(当前用户)</span>{{end}}
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+<p style="color:#86868b;font-size:13px;margin-top:8px">用户记录账号在 <a href="/tenants">用户记录详情页</a>创建。Admin 账号需直接通过 CLI 或 SQL 添加（仅 admin 自身可登录管理后台）。</p>
+</div>
+{{template "footer" .}}

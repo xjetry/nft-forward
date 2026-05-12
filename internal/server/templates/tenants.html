@@ -1,0 +1,42 @@
+{{template "header" (mkmap "Title" "用户" "User" .User "Flash" .Flash)}}
+<h1>用户</h1>
+
+<div class="card">
+<h2>用户列表</h2>
+<p style="color:#86868b;font-size:13px;margin:-4px 0 12px">一个用户对应一份配额与可授权的通道。下方"新建用户"会自动创建相应账号入口。</p>
+{{if .Tenants}}
+<table>
+<thead><tr><th>ID</th><th>名称</th><th>最大转发</th><th>流量配额</th><th>已用</th><th>状态</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Tenants}}
+<tr>
+<td>{{.ID}}</td>
+<td><a href="/tenants/{{.ID}}">{{.Name}}</a></td>
+<td>{{.MaxForwards}}</td>
+<td>{{if eq .TrafficQuotaBytes 0}}∞{{else}}{{div .TrafficQuotaBytes 1048576}} MB{{end}}</td>
+<td>{{div .TrafficUsedBytes 1048576}} MB</td>
+<td>
+{{if .Disabled}}<span class="pill warn" title="{{nullstr .DisableReason}}">已禁用</span>
+{{else}}<span class="pill ok">正常</span>{{end}}
+</td>
+<td><a href="/tenants/{{.ID}}"><button class="ghost" type="button">详情</button></a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">暂无用户。</div>{{end}}
+</div>
+
+<div class="card">
+<h2>新建用户</h2>
+<form method="post" action="/tenants">
+<div class="grid">
+<label>名称</label><input name="name" required placeholder="例如 acme">
+<label>最大转发数</label><input type="number" name="max_forwards" min="1" value="100">
+<label>流量配额(MB)</label><input type="number" name="traffic_quota_mb" min="0" value="0" placeholder="0 = 不限">
+</div>
+<div style="margin-top:12px"><button type="submit">创建</button></div>
+<p style="color:#86868b;font-size:13px;margin-top:8px">配额为 0 时不限制；超额后用户自动禁用并清空内核规则。</p>
+</form>
+</div>
+{{template "footer" .}}

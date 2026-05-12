@@ -1,0 +1,84 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    image: nft-forward-server:test
+    container_name: nftf-server
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command:
+      - "--addr=:8080"
+      - "--bootstrap-admin-password=admin123"
+    ports:
+      - "18080:8080"
+    networks:
+      - nftf
+
+  agent1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+    image: nft-forward-agent:test
+    container_name: nftf-agent1
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    environment:
+      - NODE_TOKEN=token_agent1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command:
+      - "--listen=:7878"
+      - "--token=token_agent1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    networks:
+      nftf:
+        aliases:
+          - agent1
+
+  agent2:
+    image: nft-forward-agent:test
+    container_name: nftf-agent2
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    environment:
+      - NODE_TOKEN=token_agent2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    command:
+      - "--listen=:7878"
+      - "--token=token_agent2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    depends_on:
+      - agent1
+    networks:
+      nftf:
+        aliases:
+          - agent2
+
+  agent3:
+    image: nft-forward-agent:test
+    container_name: nftf-agent3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    environment:
+      - NODE_TOKEN=token_agent3_cccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    command:
+      - "--listen=:7878"
+      - "--token=token_agent3_cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    depends_on:
+      - agent1
+    networks:
+      nftf:
+        aliases:
+          - agent3
+
+networks:
+  nftf:
+    driver: bridge

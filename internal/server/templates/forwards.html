@@ -1,0 +1,52 @@
+{{template "header" (mkmap "Title" "转发" "User" .User "Flash" .Flash)}}
+<h1>所有转发规则</h1>
+
+<div class="card">
+<h2>当前规则</h2>
+{{if .Forwards}}
+<table>
+<thead><tr><th>ID</th><th>节点</th><th>用户</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Forwards}}
+<tr>
+<td>{{.ID}}</td>
+<td>#{{.NodeID}}</td>
+<td>{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}<span style="color:#86868b">admin</span>{{end}}</td>
+<td>{{if .TunnelID.Valid}}#{{.TunnelID.Int64}}{{else}}—{{end}}</td>
+<td>{{upper .Proto}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+<td>{{.TotalBytes}}</td>
+<td>{{.Comment}}</td>
+<td>
+<form method="post" action="/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除该转发？');"><button class="danger" type="submit">删除</button></form>
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">暂无转发规则。</div>{{end}}
+</div>
+
+<div class="card">
+<h2>添加转发（管理员快速通道，无 tenant 约束）</h2>
+{{if .Nodes}}
+<form method="post" action="/forwards">
+<div class="grid">
+<label>节点</label>
+<select name="node_id" required>
+{{range .Nodes}}<option value="{{.ID}}">{{.Name}} (#{{.ID}})</option>{{end}}
+</select>
+<label>协议</label>
+<select name="proto" required><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+<label>监听端口</label><input type="number" name="listen_port" min="1" max="65535" required>
+<label>目标 IPv4</label><input name="target_ip" required>
+<label>目标端口</label><input type="number" name="target_port" min="1" max="65535" required>
+<label>备注</label><input name="comment" placeholder="可选">
+</div>
+<div style="margin-top:12px"><button type="submit">添加</button></div>
+<p style="color:#86868b;font-size:13px;margin-top:8px">用户自助添加请用 <a href="/tenants">用户面板</a>。</p>
+</form>
+{{else}}<div class="empty">请先<a href="/nodes">添加节点</a>。</div>{{end}}
+</div>
+{{template "footer" .}}

@@ -1,0 +1,16 @@
+{{template "header" (mkmap "Title" "登录" "Flash" .Flash)}}
+<div class="card" style="max-width:360px;margin:60px auto;">
+<h1>登录 nft-forward 面板</h1>
+<form method="post" action="/login">
+<div class="grid">
+<label for="username">用户名</label>
+<input name="username" id="username" required autofocus>
+<label for="password">密码</label>
+<input name="password" id="password" type="password" required>
+</div>
+<div style="margin-top:16px;text-align:right;">
+<button type="submit">登录</button>
+</div>
+</form>
+</div>
+{{template "footer" .}}

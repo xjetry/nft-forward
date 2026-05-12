@@ -1,0 +1,45 @@
+{{template "header" (mkmap "Title" "节点" "User" .User "Flash" .Flash)}}
+<h1>节点</h1>
+
+<div class="card">
+<h2>已注册节点</h2>
+{{if .Nodes}}
+<table>
+<thead><tr><th>ID</th><th>名称</th><th>地址</th><th>最近同步</th><th>状态</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Nodes}}
+<tr>
+<td>{{.ID}}</td>
+<td><a href="/nodes/{{.ID}}">{{.Name}}</a></td>
+<td class="mono">{{.Address}}</td>
+<td>{{unix .LastApplyAt}}</td>
+<td>
+{{if .Disabled}}<span class="pill warn">禁用</span>
+{{else if nullstr .LastError}}<span class="pill err" title="{{nullstr .LastError}}">错误</span>
+{{else if .LastApplyAt.Valid}}<span class="pill ok">已同步</span>
+{{else}}<span class="pill warn">待同步</span>{{end}}
+</td>
+<td>
+<form method="post" action="/nodes/{{.ID}}/resync" class="inline"><button class="ghost" type="submit">重新同步</button></form>
+<form method="post" action="/nodes/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除节点 {{.Name}}？此操作会清空节点上的转发。');"><button class="danger" type="submit">删除</button></form>
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">尚未注册任何节点。</div>{{end}}
+</div>
+
+<div class="card">
+<h2>添加节点</h2>
+<form method="post" action="/nodes">
+<div class="grid">
+<label>名称</label><input name="name" required placeholder="例如 hk-1">
+<label>Agent 地址</label><input name="address" required placeholder="例如 http://192.0.2.10:7878 或 https://hk-1.example.com:7878">
+<label>Token（可选）</label><input name="secret" placeholder="留空则随机生成 64 位 hex">
+</div>
+<div style="margin-top:12px"><button type="submit">添加</button></div>
+</form>
+<p style="color:#86868b;font-size:13px;margin-top:12px">添加后会生成 token 与一行安装命令，将命令在目标节点执行即可。</p>
+</div>
+{{template "footer" .}}

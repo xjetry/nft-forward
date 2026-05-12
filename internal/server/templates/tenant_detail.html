@@ -1,0 +1,109 @@
+{{template "header" (mkmap "Title" "用户详情" "User" .User "Flash" .Flash)}}
+<h1>{{.Tenant.Name}} <span style="opacity:0.5;font-size:14px">#{{.Tenant.ID}}</span></h1>
+
+<div class="card">
+<h2>基本信息</h2>
+<table>
+<tr><th style="width:160px">最大转发数</th><td>{{.Tenant.MaxForwards}}</td></tr>
+<tr><th>流量配额</th><td>{{if eq .Tenant.TrafficQuotaBytes 0}}∞（不限）{{else}}{{div .Tenant.TrafficQuotaBytes 1048576}} MB{{end}}</td></tr>
+<tr><th>已用流量</th><td>{{div .Tenant.TrafficUsedBytes 1048576}} MB {{if gt .Tenant.TrafficQuotaBytes 0}}({{pct .Tenant.TrafficUsedBytes .Tenant.TrafficQuotaBytes}}%){{end}}</td></tr>
+<tr><th>状态</th><td>
+{{if .Tenant.Disabled}}<span class="pill warn">已禁用</span>&nbsp;原因：{{nullstr .Tenant.DisableReason}}
+{{else}}<span class="pill ok">正常</span>{{end}}
+</td></tr>
+</table>
+<div style="margin-top:12px">
+<form method="post" action="/tenants/{{.Tenant.ID}}/toggle" class="inline"><button class="ghost" type="submit">{{if .Tenant.Disabled}}重新启用{{else}}禁用{{end}}</button></form>
+<form method="post" action="/tenants/{{.Tenant.ID}}/reset-traffic" class="inline" onsubmit="return confirm('清零已用流量并重新启用？');"><button class="ghost" type="submit">重置流量并启用</button></form>
+<form method="post" action="/tenants/{{.Tenant.ID}}/delete" class="inline" onsubmit="return confirm('删除用户？关联的转发将被一并清除。');"><button class="danger" type="submit">删除用户</button></form>
+</div>
+</div>
+
+<div class="card">
+<h2>登录账号</h2>
+{{if .TenantUsers}}
+<table>
+<thead><tr><th>ID</th><th>用户名</th><th>状态</th><th>操作</th></tr></thead>
+<tbody>
+{{range .TenantUsers}}
+<tr>
+<td>{{.ID}}</td>
+<td>{{.Username}}</td>
+<td>{{if .Disabled}}<span class="pill warn">禁用</span>{{else}}<span class="pill ok">正常</span>{{end}}</td>
+<td>
+<form method="post" action="/users/{{.ID}}/toggle" class="inline"><button class="ghost" type="submit">{{if .Disabled}}启用{{else}}禁用{{end}}</button></form>
+<form method="post" action="/users/{{.ID}}/reset-password" class="inline" onsubmit="return confirm('重置该用户密码？');"><button class="ghost" type="submit">重置密码</button></form>
+<form method="post" action="/users/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除账号？若为唯一登录账号，用户与其转发将一并清除。');"><button class="danger" type="submit">删除</button></form>
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">尚无登录账号，下方创建。</div>{{end}}
+<h2 style="margin-top:18px">添加账号</h2>
+<form method="post" action="/tenants/{{.Tenant.ID}}/users">
+<div class="grid">
+<label>用户名</label><input name="username" required>
+<label>密码</label><input name="password" type="password" required>
+</div>
+<div style="margin-top:12px"><button type="submit">创建账号</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>已授权通道</h2>
+{{if .Tunnels}}
+<table>
+<thead><tr><th>通道</th><th>节点</th><th>协议</th><th>端口段</th><th>本用户上限</th><th>操作</th></tr></thead>
+<tbody>
+{{range $i, $t := .Tunnels}}{{ $g := index $.Grants $i }}
+<tr>
+<td>{{$t.Name}}</td>
+<td>#{{$t.NodeID}}</td>
+<td>{{$t.ProtoMask}}</td>
+<td class="mono">{{$t.PortStart}}-{{$t.PortEnd}}</td>
+<td>{{$g.MaxForwards}}</td>
+<td><form method="post" action="/tenants/{{$.Tenant.ID}}/grants/{{$t.ID}}/delete" class="inline"><button class="danger" type="submit">撤销</button></form></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">尚未授权任何通道。</div>{{end}}
+<h2 style="margin-top:18px">授权新通道</h2>
+{{if .AllTunnels}}
+<form method="post" action="/tenants/{{.Tenant.ID}}/grants">
+<div class="grid">
+<label>通道</label>
+<select name="tunnel_id" required>
+{{range .AllTunnels}}<option value="{{.ID}}">{{.Name}} (节点 #{{.NodeID}}, {{.PortStart}}-{{.PortEnd}}/{{.ProtoMask}})</option>{{end}}
+</select>
+<label>本用户上限</label><input type="number" name="max_forwards" min="1" value="10">
+</div>
+<div style="margin-top:12px"><button type="submit">授权</button></div>
+</form>
+{{else}}<div class="empty">请先<a href="/tunnels">创建通道</a>。</div>{{end}}
+</div>
+
+<div class="card">
+<h2>该用户的转发</h2>
+{{if .Forwards}}
+<table>
+<thead><tr><th>ID</th><th>节点</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th>累计字节</th></tr></thead>
+<tbody>
+{{range .Forwards}}
+<tr>
+<td>{{.ID}}</td>
+<td>#{{.NodeID}}</td>
+<td>{{if .TunnelID.Valid}}#{{.TunnelID.Int64}}{{else}}—{{end}}</td>
+<td>{{upper .Proto}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+<td>{{.TotalBytes}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">该用户尚无转发。</div>{{end}}
+</div>
+<a href="/tenants">← 返回用户列表</a>
+{{template "footer" .}}

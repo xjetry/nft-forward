@@ -1,0 +1,81 @@
+{{template "header" (mkmap "Title" "我的转发" "User" .User "Flash" .Flash)}}
+<h1>我的转发</h1>
+
+{{if .Tenant.Disabled}}
+<div class="flash" style="background:#fde2e2;color:#8a1a1a">账号已被禁用：{{nullstr .Tenant.DisableReason}}。新增已暂停，可联系管理员重置。</div>
+{{end}}
+
+<div class="card">
+<h2>当前转发</h2>
+{{if .Forwards}}
+<table>
+<thead><tr><th>ID</th><th>节点</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Forwards}}
+{{ $n := index $.NodeByID .NodeID }}
+{{ $t := index $.TunnelByID .TunnelID.Int64 }}
+<tr>
+<td>{{.ID}}</td>
+<td>{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
+<td>{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
+<td>{{upper .Proto}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+<td>{{.TotalBytes}}</td>
+<td>{{.Comment}}</td>
+<td><form method="post" action="/my/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该转发？');"><button class="danger" type="submit">删除</button></form></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">暂无转发。</div>{{end}}
+</div>
+
+{{if and (not .Tenant.Disabled) .Tunnels}}
+<div class="card">
+<h2>新增转发</h2>
+<form method="post" action="/my/forwards">
+<div class="grid">
+<label>通道</label>
+<select name="tunnel_id" id="my-tunnel-select" required>
+{{range .Tunnels}}<option value="{{.ID}}" data-port-start="{{.PortStart}}" data-port-end="{{.PortEnd}}" data-proto-mask="{{.ProtoMask}}" data-cidr="{{.TargetCIDRAllow}}">{{.Name}} (节点 #{{.NodeID}}，{{.PortStart}}-{{.PortEnd}}/{{.ProtoMask}})</option>{{end}}
+</select>
+<label>协议</label>
+<select name="proto" id="my-proto-select"><option value="tcp">tcp</option><option value="udp">udp</option></select>
+<label>监听端口</label><input type="number" name="listen_port" id="my-listen-port" min="1" max="65535" placeholder="">
+<label>目标 IPv4</label><input name="target_ip" id="my-target-ip" required>
+<label>目标端口</label><input type="number" name="target_port" min="1" max="65535" required>
+<label>备注</label><input name="comment" placeholder="可选">
+</div>
+<div style="margin-top:12px"><button type="submit">添加</button></div>
+<p style="color:#86868b;font-size:13px;margin-top:8px">监听端口留空则在所选通道允许的端口段内随机分配；目标地址必须落在 CIDR 白名单内。</p>
+</form>
+<script>
+(function(){
+  var sel = document.getElementById('my-tunnel-select');
+  var proto = document.getElementById('my-proto-select');
+  var port = document.getElementById('my-listen-port');
+  var ip = document.getElementById('my-target-ip');
+  function syncTunnelHints(){
+    var opt = sel.options[sel.selectedIndex];
+    if (!opt) return;
+    var s = opt.dataset.portStart, e = opt.dataset.portEnd;
+    var mask = opt.dataset.protoMask, cidr = opt.dataset.cidr;
+    port.placeholder = '范围 ' + s + '-' + e + '，留空自动分配';
+    port.min = s; port.max = e;
+    ip.placeholder = '在 ' + cidr + ' 范围内';
+    // Constrain proto options to what the tunnel allows
+    Array.from(proto.options).forEach(function(o){
+      o.disabled = (mask !== 'tcp+udp' && mask !== o.value);
+    });
+    if (proto.options[proto.selectedIndex].disabled) {
+      proto.value = (mask === 'udp') ? 'udp' : 'tcp';
+    }
+  }
+  sel.addEventListener('change', syncTunnelHints);
+  syncTunnelHints();
+})();
+</script>
+</div>
+{{end}}
+{{template "footer" .}}

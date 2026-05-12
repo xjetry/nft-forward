@@ -1,0 +1,69 @@
+{{template "header" (mkmap "Title" "节点详情" "User" .User "Flash" .Flash)}}
+<h1>节点 {{.Node.Name}} <span style="opacity:0.5;font-size:14px">#{{.Node.ID}}</span></h1>
+
+<div class="card">
+<h2>基本信息</h2>
+<table>
+<tr><th style="width:140px">地址</th><td class="mono">{{.Node.Address}}</td></tr>
+<tr><th>Token</th><td class="mono">{{.Node.Secret}}</td></tr>
+<tr><th>最近同步</th><td>{{unix .Node.LastApplyAt}}</td></tr>
+<tr><th>最近心跳</th><td>{{unix .Node.LastSeenAt}}</td></tr>
+<tr><th>状态</th><td>
+{{if .Node.Disabled}}<span class="pill warn">禁用</span>
+{{else if nullstr .Node.LastError}}<span class="pill err">错误：{{nullstr .Node.LastError}}</span>
+{{else if .Node.LastApplyAt.Valid}}<span class="pill ok">已同步</span>
+{{else}}<span class="pill warn">待同步（agent 未连上或地址不通）</span>{{end}}
+</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>节点安装命令</h2>
+<p>在目标节点（已安装 nftables，root 用户）执行下列命令；将 <code>nft-agent</code> 二进制提前传到 <code>/usr/local/sbin/</code>：</p>
+<pre>install -m 0755 -d /etc/nft-forward /var/lib/nft-forward
+echo '{{.Node.Secret}}' &gt; /etc/nft-forward/agent.token
+chmod 600 /etc/nft-forward/agent.token
+
+cat &gt;/etc/systemd/system/nft-agent.service &lt;&lt;'EOF'
+[Unit]
+Description=nft-forward agent
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/sbin/nft-agent --listen :{{port .Node.Address}} --token-file /etc/nft-forward/agent.token
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now nft-agent.service</pre>
+<p style="color:#86868b;font-size:13px">完成后回到面板，点击「重新同步」即可验证连通性。</p>
+</div>
+
+<div class="card">
+<h2>该节点上的转发</h2>
+{{if .Forwards}}
+<table>
+<thead><tr><th>ID</th><th>协议</th><th>监听端口</th><th>目标</th><th>备注</th></tr></thead>
+<tbody>
+{{range .Forwards}}
+<tr>
+<td>{{.ID}}</td>
+<td>{{upper .Proto}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+<td>{{.Comment}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">该节点尚无转发规则。<a href="/forwards">去添加</a></div>{{end}}
+</div>
+
+<div>
+<form method="post" action="/nodes/{{.Node.ID}}/resync" class="inline"><button class="ghost" type="submit">重新同步</button></form>
+<a href="/nodes" style="margin-left:8px">← 返回</a>
+</div>
+{{template "footer" .}}
