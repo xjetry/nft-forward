@@ -14,7 +14,8 @@
 
 ## 目录
 
-- [快速构建](#快速构建)
+- [一键安装](#一键安装)
+- [快速构建（从源码）](#快速构建从源码)
 - [运行模式 1：单机 TUI](#运行模式-1单机-tui)
 - [运行模式 2：中心面板 + 远程节点](#运行模式-2中心面板--远程节点)
   - [启动 server](#启动-server)
@@ -28,7 +29,41 @@
 
 ---
 
-## 快速构建
+## 一键安装
+
+```bash
+# 交互式（脚本会问你装哪种模式 + 端口）
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash
+
+# server：默认端口 8080
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
+  | sudo bash -s -- server
+
+# server：自定义端口
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
+  | sudo bash -s -- server --port 9000
+
+# agent：必须传 --token（从面板"添加节点"页拷贝）
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
+  | sudo bash -s -- agent --port 7878 --token <从面板拷贝的 64hex token>
+
+# TUI 单机：装好后跑 sudo nft-forward
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
+  | sudo bash -s -- tui
+```
+
+脚本会：
+
+1. 从 [GitHub releases](https://github.com/xjetry/nft-forward/releases/latest) 下载对应模式的二进制 + SHA256 校验
+2. 安装到 `/usr/local/sbin/`
+3. server / agent 模式自动写入 `systemd` 单元并 `enable --now`
+4. 打印登录入口、systemctl 命令、日志位置等
+
+`--port` 留空时使用默认（server=8080，agent=7878，TUI 不需要端口）。完整用法 `install.sh --help`。
+
+---
+
+## 快速构建（从源码）
 
 依赖：Go ≥ 1.21（推荐 1.22+）。无 CGO，跨平台编译。
 
