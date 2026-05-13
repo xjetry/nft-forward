@@ -1,6 +1,9 @@
 # compiled binaries / release artifacts
 /build/
 
+# git worktrees managed by the dev workflow
+/.worktrees/
+
 # macOS / editor noise
 .DS_Store
 .idea/
