@@ -297,7 +297,7 @@ func commit(rules []nft.Rule) error {
 	}
 	resolved, _, dnsErr := nft.ResolveHosts(context.Background(), rules, resolver.New())
 	if dnsErr != nil {
-		return fmt.Errorf("dns: %w", dnsErr)
+		return dnsErr
 	}
 	for _, rl := range resolved {
 		if rl.DestIP == "" {
