@@ -23,6 +23,7 @@
   - [Server 主动连接 Agent](#server-主动连接-agent)
 - [多租户使用](#多租户使用)
 - [流量配额与带宽限速](#流量配额与带宽限速)
+- [域名 / DDNS 目标](#域名--ddns-目标)
 - [常用配置项](#常用配置项)
 - [忘记 admin 密码 / 故障恢复](#忘记-admin-密码--故障恢复)
 - [架构](#架构)
@@ -336,6 +337,34 @@ sudo tc filter show dev eth0           # 应有 fw filter -> classid
 
 ---
 
+## 域名 / DDNS 目标
+
+转发目标除 IPv4 外，也接受域名（如 `home.example.ddns.net`、`localhost`），适合家宽 + 动态 IP + DDNS 这类场景。
+
+行为：
+
+- 域名只在执行端（agent / TUI）解析，server 不解析也不缓存——这样 server 离线时 agent 仍能感知 DDNS 变化。
+- agent 启动一个后台 goroutine，按 `NFT_FORWARD_DNS_INTERVAL`（默认 60s）周期重解析所有带域名的规则；底层 IP 变化即重建 nftables 规则，新连接落到新 IP。
+- 解析失败时**保留上一次成功的 IP**，仅在日志里打 warn——避免 DNS 抽风把已生效的转发撕掉。
+- 解析结果会随 ruleset 一起持久化（`agent-state.json` / `rules.json`），agent 重启后即便上游 DNS 暂时不可达，也能用最近一次成功的 IP 先把规则装回去。
+- nftables 真正下发的是解析后的 IPv4；域名仅作为「源头」存在于 agent / TUI 的状态中，不会进入内核规则。
+
+约束（安全 / 行为）：
+
+- 仅解析 IPv4（A 记录）。AAAA 暂未支持。
+- **多租户场景**：当 tunnel 设置了 `target_cidr_allow` 时，对应租户**只能填 IPv4**。原因：无法静态证明域名解析结果落在白名单 CIDR 内，否则 tenant 可以用 DNS 绕过 CIDR 限制。Admin 直建的 forward 不受此限。
+- 当域名永远无法解析（NXDOMAIN 等）时，`POST /v1/apply` 会以 error 返回；server 端会将该 push 标记失败并重试。
+
+调整周期：
+
+```bash
+# 改成 5 秒（DDNS 切换更激进时有用）
+echo 'NFT_FORWARD_DNS_INTERVAL=5s' >> /etc/default/nft-agent
+systemctl restart nft-agent
+```
+
+---
+
 ## 常用配置项
 
 环境变量 / 文件位置：
@@ -355,6 +384,7 @@ sudo tc filter show dev eth0           # 应有 fw filter -> classid
 | 变量 | 作用 |
 |---|---|
 | `NFT_FORWARD_CONFIG` | 覆盖 TUI 模式默认的 `rules.json` 路径 |
+| `NFT_FORWARD_DNS_INTERVAL` | agent 后台重解析周期（如 `30s`、`2m`），缺省 60s |
 
 ---
 
