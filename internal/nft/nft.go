@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"nft-forward/internal/resolver"
 )
 
 const (
@@ -20,19 +22,28 @@ type Rule struct {
 	ID            string `json:"id"`
 	Proto         string `json:"proto"`
 	SrcPort       int    `json:"src_port"`
-	DestIP        string `json:"dest_ip"`
+	DestIP        string `json:"dest_ip,omitempty"`
+	DestHost      string `json:"dest_host,omitempty"`
 	DestPort      int    `json:"dest_port"`
 	Comment       string `json:"comment,omitempty"`
 	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
 }
 
 func (r Rule) Display() string {
+	target := r.DestIP
+	if r.DestHost != "" {
+		if r.DestIP != "" {
+			target = fmt.Sprintf("%s (→ %s)", r.DestHost, r.DestIP)
+		} else {
+			target = r.DestHost
+		}
+	}
 	suffix := ""
 	if r.Comment != "" {
 		suffix = "  # " + r.Comment
 	}
 	return fmt.Sprintf("%s  %5d  →  %s:%d%s",
-		strings.ToUpper(r.Proto), r.SrcPort, r.DestIP, r.DestPort, suffix)
+		strings.ToUpper(r.Proto), r.SrcPort, target, r.DestPort, suffix)
 }
 
 func NewRuleID() string {
@@ -53,9 +64,21 @@ func Validate(r Rule) error {
 	if r.DestPort < 1 || r.DestPort > 65535 {
 		return fmt.Errorf("目标端口必须在 1-65535 之间")
 	}
-	ip := net.ParseIP(r.DestIP)
-	if ip == nil || ip.To4() == nil {
-		return fmt.Errorf("目标地址必须为有效的 IPv4")
+	hasHost := r.DestHost != ""
+	hasIP := r.DestIP != ""
+	if !hasHost && !hasIP {
+		return fmt.Errorf("目标必须填 IPv4 或域名")
+	}
+	if hasIP {
+		ip := net.ParseIP(r.DestIP)
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("目标 IP 必须为有效的 IPv4")
+		}
+	}
+	if hasHost {
+		if !resolver.IsHostname(r.DestHost) {
+			return fmt.Errorf("目标域名格式非法")
+		}
 	}
 	return nil
 }
