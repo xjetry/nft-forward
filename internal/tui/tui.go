@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"nft-forward/internal/nft"
+	"nft-forward/internal/resolver"
 	"nft-forward/internal/store"
 	"nft-forward/internal/systemd"
 )
@@ -80,7 +82,7 @@ func buildInputs() []textinput.Model {
 	return []textinput.Model{
 		protoIn,
 		mk("监听端口 1-65535", 12),
-		mk("目标 IPv4 地址", 18),
+		mk("目标 IPv4 或域名", 32),
 		mk("目标端口", 12),
 		mk("可选备注", 40),
 	}
@@ -179,7 +181,7 @@ func (m *model) cycleFocus(dir int) {
 func (m model) submitAdd() (tea.Model, tea.Cmd) {
 	proto := strings.ToLower(strings.TrimSpace(m.inputs[fProto].Value()))
 	srcPortStr := strings.TrimSpace(m.inputs[fSrcPort].Value())
-	destIP := strings.TrimSpace(m.inputs[fDestIP].Value())
+	destInput := strings.TrimSpace(m.inputs[fDestIP].Value())
 	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
 	comment := strings.TrimSpace(m.inputs[fComment].Value())
 
@@ -194,9 +196,13 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 		ID:       nft.NewRuleID(),
 		Proto:    proto,
 		SrcPort:  srcPort,
-		DestIP:   destIP,
 		DestPort: destPort,
 		Comment:  comment,
+	}
+	if resolver.IsHostname(destInput) {
+		r.DestHost = destInput
+	} else {
+		r.DestIP = destInput
 	}
 	if err := nft.Validate(r); err != nil {
 		m.err = err.Error()
@@ -217,7 +223,11 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 	}
 	m.rules = next
 	m.mode = viewList
-	m.status = fmt.Sprintf("已添加 %s/%d → %s:%d", r.Proto, r.SrcPort, r.DestIP, r.DestPort)
+	statusTarget := r.DestIP
+	if r.DestHost != "" {
+		statusTarget = r.DestHost
+	}
+	m.status = fmt.Sprintf("已添加 %s/%d → %s:%d", r.Proto, r.SrcPort, statusTarget, r.DestPort)
 	m.err = ""
 	return m, nil
 }
@@ -285,10 +295,19 @@ func commit(rules []nft.Rule) error {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
-	if err := nft.Apply(rules); err != nil {
+	resolved, _, dnsErr := nft.ResolveHosts(context.Background(), rules, resolver.New())
+	if dnsErr != nil {
+		return fmt.Errorf("dns: %w", dnsErr)
+	}
+	for _, rl := range resolved {
+		if rl.DestIP == "" {
+			return fmt.Errorf("%s/%d: 无法解析目标域名 %s", rl.Proto, rl.SrcPort, rl.DestHost)
+		}
+	}
+	if err := nft.Apply(resolved); err != nil {
 		return err
 	}
-	return store.Save(rules)
+	return store.Save(resolved)
 }
 
 func (m model) View() string {
@@ -321,8 +340,16 @@ func (m model) viewList() string {
 		b.WriteString(headerStyle.Render(fmt.Sprintf("  %-4s  %-5s     %-22s  %s",
 			"协议", "监听", "→ 目标", "备注")) + "\n")
 		for i, r := range m.rules {
+			target := r.DestIP
+			if r.DestHost != "" {
+				if r.DestIP != "" {
+					target = fmt.Sprintf("%s (→ %s)", r.DestHost, r.DestIP)
+				} else {
+					target = r.DestHost
+				}
+			}
 			line := fmt.Sprintf("  %-4s  %5d  →  %s:%-5d  %s",
-				strings.ToUpper(r.Proto), r.SrcPort, r.DestIP, r.DestPort, r.Comment)
+				strings.ToUpper(r.Proto), r.SrcPort, target, r.DestPort, r.Comment)
 			if i == m.cursor {
 				b.WriteString(selectedStyle.Render(line) + "\n")
 			} else {
@@ -349,7 +376,7 @@ func (m model) viewAdd() string {
 	labels := []string{
 		"协议       ",
 		"监听端口   ",
-		"目标 IPv4  ",
+		"目标地址   ",
 		"目标端口   ",
 		"备注       ",
 	}
