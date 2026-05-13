@@ -15,6 +15,7 @@ import (
 	"nft-forward/internal/agent"
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/resolver"
 )
 
 // LocalAddrPrefix marks a node whose data plane lives in the panel process.
@@ -120,14 +121,19 @@ func (p *Pusher) pushOne(nodeID int64) {
 				bw = t.BandwidthMbps
 			}
 		}
-		rules = append(rules, nft.Rule{
+		rule := nft.Rule{
 			Proto:         f.Proto,
 			SrcPort:       f.ListenPort,
-			DestIP:        f.TargetIP,
 			DestPort:      f.TargetPort,
 			Comment:       f.Comment,
 			BandwidthMbps: bw,
-		})
+		}
+		if resolver.IsHostname(f.TargetIP) {
+			rule.DestHost = f.TargetIP
+		} else {
+			rule.DestIP = f.TargetIP
+		}
+		rules = append(rules, rule)
 	}
 	if err := p.send(n, rules); err != nil {
 		log.Printf("push node=%d (%s): %v", n.ID, n.Name, err)

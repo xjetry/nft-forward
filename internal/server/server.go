@@ -15,6 +15,7 @@ import (
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/resolver"
 )
 
 var urlParse = url.Parse
@@ -282,12 +283,17 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		TargetPort: targetPort,
 		Comment:    comment,
 	}
-	if err := nft.Validate(nft.Rule{
+	testRule := nft.Rule{
 		Proto:    proto,
 		SrcPort:  listenPort,
-		DestIP:   targetIP,
 		DestPort: targetPort,
-	}); err != nil {
+	}
+	if resolver.IsHostname(targetIP) {
+		testRule.DestHost = targetIP
+	} else {
+		testRule.DestIP = targetIP
+	}
+	if err := nft.Validate(testRule); err != nil {
 		setFlash(w, err.Error())
 		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 		return

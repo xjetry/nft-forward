@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/resolver"
 )
 
 func (s *Server) tenantDashboard(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +209,7 @@ func (s *Server) tenantContext(u *db.User) (*db.Tenant, error) {
 	return db.GetTenant(s.DB, u.TenantID.Int64)
 }
 
-func validateAgainstTunnel(t *db.Tunnel, proto string, listenPort int, targetIP string, targetPort int) error {
+func validateAgainstTunnel(t *db.Tunnel, proto string, listenPort int, target string, targetPort int) error {
 	switch proto {
 	case "tcp", "udp":
 	default:
@@ -223,9 +224,23 @@ func validateAgainstTunnel(t *db.Tunnel, proto string, listenPort int, targetIP 
 	if targetPort < 1 || targetPort > 65535 {
 		return errors.New("目标端口超出范围")
 	}
-	ip := net.ParseIP(targetIP)
-	if ip == nil || ip.To4() == nil {
-		return errors.New("目标地址必须为有效 IPv4")
+	if target == "" {
+		return errors.New("目标地址不能为空")
+	}
+	ip := net.ParseIP(target)
+	if ip == nil {
+		// hostname path — only allowed when the tunnel imposes no CIDR
+		// restriction (we can't statically prove a hostname lands inside a CIDR).
+		if !resolver.IsHostname(target) {
+			return errors.New("目标地址格式非法")
+		}
+		if strings.TrimSpace(t.TargetCIDRAllow) != "" {
+			return errors.New("该通道限制了目标 CIDR，仅允许 IPv4 目标")
+		}
+		return nil
+	}
+	if ip.To4() == nil {
+		return errors.New("目标地址必须为 IPv4")
 	}
 	if !targetIPInCIDR(ip, t.TargetCIDRAllow) {
 		return fmt.Errorf("目标地址不在允许的 CIDR 内（%s）", t.TargetCIDRAllow)
