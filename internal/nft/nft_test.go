@@ -1,6 +1,12 @@
 package nft
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"nft-forward/internal/resolver"
+)
 
 func TestValidateAcceptsIPOnly(t *testing.T) {
 	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}
@@ -50,4 +56,61 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestResolveHostsFillsDestIP(t *testing.T) {
+	r := &resolver.Resolver{
+		Lookup: func(ctx context.Context, host string) ([]string, error) {
+			return []string{"203.0.113.7"}, nil
+		},
+	}
+	rules := []Rule{{Proto: "tcp", SrcPort: 80, DestHost: "x.example", DestPort: 80}}
+	out, changed, err := ResolveHosts(context.Background(), rules, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true on first resolve")
+	}
+	if out[0].DestIP != "203.0.113.7" {
+		t.Fatalf("got %q", out[0].DestIP)
+	}
+}
+
+func TestResolveHostsNoChangeWhenSame(t *testing.T) {
+	r := &resolver.Resolver{
+		Lookup: func(ctx context.Context, host string) ([]string, error) {
+			return []string{"203.0.113.7"}, nil
+		},
+	}
+	rules := []Rule{{Proto: "tcp", SrcPort: 80, DestHost: "x.example", DestIP: "203.0.113.7", DestPort: 80}}
+	out, changed, err := ResolveHosts(context.Background(), rules, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("expected changed=false when IP unchanged")
+	}
+	if out[0].DestIP != "203.0.113.7" {
+		t.Fatalf("got %q", out[0].DestIP)
+	}
+}
+
+func TestResolveHostsKeepsOldIPOnError(t *testing.T) {
+	r := &resolver.Resolver{
+		Lookup: func(ctx context.Context, host string) ([]string, error) {
+			return nil, errors.New("dns down")
+		},
+	}
+	rules := []Rule{{Proto: "tcp", SrcPort: 80, DestHost: "x.example", DestIP: "203.0.113.7", DestPort: 80}}
+	out, changed, err := ResolveHosts(context.Background(), rules, r)
+	if err == nil {
+		t.Fatal("expected aggregated error")
+	}
+	if changed {
+		t.Fatal("expected changed=false on failure")
+	}
+	if out[0].DestIP != "203.0.113.7" {
+		t.Fatalf("stale IP should be preserved, got %q", out[0].DestIP)
+	}
 }

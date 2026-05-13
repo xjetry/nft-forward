@@ -2,6 +2,7 @@ package nft
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -158,4 +159,36 @@ func EnableIPForward() error {
 	conf := "/etc/sysctl.d/99-nft-forward.conf"
 	body := "net.ipv4.ip_forward = 1\n"
 	return os.WriteFile(conf, []byte(body), 0o644)
+}
+
+// ResolveHosts walks rules; for any rule with DestHost set it asks r to look
+// up the IPv4 and writes it into a copy. Returns:
+//   - out: the resolved rule slice (callers should use this in nft.Apply)
+//   - changed: true when at least one DestIP differs from the input
+//   - err: aggregated lookup failure (non-nil when at least one host failed to
+//     resolve, but out still contains the best-effort state — failed entries
+//     keep their previous DestIP so live traffic isn't torn down by DNS hiccups)
+func ResolveHosts(ctx context.Context, rules []Rule, r *resolver.Resolver) ([]Rule, bool, error) {
+	out := make([]Rule, len(rules))
+	copy(out, rules)
+	changed := false
+	var errs []string
+	for i := range out {
+		if out[i].DestHost == "" {
+			continue
+		}
+		ip, err := r.LookupIPv4(ctx, out[i].DestHost)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", out[i].DestHost, err))
+			continue
+		}
+		if ip != out[i].DestIP {
+			changed = true
+			out[i].DestIP = ip
+		}
+	}
+	if len(errs) > 0 {
+		return out, changed, fmt.Errorf("dns: %s", strings.Join(errs, "; "))
+	}
+	return out, changed, nil
 }
