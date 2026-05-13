@@ -217,11 +217,12 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 
 	next := append([]nft.Rule{}, m.rules...)
 	next = append(next, r)
-	if err := commit(next); err != nil {
+	applied, err := commit(next)
+	if err != nil {
 		m.err = err.Error()
 		return m, nil
 	}
-	m.rules = next
+	m.rules = applied
 	m.mode = viewList
 	statusTarget := r.DestIP
 	if r.DestHost != "" {
@@ -242,12 +243,13 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		removed := m.rules[m.cursor]
 		next := append([]nft.Rule{}, m.rules[:m.cursor]...)
 		next = append(next, m.rules[m.cursor+1:]...)
-		if err := commit(next); err != nil {
+		applied, err := commit(next)
+		if err != nil {
 			m.err = err.Error()
 			m.mode = viewList
 			return m, nil
 		}
-		m.rules = next
+		m.rules = applied
 		if m.cursor >= len(m.rules) && m.cursor > 0 {
 			m.cursor--
 		}
@@ -264,12 +266,13 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		if err := commit(nil); err != nil {
+		applied, err := commit(nil)
+		if err != nil {
 			m.err = err.Error()
 			m.mode = viewList
 			return m, nil
 		}
-		m.rules = nil
+		m.rules = applied
 		m.cursor = 0
 		m.status = "已清空全部转发规则"
 		m.mode = viewList
@@ -291,23 +294,26 @@ func (m *model) refresh() {
 	m.status = "已从磁盘重新加载"
 }
 
-func commit(rules []nft.Rule) error {
+func commit(rules []nft.Rule) ([]nft.Rule, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
 	resolved, _, dnsErr := nft.ResolveHosts(context.Background(), rules, resolver.New())
 	if dnsErr != nil {
-		return dnsErr
+		return nil, dnsErr
 	}
 	for _, rl := range resolved {
 		if rl.DestIP == "" {
-			return fmt.Errorf("%s/%d: 无法解析目标域名 %s", rl.Proto, rl.SrcPort, rl.DestHost)
+			return nil, fmt.Errorf("%s/%d: 无法解析目标域名 %s", rl.Proto, rl.SrcPort, rl.DestHost)
 		}
 	}
 	if err := nft.Apply(resolved); err != nil {
-		return err
+		return nil, err
 	}
-	return store.Save(resolved)
+	if err := store.Save(resolved); err != nil {
+		return nil, err
+	}
+	return resolved, nil
 }
 
 func (m model) View() string {
