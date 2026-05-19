@@ -21,6 +21,7 @@ type viewMode int
 const (
 	viewList viewMode = iota
 	viewAdd
+	viewEdit
 	viewConfirmDelete
 	viewConfirmClear
 )
@@ -102,6 +103,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateList(msg)
 		case viewAdd:
 			return m.updateAdd(msg)
+		case viewEdit:
+			return m.updateEdit(msg)
 		case viewConfirmDelete:
 			return m.updateConfirmDelete(msg)
 		case viewConfirmClear:
@@ -125,6 +128,13 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a", "n", "+":
 		m.enterAddMode()
+		return m, textinput.Blink
+	case "e":
+		if len(m.rules) == 0 {
+			m.status = "no rule to edit"
+			return m, nil
+		}
+		m.enterEditMode()
 		return m, textinput.Blink
 	case "d", "delete":
 		if len(m.rules) > 0 {
@@ -150,6 +160,25 @@ func (m *model) enterAddMode() {
 	m.focusedInput = fProto
 }
 
+func (m *model) enterEditMode() {
+	m.mode = viewEdit
+	m.err = ""
+	m.status = ""
+	m.inputs = buildInputs()
+	m.focusedInput = fProto
+
+	r := m.rules[m.cursor]
+	m.inputs[fProto].SetValue(r.Proto)
+	m.inputs[fSrcPort].SetValue(strconv.Itoa(r.SrcPort))
+	destValue := r.DestIP
+	if r.DestHost != "" {
+		destValue = r.DestHost
+	}
+	m.inputs[fDestIP].SetValue(destValue)
+	m.inputs[fDestPort].SetValue(strconv.Itoa(r.DestPort))
+	m.inputs[fComment].SetValue(r.Comment)
+}
+
 func (m model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -170,6 +199,83 @@ func (m model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.inputs[m.focusedInput], cmd = m.inputs[m.focusedInput].Update(msg)
 	return m, cmd
+}
+
+func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = viewList
+		m.err = ""
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "tab", "down":
+		m.cycleFocus(1)
+		return m, textinput.Blink
+	case "shift+tab", "up":
+		m.cycleFocus(-1)
+		return m, textinput.Blink
+	case "enter":
+		return m.submitEdit()
+	}
+	var cmd tea.Cmd
+	m.inputs[m.focusedInput], cmd = m.inputs[m.focusedInput].Update(msg)
+	return m, cmd
+}
+
+func (m model) submitEdit() (tea.Model, tea.Cmd) {
+	proto := strings.ToLower(strings.TrimSpace(m.inputs[fProto].Value()))
+	srcPortStr := strings.TrimSpace(m.inputs[fSrcPort].Value())
+	destInput := strings.TrimSpace(m.inputs[fDestIP].Value())
+	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
+	comment := strings.TrimSpace(m.inputs[fComment].Value())
+
+	srcPort, err1 := strconv.Atoi(srcPortStr)
+	destPort, err2 := strconv.Atoi(destPortStr)
+	if err1 != nil || err2 != nil {
+		m.err = "端口必须为数字"
+		return m, nil
+	}
+
+	r := nft.Rule{
+		ID:       m.rules[m.cursor].ID,
+		Proto:    proto,
+		SrcPort:  srcPort,
+		DestPort: destPort,
+		Comment:  comment,
+	}
+	if resolver.IsHostname(destInput) {
+		r.DestHost = destInput
+	} else {
+		r.DestIP = destInput
+	}
+	if err := nft.Validate(r); err != nil {
+		m.err = err.Error()
+		return m, nil
+	}
+	for i, existing := range m.rules {
+		if i != m.cursor && existing.Proto == r.Proto && existing.SrcPort == r.SrcPort {
+			m.err = fmt.Sprintf("%s/%d 已被转发占用", r.Proto, r.SrcPort)
+			return m, nil
+		}
+	}
+
+	next := append([]nft.Rule{}, m.rules...)
+	next[m.cursor] = r
+	applied, err := commit(next)
+	if err != nil {
+		m.err = err.Error()
+		return m, nil
+	}
+	m.rules = applied
+	m.mode = viewList
+	statusTarget := r.DestIP
+	if r.DestHost != "" {
+		statusTarget = r.DestHost
+	}
+	m.status = fmt.Sprintf("已更新 %s/%d → %s:%d", r.Proto, r.SrcPort, statusTarget, r.DestPort)
+	m.err = ""
+	return m, nil
 }
 
 func (m *model) cycleFocus(dir int) {
@@ -318,8 +424,8 @@ func commit(rules []nft.Rule) ([]nft.Rule, error) {
 
 func (m model) View() string {
 	switch m.mode {
-	case viewAdd:
-		return m.viewAdd()
+	case viewAdd, viewEdit:
+		return m.viewForm()
 	case viewConfirmDelete:
 		return m.viewConfirm(
 			fmt.Sprintf("确认删除该规则？\n\n  %s\n", m.rules[m.cursor].Display()))
@@ -371,13 +477,20 @@ func (m model) viewList() string {
 		b.WriteString(okStyle.Render(m.status) + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓ 选择 • a 新增 • d 删除 • c 清空 • r 重载 • q 退出"))
+	b.WriteString(helpStyle.Render("↑/↓ 选择 • a 新增 • e 编辑 • d 删除 • c 清空 • r 重载 • q 退出"))
 	return b.String()
 }
 
-func (m model) viewAdd() string {
+func (m model) formTitle() string {
+	if m.mode == viewEdit {
+		return "编辑转发规则"
+	}
+	return "新增转发规则"
+}
+
+func (m model) viewForm() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("新增转发规则") + "\n\n")
+	b.WriteString(titleStyle.Render(m.formTitle()) + "\n\n")
 
 	labels := []string{
 		"协议       ",
