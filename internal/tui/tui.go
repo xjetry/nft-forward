@@ -437,6 +437,55 @@ func (m model) View() string {
 	}
 }
 
+// Column widths in terminal cells (CJK double-width characters count as 2 cells).
+// These constants must match between the header and every data row.
+const (
+	colProto    = 6  // "TCP   " or "UDP   "
+	colSrcPort  = 8  // "  8088  "
+	colDest     = 28 // "→ 100.100.100.11:8088       "
+	// colComment is flexible — it consumes the remainder of the line
+)
+
+// cellStyle returns a lipgloss style that pads/truncates to exactly w terminal cells.
+func cellStyle(w int) lipgloss.Style {
+	return lipgloss.NewStyle().Width(w).MaxWidth(w)
+}
+
+// truncateCell truncates s so that its display width does not exceed maxCells,
+// appending an ellipsis if truncation occurs. Width is measured via lipgloss
+// (which uses go-runewidth internally but applies its own Unicode normalization,
+// e.g. treating → as 1 cell). Using lipgloss.Width here keeps measurements
+// consistent with what lipgloss actually renders.
+func truncateCell(s string, maxCells int) string {
+	if lipgloss.Width(s) <= maxCells {
+		return s
+	}
+	// Reserve 1 cell for the ellipsis "…".
+	limit := maxCells - 1
+	width := 0
+	var out []rune
+	for _, r := range []rune(s) {
+		rw := lipgloss.Width(string(r))
+		if width+rw > limit {
+			break
+		}
+		out = append(out, r)
+		width += rw
+	}
+	return string(out) + "…"
+}
+
+// renderTableRow assembles a fixed-width table row from four cell strings.
+// Columns: proto (colProto cells), srcPort (colSrcPort cells),
+// dest (colDest cells), comment (flexible).
+// The assembled line contains no styling — callers apply styles after.
+func renderTableRow(proto, srcPort, dest, comment string) string {
+	return cellStyle(colProto).Render(truncateCell(proto, colProto)) +
+		cellStyle(colSrcPort).Render(truncateCell(srcPort, colSrcPort)) +
+		cellStyle(colDest).Render(truncateCell(dest, colDest)) +
+		comment
+}
+
 func (m model) viewList() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "  ")
@@ -449,8 +498,10 @@ func (m model) viewList() string {
 	if len(m.rules) == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
 	} else {
-		b.WriteString(headerStyle.Render(fmt.Sprintf("  %-4s  %-5s     %-22s  %s",
-			"协议", "监听", "→ 目标", "备注")) + "\n")
+		// Header row uses the same column model as data rows.
+		header := renderTableRow("协议", "监听", "→ 目标", "备注")
+		b.WriteString(headerStyle.Render(header) + "\n")
+
 		for i, r := range m.rules {
 			target := r.DestIP
 			if r.DestHost != "" {
@@ -460,10 +511,29 @@ func (m model) viewList() string {
 					target = r.DestHost
 				}
 			}
-			line := fmt.Sprintf("  %-4s  %5d  →  %s:%-5d  %s",
-				strings.ToUpper(r.Proto), r.SrcPort, target, r.DestPort, r.Comment)
+			destCell := fmt.Sprintf("→ %s:%d", target, r.DestPort)
+			line := renderTableRow(
+				strings.ToUpper(r.Proto),
+				strconv.Itoa(r.SrcPort),
+				destCell,
+				r.Comment,
+			)
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render(line) + "\n")
+				// Determine the fixed portion width so the highlight spans the full row.
+				fixedWidth := colProto + colSrcPort + colDest
+				// Pad comment cell to fill the terminal width (or a sane default).
+				termWidth := m.width
+				if termWidth < fixedWidth+1 {
+					termWidth = 80
+				}
+				commentWidth := termWidth - fixedWidth
+				paddedLine := renderTableRow(
+					strings.ToUpper(r.Proto),
+					strconv.Itoa(r.SrcPort),
+					destCell,
+					cellStyle(commentWidth).Render(r.Comment),
+				)
+				b.WriteString(selectedStyle.Render(paddedLine) + "\n")
 			} else {
 				b.WriteString(line + "\n")
 			}
