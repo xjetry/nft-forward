@@ -36,6 +36,50 @@ func TestValidateRejectsBadHost(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsTCPUDP(t *testing.T) {
+	r := Rule{Proto: "tcp+udp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}
+	if err := Validate(r); err != nil {
+		t.Fatalf("expected tcp+udp to be valid, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownCompositeProto(t *testing.T) {
+	r := Rule{Proto: "tcp+udp+icmp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}
+	if err := Validate(r); err == nil {
+		t.Fatal("expected error for tcp+udp+icmp, got nil")
+	}
+}
+
+func TestRenderRulesetTCPUDPUsesSetSyntax(t *testing.T) {
+	out := RenderRuleset([]Rule{{
+		Proto: "tcp+udp", SrcPort: 8080, DestIP: "10.0.0.5", DestPort: 8080,
+	}})
+	if !contains(out, "meta l4proto { tcp, udp }") {
+		t.Fatalf("expected set-syntax l4proto match, got:\n%s", out)
+	}
+	if !contains(out, "th dport") {
+		t.Fatalf("expected th dport keyword, got:\n%s", out)
+	}
+	if contains(out, "tcp dport") {
+		t.Fatalf("must not emit single-protocol tcp dport, got:\n%s", out)
+	}
+	if contains(out, "udp dport") {
+		t.Fatalf("must not emit single-protocol udp dport, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetTCPSingleProtocol(t *testing.T) {
+	out := RenderRuleset([]Rule{{
+		Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80,
+	}})
+	if !contains(out, "tcp dport 80") {
+		t.Fatalf("expected single-protocol tcp dport 80, got:\n%s", out)
+	}
+	if contains(out, "meta l4proto") {
+		t.Fatalf("single tcp rule must not use set syntax, got:\n%s", out)
+	}
+}
+
 func TestRenderRulesetUsesDestIP(t *testing.T) {
 	out := RenderRuleset([]Rule{{
 		Proto: "tcp", SrcPort: 80, DestHost: "home.example.net",

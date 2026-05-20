@@ -42,7 +42,19 @@ var (
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
 	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
 	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+
+	// selectorFocusedStyle highlights the active option in the proto selector.
+	selectorFocusedStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("231")).
+				Background(lipgloss.Color("57"))
+	// selectorBlurredStyle draws the active option when the field is not focused.
+	selectorBlurredStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
 )
+
+// protoOptions is the ordered list of protocol choices for the selector.
+var protoOptions = []string{"tcp", "udp", "tcp+udp"}
 
 type model struct {
 	mode   viewMode
@@ -51,6 +63,7 @@ type model struct {
 
 	inputs       []textinput.Model
 	focusedInput int
+	protoIdx     int // index into protoOptions; owned separately from inputs[fProto]
 
 	status string
 	err    string
@@ -77,11 +90,13 @@ func buildInputs() []textinput.Model {
 		ti.Width = width
 		return ti
 	}
-	protoIn := mk("tcp 或 udp", 12)
-	protoIn.SetValue("tcp")
-	protoIn.Focus()
+	// Slot 0 (fProto) is kept as a placeholder so that the focusedInput index
+	// constants (fProto=0 … fComment=4) remain valid and cycleFocus arithmetic
+	// is unchanged.  The slot is never rendered or updated — the proto selector
+	// widget is rendered from protoIdx instead.
+	protoPlaceholder := mk("", 0)
 	return []textinput.Model{
-		protoIn,
+		protoPlaceholder,
 		mk("监听端口 1-65535", 12),
 		mk("目标 IPv4 或域名", 32),
 		mk("目标端口", 12),
@@ -158,6 +173,7 @@ func (m *model) enterAddMode() {
 	m.status = ""
 	m.inputs = buildInputs()
 	m.focusedInput = fProto
+	m.protoIdx = 0 // default: tcp
 }
 
 func (m *model) enterEditMode() {
@@ -168,7 +184,17 @@ func (m *model) enterEditMode() {
 	m.focusedInput = fProto
 
 	r := m.rules[m.cursor]
-	m.inputs[fProto].SetValue(r.Proto)
+
+	// Resolve protoIdx from the stored protocol value.
+	m.protoIdx = 0 // default: tcp
+	for i, p := range protoOptions {
+		if p == r.Proto {
+			m.protoIdx = i
+			break
+		}
+	}
+	// If the stored proto is unknown (legacy data), we silently fall back to tcp (idx 0).
+
 	m.inputs[fSrcPort].SetValue(strconv.Itoa(r.SrcPort))
 	destValue := r.DestIP
 	if r.DestHost != "" {
@@ -196,6 +222,17 @@ func (m model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitAdd()
 	}
+	// When the proto field is focused, route left/right to the selector;
+	// all other keys are ignored (not forwarded to the placeholder textinput).
+	if m.focusedInput == fProto {
+		switch msg.String() {
+		case "left", "h":
+			m.protoIdx = (m.protoIdx - 1 + len(protoOptions)) % len(protoOptions)
+		case "right", "l":
+			m.protoIdx = (m.protoIdx + 1) % len(protoOptions)
+		}
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.inputs[m.focusedInput], cmd = m.inputs[m.focusedInput].Update(msg)
 	return m, cmd
@@ -218,13 +255,24 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitEdit()
 	}
+	// When the proto field is focused, route left/right to the selector;
+	// all other keys are ignored (not forwarded to the placeholder textinput).
+	if m.focusedInput == fProto {
+		switch msg.String() {
+		case "left", "h":
+			m.protoIdx = (m.protoIdx - 1 + len(protoOptions)) % len(protoOptions)
+		case "right", "l":
+			m.protoIdx = (m.protoIdx + 1) % len(protoOptions)
+		}
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.inputs[m.focusedInput], cmd = m.inputs[m.focusedInput].Update(msg)
 	return m, cmd
 }
 
 func (m model) submitEdit() (tea.Model, tea.Cmd) {
-	proto := strings.ToLower(strings.TrimSpace(m.inputs[fProto].Value()))
+	proto := protoOptions[m.protoIdx]
 	srcPortStr := strings.TrimSpace(m.inputs[fSrcPort].Value())
 	destInput := strings.TrimSpace(m.inputs[fDestIP].Value())
 	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
@@ -285,7 +333,7 @@ func (m *model) cycleFocus(dir int) {
 }
 
 func (m model) submitAdd() (tea.Model, tea.Cmd) {
-	proto := strings.ToLower(strings.TrimSpace(m.inputs[fProto].Value()))
+	proto := protoOptions[m.protoIdx]
 	srcPortStr := strings.TrimSpace(m.inputs[fSrcPort].Value())
 	destInput := strings.TrimSpace(m.inputs[fDestIP].Value())
 	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
@@ -440,9 +488,9 @@ func (m model) View() string {
 // Column widths in terminal cells (CJK double-width characters count as 2 cells).
 // These constants must match between the header and every data row.
 const (
-	colProto    = 6  // "TCP   " or "UDP   "
-	colSrcPort  = 8  // "  8088  "
-	colDest     = 28 // "→ 100.100.100.11:8088       "
+	colProto   = 8  // "TCP     " / "UDP     " / "TCP+UDP "
+	colSrcPort = 8  // "  8088  "
+	colDest    = 28 // "→ 100.100.100.11:8088       "
 	// colComment is flexible — it consumes the remainder of the line
 )
 
@@ -558,6 +606,27 @@ func (m model) formTitle() string {
 	return "新增转发规则"
 }
 
+// renderProtoSelector renders the horizontal pill selector for the proto field.
+// When focused, the active option is highlighted with selectorFocusedStyle;
+// when blurred, it uses selectorBlurredStyle.
+func (m model) renderProtoSelector() string {
+	focused := m.focusedInput == fProto
+	var parts []string
+	for i, opt := range protoOptions {
+		if i == m.protoIdx {
+			label := "[ " + opt + " ]"
+			if focused {
+				parts = append(parts, selectorFocusedStyle.Render(label))
+			} else {
+				parts = append(parts, selectorBlurredStyle.Render(label))
+			}
+		} else {
+			parts = append(parts, "  "+opt+"  ")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m model) viewForm() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(m.formTitle()) + "\n\n")
@@ -574,14 +643,24 @@ func (m model) viewForm() string {
 		if i == m.focusedInput {
 			marker = "▌ "
 		}
-		b.WriteString(fmt.Sprintf("%s%s  %s\n", marker, labels[i], ti.View()))
+		var fieldView string
+		if i == fProto {
+			fieldView = m.renderProtoSelector()
+		} else {
+			fieldView = ti.View()
+		}
+		b.WriteString(fmt.Sprintf("%s%s  %s\n", marker, labels[i], fieldView))
 	}
 
 	b.WriteString("\n")
 	if m.err != "" {
 		b.WriteString(errStyle.Render("错误: "+m.err) + "\n\n")
 	}
-	b.WriteString(helpStyle.Render("Tab 下一项 • Shift+Tab 上一项 • Enter 保存 • Esc 取消"))
+	helpText := "Tab 下一项 • Shift+Tab 上一项 • Enter 保存 • Esc 取消"
+	if m.focusedInput == fProto {
+		helpText = "← → 切换协议 • " + helpText
+	}
+	b.WriteString(helpStyle.Render(helpText))
 	return b.String()
 }
 

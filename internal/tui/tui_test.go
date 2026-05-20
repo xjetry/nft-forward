@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"nft-forward/internal/nft"
@@ -141,6 +142,101 @@ func TestTruncateCell(t *testing.T) {
 				t.Errorf("truncateCell(%q, %d) width %d > maxCells %d", c.input, c.maxCells, w, c.maxCells)
 			}
 		}
+	}
+}
+
+// TestProtoSelectorCycles verifies that left/right key presses cycle through protoOptions.
+func TestProtoSelectorCycles(t *testing.T) {
+	m := initialModel(nil)
+	m.enterAddMode()
+
+	// Initial state: idx=0 (tcp)
+	if m.protoIdx != 0 {
+		t.Fatalf("expected protoIdx=0 after enterAddMode, got %d", m.protoIdx)
+	}
+
+	// Simulate right arrow: tcp → udp
+	next, _ := m.updateAdd(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(model)
+	if m.protoIdx != 1 {
+		t.Fatalf("after right: expected protoIdx=1 (udp), got %d", m.protoIdx)
+	}
+
+	// right again: udp → tcp+udp
+	next, _ = m.updateAdd(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(model)
+	if m.protoIdx != 2 {
+		t.Fatalf("after 2nd right: expected protoIdx=2 (tcp+udp), got %d", m.protoIdx)
+	}
+
+	// right again: wraps back to tcp
+	next, _ = m.updateAdd(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(model)
+	if m.protoIdx != 0 {
+		t.Fatalf("after wrap: expected protoIdx=0 (tcp), got %d", m.protoIdx)
+	}
+
+	// left from tcp wraps to tcp+udp
+	next, _ = m.updateAdd(tea.KeyMsg{Type: tea.KeyLeft})
+	m = next.(model)
+	if m.protoIdx != 2 {
+		t.Fatalf("after left wrap: expected protoIdx=2 (tcp+udp), got %d", m.protoIdx)
+	}
+}
+
+// TestProtoSelectorEditPreFill verifies that enterEditMode sets protoIdx correctly.
+func TestProtoSelectorEditPreFill(t *testing.T) {
+	rules := []nft.Rule{
+		{Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
+		{Proto: "tcp+udp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80},
+		{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.1", DestPort: 443},
+	}
+	for _, r := range rules {
+		m := initialModel(rules)
+		// find cursor index
+		for i, rule := range rules {
+			if rule.Proto == r.Proto && rule.SrcPort == r.SrcPort {
+				m.cursor = i
+			}
+		}
+		m.enterEditMode()
+		expected := -1
+		for i, p := range protoOptions {
+			if p == r.Proto {
+				expected = i
+				break
+			}
+		}
+		if m.protoIdx != expected {
+			t.Errorf("proto=%q: expected protoIdx=%d, got %d", r.Proto, expected, m.protoIdx)
+		}
+	}
+}
+
+// TestProtoSelectorRenderContainsOptions verifies the selector renders all three options.
+func TestProtoSelectorRenderContainsOptions(t *testing.T) {
+	m := initialModel(nil)
+	m.enterAddMode()
+
+	view := m.renderProtoSelector()
+	plain := stripANSI(view)
+	for _, opt := range protoOptions {
+		if !strings.Contains(plain, opt) {
+			t.Errorf("selector render missing option %q; got: %q", opt, plain)
+		}
+	}
+	// Active (idx=0, tcp) should be wrapped in brackets.
+	if !strings.Contains(plain, "[ tcp ]") {
+		t.Errorf("active option 'tcp' should be shown as '[ tcp ]', got: %q", plain)
+	}
+}
+
+// TestColProtoFitsLongestOption ensures colProto is wide enough for "tcp+udp" (7 chars + 1 pad).
+func TestColProtoFitsLongestOption(t *testing.T) {
+	longestOption := "TCP+UDP"
+	w := lipgloss.Width(longestOption)
+	if colProto < w {
+		t.Errorf("colProto=%d is too narrow for %q (%d cells)", colProto, longestOption, w)
 	}
 }
 
