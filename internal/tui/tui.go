@@ -471,27 +471,38 @@ func commit(rules []nft.Rule) ([]nft.Rule, error) {
 }
 
 func (m model) View() string {
+	var inner string
 	switch m.mode {
 	case viewAdd, viewEdit:
-		return m.viewForm()
+		inner = m.viewForm()
 	case viewConfirmDelete:
-		return m.viewConfirm(
+		inner = m.viewConfirm(
 			fmt.Sprintf("确认删除该规则？\n\n  %s\n", m.rules[m.cursor].Display()))
 	case viewConfirmClear:
-		return m.viewConfirm(
+		inner = m.viewConfirm(
 			fmt.Sprintf("确认清空全部 %d 条转发规则？", len(m.rules)))
 	default:
-		return m.viewList()
+		inner = m.viewList()
 	}
+	// Wrap the entire viewport with a 2-cell horizontal margin on each side.
+	// PaddingLeft/PaddingRight (not Margin) is used so the background of the
+	// padding area inherits the terminal default, keeping the margins plain
+	// while the selected-row highlight is contained within the inner content.
+	return lipgloss.NewStyle().PaddingLeft(colMargin).PaddingRight(colMargin).Render(inner)
 }
 
 // Column widths in terminal cells (CJK double-width characters count as 2 cells).
 // These constants must match between the header and every data row.
 const (
-	colProto   = 8  // "TCP     " / "UDP     " / "TCP+UDP "
-	colSrcPort = 8  // "  8088  "
-	colDest    = 28 // "→ 100.100.100.11:8088       "
+	colProto   = 8  // "tcp+udp " (longest option 7 chars + 1 pad)
+	colSrcPort = 10 // " 65535    "
+	colDest    = 18 // "100.100.100.255   " (max IPv4 15 chars + 3 pad)
+	colDstPort = 10 // " 65535    "
 	// colComment is flexible — it consumes the remainder of the line
+	// Total fixed width: colProto + colSrcPort + colDest + colDstPort = 46 cells
+
+	// colMargin is the horizontal margin (in cells) on each side of the viewport.
+	colMargin = 2
 )
 
 // cellStyle returns a lipgloss style that pads/truncates to exactly w terminal cells.
@@ -523,14 +534,15 @@ func truncateCell(s string, maxCells int) string {
 	return string(out) + "…"
 }
 
-// renderTableRow assembles a fixed-width table row from four cell strings.
+// renderTableRow assembles a fixed-width table row from five cell strings.
 // Columns: proto (colProto cells), srcPort (colSrcPort cells),
-// dest (colDest cells), comment (flexible).
+// dest (colDest cells), dstPort (colDstPort cells), comment (flexible).
 // The assembled line contains no styling — callers apply styles after.
-func renderTableRow(proto, srcPort, dest, comment string) string {
+func renderTableRow(proto, srcPort, dest, dstPort, comment string) string {
 	return cellStyle(colProto).Render(truncateCell(proto, colProto)) +
 		cellStyle(colSrcPort).Render(truncateCell(srcPort, colSrcPort)) +
 		cellStyle(colDest).Render(truncateCell(dest, colDest)) +
+		cellStyle(colDstPort).Render(truncateCell(dstPort, colDstPort)) +
 		comment
 }
 
@@ -547,43 +559,36 @@ func (m model) viewList() string {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
 	} else {
 		// Header row uses the same column model as data rows.
-		header := renderTableRow("协议", "监听", "→ 目标", "备注")
+		header := renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 		b.WriteString(headerStyle.Render(header) + "\n")
 
+		fixedWidth := colProto + colSrcPort + colDest + colDstPort
+		// innerWidth is the usable terminal width minus the two side margins.
+		innerWidth := m.width - 2*colMargin
+		if innerWidth < fixedWidth+1 {
+			innerWidth = 80 - 2*colMargin
+		}
+		commentWidth := innerWidth - fixedWidth
+
 		for i, r := range m.rules {
-			target := r.DestIP
+			// Prefer DestHost (what the user typed) over DestIP for the target cell.
+			destHost := r.DestIP
 			if r.DestHost != "" {
-				if r.DestIP != "" {
-					target = fmt.Sprintf("%s (→ %s)", r.DestHost, r.DestIP)
-				} else {
-					target = r.DestHost
-				}
+				destHost = r.DestHost
 			}
-			destCell := fmt.Sprintf("→ %s:%d", target, r.DestPort)
-			line := renderTableRow(
-				strings.ToUpper(r.Proto),
+			// Always render with a padded comment so selected highlight fills inner width.
+			paddedLine := renderTableRow(
+				strings.ToLower(r.Proto),
 				strconv.Itoa(r.SrcPort),
-				destCell,
-				r.Comment,
+				destHost,
+				strconv.Itoa(r.DestPort),
+				cellStyle(commentWidth).Render(r.Comment),
 			)
 			if i == m.cursor {
-				// Determine the fixed portion width so the highlight spans the full row.
-				fixedWidth := colProto + colSrcPort + colDest
-				// Pad comment cell to fill the terminal width (or a sane default).
-				termWidth := m.width
-				if termWidth < fixedWidth+1 {
-					termWidth = 80
-				}
-				commentWidth := termWidth - fixedWidth
-				paddedLine := renderTableRow(
-					strings.ToUpper(r.Proto),
-					strconv.Itoa(r.SrcPort),
-					destCell,
-					cellStyle(commentWidth).Render(r.Comment),
-				)
+				// Apply highlight only to the inner content; margins remain un-highlighted.
 				b.WriteString(selectedStyle.Render(paddedLine) + "\n")
 			} else {
-				b.WriteString(line + "\n")
+				b.WriteString(paddedLine + "\n")
 			}
 		}
 	}

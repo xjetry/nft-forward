@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,23 +42,24 @@ func fixedPortion(s string, targetCells int) string {
 // through renderTableRow have identical fixed-column widths regardless of
 // destination address length.
 func TestRenderTableRow_ColumnAlignment(t *testing.T) {
-	header := renderTableRow("协议", "监听", "→ 目标", "备注")
+	header := renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 	headerPlain := stripANSI(header)
 
 	rows := []struct {
 		proto   string
 		port    string
 		dest    string
+		dstPort string
 		comment string
 	}{
-		{"TCP", "8088", "→ 100.100.100.11:8088", "T"},
-		{"TCP", "10010", "→ 127.0.0.1:10011", "local"},
-		{"UDP", "53", "→ 8.8.8.8:53", "dns"},
+		{"tcp", "8088", "100.100.100.11", "8088", "T"},
+		{"tcp", "10010", "127.0.0.1", "10011", "local"},
+		{"udp", "53", "8.8.8.8", "53", "dns"},
 		// Long destination that must be truncated.
-		{"TCP", "9999", "→ very-long-hostname.example.com:12345", "overflow"},
+		{"tcp", "9999", "very-long-hostname.example.com", "12345", "overflow"},
 	}
 
-	expectedFixedCells := colProto + colSrcPort + colDest
+	expectedFixedCells := colProto + colSrcPort + colDest + colDstPort
 
 	// The header's fixed portion must be exactly expectedFixedCells wide.
 	hFixed := fixedPortion(headerPlain, expectedFixedCells)
@@ -68,7 +70,7 @@ func TestRenderTableRow_ColumnAlignment(t *testing.T) {
 	}
 
 	for _, row := range rows {
-		line := renderTableRow(row.proto, row.port, row.dest, row.comment)
+		line := renderTableRow(row.proto, row.port, row.dest, row.dstPort, row.comment)
 		linePlain := stripANSI(line)
 
 		// 1. Every row must be at least as wide as the fixed columns.
@@ -92,8 +94,8 @@ func TestRenderTableRow_ColumnAlignment(t *testing.T) {
 // TestRenderTableRow_TruncationEllipsis verifies that a destination string longer
 // than colDest cells is truncated and the dest cell ends with "…".
 func TestRenderTableRow_TruncationEllipsis(t *testing.T) {
-	longDest := "→ " + strings.Repeat("x", 100)
-	line := renderTableRow("TCP", "80", longDest, "")
+	longDest := strings.Repeat("x", 100)
+	line := renderTableRow("tcp", "80", longDest, "8080", "")
 	plain := stripANSI(line)
 
 	// Skip the proto+srcPort prefix and examine the dest cell.
@@ -240,6 +242,72 @@ func TestColProtoFitsLongestOption(t *testing.T) {
 	}
 }
 
+// TestRenderTableRow_FiveColumns verifies the 5-column layout (proto | srcPort | dest | dstPort | comment).
+// It checks:
+//  1. Each row's fixed portion is exactly 46 cells (colProto+colSrcPort+colDest+colDstPort).
+//  2. The 远程端口 cell contains the expected port string.
+func TestRenderTableRow_FiveColumns(t *testing.T) {
+	const expectedFixed = colProto + colSrcPort + colDest + colDstPort // 46
+
+	cases := []struct {
+		rule        nft.Rule
+		wantDstPort string
+		desc        string
+	}{
+		{
+			rule:        nft.Rule{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.1", DestPort: 9000, Comment: "short-host"},
+			wantDstPort: "9000",
+			desc:        "IPv4 short host",
+		},
+		{
+			rule:        nft.Rule{Proto: "udp", SrcPort: 1234, DestIP: "192.168.1.1", DestPort: 65535, Comment: "max-port"},
+			wantDstPort: "65535",
+			desc:        "max remote port",
+		},
+		{
+			rule:        nft.Rule{Proto: "tcp+udp", SrcPort: 443, DestHost: "my.ddns.example.com", DestIP: "203.0.113.5", DestPort: 8443, Comment: "ddns"},
+			wantDstPort: "8443",
+			desc:        "DDNS DestHost preferred over DestIP",
+		},
+	}
+
+	for _, c := range cases {
+		r := c.rule
+		destHost := r.DestIP
+		if r.DestHost != "" {
+			destHost = r.DestHost
+		}
+		dstPortStr := strconv.Itoa(r.DestPort)
+
+		line := renderTableRow(
+			strings.ToLower(r.Proto),
+			strconv.Itoa(r.SrcPort),
+			destHost,
+			dstPortStr,
+			r.Comment,
+		)
+		plain := stripANSI(line)
+
+		// 1. Fixed portion must be exactly 58 cells.
+		rFixed := fixedPortion(plain, expectedFixed)
+		rFixedW := lipgloss.Width(rFixed)
+		if rFixedW != expectedFixed {
+			t.Errorf("[%s] fixed-column width = %d, want %d (portion: %q)",
+				c.desc, rFixedW, expectedFixed, rFixed)
+		}
+
+		// 2. The 远程端口 cell (4th fixed column) must contain the expected port.
+		// Extract the dstPort cell: bytes between (colProto+colSrcPort+colDest) and end of fixed.
+		afterThree := fixedPortion(plain, colProto+colSrcPort+colDest)
+		dstPortCell := fixedPortion(plain[len(afterThree):], colDstPort)
+		dstPortCellTrimmed := strings.TrimSpace(dstPortCell)
+		if dstPortCellTrimmed != c.wantDstPort {
+			t.Errorf("[%s] 远程端口 cell = %q (trimmed: %q), want %q",
+				c.desc, dstPortCell, dstPortCellTrimmed, c.wantDstPort)
+		}
+	}
+}
+
 // TestViewList_ColumnConsistency builds rows for mixed-length rules and
 // checks that each data row has the same fixed-column display width as the header.
 func TestViewList_ColumnConsistency(t *testing.T) {
@@ -249,9 +317,9 @@ func TestViewList_ColumnConsistency(t *testing.T) {
 		{Proto: "udp", SrcPort: 53, DestHost: "dns.example.com", DestIP: "8.8.8.8", DestPort: 53, Comment: "dns-forward"},
 	}
 
-	header := renderTableRow("协议", "监听", "→ 目标", "备注")
+	header := renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 	headerPlain := stripANSI(header)
-	expectedFixed := colProto + colSrcPort + colDest
+	expectedFixed := colProto + colSrcPort + colDest + colDstPort
 
 	hFixed := fixedPortion(headerPlain, expectedFixed)
 	if lipgloss.Width(hFixed) != expectedFixed {
@@ -259,20 +327,16 @@ func TestViewList_ColumnConsistency(t *testing.T) {
 	}
 
 	for _, r := range rules {
-		target := r.DestIP
+		destHost := r.DestIP
 		if r.DestHost != "" {
-			if r.DestIP != "" {
-				target = fmt.Sprintf("%s (→ %s)", r.DestHost, r.DestIP)
-			} else {
-				target = r.DestHost
-			}
+			destHost = r.DestHost
 		}
-		destCell := fmt.Sprintf("→ %s:%d", target, r.DestPort)
 
 		line := renderTableRow(
-			strings.ToUpper(r.Proto),
+			strings.ToLower(r.Proto),
 			fmt.Sprintf("%d", r.SrcPort),
-			destCell,
+			destHost,
+			fmt.Sprintf("%d", r.DestPort),
 			r.Comment,
 		)
 		plain := stripANSI(line)
@@ -280,7 +344,7 @@ func TestViewList_ColumnConsistency(t *testing.T) {
 		rFixedW := lipgloss.Width(rFixed)
 		if rFixedW != expectedFixed {
 			t.Errorf("rule %s/%d dest=%q: fixed-column width = %d, want %d",
-				r.Proto, r.SrcPort, destCell, rFixedW, expectedFixed)
+				r.Proto, r.SrcPort, destHost, rFixedW, expectedFixed)
 		}
 	}
 }
