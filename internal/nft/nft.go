@@ -55,9 +55,9 @@ func NewRuleID() string {
 
 func Validate(r Rule) error {
 	switch r.Proto {
-	case "tcp", "udp":
+	case "tcp", "udp", "tcp+udp":
 	default:
-		return fmt.Errorf("协议必须为 tcp 或 udp")
+		return fmt.Errorf("协议必须为 tcp、udp 或 tcp+udp")
 	}
 	if r.SrcPort < 1 || r.SrcPort > 65535 {
 		return fmt.Errorf("监听端口必须在 1-65535 之间")
@@ -84,6 +84,29 @@ func Validate(r Rule) error {
 	return nil
 }
 
+// protoMatch returns the nft match expression for the protocol and port.
+// For "tcp+udp", it uses set syntax with the transport-header dport keyword
+// so that nft accepts the multi-protocol match without error.
+func protoMatch(proto string, port int) string {
+	switch proto {
+	case "tcp+udp":
+		return fmt.Sprintf("meta l4proto { tcp, udp } th dport %d", port)
+	default:
+		return fmt.Sprintf("%s dport %d", proto, port)
+	}
+}
+
+// protoPostMatch returns the postrouting nft match for the protocol and port.
+// For "tcp+udp" the same set syntax is required.
+func protoPostMatch(proto string, port int) string {
+	switch proto {
+	case "tcp+udp":
+		return fmt.Sprintf("meta l4proto { tcp, udp } th dport %d", port)
+	default:
+		return fmt.Sprintf("%s dport %d", proto, port)
+	}
+}
+
 func RenderRuleset(rules []Rule) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("table %s %s {\n", TableFamily, TableName))
@@ -96,15 +119,15 @@ func RenderRuleset(rules []Rule) string {
 			// minor class id, so packets are routed to the rate-limited class.
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
-		b.WriteString(fmt.Sprintf("\t\t%s dport %d %scounter dnat to %s:%d\n",
-			r.Proto, r.SrcPort, mark, r.DestIP, r.DestPort))
+		b.WriteString(fmt.Sprintf("\t\t%s %scounter dnat to %s:%d\n",
+			protoMatch(r.Proto, r.SrcPort), mark, r.DestIP, r.DestPort))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	for _, r := range rules {
-		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s dport %d masquerade\n",
-			r.DestIP, r.Proto, r.DestPort))
+		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s masquerade\n",
+			r.DestIP, protoPostMatch(r.Proto, r.DestPort)))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")
