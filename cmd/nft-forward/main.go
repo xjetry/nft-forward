@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"nft-forward/internal/daemon"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/store"
 	"nft-forward/internal/sysdeps"
@@ -15,6 +16,13 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch must precede flag.Parse() so the global flag set
+	// does not try to consume subcommand-specific args.
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
+		os.Exit(runDaemon())
+	}
+
 	var (
 		applyOnly  bool
 		uninstall  bool
@@ -35,6 +43,56 @@ func main() {
 	default:
 		os.Exit(runTUI())
 	}
+}
+
+func runDaemon() int {
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "nft-forward daemon 必须以 root 身份运行")
+		return 1
+	}
+
+	var (
+		socketPath string
+		statePath  string
+		groupName  string
+	)
+	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
+	fs.StringVar(&statePath, "state", daemon.DefaultStatePath, "持久化 state 文件路径")
+	fs.StringVar(&groupName, "group", daemon.DefaultGroupName, "socket 文件 group（不存在时回落到默认 group）")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return 2
+	}
+
+	if err := sysdeps.Ensure("nftables"); err != nil {
+		fmt.Fprintln(os.Stderr, "依赖检查失败:", err)
+		return 1
+	}
+	if !nft.Available() {
+		fmt.Fprintln(os.Stderr, "nft 命令不可用，请先安装 nftables")
+		return 1
+	}
+	if err := nft.Probe(); err != nil {
+		fmt.Fprintln(os.Stderr, "nft 检测失败:", err)
+		return 1
+	}
+	if !nft.IPForwardEnabled() {
+		if err := nft.EnableIPForward(); err != nil {
+			fmt.Fprintln(os.Stderr, "启用 ip_forward 失败:", err)
+			return 1
+		}
+	}
+
+	d := daemon.New(daemon.Config{
+		SocketPath: socketPath,
+		StatePath:  statePath,
+		GroupName:  groupName,
+	})
+	if err := d.RunWithSignals(); err != nil {
+		fmt.Fprintln(os.Stderr, "daemon 运行失败:", err)
+		return 1
+	}
+	return 0
 }
 
 func runApply() int {
@@ -160,4 +218,3 @@ func promptYes(prompt string, defaultYes bool) bool {
 	}
 	return ans == "y" || ans == "yes"
 }
-
