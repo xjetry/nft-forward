@@ -13,7 +13,6 @@ import (
 	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
-	"nft-forward/internal/systemd"
 )
 
 // daemonClient is the subset of daemonclient.Client the TUI relies on.
@@ -588,12 +587,7 @@ func renderTableRow(proto, srcPort, dest, dstPort, comment string) string {
 
 func (m model) viewList() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "  ")
-	if systemd.Installed() {
-		b.WriteString(okStyle.Render("● 开机持久化已启用") + "\n\n")
-	} else {
-		b.WriteString(warnStyle.Render("○ 开机持久化未启用") + "\n\n")
-	}
+	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "\n\n")
 
 	if len(m.rules) == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
