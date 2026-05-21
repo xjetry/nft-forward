@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nft-forward/internal/daemon"
+	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/store"
 	"nft-forward/internal/sysdeps"
@@ -144,32 +145,15 @@ func runUninstall() int {
 }
 
 func runTUI() int {
-	if err := preflight(); err != nil {
-		fmt.Fprintln(os.Stderr, "错误:", err)
+	client := daemonclient.New(daemonclient.DefaultSocketPath)
+	if err := client.Health(); err != nil {
+		fmt.Fprintln(os.Stderr, "无法连接 nft-forward daemon:", err)
+		fmt.Fprintln(os.Stderr, "请先启动 daemon：sudo systemctl start nft-forward-daemon.service")
+		fmt.Fprintln(os.Stderr, "或者临时：sudo nft-forward daemon")
 		return 1
 	}
 
-	if !systemd.Installed() {
-		if promptPersist() {
-			if err := systemd.Install(); err != nil {
-				fmt.Fprintln(os.Stderr, "安装持久化服务失败:", err)
-				return 1
-			}
-			fmt.Println("已启用开机持久化：systemd 单元 nft-forward.service")
-		}
-	}
-
-	rules, err := store.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "加载规则失败:", err)
-		return 1
-	}
-	if err := nft.Apply(rules); err != nil {
-		fmt.Fprintln(os.Stderr, "应用规则失败:", err)
-		return 1
-	}
-
-	if err := tui.Run(rules); err != nil {
+	if err := tui.Run(client); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI 错误:", err)
 		return 1
 	}
