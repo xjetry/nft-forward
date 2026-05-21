@@ -147,3 +147,78 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 		t.Fatalf("state.json not persisted as expected: %+v", saved)
 	}
 }
+
+func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
+	root := t.TempDir()
+	tuiPath := filepath.Join(root, "etc", "nft-forward", "rules.json")
+	if err := os.MkdirAll(filepath.Dir(tuiPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`[{"id":"legacy1","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]`)
+	if err := os.WriteFile(tuiPath, legacy, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeApplier{}
+	statePath := filepath.Join(root, "state.json")
+	d := New(Config{
+		StatePath:  statePath,
+		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
+		Applier:    fa,
+		LegacyPaths: LegacyMigrationPaths{
+			TUI:           tuiPath,
+			Agent:         filepath.Join(root, "no-such-agent.json"),
+			EmbeddedAgent: filepath.Join(root, "no-such-embedded.json"),
+		},
+	})
+
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if len(d.owners["tui"]) != 1 || d.owners["tui"][0].ID != "legacy1" {
+		t.Fatalf("legacy TUI rule not imported into tui segment: %+v", d.owners)
+	}
+	if len(fa.last) != 1 {
+		t.Fatalf("Apply should see merged ruleset (1 rule): %+v", fa.last)
+	}
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("state.json not created post-migration: %v", err)
+	}
+	if _, err := os.Stat(tuiPath + ".migrated"); err != nil {
+		t.Fatalf("legacy file should be renamed: %v", err)
+	}
+}
+
+func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state.json")
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{{ID: "from-v2", Proto: "tcp", SrcPort: 90, DestIP: "9.0.0.0", DestPort: 90}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(root, "rules.json")
+	if err := os.WriteFile(legacyPath, []byte(`[{"id":"ghost","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeApplier{}
+	d := New(Config{
+		StatePath:   statePath,
+		SocketPath:  filepath.Join(shortSockDir(t), "s.sock"),
+		Applier:     fa,
+		LegacyPaths: LegacyMigrationPaths{TUI: legacyPath},
+	})
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if d.owners["tui"][0].ID != "from-v2" {
+		t.Fatalf("expected v2 state, got: %+v", d.owners["tui"])
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy file should still exist (not migrated): %v", err)
+	}
+	if _, err := os.Stat(legacyPath + ".migrated"); !os.IsNotExist(err) {
+		t.Fatalf(".migrated marker should NOT exist when state already there: %v", err)
+	}
+}

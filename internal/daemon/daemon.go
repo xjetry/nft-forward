@@ -25,6 +25,11 @@ type Config struct {
 	StatePath  string
 	GroupName  string
 	Applier    Applier
+
+	// LegacyPaths configures where to look for the three pre-daemon state
+	// files (TUI rules.json, agent-state.json, embedded-agent-state.json).
+	// Production defaults populated by New; tests inject a temp dir.
+	LegacyPaths LegacyMigrationPaths
 }
 
 
@@ -43,11 +48,15 @@ func New(cfg Config) *Daemon {
 	if cfg.Applier == nil {
 		cfg.Applier = DefaultApplier()
 	}
+	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
+		cfg.LegacyPaths = DefaultLegacyPaths()
+	}
 	return &Daemon{
-		socketPath: cfg.SocketPath,
-		statePath:  cfg.StatePath,
-		groupName:  cfg.GroupName,
-		applier:    cfg.Applier,
+		socketPath:  cfg.SocketPath,
+		statePath:   cfg.StatePath,
+		groupName:   cfg.GroupName,
+		applier:     cfg.Applier,
+		legacyPaths: cfg.LegacyPaths,
 	}
 }
 
@@ -55,16 +64,29 @@ func New(cfg Config) *Daemon {
 // reflects the last known good configuration immediately on daemon startup.
 // Must be called before Run.
 func (d *Daemon) Bootstrap() error {
+	// If daemon's own state.json does not exist, this is potentially a
+	// first-boot upgrade from the pre-daemon binaries — try importing
+	// their legacy state files. We only attempt migration on first boot
+	// so a later legacy file showing up after the daemon has been running
+	// (e.g. a stale leftover) does not silently overwrite live state.
+	if _, err := os.Stat(d.statePath); os.IsNotExist(err) {
+		migrated, mErr := migrateLegacyState(d.legacyPaths)
+		if mErr != nil {
+			return fmt.Errorf("migrate legacy state: %w", mErr)
+		}
+		if len(migrated) > 0 {
+			if err := SaveState(d.statePath, migrated); err != nil {
+				return fmt.Errorf("save migrated state: %w", err)
+			}
+		}
+	}
+
 	owners, err := LoadState(d.statePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
 	merged, err := MergedRuleset(owners)
 	if err != nil {
-		// Persisted state should never contain a conflict — it was written
-		// by us after a passing merge. If we see one now the file was
-		// hand-edited or corrupted; refuse to start rather than risk
-		// flapping the kernel.
 		return fmt.Errorf("persisted state has conflict: %w", err)
 	}
 	if len(merged) > 0 {

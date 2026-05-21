@@ -13,10 +13,11 @@ import (
 // shared by the HTTP handlers and the lifecycle code.
 // Fields are unexported; production callers go through New().
 type Daemon struct {
-	socketPath string
-	statePath  string
-	groupName  string
-	applier    Applier
+	socketPath  string
+	statePath   string
+	groupName   string
+	applier     Applier
+	legacyPaths LegacyMigrationPaths
 
 	mu     sync.Mutex
 	owners OwnerRuleset
