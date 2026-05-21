@@ -27,8 +27,9 @@ type stateFile struct {
 	Owners  OwnerRuleset `json:"owners"`
 }
 
-// legacyV1File is the Phase A on-disk layout. We keep this type defined
-// purely to recognize and migrate it; we do not write v1 anymore.
+// legacyV1File is the pre-v2 on-disk layout where rules were stored as a
+// single flat slice keyed by "rules". We keep this type defined purely
+// to recognize and migrate it; we do not write v1 anymore.
 type legacyV1File struct {
 	Version int        `json:"version"`
 	Rules   []nft.Rule `json:"rules"`
