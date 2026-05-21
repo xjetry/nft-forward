@@ -118,4 +118,5 @@ ls /tmp/nft-forward.sock
 
 - **仅 unix socket** — 远程接入（HTTP + Bearer token）会在接入 server/agent 时再加
 - **无认证** — 只有 socket 文件权限是访问控制（生产部署只让 root + nft-forward group 用户能连）
-- **TUI / server / agent 仍走旧路径**，与 daemon 并存 — 同机同时跑 daemon 和旧 TUI/agent **会冲突**（都想独占本机 nftables 表），验证时只跑 daemon
+- **TUI 已接入 daemon** — 运行 `sudo nft-forward`（默认子命令）会通过 unix socket 与 daemon 对话；daemon 没起会立即报错，不再 fallback 直接管 nftables
+- **server / agent 仍走旧路径** — `nft-server` / `nft-agent` 二进制各自直接操作 nftables，与 daemon 并存会撞表。生产部署目前仍只能选一种：要么单机跑 daemon + TUI，要么跑 server/agent 集群（不要混用）
