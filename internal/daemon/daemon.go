@@ -55,17 +55,25 @@ func New(cfg Config) *Daemon {
 // reflects the last known good configuration immediately on daemon startup.
 // Must be called before Run.
 func (d *Daemon) Bootstrap() error {
-	rules, err := LoadState(d.statePath)
+	owners, err := LoadState(d.statePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
-	if len(rules) > 0 {
-		if err := d.applier.Apply(rules); err != nil {
+	merged, err := MergedRuleset(owners)
+	if err != nil {
+		// Persisted state should never contain a conflict — it was written
+		// by us after a passing merge. If we see one now the file was
+		// hand-edited or corrupted; refuse to start rather than risk
+		// flapping the kernel.
+		return fmt.Errorf("persisted state has conflict: %w", err)
+	}
+	if len(merged) > 0 {
+		if err := d.applier.Apply(merged); err != nil {
 			return fmt.Errorf("apply persisted state: %w", err)
 		}
 	}
 	d.mu.Lock()
-	d.rules = rules
+	d.owners = owners
 	d.mu.Unlock()
 	return nil
 }

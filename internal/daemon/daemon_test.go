@@ -45,10 +45,13 @@ func TestNew_ExplicitOverrides(t *testing.T) {
 	}
 }
 
-func TestBootstrap_LoadsAndApplies(t *testing.T) {
+func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	if err := SaveState(statePath, []nft.Rule{
-		{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080},
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080}},
+		"panel": []nft.Rule{
+			{ID: "p1", Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +64,11 @@ func TestBootstrap_LoadsAndApplies(t *testing.T) {
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if len(fa.last) != 1 || fa.last[0].SrcPort != 80 {
-		t.Fatalf("Bootstrap did not apply state: %+v", fa.last)
+	if len(fa.last) != 2 {
+		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got: %+v", fa.last)
 	}
-	if len(d.rules) != 1 {
-		t.Fatalf("in-memory rules not populated: %+v", d.rules)
+	if len(d.owners["tui"]) != 1 || len(d.owners["panel"]) != 1 {
+		t.Fatalf("in-memory owners not populated: %+v", d.owners)
 	}
 }
 
@@ -106,7 +109,6 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 		}
 	})
 
-	// 等 socket 出现，最多 1s
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(sockPath); err == nil {
@@ -118,7 +120,6 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 		t.Fatalf("socket never appeared: %v", err)
 	}
 
-	// 通过 unix-socket dial 提交一条 ruleset
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
@@ -127,7 +128,7 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 		},
 	}
 	body := `{"rules":[{"id":"rZ","proto":"tcp","src_port":9090,"dest_ip":"1.2.3.4","dest_port":80}]}`
-	resp, err := client.Post("http://unix/v1/ruleset", "application/json", strings.NewReader(body))
+	resp, err := client.Post("http://unix/v1/ruleset/tui", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 1 || saved[0].ID != "rZ" {
+	if len(saved["tui"]) != 1 || saved["tui"][0].ID != "rZ" {
 		t.Fatalf("state.json not persisted as expected: %+v", saved)
 	}
 }
