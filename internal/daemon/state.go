@@ -37,8 +37,16 @@ func LoadState(path string) ([]nft.Rule, error) {
 	return sf.Rules, nil
 }
 
-// SaveState writes the ruleset atomically: write to path+".tmp" first,
-// then rename. A reader seeing path always sees a fully written file.
+// SaveState writes the ruleset atomically at the filesystem-rename level:
+// write to path+".tmp" first, then rename. A reader seeing path always
+// observes a fully written file. On rename failure the temp file is
+// removed best-effort so a retried call does not silently overwrite a
+// stale leftover.
+//
+// This is not crash-safe at the OS level: no fsync is performed, so a
+// system crash between WriteFile and the next page-cache flush can lose
+// the latest contents. For daemon state this is acceptable — a crash
+// either way means the kernel ruleset has to be reconciled on recovery.
 func SaveState(path string, rules []nft.Rule) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
@@ -52,5 +60,9 @@ func SaveState(path string, rules []nft.Rule) error {
 	if err := os.WriteFile(tmp, b, 0o640); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

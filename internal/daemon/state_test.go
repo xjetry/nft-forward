@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"nft-forward/internal/nft"
@@ -23,6 +24,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	in := []nft.Rule{
 		{ID: "r1", Proto: "tcp", SrcPort: 8080, DestIP: "1.2.3.4", DestPort: 80, Comment: "demo"},
 		{ID: "r2", Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
+		{ID: "r3", Proto: "tcp+udp", SrcPort: 443, DestHost: "example.com", DestIP: "203.0.113.5", DestPort: 8443, BandwidthMbps: 100, Comment: "with host + bandwidth"},
 	}
 	if err := SaveState(path, in); err != nil {
 		t.Fatalf("save: %v", err)
@@ -31,8 +33,8 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(out) != 2 || out[0].ID != "r1" || out[1].SrcPort != 53 {
-		t.Fatalf("round-trip mismatch: %+v", out)
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("round-trip mismatch:\nin = %+v\nout = %+v", in, out)
 	}
 }
 
