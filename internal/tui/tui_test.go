@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/nft"
 )
 
@@ -18,6 +19,31 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
 	return ansiRe.ReplaceAllString(s, "")
+}
+
+// fakeDaemonClient stubs the daemonClient interface for TUI tests so
+// they don't have to spin up a real daemon over unix sockets.
+type fakeDaemonClient struct {
+	owners      daemonclient.OwnerRuleset
+	postedOwner string
+	postedRules []nft.Rule
+	postErr     error
+}
+
+func (f *fakeDaemonClient) GetRuleset() (daemonclient.OwnerRuleset, error) {
+	if f.owners == nil {
+		return daemonclient.OwnerRuleset{}, nil
+	}
+	return f.owners, nil
+}
+
+func (f *fakeDaemonClient) PostRuleset(owner string, rules []nft.Rule) error {
+	if f.postErr != nil {
+		return f.postErr
+	}
+	f.postedOwner = owner
+	f.postedRules = append([]nft.Rule(nil), rules...)
+	return nil
 }
 
 // fixedPortion returns the byte-prefix of s whose lipgloss display width equals
@@ -149,7 +175,7 @@ func TestTruncateCell(t *testing.T) {
 
 // TestProtoSelectorCycles verifies that left/right key presses cycle through protoOptions.
 func TestProtoSelectorCycles(t *testing.T) {
-	m := initialModel(nil)
+	m := initialModel(&fakeDaemonClient{}, nil)
 	m.enterAddMode()
 
 	// Initial state: idx=0 (tcp)
@@ -194,7 +220,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 		{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.1", DestPort: 443},
 	}
 	for _, r := range rules {
-		m := initialModel(rules)
+		m := initialModel(&fakeDaemonClient{}, rules)
 		// find cursor index
 		for i, rule := range rules {
 			if rule.Proto == r.Proto && rule.SrcPort == r.SrcPort {
@@ -217,7 +243,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 
 // TestProtoSelectorRenderContainsOptions verifies the selector renders all three options.
 func TestProtoSelectorRenderContainsOptions(t *testing.T) {
-	m := initialModel(nil)
+	m := initialModel(&fakeDaemonClient{}, nil)
 	m.enterAddMode()
 
 	view := m.renderProtoSelector()

@@ -10,11 +10,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
-	"nft-forward/internal/store"
-	"nft-forward/internal/systemd"
 )
+
+// daemonClient is the subset of daemonclient.Client the TUI relies on.
+// Declared locally so the TUI test suite can substitute a fake; the
+// return type uses daemonclient.OwnerRuleset because Go's interface
+// matching is strict on named-vs-unnamed map types — *daemonclient.Client
+// declares OwnerRuleset, so the TUI's interface must use the same name
+// for the structural match to hold.
+type daemonClient interface {
+	GetRuleset() (daemonclient.OwnerRuleset, error)
+	PostRuleset(owner string, rules []nft.Rule) error
+}
 
 type viewMode int
 
@@ -70,16 +80,44 @@ type model struct {
 
 	width  int
 	height int
+
+	client daemonClient
 }
 
-func Run(rules []nft.Rule) error {
-	p := tea.NewProgram(initialModel(rules), tea.WithAltScreen())
-	_, err := p.Run()
+// Run starts the TUI bound to the given daemon client. Caller (cmd) is
+// responsible for verifying the daemon is reachable before invoking Run.
+func Run(client daemonClient) error {
+	rules, err := loadInitialRules(client)
+	if err != nil {
+		return err
+	}
+	p := tea.NewProgram(initialModel(client, rules), tea.WithAltScreen())
+	_, err = p.Run()
 	return err
 }
 
-func initialModel(rules []nft.Rule) model {
-	return model{mode: viewList, rules: rules, inputs: buildInputs()}
+func initialModel(client daemonClient, rules []nft.Rule) model {
+	return model{
+		mode:   viewList,
+		rules:  rules,
+		inputs: buildInputs(),
+		client: client,
+	}
+}
+
+// loadInitialRules fetches the tui owner segment from the daemon. A nil
+// segment (daemon has no tui rules yet) becomes an empty slice so the
+// rest of the TUI does not have to nil-check.
+func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
+	owners, err := client.GetRuleset()
+	if err != nil {
+		return nil, fmt.Errorf("加载规则失败: %w", err)
+	}
+	rules := owners["tui"]
+	if rules == nil {
+		rules = []nft.Rule{}
+	}
+	return rules, nil
 }
 
 func buildInputs() []textinput.Model {
@@ -310,7 +348,7 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 
 	next := append([]nft.Rule{}, m.rules...)
 	next[m.cursor] = r
-	applied, err := commit(next)
+	applied, err := commit(m.client, next)
 	if err != nil {
 		m.err = err.Error()
 		return m, nil
@@ -371,7 +409,7 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 
 	next := append([]nft.Rule{}, m.rules...)
 	next = append(next, r)
-	applied, err := commit(next)
+	applied, err := commit(m.client, next)
 	if err != nil {
 		m.err = err.Error()
 		return m, nil
@@ -397,7 +435,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		removed := m.rules[m.cursor]
 		next := append([]nft.Rule{}, m.rules[:m.cursor]...)
 		next = append(next, m.rules[m.cursor+1:]...)
-		applied, err := commit(next)
+		applied, err := commit(m.client, next)
 		if err != nil {
 			m.err = err.Error()
 			m.mode = viewList
@@ -420,7 +458,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		applied, err := commit(nil)
+		applied, err := commit(m.client, nil)
 		if err != nil {
 			m.err = err.Error()
 			m.mode = viewList
@@ -439,16 +477,20 @@ func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) refresh() {
-	rules, err := store.Load()
+	owners, err := m.client.GetRuleset()
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
+	rules := owners["tui"]
+	if rules == nil {
+		rules = []nft.Rule{}
+	}
 	m.rules = rules
-	m.status = "已从磁盘重新加载"
+	m.status = "已从 daemon 重新加载"
 }
 
-func commit(rules []nft.Rule) ([]nft.Rule, error) {
+func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
@@ -461,10 +503,7 @@ func commit(rules []nft.Rule) ([]nft.Rule, error) {
 			return nil, fmt.Errorf("%s/%d: 无法解析目标域名 %s", rl.Proto, rl.SrcPort, rl.DestHost)
 		}
 	}
-	if err := nft.Apply(resolved); err != nil {
-		return nil, err
-	}
-	if err := store.Save(resolved); err != nil {
+	if err := client.PostRuleset("tui", resolved); err != nil {
 		return nil, err
 	}
 	return resolved, nil
@@ -548,12 +587,7 @@ func renderTableRow(proto, srcPort, dest, dstPort, comment string) string {
 
 func (m model) viewList() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "  ")
-	if systemd.Installed() {
-		b.WriteString(okStyle.Render("● 开机持久化已启用") + "\n\n")
-	} else {
-		b.WriteString(warnStyle.Render("○ 开机持久化未启用") + "\n\n")
-	}
+	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "\n\n")
 
 	if len(m.rules) == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
