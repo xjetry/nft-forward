@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"nft-forward/internal/nft"
 )
 
 // newTestServer wires a Daemon with provided applier and a temp state file
@@ -125,6 +123,9 @@ func TestHandler_PostRuleset_ApplyErrorReturns500AndDoesNotSave(t *testing.T) {
 	if len(saved) != 0 {
 		t.Fatalf("state was saved despite apply error: %+v", saved)
 	}
+	if len(d.rules) != 0 {
+		t.Fatalf("d.rules mutated despite apply error: %+v", d.rules)
+	}
 }
 
 func TestHandler_PostRuleset_BadJSON(t *testing.T) {
@@ -154,5 +155,3 @@ func TestHandler_PutRulesetNotAllowed(t *testing.T) {
 	}
 }
 
-// Reference unused symbols to keep imports tidy.
-var _ = nft.Rule{}

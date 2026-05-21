@@ -73,6 +73,12 @@ func (d *Daemon) handlePostRuleset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := SaveState(d.statePath, p.Rules); err != nil {
+		// Kernel ruleset is already updated by the Apply above; the disk
+		// state lags behind. A daemon restart would reload the old state
+		// and Apply that, rolling the kernel back. We accept this rare
+		// window because SaveState failure is extremely unlikely outside
+		// of a disk full / read-only fs situation, and reporting 500 lets
+		// the client retry or escalate.
 		http.Error(w, "save state: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
