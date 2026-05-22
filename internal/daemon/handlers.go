@@ -1,12 +1,15 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"nft-forward/internal/nft"
+	"nft-forward/internal/resolver"
 )
 
 // Daemon holds the in-memory owner-segmented ruleset and applier wiring
@@ -20,6 +23,8 @@ type Daemon struct {
 	legacyPaths LegacyMigrationPaths
 	iface       string
 	countersFn  func() ([]nft.Counter, error)
+	resolver    *resolver.Resolver
+	resolveFn   resolveFunc
 
 	mu     sync.Mutex
 	owners OwnerRuleset
@@ -93,20 +98,34 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Build the would-be new owner map, then merge to detect conflicts
-	// before touching kernel state.
+	// Snapshot d.owners, replace the segment, merge, resolve, then apply.
+	// State persists the raw (pre-resolve) rules so the refresh loop can
+	// re-resolve when an upstream DNS answer changes.
 	candidate := cloneOwners(d.owners)
 	if len(p.Rules) == 0 {
 		delete(candidate, owner)
 	} else {
 		candidate[owner] = append([]nft.Rule(nil), p.Rules...)
 	}
+
 	merged, err := MergedRuleset(candidate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := d.applier.Apply(merged, d.iface); err != nil {
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	resolved, _, err := d.resolveFn(ctx, merged)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.applier.Apply(resolved, d.iface); err != nil {
 		http.Error(w, "apply: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,8 +49,12 @@ func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
 		applier:   applier,
 		statePath: filepath.Join(t.TempDir(), "state.json"),
 		iface:     "eth0",
-		mu:        sync.Mutex{},
-		owners:    OwnerRuleset{},
+		resolveFn: func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+			// Default: passthrough resolver returns rules unchanged
+			return rules, true, nil
+		},
+		mu:     sync.Mutex{},
+		owners: OwnerRuleset{},
 	}
 	return d, httptest.NewServer(d.Handler())
 }
@@ -62,6 +67,10 @@ func newTestDaemon(t *testing.T) *Daemon {
 		iface:     "eth0",
 		countersFn: func() ([]nft.Counter, error) {
 			panic("countersFn not injected — every test must set d.countersFn explicitly")
+		},
+		resolveFn: func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+			// Default: passthrough resolver returns rules unchanged
+			return rules, true, nil
 		},
 		mu:     sync.Mutex{},
 		owners: OwnerRuleset{},
@@ -374,5 +383,63 @@ func TestApply_TcFailure_StillReturnsErrorAfterNftRan(t *testing.T) {
 	}
 	if len(fake.tcCalls) != 0 {
 		t.Errorf("tc should not have recorded a successful call, got tcCalls=%d", len(fake.tcCalls))
+	}
+}
+
+func TestApplyResolvesDestHost(t *testing.T) {
+	fake := &fakeApplier{}
+	d := newTestDaemon(t)
+	d.applier = fake
+	// fake resolver: example.com -> 192.0.2.5
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		out := make([]nft.Rule, len(in))
+		for i, r := range in {
+			out[i] = r
+			if r.DestHost == "example.com" {
+				out[i].DestIP = "192.0.2.5"
+			}
+		}
+		return out, true, nil
+	}
+
+	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestHost: "example.com", DestPort: 80}}
+	body, _ := json.Marshal(map[string]any{"rules": rules})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+
+	if w.Code/100 != 2 {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if len(fake.nftCalls) != 1 {
+		t.Fatalf("expected 1 apply call")
+	}
+	got := fake.nftCalls[0][0]
+	if got.DestIP != "192.0.2.5" {
+		t.Errorf("DestIP = %q, want 192.0.2.5", got.DestIP)
+	}
+	// State persists raw rules so a refresh can re-resolve.
+	state, err := LoadState(d.statePath)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state["tui"][0].DestHost != "example.com" || state["tui"][0].DestIP != "" {
+		t.Errorf("state should keep raw rule, got %+v", state["tui"][0])
+	}
+}
+
+func TestApplyRejectsUnresolvableHost(t *testing.T) {
+	d := newTestDaemon(t)
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		// resolver returns rules unchanged: DestHost still set, DestIP empty.
+		return in, false, nil
+	}
+	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestHost: "nowhere.invalid", DestPort: 80}}
+	body, _ := json.Marshal(map[string]any{"rules": rules})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }

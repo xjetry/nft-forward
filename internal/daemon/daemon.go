@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nft-forward/internal/nft"
+	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
 )
 
@@ -66,6 +67,7 @@ func New(cfg Config) *Daemon {
 			iface = "eth0"
 		}
 	}
+	r := resolver.New()
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
@@ -74,6 +76,8 @@ func New(cfg Config) *Daemon {
 		legacyPaths: cfg.LegacyPaths,
 		iface:       iface,
 		countersFn:  cfg.CountersFn,
+		resolver:    r,
+		resolveFn:   defaultResolver(r),
 	}
 }
 
