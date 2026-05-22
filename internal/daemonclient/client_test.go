@@ -49,14 +49,20 @@ func TestHealth_OK(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
-	c := New(sock)
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
 	}
 }
 
 func TestHealth_FailsWhenSocketMissing(t *testing.T) {
-	c := New(filepath.Join(shortSockDir(t), "nope.sock"))
+	c, err := New(filepath.Join(shortSockDir(t), "nope.sock"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if err := c.Health(); err == nil {
 		t.Fatal("expected error when socket does not exist")
 	}
@@ -66,8 +72,11 @@ func TestHealth_FailsOnNon200(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
-	c := New(sock)
-	err := c.Health()
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.Health()
 	if err == nil || !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected 500 error, got %v", err)
 	}
@@ -77,8 +86,11 @@ func TestHealth_FailsOnOkFalse(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":false}`))
 	})
-	c := New(sock)
-	err := c.Health()
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.Health()
 	if err == nil || !strings.Contains(err.Error(), "ok=false") {
 		t.Fatalf("expected ok=false error, got %v", err)
 	}
@@ -88,7 +100,10 @@ func TestGetRuleset_RoundTrip(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"owners":{"tui":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80}]}}`))
 	})
-	c := New(sock)
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	got, err := c.GetRuleset()
 	if err != nil {
 		t.Fatalf("GetRuleset: %v", err)
@@ -102,7 +117,10 @@ func TestGetRuleset_EmptyOwnersReturnsNonNilMap(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"owners":{}}`))
 	})
-	c := New(sock)
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	got, err := c.GetRuleset()
 	if err != nil {
 		t.Fatalf("GetRuleset: %v", err)
@@ -123,8 +141,11 @@ func TestPostRuleset_SendsBodyAndOwnerInPath(t *testing.T) {
 		capturedBody, _ = io.ReadAll(r.Body)
 		_, _ = w.Write([]byte(`{"count":1}`))
 	})
-	c := New(sock)
-	err := c.PostRuleset("tui", []nft.Rule{
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.PostRuleset("tui", []nft.Rule{
 		{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 80},
 	})
 	if err != nil {
@@ -148,7 +169,10 @@ func TestPostRuleset_NilRulesNormalizesToEmpty(t *testing.T) {
 		capturedBody, _ = io.ReadAll(r.Body)
 		_, _ = w.Write([]byte(`{"count":0}`))
 	})
-	c := New(sock)
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if err := c.PostRuleset("tui", nil); err != nil {
 		t.Fatalf("PostRuleset: %v", err)
 	}
@@ -161,8 +185,11 @@ func TestPostRuleset_PropagatesConflict(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "port tcp/80 already claimed by owner \"panel\"", http.StatusConflict)
 	})
-	c := New(sock)
-	err := c.PostRuleset("tui", []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}})
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.PostRuleset("tui", []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}})
 	if err == nil {
 		t.Fatal("expected conflict error")
 	}
@@ -172,9 +199,108 @@ func TestPostRuleset_PropagatesConflict(t *testing.T) {
 }
 
 func TestPostRuleset_EmptyOwnerRejectedClientSide(t *testing.T) {
-	c := New("/tmp/not-used.sock")
-	err := c.PostRuleset("", []nft.Rule{{ID: "x"}})
+	c, err := New("/tmp/not-used.sock")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.PostRuleset("", []nft.Rule{{ID: "x"}})
 	if err == nil || !strings.Contains(err.Error(), "owner") {
 		t.Fatalf("expected owner-empty error, got %v", err)
+	}
+}
+
+func TestClient_HTTPTransport_HealthAndPost(t *testing.T) {
+	var gotAuth string
+	var gotOwner string
+	var gotBody []byte
+	srv := http.NewServeMux()
+	srv.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	srv.HandleFunc("/v1/ruleset/panel", func(w http.ResponseWriter, r *http.Request) {
+		gotOwner = "panel"
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	httpSrv := &http.Server{Handler: srv}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go httpSrv.Serve(l)
+	defer httpSrv.Close()
+
+	addr := "http://" + l.Addr().String()
+	c, err := New(addr, WithBearerToken("s3cret"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.Health(); err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if err := c.PostRuleset("panel", []nft.Rule{{Proto: "tcp", SrcPort: 22, DestIP: "10.0.0.1", DestPort: 22}}); err != nil {
+		t.Fatalf("PostRuleset: %v", err)
+	}
+	if gotAuth != "Bearer s3cret" {
+		t.Errorf("Authorization = %q, want Bearer s3cret", gotAuth)
+	}
+	if gotOwner != "panel" {
+		t.Errorf("owner = %q", gotOwner)
+	}
+	if !strings.Contains(string(gotBody), `"src_port":22`) {
+		t.Errorf("body missing rule: %s", gotBody)
+	}
+}
+
+func TestClient_HTTPTransport_GetCounters(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.HandleFunc("/v1/counters", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"counters":[{"proto":"tcp","listen_port":80,"bytes":123,"packets":4}]}`))
+	})
+	httpSrv := &http.Server{Handler: srv}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go httpSrv.Serve(l)
+	defer httpSrv.Close()
+
+	addr := "http://" + l.Addr().String()
+	c, err := New(addr, WithBearerToken("tok"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.GetCounters()
+	if err != nil {
+		t.Fatalf("GetCounters: %v", err)
+	}
+	if len(got) != 1 || got[0].ListenPort != 80 || got[0].Bytes != 123 {
+		t.Errorf("unexpected counters: %+v", got)
+	}
+}
+
+func TestClient_UnixTransport_StillWorks(t *testing.T) {
+	dir := shortSockDir(t)
+	sockPath := filepath.Join(dir, "d.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	go func() { _ = http.Serve(ln, mux) }()
+
+	c, err := New("unix://" + sockPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.Health(); err != nil {
+		t.Fatalf("Health: %v", err)
 	}
 }
