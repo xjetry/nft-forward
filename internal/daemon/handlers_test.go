@@ -28,11 +28,13 @@ func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
 func newTestDaemon(t *testing.T) *Daemon {
 	t.Helper()
 	d := &Daemon{
-		applier:    &fakeApplier{},
-		statePath:  filepath.Join(t.TempDir(), "state.json"),
-		countersFn: defaultCounters,
-		mu:         sync.Mutex{},
-		owners:     OwnerRuleset{},
+		applier:   &fakeApplier{},
+		statePath: filepath.Join(t.TempDir(), "state.json"),
+		countersFn: func() ([]nft.Counter, error) {
+			panic("countersFn not injected — every test must set d.countersFn explicitly")
+		},
+		mu:     sync.Mutex{},
+		owners: OwnerRuleset{},
 	}
 	return d
 }
@@ -279,5 +281,22 @@ func TestHandleCounters_Error(t *testing.T) {
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
+	}
+}
+
+func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
+	d := newTestDaemon(t)
+	d.countersFn = func() ([]nft.Counter, error) { return nil, nil }
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"counters":[]`) {
+		t.Errorf("expected empty array in body, got %s", body)
 	}
 }

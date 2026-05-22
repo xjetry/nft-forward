@@ -20,6 +20,9 @@ func (d *Daemon) handleCounters(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if counters == nil {
+		counters = []nft.Counter{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"counters": counters})
 }
