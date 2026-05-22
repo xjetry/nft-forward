@@ -69,6 +69,126 @@ remove_legacy_units() {
   done
 }
 
+# Detect what role is currently installed by reading systemd unit-files and
+# the daemon unit ExecStart. Echoes a space-separated list of roles found
+# (any of "server" "agent"), or nothing if only a baseline daemon-only TUI
+# install exists. Caller is expected to dispatch into uninstall paths for
+# each role echoed.
+detect_existing_roles() {
+  local roles=()
+  if systemctl list-unit-files --no-legend \
+     | grep -q '^nft-forward-server\.service '; then
+    roles+=(server)
+  fi
+  if [[ -f "$SYSTEMD_DIR/nft-forward-daemon.service" ]] \
+     && grep -q -- '--listen' "$SYSTEMD_DIR/nft-forward-daemon.service"; then
+    roles+=(agent)
+  fi
+  echo "${roles[@]}"
+}
+
+# When installing mode $new, clean up any conflicting old roles.
+# The matrix:
+#   tui    -> uninstall server, uninstall agent
+#   server -> uninstall agent  (server unit gets rewritten in place)
+#   agent  -> uninstall server (daemon unit gets rewritten with --listen)
+# Re-installing the same role doesn't trigger cleanup.
+switch_role_cleanup() {
+  local new="$1"
+  local existing
+  existing="$(detect_existing_roles)"
+  case "$new" in
+    tui)
+      [[ "$existing" == *server* ]] && do_uninstall server 0
+      [[ "$existing" == *agent*  ]] && do_uninstall agent  0
+      ;;
+    server)
+      [[ "$existing" == *agent* ]] && do_uninstall agent 0
+      ;;
+    agent)
+      [[ "$existing" == *server* ]] && do_uninstall server 0
+      ;;
+  esac
+}
+
+# Inline uninstall implementation: target is server/agent/daemon, purge is 0/1.
+# Called both from the top-level "mode=uninstall" path and from
+# switch_role_cleanup (which always passes purge=0).
+do_uninstall() {
+  local target="$1"
+  local purge="${2:-0}"
+  case "$target" in
+    server)
+      systemctl disable --now nft-forward-server.service 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/nft-forward-server.service"
+      systemctl daemon-reload
+      if [[ "$purge" -eq 1 ]]; then
+        # Clear daemon's panel segment so leftover rules from server pushes
+        # don't keep forwarding after the panel database is gone.
+        curl -sf --unix-socket /var/run/nft-forward.sock \
+             -X POST -H 'Content-Type: application/json' \
+             http://daemon/v1/ruleset/panel \
+             -d '{"rules":[]}' >/dev/null 2>&1 \
+          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+        rm -f /var/lib/nft-forward/panel.db \
+              /var/lib/nft-forward/panel.db-wal \
+              /var/lib/nft-forward/panel.db-shm
+        ok "已卸载 server 角色 + 清 panel.db 与 daemon panel 段"
+      else
+        ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
+      fi
+      ;;
+    agent)
+      if [[ "$purge" -eq 1 ]]; then
+        # POST empty panel segment first so daemon persists the clear into
+        # state.json before we restart it under the new unit.
+        curl -sf --unix-socket /var/run/nft-forward.sock \
+             -X POST -H 'Content-Type: application/json' \
+             http://daemon/v1/ruleset/panel \
+             -d '{"rules":[]}' >/dev/null 2>&1 \
+          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+      fi
+      # Restore the daemon unit to a no-listen ExecStart and remove the token file.
+      write_daemon_unit ""
+      rm -f /etc/nft-forward/daemon.token
+      systemctl daemon-reload
+      systemctl restart nft-forward-daemon.service
+      if [[ "$purge" -eq 1 ]]; then
+        rm -rf /etc/nft-forward/
+        ok "已卸载 agent 角色 + 清 /etc/nft-forward/ 与 daemon panel 段"
+      else
+        ok "已卸载 agent 角色（daemon 保留，去掉 --listen；token 文件已删，panel 段保留）"
+      fi
+      ;;
+    daemon)
+      if systemctl is-active --quiet nft-forward-server.service \
+         || systemctl list-unit-files --no-legend \
+            | grep -qE '^nft-forward-server\.service '; then
+        die "请先卸载 server 角色：sudo $0 uninstall server"
+      fi
+      systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/nft-forward-daemon.service"
+      rm -f "$INSTALL_DIR/nft-forward"
+      systemctl daemon-reload
+      if [[ "$purge" -eq 1 ]]; then
+        rm -rf /var/lib/nft-forward/
+        rm -f /etc/sysctl.d/99-nft-forward.conf
+        # Best-effort: drop the dedicated nftables table if still loaded.
+        nft delete table ip nft_forward 2>/dev/null || true
+        # Drop the system group only if it exists; ignore errors otherwise.
+        if getent group nft-forward >/dev/null; then
+          groupdel nft-forward 2>/dev/null || true
+        fi
+        ok "已卸载 daemon + 清 state.json / sysctl drop-in / nftables 表 / 系统组"
+        echo "提示：如有 tc HTB 限速残留，请手动 tc qdisc del dev <iface> root" >&2
+      else
+        ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
+      fi
+      ;;
+    *) die "未知卸载目标: $target" ;;
+  esac
+}
+
 usage() {
   cat <<USAGE
 nft-forward 一键安装/卸载/升级脚本
@@ -281,76 +401,7 @@ esac
 
 # Uninstall takes a separate code path (no download needed).
 if [[ "$mode" == "uninstall" ]]; then
-  case "$UNINSTALL_TARGET" in
-    server)
-      systemctl disable --now nft-forward-server.service 2>/dev/null || true
-      rm -f "$SYSTEMD_DIR/nft-forward-server.service"
-      systemctl daemon-reload
-      if [[ "$purge" -eq 1 ]]; then
-        # Clear daemon's panel segment so leftover rules from server pushes
-        # don't keep forwarding after the panel database is gone.
-        curl -sf --unix-socket /var/run/nft-forward.sock \
-             -X POST -H 'Content-Type: application/json' \
-             http://daemon/v1/ruleset/panel \
-             -d '{"rules":[]}' >/dev/null 2>&1 \
-          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
-        rm -f /var/lib/nft-forward/panel.db \
-              /var/lib/nft-forward/panel.db-wal \
-              /var/lib/nft-forward/panel.db-shm
-        ok "已卸载 server 角色 + 清 panel.db 与 daemon panel 段"
-      else
-        ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
-      fi
-      ;;
-    agent)
-      if [[ "$purge" -eq 1 ]]; then
-        # POST empty panel segment first so daemon persists the clear into
-        # state.json before we restart it under the new unit.
-        curl -sf --unix-socket /var/run/nft-forward.sock \
-             -X POST -H 'Content-Type: application/json' \
-             http://daemon/v1/ruleset/panel \
-             -d '{"rules":[]}' >/dev/null 2>&1 \
-          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
-      fi
-      # Restore the daemon unit to a no-listen ExecStart and remove the token file.
-      write_daemon_unit ""
-      rm -f /etc/nft-forward/daemon.token
-      systemctl daemon-reload
-      systemctl restart nft-forward-daemon.service
-      if [[ "$purge" -eq 1 ]]; then
-        rm -rf /etc/nft-forward/
-        ok "已卸载 agent 角色 + 清 /etc/nft-forward/ 与 daemon panel 段"
-      else
-        ok "已卸载 agent 角色（daemon 保留，去掉 --listen；token 文件已删，panel 段保留）"
-      fi
-      ;;
-    daemon)
-      if systemctl is-active --quiet nft-forward-server.service \
-         || systemctl list-unit-files --no-legend \
-            | grep -qE '^nft-forward-server\.service '; then
-        die "请先卸载 server 角色：sudo $0 uninstall server"
-      fi
-      systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
-      rm -f "$SYSTEMD_DIR/nft-forward-daemon.service"
-      rm -f "$INSTALL_DIR/nft-forward"
-      systemctl daemon-reload
-      if [[ "$purge" -eq 1 ]]; then
-        rm -rf /var/lib/nft-forward/
-        rm -f /etc/sysctl.d/99-nft-forward.conf
-        # Best-effort: drop the dedicated nftables table if still loaded.
-        nft delete table ip nft_forward 2>/dev/null || true
-        # Drop the system group only if it exists; ignore errors otherwise.
-        if getent group nft-forward >/dev/null; then
-          groupdel nft-forward 2>/dev/null || true
-        fi
-        ok "已卸载 daemon + 清 state.json / sysctl drop-in / nftables 表 / 系统组"
-        echo "提示：如有 tc HTB 限速残留，请手动 tc qdisc del dev <iface> root" >&2
-      else
-        ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
-      fi
-      ;;
-    *) die "未知卸载目标: $UNINSTALL_TARGET" ;;
-  esac
+  do_uninstall "$UNINSTALL_TARGET" "$purge"
   exit 0
 fi
 
@@ -399,6 +450,7 @@ primary_ip="${primary_ip:-<本机IP>}"
 
 case "$mode" in
   tui)
+    switch_role_cleanup tui
     write_daemon_unit ""
     systemctl daemon-reload
     systemctl enable --now nft-forward-daemon.service
@@ -414,6 +466,7 @@ EOF
     ;;
 
   server)
+    switch_role_cleanup server
     write_daemon_unit ""
     write_server_unit "$addr"
     systemctl daemon-reload
@@ -432,6 +485,7 @@ EOF
     ;;
 
   agent)
+    switch_role_cleanup agent
     mkdir -p /etc/nft-forward
     install -m 0600 /dev/stdin /etc/nft-forward/daemon.token <<<"$token"
     write_daemon_unit " --listen :$port --token-file /etc/nft-forward/daemon.token"
