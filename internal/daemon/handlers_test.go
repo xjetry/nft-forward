@@ -493,3 +493,30 @@ func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 		t.Fatalf("expected re-apply after IP change, got %d", len(fake.nftCalls))
 	}
 }
+
+func TestRefreshAndHandlerNoRace(t *testing.T) {
+	// Should pass under `go test -race`. Drives concurrent
+	// handleRulesetOwner POST + refreshOnce calls to ensure no data race
+	// on d.owners / d.lastResolved.
+	d := newTestDaemon(t)
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		return in, false, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			_ = d.refreshOnce(context.Background())
+		}
+	}()
+
+	for i := 0; i < 50; i++ {
+		rules := []nft.Rule{{Proto: "tcp", SrcPort: 80 + i, DestIP: "10.0.0.1", DestPort: 80}}
+		body, _ := json.Marshal(map[string]any{"rules": rules})
+		req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		d.Handler().ServeHTTP(w, req)
+	}
+	<-done
+}

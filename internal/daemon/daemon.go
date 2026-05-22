@@ -38,7 +38,6 @@ type Config struct {
 	CountersFn  func() ([]nft.Counter, error)
 }
 
-
 // New constructs a Daemon ready to Bootstrap and Run. Applier defaults to
 // the production nft-backed implementation.
 func New(cfg Config) *Daemon {
@@ -108,10 +107,12 @@ func (d *Daemon) Bootstrap() error {
 	if err != nil {
 		return fmt.Errorf("persisted state has conflict: %w", err)
 	}
+	var resolved []nft.Rule
 	if len(merged) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		resolved, _, err := d.resolveFn(ctx, merged)
+		var err error
+		resolved, _, err = d.resolveFn(ctx, merged)
 		if err != nil {
 			return fmt.Errorf("bootstrap resolve: %w", err)
 		}
@@ -121,10 +122,12 @@ func (d *Daemon) Bootstrap() error {
 		if err := d.applier.Apply(resolved, d.iface); err != nil {
 			return fmt.Errorf("bootstrap apply: %w", err)
 		}
-		d.lastResolved = append([]nft.Rule(nil), resolved...)
 	}
 	d.mu.Lock()
 	d.owners = owners
+	if len(resolved) > 0 {
+		d.lastResolved = append([]nft.Rule(nil), resolved...)
+	}
 	d.mu.Unlock()
 	return nil
 }

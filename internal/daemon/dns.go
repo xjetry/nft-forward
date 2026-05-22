@@ -43,6 +43,7 @@ func requireResolvedHosts(rules []nft.Rule) error {
 func (d *Daemon) refreshOnce(ctx context.Context) error {
 	d.mu.Lock()
 	snapshot := cloneOwners(d.owners)
+	prev := append([]nft.Rule(nil), d.lastResolved...)
 	d.mu.Unlock()
 
 	merged, err := MergedRuleset(snapshot)
@@ -58,7 +59,7 @@ func (d *Daemon) refreshOnce(ctx context.Context) error {
 		// next tick. The caller (the loop) is responsible for log shaping.
 		return err
 	}
-	if !rulesDiffer(d.lastResolved, resolved) {
+	if !rulesDiffer(prev, resolved) {
 		return nil
 	}
 	if err := d.applier.Apply(resolved, d.iface); err != nil {
@@ -83,7 +84,8 @@ func rulesDiffer(a, b []nft.Rule) bool {
 }
 
 // dnsInterval honours NFT_FORWARD_DNS_INTERVAL for parity with the previous
-// agent loop. A zero or invalid value disables the loop.
+// agent loop. When the env var is set to a zero or invalid duration the loop
+// is disabled; when unset, the default is 60 s.
 func dnsInterval() time.Duration {
 	if s := os.Getenv("NFT_FORWARD_DNS_INTERVAL"); s != "" {
 		if d, err := time.ParseDuration(s); err == nil && d > 0 {
