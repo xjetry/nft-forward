@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"nft-forward/internal/nft"
 )
 
 const (
@@ -30,6 +32,7 @@ type Config struct {
 	// files (TUI rules.json, agent-state.json, embedded-agent-state.json).
 	// Production defaults populated by New; tests inject a temp dir.
 	LegacyPaths LegacyMigrationPaths
+	CountersFn  func() ([]nft.Counter, error)
 }
 
 
@@ -51,12 +54,16 @@ func New(cfg Config) *Daemon {
 	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
 		cfg.LegacyPaths = DefaultLegacyPaths()
 	}
+	if cfg.CountersFn == nil {
+		cfg.CountersFn = defaultCounters
+	}
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
 		groupName:   cfg.GroupName,
 		applier:     cfg.Applier,
 		legacyPaths: cfg.LegacyPaths,
+		countersFn:  cfg.CountersFn,
 	}
 }
 

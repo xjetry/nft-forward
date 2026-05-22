@@ -3,12 +3,15 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"nft-forward/internal/nft"
 )
 
 func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
@@ -20,6 +23,18 @@ func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
 		owners:    OwnerRuleset{},
 	}
 	return d, httptest.NewServer(d.Handler())
+}
+
+func newTestDaemon(t *testing.T) *Daemon {
+	t.Helper()
+	d := &Daemon{
+		applier:    &fakeApplier{},
+		statePath:  filepath.Join(t.TempDir(), "state.json"),
+		countersFn: defaultCounters,
+		mu:         sync.Mutex{},
+		owners:     OwnerRuleset{},
+	}
+	return d
 }
 
 func TestHandler_Health(t *testing.T) {
@@ -227,5 +242,42 @@ func TestHandler_PutRulesetNotAllowed(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestHandleCounters(t *testing.T) {
+	d := newTestDaemon(t)
+	d.countersFn = func() ([]nft.Counter, error) {
+		return []nft.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100, Packets: 2}}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got struct {
+		Counters []nft.Counter `json:"counters"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Counters) != 1 || got.Counters[0].ListenPort != 80 {
+		t.Errorf("unexpected counters: %+v", got.Counters)
+	}
+}
+
+func TestHandleCounters_Error(t *testing.T) {
+	d := newTestDaemon(t)
+	d.countersFn = func() ([]nft.Counter, error) {
+		return nil, fmt.Errorf("nft not available")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
 	}
 }

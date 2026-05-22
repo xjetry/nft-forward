@@ -18,6 +18,7 @@ type Daemon struct {
 	groupName   string
 	applier     Applier
 	legacyPaths LegacyMigrationPaths
+	countersFn  func() ([]nft.Counter, error)
 
 	mu     sync.Mutex
 	owners OwnerRuleset
@@ -39,6 +40,7 @@ type fullPayload struct {
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", d.handleHealth)
+	mux.HandleFunc("/v1/counters", d.handleCounters)
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
 	return mux
