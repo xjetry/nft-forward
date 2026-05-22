@@ -1,24 +1,18 @@
 package server
 
 import (
-	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"strings"
 	"time"
 
+	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/db"
-	"nft-forward/internal/nft"
 )
 
 type Poller struct {
 	DB       *sql.DB
 	Pusher   *Pusher
-	Client   *http.Client
 	Interval time.Duration
 	stop     chan struct{}
 }
@@ -27,7 +21,6 @@ func NewPoller(d *sql.DB, p *Pusher, interval time.Duration) *Poller {
 	return &Poller{
 		DB:       d,
 		Pusher:   p,
-		Client:   &http.Client{Timeout: 5 * time.Second},
 		Interval: interval,
 		stop:     make(chan struct{}),
 	}
@@ -64,42 +57,24 @@ func (po *Poller) pollAll() {
 }
 
 func (po *Poller) pollOne(n *db.Node) {
-	var counters []nft.Counter
-	url := strings.TrimRight(n.Address, "/") + "/v1/counters"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+n.Secret)
-	resp, err := po.Client.Do(req)
+	c, err := daemonclient.New(n.Address, daemonclient.WithBearerToken(n.Secret))
 	if err != nil {
 		log.Printf("poller node=%d: %v", n.ID, err)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		log.Printf("poller node=%d HTTP %d: %s", n.ID, resp.StatusCode, strings.TrimSpace(string(buf)))
+	counters, err := c.GetCounters()
+	if err != nil {
+		log.Printf("poller node=%d: %v", n.ID, err)
 		return
 	}
-	var body struct {
-		Counters []nft.Counter `json:"counters"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		log.Printf("poller node=%d decode: %v", n.ID, err)
-		return
-	}
-	counters = body.Counters
 	_ = db.MarkNodeSeen(po.DB, n.ID)
 
-	for _, c := range counters {
-		f, err := db.GetForwardByNodeProtoPort(po.DB, n.ID, c.Proto, c.ListenPort)
+	for _, ct := range counters {
+		f, err := db.GetForwardByNodeProtoPort(po.DB, n.ID, ct.Proto, ct.ListenPort)
 		if err != nil {
 			continue
 		}
-		delta, err := db.UpdateForwardBytes(po.DB, f.ID, c.Bytes)
+		delta, err := db.UpdateForwardBytes(po.DB, f.ID, int64(ct.Bytes))
 		if err != nil {
 			log.Printf("poller: update forward %d: %v", f.ID, err)
 			continue
