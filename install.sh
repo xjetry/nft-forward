@@ -211,7 +211,9 @@ fi
 # once, then layer the role-specific unit on top.
 remove_legacy_units
 
-if [[ "$RELEASE" == "latest" ]]; then
+if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
+  base="$NFTF_RELEASE_BASE_URL"
+elif [[ "$RELEASE" == "latest" ]]; then
   base="https://github.com/$REPO/releases/latest/download"
 else
   base="https://github.com/$REPO/releases/download/$RELEASE"
