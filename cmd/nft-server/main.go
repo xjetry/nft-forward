@@ -59,8 +59,9 @@ func main() {
 		log.Fatalf("内嵌 agent: %v", err)
 	}
 
-	pusher := server.NewPusher(d, embedded)
+	pusher := server.NewPusher(d)
 	go pusher.Run()
+	_ = embedded
 
 	poller := server.NewPoller(d, pusher, 5*time.Second)
 	go poller.Run()

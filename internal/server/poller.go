@@ -65,45 +65,33 @@ func (po *Poller) pollAll() {
 
 func (po *Poller) pollOne(n *db.Node) {
 	var counters []nft.Counter
-	if strings.HasPrefix(n.Address, LocalAddrPrefix) {
-		if po.Pusher.Embedded == nil {
-			return
-		}
-		got, err := po.Pusher.Embedded.GetCounters()
-		if err != nil {
-			log.Printf("poller node=%d (local): %v", n.ID, err)
-			return
-		}
-		counters = got
-	} else {
-		url := strings.TrimRight(n.Address, "/") + "/v1/counters"
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return
-		}
-		req.Header.Set("Authorization", "Bearer "+n.Secret)
-		resp, err := po.Client.Do(req)
-		if err != nil {
-			log.Printf("poller node=%d: %v", n.ID, err)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
-			buf, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			log.Printf("poller node=%d HTTP %d: %s", n.ID, resp.StatusCode, strings.TrimSpace(string(buf)))
-			return
-		}
-		var body struct {
-			Counters []nft.Counter `json:"counters"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			log.Printf("poller node=%d decode: %v", n.ID, err)
-			return
-		}
-		counters = body.Counters
+	url := strings.TrimRight(n.Address, "/") + "/v1/counters"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
 	}
+	req.Header.Set("Authorization", "Bearer "+n.Secret)
+	resp, err := po.Client.Do(req)
+	if err != nil {
+		log.Printf("poller node=%d: %v", n.ID, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Printf("poller node=%d HTTP %d: %s", n.ID, resp.StatusCode, strings.TrimSpace(string(buf)))
+		return
+	}
+	var body struct {
+		Counters []nft.Counter `json:"counters"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Printf("poller node=%d decode: %v", n.ID, err)
+		return
+	}
+	counters = body.Counters
 	_ = db.MarkNodeSeen(po.DB, n.ID)
 
 	for _, c := range counters {

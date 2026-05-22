@@ -1,42 +1,26 @@
 package server
 
 import (
-	"bytes"
-	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"strings"
 	"time"
 
-	"nft-forward/internal/agent"
+	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 )
 
-// LocalAddrPrefix marks a node whose data plane lives in the panel process.
-// We bypass HTTP entirely for these and call the embedded agent directly.
-const LocalAddrPrefix = "local://"
-
 type Pusher struct {
-	DB       *sql.DB
-	Client   *http.Client
-	Embedded *agent.Agent
-	pending  chan int64
-	stop     chan struct{}
+	DB      *sql.DB
+	pending chan int64
+	stop    chan struct{}
 }
 
-func NewPusher(d *sql.DB, embedded *agent.Agent) *Pusher {
+func NewPusher(d *sql.DB) *Pusher {
 	return &Pusher{
-		DB:       d,
-		Embedded: embedded,
-		Client: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		DB:      d,
 		pending: make(chan int64, 256),
 		stop:    make(chan struct{}),
 	}
@@ -145,59 +129,22 @@ func (p *Pusher) pushOne(nodeID int64) {
 }
 
 func (p *Pusher) send(n *db.Node, rules []nft.Rule) error {
-	if strings.HasPrefix(n.Address, LocalAddrPrefix) {
-		if p.Embedded == nil {
-			return fmt.Errorf("节点 %s 标记为本地，但 panel 未注册内嵌 agent", n.Name)
-		}
-		return p.Embedded.ApplyRules(rules)
-	}
-	body, err := json.Marshal(map[string]any{"rules": rules})
+	c, err := daemonclient.New(n.Address, daemonclient.WithBearerToken(n.Secret))
 	if err != nil {
-		return err
+		return fmt.Errorf("dial %s: %w", n.Address, err)
 	}
-	url := strings.TrimRight(n.Address, "/") + "/v1/apply"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+n.Secret)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("agent HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
-	}
-	return nil
+	return c.PostRuleset("panel", rules)
 }
 
 // Probe verifies an agent is reachable. Useful for the "node detail" page so
 // the operator can confirm the install command worked.
 func (p *Pusher) Probe(n *db.Node) error {
-	if strings.HasPrefix(n.Address, LocalAddrPrefix) {
-		_ = db.MarkNodeSeen(p.DB, n.ID)
-		return nil
-	}
-	url := strings.TrimRight(n.Address, "/") + "/v1/status"
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	c, err := daemonclient.New(n.Address, daemonclient.WithBearerToken(n.Secret))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+n.Secret)
-	resp, err := p.Client.Do(req)
-	if err != nil {
+	if err := c.Health(); err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	_ = db.MarkNodeSeen(p.DB, n.ID)
 	return nil
