@@ -56,12 +56,18 @@ docker compose exec daemon bash -c '
   cp /usr/local/sbin/nft-forward /tmp/relmock/nft-forward
   ( cd /tmp/relmock && sha256sum nft-forward > SHA256SUMS )
   ( cd /tmp/relmock && python3 -m http.server 8765 >/tmp/http.log 2>&1 & disown )
-  sleep 1
-  # 预探：URL 替换链路工作
-  curl -sf http://127.0.0.1:8765/nft-forward -o /tmp/check.bin
+  for _ in $(seq 1 20); do
+    curl -sf http://127.0.0.1:8765/nft-forward -o /tmp/check.bin && break
+    sleep 0.2
+  done
+  test -s /tmp/check.bin \
+    || { echo "mock http server 未就绪（4s 内）"; cat /tmp/http.log; exit 1; }
   test "$(sha256sum /tmp/check.bin | awk "{print \$1}")" \
        = "$(sha256sum /usr/local/sbin/nft-forward | awk "{print \$1}")" \
     || { echo "URL 替换/sha 校验链路异常"; exit 1; }
+  # Sanity: 确认 install.sh 源码里仍保留 NFTF_RELEASE_BASE_URL 的 dispatch 分支
+  grep -q "NFTF_RELEASE_BASE_URL" /usr/local/sbin/nft-forward-install \
+    || { echo "install.sh 已丢失 NFTF_RELEASE_BASE_URL dispatch"; exit 1; }
 ' || fail "step 5 失败"
 green "  update 子命令 dry-run 通过（systemd 依赖见手工章节）"
 
