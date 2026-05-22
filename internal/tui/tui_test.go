@@ -374,3 +374,27 @@ func TestViewList_ColumnConsistency(t *testing.T) {
 		}
 	}
 }
+
+// TestCommitPostsRawRules verifies that commit posts rules with DestHost set
+// and DestIP empty, without attempting to resolve hostnames.
+func TestCommitPostsRawRules(t *testing.T) {
+	fake := &fakeDaemonClient{}
+	rules := []nft.Rule{
+		{Proto: "tcp", SrcPort: 80, DestHost: "home.example.com", DestPort: 80},
+	}
+	applied, err := commit(fake, rules)
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if fake.postedOwner != "tui" {
+		t.Errorf("owner = %q, want tui", fake.postedOwner)
+	}
+	if len(fake.postedRules) != 1 {
+		t.Errorf("expected 1 rule posted, got %d", len(fake.postedRules))
+	} else if fake.postedRules[0].DestHost != "home.example.com" || fake.postedRules[0].DestIP != "" {
+		t.Errorf("expected raw rule with DestHost=home.example.com and DestIP empty, got %+v", fake.postedRules[0])
+	}
+	if len(applied) != 1 || applied[0].DestHost != "home.example.com" || applied[0].DestIP != "" {
+		t.Errorf("expected commit to return raw rule with DestHost set, got %+v", applied)
+	}
+}

@@ -14,7 +14,10 @@ import (
 )
 
 func TestNew_DefaultsApplied(t *testing.T) {
-	d := New(Config{})
+	d, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.socketPath != DefaultSocketPath {
 		t.Errorf("socketPath default = %q, want %q", d.socketPath, DefaultSocketPath)
 	}
@@ -31,12 +34,15 @@ func TestNew_DefaultsApplied(t *testing.T) {
 
 func TestNew_ExplicitOverrides(t *testing.T) {
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		SocketPath: "/tmp/x.sock",
 		StatePath:  "/tmp/x.json",
 		GroupName:  "g",
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.socketPath != "/tmp/x.sock" || d.statePath != "/tmp/x.json" || d.groupName != "g" {
 		t.Fatalf("overrides not applied: %+v", d)
 	}
@@ -56,16 +62,19 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if len(fa.last) != 2 {
-		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got: %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 2 {
+		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got nftCalls: %+v", fa.nftCalls)
 	}
 	if len(d.owners["tui"]) != 1 || len(d.owners["panel"]) != 1 {
 		t.Fatalf("in-memory owners not populated: %+v", d.owners)
@@ -73,11 +82,14 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 }
 
 func TestBootstrap_EmptyStateIsFine(t *testing.T) {
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  filepath.Join(t.TempDir(), "missing.json"),
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    &fakeApplier{},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap on empty state: %v", err)
 	}
@@ -87,12 +99,15 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	sockPath := filepath.Join(shortSockDir(t), "test.sock")
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		SocketPath: sockPath,
 		StatePath:  statePath,
 		GroupName:  "",
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -136,8 +151,8 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("POST status = %d", resp.StatusCode)
 	}
-	if len(fa.last) != 1 || fa.last[0].ID != "rZ" {
-		t.Fatalf("applier did not see POSTed rule: %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].ID != "rZ" {
+		t.Fatalf("applier did not see POSTed rule: %+v", fa.nftCalls)
 	}
 	saved, err := LoadState(statePath)
 	if err != nil {
@@ -161,7 +176,7 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 
 	fa := &fakeApplier{}
 	statePath := filepath.Join(root, "state.json")
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    fa,
@@ -171,6 +186,9 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 			EmbeddedAgent: filepath.Join(root, "no-such-embedded.json"),
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -178,8 +196,8 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 	if len(d.owners["tui"]) != 1 || d.owners["tui"][0].ID != "legacy1" {
 		t.Fatalf("legacy TUI rule not imported into tui segment: %+v", d.owners)
 	}
-	if len(fa.last) != 1 {
-		t.Fatalf("Apply should see merged ruleset (1 rule): %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 {
+		t.Fatalf("Apply should see merged ruleset (1 rule): nftCalls=%+v", fa.nftCalls)
 	}
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state.json not created post-migration: %v", err)
@@ -203,12 +221,15 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 	}
 
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:   statePath,
 		SocketPath:  filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:     fa,
 		LegacyPaths: LegacyMigrationPaths{TUI: legacyPath},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -220,5 +241,50 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 	}
 	if _, err := os.Stat(legacyPath + ".migrated"); !os.IsNotExist(err) {
 		t.Fatalf(".migrated marker should NOT exist when state already there: %v", err)
+	}
+}
+
+func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestHost: "x.example.com", DestPort: 80}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeApplier{}
+	d, err := New(Config{
+		StatePath:  statePath,
+		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
+		Applier:    fa,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Override resolveFn to simulate hostname resolution
+	d.resolveFn = func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+		resolved := make([]nft.Rule, len(rules))
+		copy(resolved, rules)
+		for i := range resolved {
+			if resolved[i].DestHost == "x.example.com" {
+				resolved[i].DestIP = "10.0.0.5"
+			}
+		}
+		return resolved, true, nil
+	}
+
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if len(fa.nftCalls) != 1 {
+		t.Fatalf("expected 1 Apply call, got %d", len(fa.nftCalls))
+	}
+	if len(fa.nftCalls[0]) != 1 {
+		t.Fatalf("expected 1 rule in Apply call, got %d", len(fa.nftCalls[0]))
+	}
+	if fa.nftCalls[0][0].DestIP != "10.0.0.5" {
+		t.Fatalf("expected DestIP=10.0.0.5 after resolution, got %q", fa.nftCalls[0][0].DestIP)
 	}
 }

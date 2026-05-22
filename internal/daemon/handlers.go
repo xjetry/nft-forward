@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"nft-forward/internal/nft"
 )
@@ -18,9 +21,15 @@ type Daemon struct {
 	groupName   string
 	applier     Applier
 	legacyPaths LegacyMigrationPaths
+	iface       string
+	countersFn  func() ([]nft.Counter, error)
+	resolveFn   resolveFunc
+	httpListen  string
+	httpToken   string
 
-	mu     sync.Mutex
-	owners OwnerRuleset
+	mu           sync.Mutex
+	owners       OwnerRuleset
+	lastResolved []nft.Rule
 }
 
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
@@ -39,9 +48,30 @@ type fullPayload struct {
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", d.handleHealth)
+	mux.HandleFunc("/v1/counters", d.handleCounters)
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
 	return mux
+}
+
+// httpHandler wraps Handler() with bearer token authentication middleware.
+func (d *Daemon) httpHandler() http.Handler {
+	inner := d.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "Bearer "
+		got := r.Header.Get("Authorization")
+		if len(got) <= len(prefix) || got[:len(prefix)] != prefix {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		expect := []byte(d.httpToken)
+		actual := []byte(got[len(prefix):])
+		if len(expect) != len(actual) || subtle.ConstantTimeCompare(expect, actual) != 1 {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
 }
 
 func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -90,20 +120,34 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Build the would-be new owner map, then merge to detect conflicts
-	// before touching kernel state.
+	// Snapshot d.owners, replace the segment, merge, resolve, then apply.
+	// State persists the raw (pre-resolve) rules so the refresh loop can
+	// re-resolve when an upstream DNS answer changes.
 	candidate := cloneOwners(d.owners)
 	if len(p.Rules) == 0 {
 		delete(candidate, owner)
 	} else {
 		candidate[owner] = append([]nft.Rule(nil), p.Rules...)
 	}
+
 	merged, err := MergedRuleset(candidate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := d.applier.Apply(merged); err != nil {
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	resolved, _, err := d.resolveFn(ctx, merged)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.applier.Apply(resolved, d.iface); err != nil {
 		http.Error(w, "apply: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -118,6 +162,7 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.owners = candidate
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
 	writeJSON(w, http.StatusOK, map[string]int{"count": len(p.Rules)})
 }
 

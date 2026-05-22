@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -494,19 +493,10 @@ func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
-	resolved, _, dnsErr := nft.ResolveHosts(context.Background(), rules, resolver.New())
-	if dnsErr != nil {
-		return nil, dnsErr
-	}
-	for _, rl := range resolved {
-		if rl.DestIP == "" {
-			return nil, fmt.Errorf("%s/%d: 无法解析目标域名 %s", rl.Proto, rl.SrcPort, rl.DestHost)
-		}
-	}
-	if err := client.PostRuleset("tui", resolved); err != nil {
+	if err := client.PostRuleset("tui", rules); err != nil {
 		return nil, err
 	}
-	return resolved, nil
+	return rules, nil
 }
 
 func (m model) View() string {
