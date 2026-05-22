@@ -286,7 +286,21 @@ if [[ "$mode" == "uninstall" ]]; then
       systemctl disable --now nft-forward-server.service 2>/dev/null || true
       rm -f "$SYSTEMD_DIR/nft-forward-server.service"
       systemctl daemon-reload
-      ok "已卸载 server 角色（daemon 保留）"
+      if [[ "$purge" -eq 1 ]]; then
+        # Clear daemon's panel segment so leftover rules from server pushes
+        # don't keep forwarding after the panel database is gone.
+        curl -sf --unix-socket /var/run/nft-forward.sock \
+             -X POST -H 'Content-Type: application/json' \
+             http://daemon/v1/ruleset/panel \
+             -d '{"rules":[]}' >/dev/null 2>&1 \
+          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+        rm -f /var/lib/nft-forward/panel.db \
+              /var/lib/nft-forward/panel.db-wal \
+              /var/lib/nft-forward/panel.db-shm
+        ok "已卸载 server 角色 + 清 panel.db 与 daemon panel 段"
+      else
+        ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
+      fi
       ;;
     agent)
       # Restore the daemon unit to a no-listen ExecStart and remove the token file.
