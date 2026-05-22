@@ -84,7 +84,12 @@ detect_existing_roles() {
      && grep -q -- '--listen' "$SYSTEMD_DIR/nft-forward-daemon.service"; then
     roles+=(agent)
   fi
-  [[ ${#roles[@]} -gt 0 ]] && echo "${roles[*]}"
+  # Use an if-block (not `&&` short-circuit) so an empty array doesn't
+  # make this function return non-zero, which would propagate into
+  # `existing=$(detect_existing_roles)` and trip `set -e` silently.
+  if [[ ${#roles[@]} -gt 0 ]]; then
+    echo "${roles[*]}"
+  fi
 }
 
 # When installing mode $new, clean up any conflicting old roles.
