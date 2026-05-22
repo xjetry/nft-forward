@@ -303,12 +303,26 @@ if [[ "$mode" == "uninstall" ]]; then
       fi
       ;;
     agent)
+      if [[ "$purge" -eq 1 ]]; then
+        # POST empty panel segment first so daemon persists the clear into
+        # state.json before we restart it under the new unit.
+        curl -sf --unix-socket /var/run/nft-forward.sock \
+             -X POST -H 'Content-Type: application/json' \
+             http://daemon/v1/ruleset/panel \
+             -d '{"rules":[]}' >/dev/null 2>&1 \
+          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+      fi
       # Restore the daemon unit to a no-listen ExecStart and remove the token file.
       write_daemon_unit ""
       rm -f /etc/nft-forward/daemon.token
       systemctl daemon-reload
       systemctl restart nft-forward-daemon.service
-      ok "已卸载 agent 角色（daemon 保留，去掉 --listen）"
+      if [[ "$purge" -eq 1 ]]; then
+        rm -rf /etc/nft-forward/
+        ok "已卸载 agent 角色 + 清 /etc/nft-forward/ 与 daemon panel 段"
+      else
+        ok "已卸载 agent 角色（daemon 保留，去掉 --listen；token 文件已删，panel 段保留）"
+      fi
       ;;
     daemon)
       if systemctl is-active --quiet nft-forward-server.service \
