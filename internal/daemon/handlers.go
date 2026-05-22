@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"nft-forward/internal/nft"
-	"nft-forward/internal/resolver"
 )
 
 // Daemon holds the in-memory owner-segmented ruleset and applier wiring
@@ -23,7 +22,6 @@ type Daemon struct {
 	legacyPaths LegacyMigrationPaths
 	iface       string
 	countersFn  func() ([]nft.Counter, error)
-	resolver    *resolver.Resolver
 	resolveFn   resolveFunc
 
 	mu     sync.Mutex

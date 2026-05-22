@@ -222,3 +222,45 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 		t.Fatalf(".migrated marker should NOT exist when state already there: %v", err)
 	}
 }
+
+func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestHost: "x.example.com", DestPort: 80}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeApplier{}
+	d := New(Config{
+		StatePath:  statePath,
+		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
+		Applier:    fa,
+	})
+
+	// Override resolveFn to simulate hostname resolution
+	d.resolveFn = func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+		resolved := make([]nft.Rule, len(rules))
+		copy(resolved, rules)
+		for i := range resolved {
+			if resolved[i].DestHost == "x.example.com" {
+				resolved[i].DestIP = "10.0.0.5"
+			}
+		}
+		return resolved, true, nil
+	}
+
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if len(fa.nftCalls) != 1 {
+		t.Fatalf("expected 1 Apply call, got %d", len(fa.nftCalls))
+	}
+	if len(fa.nftCalls[0]) != 1 {
+		t.Fatalf("expected 1 rule in Apply call, got %d", len(fa.nftCalls[0]))
+	}
+	if fa.nftCalls[0][0].DestIP != "10.0.0.5" {
+		t.Fatalf("expected DestIP=10.0.0.5 after resolution, got %q", fa.nftCalls[0][0].DestIP)
+	}
+}

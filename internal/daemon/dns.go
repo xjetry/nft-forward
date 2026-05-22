@@ -11,6 +11,9 @@ import (
 // resolveFunc is the apply-time DNS resolver. Production points it at
 // nft.ResolveHosts backed by a long-lived resolver.Resolver so positive
 // answers are cached; tests inject deterministic fakes.
+// The bool return signals whether any DestIP in the returned slice differs from
+// the input — meaningful only when err == nil. The apply path discards it;
+// the refresh loop uses it to skip a no-op Apply.
 type resolveFunc func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error)
 
 func defaultResolver(r *resolver.Resolver) resolveFunc {

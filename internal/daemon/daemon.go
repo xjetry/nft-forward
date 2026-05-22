@@ -67,7 +67,6 @@ func New(cfg Config) *Daemon {
 			iface = "eth0"
 		}
 	}
-	r := resolver.New()
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
@@ -76,8 +75,7 @@ func New(cfg Config) *Daemon {
 		legacyPaths: cfg.LegacyPaths,
 		iface:       iface,
 		countersFn:  cfg.CountersFn,
-		resolver:    r,
-		resolveFn:   defaultResolver(r),
+		resolveFn:   defaultResolver(resolver.New()),
 	}
 }
 
@@ -111,8 +109,17 @@ func (d *Daemon) Bootstrap() error {
 		return fmt.Errorf("persisted state has conflict: %w", err)
 	}
 	if len(merged) > 0 {
-		if err := d.applier.Apply(merged, d.iface); err != nil {
-			return fmt.Errorf("apply persisted state: %w", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resolved, _, err := d.resolveFn(ctx, merged)
+		if err != nil {
+			return fmt.Errorf("bootstrap resolve: %w", err)
+		}
+		if err := requireResolvedHosts(resolved); err != nil {
+			return fmt.Errorf("bootstrap: %w", err)
+		}
+		if err := d.applier.Apply(resolved, d.iface); err != nil {
+			return fmt.Errorf("bootstrap apply: %w", err)
 		}
 	}
 	d.mu.Lock()
