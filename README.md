@@ -165,6 +165,42 @@ TUI 键位：
 
 ## 升级与迁移
 
+### 日常升级
+
+新版发布后用 `install.sh update` 升级现有部署：
+
+```bash
+sudo bash install.sh update
+```
+
+行为：拉 GitHub latest 二进制 → sha256 校验 → ELF x86-64 架构校验 → 备份旧二进制到 `/usr/local/sbin/nft-forward.bak` → 原子替换 → `systemctl restart nft-forward-daemon.service`（+ `nft-forward-server.service` 如有）→ 10 秒 health-check。失败自动回滚到旧二进制并重启。
+
+约束：
+
+- `update` 总是拉 `latest`；要锁版本/降级请用 `install.sh tui --release v1.2.3`（等价于重装）
+- `update` 不动 systemd unit 文件，`--listen` / `--addr` / token 等角色配置完全保留
+- daemon 短暂重启期间 nftables 规则从 state.json 重放，规则不丢
+
+### 角色切换
+
+支持互切：
+
+```bash
+sudo bash install.sh tui      # 从 server/agent 降回 tui
+sudo bash install.sh server   # 从 tui/agent 切到 server
+sudo bash install.sh agent    # 从 tui/server 切到 agent
+```
+
+脚本会自动 detect 当前角色并清理冲突的旧 unit / token。**但 state.json 中之前 panel 段的规则会保留并继续生效**——从 server/agent 降回 tui 不会自动撤掉旧的远程推送规则。需要彻底清的话先跑：
+
+```bash
+sudo bash install.sh uninstall server --purge   # 卸 server 同时清 panel.db + daemon panel 段
+sudo bash install.sh uninstall agent  --purge   # 卸 agent 同时清 /etc/nft-forward + daemon panel 段
+sudo bash install.sh uninstall daemon --purge   # 卸 daemon 同时清 state / sysctl / nftables 表 / 系统组
+```
+
+`--purge` 仅在 `uninstall` 模式下有效；不带 `--purge` 时数据完全保留（向后兼容现有行为）。
+
 **从旧版（三二进制布局）升级**，运行新版 `install.sh` 时脚本会自动：
 
 1. 检测并 `systemctl disable --now` 旧的 `nft-forward.service`、`nft-server.service`、`nft-agent.service`，删除对应 unit 文件；
