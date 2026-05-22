@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,11 +37,13 @@ type Config struct {
 	LegacyPaths LegacyMigrationPaths
 	Iface       string
 	CountersFn  func() ([]nft.Counter, error)
+	HTTPListen  string
+	TokenPath   string
 }
 
 // New constructs a Daemon ready to Bootstrap and Run. Applier defaults to
 // the production nft-backed implementation.
-func New(cfg Config) *Daemon {
+func New(cfg Config) (*Daemon, error) {
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = DefaultSocketPath
 	}
@@ -66,6 +69,17 @@ func New(cfg Config) *Daemon {
 			iface = "eth0"
 		}
 	}
+	var httpToken string
+	if cfg.TokenPath != "" {
+		tok, err := os.ReadFile(cfg.TokenPath)
+		if err != nil {
+			return nil, fmt.Errorf("read token file: %w", err)
+		}
+		httpToken = strings.TrimSpace(string(tok))
+		if httpToken == "" {
+			return nil, fmt.Errorf("token file is empty")
+		}
+	}
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
@@ -75,7 +89,9 @@ func New(cfg Config) *Daemon {
 		iface:       iface,
 		countersFn:  cfg.CountersFn,
 		resolveFn:   defaultResolver(resolver.New()),
-	}
+		httpListen:  cfg.HTTPListen,
+		httpToken:   httpToken,
+	}, nil
 }
 
 // Bootstrap loads persisted state and re-applies it so the kernel ruleset
@@ -148,6 +164,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(l) }()
+
+	if d.httpListen != "" {
+		go func() {
+			srv := &http.Server{
+				Addr:              d.httpListen,
+				Handler:           d.httpHandler(),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			log.Printf("nft-forward daemon listening on %s (http)", d.httpListen)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("http listener: %v", err)
+			}
+		}()
+	}
 
 	go d.refreshLoop(ctx)
 

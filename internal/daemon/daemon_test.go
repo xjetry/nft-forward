@@ -14,7 +14,10 @@ import (
 )
 
 func TestNew_DefaultsApplied(t *testing.T) {
-	d := New(Config{})
+	d, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.socketPath != DefaultSocketPath {
 		t.Errorf("socketPath default = %q, want %q", d.socketPath, DefaultSocketPath)
 	}
@@ -31,12 +34,15 @@ func TestNew_DefaultsApplied(t *testing.T) {
 
 func TestNew_ExplicitOverrides(t *testing.T) {
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		SocketPath: "/tmp/x.sock",
 		StatePath:  "/tmp/x.json",
 		GroupName:  "g",
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.socketPath != "/tmp/x.sock" || d.statePath != "/tmp/x.json" || d.groupName != "g" {
 		t.Fatalf("overrides not applied: %+v", d)
 	}
@@ -56,11 +62,14 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -73,11 +82,14 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 }
 
 func TestBootstrap_EmptyStateIsFine(t *testing.T) {
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  filepath.Join(t.TempDir(), "missing.json"),
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    &fakeApplier{},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap on empty state: %v", err)
 	}
@@ -87,12 +99,15 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	sockPath := filepath.Join(shortSockDir(t), "test.sock")
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		SocketPath: sockPath,
 		StatePath:  statePath,
 		GroupName:  "",
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -161,7 +176,7 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 
 	fa := &fakeApplier{}
 	statePath := filepath.Join(root, "state.json")
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    fa,
@@ -171,6 +186,9 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 			EmbeddedAgent: filepath.Join(root, "no-such-embedded.json"),
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -203,12 +221,15 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 	}
 
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:   statePath,
 		SocketPath:  filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:     fa,
 		LegacyPaths: LegacyMigrationPaths{TUI: legacyPath},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -232,11 +253,14 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 	}
 
 	fa := &fakeApplier{}
-	d := New(Config{
+	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Applier:    fa,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Override resolveFn to simulate hostname resolution
 	d.resolveFn = func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {

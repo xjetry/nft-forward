@@ -84,11 +84,15 @@ func runDaemon() int {
 		}
 	}
 
-	d := daemon.New(daemon.Config{
+	d, err := daemon.New(daemon.Config{
 		SocketPath: socketPath,
 		StatePath:  statePath,
 		GroupName:  groupName,
 	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "daemon 构造失败:", err)
+		return 1
+	}
 	if err := d.RunWithSignals(); err != nil {
 		fmt.Fprintln(os.Stderr, "daemon 运行失败:", err)
 		return 1
