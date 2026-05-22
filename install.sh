@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nft-forward 一键安装脚本
-# 从 GitHub release 下载二进制并配置 systemd（server / agent 模式）
+# 从 GitHub release 下载 nft-forward 二进制并配置 host daemon / server / agent / uninstall
 # 用法：见 --help
 
 set -euo pipefail
@@ -82,7 +82,7 @@ nft-forward 一键安装脚本
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
 
 选项 / 环境变量:
-  --port PORT      (PORT)          端口；server 默认 8080，agent 默认 7878
+  --port PORT      (PORT)          agent 监听端口；默认 7878
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
