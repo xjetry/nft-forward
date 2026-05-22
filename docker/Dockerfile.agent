@@ -1,9 +1,0 @@
-FROM debian:bookworm-slim
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates nftables iproute2 curl && \
-    rm -rf /var/lib/apt/lists/*
-COPY build/nft-agent /usr/local/sbin/nft-agent
-RUN mkdir -p /etc/nft-forward /var/lib/nft-forward
-EXPOSE 7878
-ENTRYPOINT ["/usr/local/sbin/nft-agent"]
-CMD ["--listen", ":7878", "--token-file", "/etc/nft-forward/agent.token"]

@@ -1,9 +1,0 @@
-FROM debian:bookworm-slim
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates nftables iproute2 && \
-    rm -rf /var/lib/apt/lists/*
-COPY build/nft-server /usr/local/sbin/nft-server
-RUN mkdir -p /var/lib/nft-forward
-EXPOSE 8080
-ENTRYPOINT ["/usr/local/sbin/nft-server"]
-CMD ["--addr", ":8080"]
