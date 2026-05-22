@@ -10,6 +10,64 @@ RELEASE="${NFTF_RELEASE:-latest}"
 INSTALL_DIR="/usr/local/sbin"
 SYSTEMD_DIR="/etc/systemd/system"
 
+write_daemon_unit() {
+  local extra_args="${1:-}"
+  cat >"$SYSTEMD_DIR/nft-forward-daemon.service" <<EOF
+[Unit]
+Description=nft-forward host daemon (nftables controller)
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+ExecStart=$INSTALL_DIR/nft-forward daemon$extra_args
+Restart=on-failure
+RuntimeDirectory=nft-forward
+RuntimeDirectoryMode=0750
+StateDirectory=nft-forward
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_server_unit() {
+  local addr="${1:-:8080}"
+  cat >"$SYSTEMD_DIR/nft-forward-server.service" <<EOF
+[Unit]
+Description=nft-forward web panel
+Requires=nft-forward-daemon.service
+After=nft-forward-daemon.service
+
+[Service]
+ExecStart=$INSTALL_DIR/nft-forward server --addr $addr
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+remove_legacy_units() {
+  # Earlier releases installed three separate units (nft-forward.service for
+  # the standalone TUI apply path, nft-server.service for the panel, and
+  # nft-agent.service for remote nodes). They are replaced by the
+  # daemon-first layout above. Disable and remove any we find so systemctl
+  # status reflects the new world.
+  for unit in nft-forward.service nft-server.service nft-agent.service; do
+    if systemctl list-unit-files --no-legend | grep -q "^$unit "; then
+      systemctl disable --now "$unit" 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/$unit"
+    fi
+  done
+
+  # Earlier releases also dropped two stand-alone binaries that the daemon
+  # has since absorbed. Remove them so PATH doesn't shadow nft-forward.
+  for bin in nft-agent nft-server; do
+    rm -f "$INSTALL_DIR/$bin"
+  done
+}
+
 usage() {
   cat <<USAGE
 nft-forward 一键安装脚本
