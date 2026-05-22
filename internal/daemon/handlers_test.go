@@ -443,3 +443,53 @@ func TestApplyRejectsUnresolvableHost(t *testing.T) {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
+	d := newTestDaemon(t)
+	fake := d.applier.(*fakeApplier)
+
+	// Seed an owner segment with a host-only rule.
+	d.owners = OwnerRuleset{
+		"tui": {{Proto: "tcp", SrcPort: 80, DestHost: "x.example.com", DestPort: 80}},
+	}
+
+	answer := "192.0.2.10"
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		out := make([]nft.Rule, len(in))
+		changed := false
+		for i, r := range in {
+			out[i] = r
+			if r.DestHost == "x.example.com" {
+				if r.DestIP != answer {
+					changed = true
+				}
+				out[i].DestIP = answer
+			}
+		}
+		return out, changed, nil
+	}
+
+	if err := d.refreshOnce(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(fake.nftCalls) != 1 {
+		t.Fatalf("first refresh should apply, got %d", len(fake.nftCalls))
+	}
+
+	// Second refresh with the same answer should be a no-op.
+	if err := d.refreshOnce(context.Background()); err != nil {
+		t.Fatalf("refresh 2: %v", err)
+	}
+	if len(fake.nftCalls) != 1 {
+		t.Fatalf("idempotent refresh applied %d times", len(fake.nftCalls))
+	}
+
+	// IP changes -> apply again.
+	answer = "192.0.2.11"
+	if err := d.refreshOnce(context.Background()); err != nil {
+		t.Fatalf("refresh 3: %v", err)
+	}
+	if len(fake.nftCalls) != 2 {
+		t.Fatalf("expected re-apply after IP change, got %d", len(fake.nftCalls))
+	}
+}

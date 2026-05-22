@@ -24,8 +24,9 @@ type Daemon struct {
 	countersFn  func() ([]nft.Counter, error)
 	resolveFn   resolveFunc
 
-	mu     sync.Mutex
-	owners OwnerRuleset
+	mu           sync.Mutex
+	owners       OwnerRuleset
+	lastResolved []nft.Rule
 }
 
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
@@ -138,6 +139,7 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.owners = candidate
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
 	writeJSON(w, http.StatusOK, map[string]int{"count": len(p.Rules)})
 }
 

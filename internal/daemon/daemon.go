@@ -121,6 +121,7 @@ func (d *Daemon) Bootstrap() error {
 		if err := d.applier.Apply(resolved, d.iface); err != nil {
 			return fmt.Errorf("bootstrap apply: %w", err)
 		}
+		d.lastResolved = append([]nft.Rule(nil), resolved...)
 	}
 	d.mu.Lock()
 	d.owners = owners
@@ -145,6 +146,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(l) }()
 
+	go d.refreshLoop(ctx)
+
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -155,6 +158,27 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// refreshLoop periodically re-resolves and re-applies the ruleset on a
+// configurable interval. It exits when ctx is Done.
+func (d *Daemon) refreshLoop(ctx context.Context) {
+	interval := dnsInterval()
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := d.refreshOnce(ctx); err != nil {
+				log.Printf("dns refresh: %v", err)
+			}
+		}
 	}
 }
 

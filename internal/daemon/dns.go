@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
@@ -32,4 +34,61 @@ func requireResolvedHosts(rules []nft.Rule) error {
 		}
 	}
 	return nil
+}
+
+// refreshOnce performs a single DNS refresh pass: snapshot owners under the
+// lock, merge, resolve, and re-apply only when at least one IP changed. The
+// last-applied set is held in d.lastResolved so subsequent passes can detect
+// "nothing moved" without an extra system call.
+func (d *Daemon) refreshOnce(ctx context.Context) error {
+	d.mu.Lock()
+	snapshot := cloneOwners(d.owners)
+	d.mu.Unlock()
+
+	merged, err := MergedRuleset(snapshot)
+	if err != nil {
+		return err
+	}
+	resolved, _, err := d.resolveFn(ctx, merged)
+	if err != nil {
+		return err
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		// Don't push a partially-resolved set; just log and try again on the
+		// next tick. The caller (the loop) is responsible for log shaping.
+		return err
+	}
+	if !rulesDiffer(d.lastResolved, resolved) {
+		return nil
+	}
+	if err := d.applier.Apply(resolved, d.iface); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
+	d.mu.Unlock()
+	return nil
+}
+
+func rulesDiffer(a, b []nft.Rule) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// dnsInterval honours NFT_FORWARD_DNS_INTERVAL for parity with the previous
+// agent loop. A zero or invalid value disables the loop.
+func dnsInterval() time.Duration {
+	if s := os.Getenv("NFT_FORWARD_DNS_INTERVAL"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
 }
