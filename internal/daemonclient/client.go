@@ -68,6 +68,7 @@ func New(address string, opts ...Option) (*Client, error) {
 				},
 			},
 		}
+		c.bearer = ""
 	case strings.HasPrefix(address, "http://"), strings.HasPrefix(address, "https://"):
 		u, err := url.Parse(address)
 		if err != nil {
@@ -87,6 +88,7 @@ func New(address string, opts ...Option) (*Client, error) {
 				},
 			},
 		}
+		c.bearer = ""
 	}
 	return c, nil
 }

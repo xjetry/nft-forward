@@ -145,7 +145,11 @@ func runUninstall() int {
 }
 
 func runTUI() int {
-	client := daemonclient.New(daemonclient.DefaultSocketPath)
+	client, err := daemonclient.New(daemonclient.DefaultSocketPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "创建 daemon 客户端失败:", err)
+		return 1
+	}
 	if err := client.Health(); err != nil {
 		fmt.Fprintln(os.Stderr, "无法连接 nft-forward daemon:", err)
 		fmt.Fprintln(os.Stderr, "请先启动 daemon：sudo systemctl start nft-forward-daemon.service")

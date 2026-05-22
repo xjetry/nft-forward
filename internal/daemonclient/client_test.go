@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -302,5 +303,34 @@ func TestClient_UnixTransport_StillWorks(t *testing.T) {
 	}
 	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
+	}
+}
+
+func TestClient_GetCounters_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := c.GetCounters(); err == nil {
+		t.Fatal("expected error on 500, got nil")
+	}
+}
+
+func TestClient_GetCounters_MalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := c.GetCounters(); err == nil {
+		t.Fatal("expected decode error, got nil")
 	}
 }
