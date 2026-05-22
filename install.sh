@@ -334,7 +334,20 @@ if [[ "$mode" == "uninstall" ]]; then
       rm -f "$SYSTEMD_DIR/nft-forward-daemon.service"
       rm -f "$INSTALL_DIR/nft-forward"
       systemctl daemon-reload
-      ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
+      if [[ "$purge" -eq 1 ]]; then
+        rm -rf /var/lib/nft-forward/
+        rm -f /etc/sysctl.d/99-nft-forward.conf
+        # Best-effort: drop the dedicated nftables table if still loaded.
+        nft delete table ip nft_forward 2>/dev/null || true
+        # Drop the system group only if it exists; ignore errors otherwise.
+        if getent group nft-forward >/dev/null; then
+          groupdel nft-forward 2>/dev/null || true
+        fi
+        ok "已卸载 daemon + 清 state.json / sysctl drop-in / nftables 表 / 系统组"
+        echo "提示：如有 tc HTB 限速残留，请手动 tc qdisc del dev <iface> root" >&2
+      else
+        ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
+      fi
       ;;
     *) die "未知卸载目标: $UNINSTALL_TARGET" ;;
   esac
