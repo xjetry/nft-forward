@@ -64,8 +64,8 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	if err := d.Bootstrap(); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if len(fa.last) != 2 {
-		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got: %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 2 {
+		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got nftCalls: %+v", fa.nftCalls)
 	}
 	if len(d.owners["tui"]) != 1 || len(d.owners["panel"]) != 1 {
 		t.Fatalf("in-memory owners not populated: %+v", d.owners)
@@ -136,8 +136,8 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("POST status = %d", resp.StatusCode)
 	}
-	if len(fa.last) != 1 || fa.last[0].ID != "rZ" {
-		t.Fatalf("applier did not see POSTed rule: %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].ID != "rZ" {
+		t.Fatalf("applier did not see POSTed rule: %+v", fa.nftCalls)
 	}
 	saved, err := LoadState(statePath)
 	if err != nil {
@@ -178,8 +178,8 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 	if len(d.owners["tui"]) != 1 || d.owners["tui"][0].ID != "legacy1" {
 		t.Fatalf("legacy TUI rule not imported into tui segment: %+v", d.owners)
 	}
-	if len(fa.last) != 1 {
-		t.Fatalf("Apply should see merged ruleset (1 rule): %+v", fa.last)
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 {
+		t.Fatalf("Apply should see merged ruleset (1 rule): nftCalls=%+v", fa.nftCalls)
 	}
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state.json not created post-migration: %v", err)

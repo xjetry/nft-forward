@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +15,35 @@ import (
 	"nft-forward/internal/nft"
 )
 
+type fakeTcCall struct {
+	rules []nft.Rule
+	iface string
+}
+
+type fakeApplier struct {
+	nftCalls [][]nft.Rule
+	tcCalls  []fakeTcCall
+	err      error
+}
+
+func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.nftCalls = append(f.nftCalls, append([]nft.Rule(nil), rules...))
+	f.tcCalls = append(f.tcCalls, fakeTcCall{
+		rules: append([]nft.Rule(nil), rules...),
+		iface: iface,
+	})
+	return nil
+}
+
 func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
 	t.Helper()
 	d := &Daemon{
 		applier:   applier,
 		statePath: filepath.Join(t.TempDir(), "state.json"),
+		iface:     "eth0",
 		mu:        sync.Mutex{},
 		owners:    OwnerRuleset{},
 	}
@@ -30,6 +55,7 @@ func newTestDaemon(t *testing.T) *Daemon {
 	d := &Daemon{
 		applier:   &fakeApplier{},
 		statePath: filepath.Join(t.TempDir(), "state.json"),
+		iface:     "eth0",
 		countersFn: func() ([]nft.Counter, error) {
 			panic("countersFn not injected — every test must set d.countersFn explicitly")
 		},
@@ -90,8 +116,8 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
-	if len(fa.last) != 1 || fa.last[0].SrcPort != 8080 {
-		t.Fatalf("Apply not called with merged ruleset: %+v", fa.last)
+	if len(fa.nftCalls) != 1 || fa.nftCalls[0][0].SrcPort != 8080 {
+		t.Fatalf("Apply not called with merged ruleset: %+v", fa.nftCalls)
 	}
 	saved, err := LoadState(d.statePath)
 	if err != nil {
@@ -298,5 +324,28 @@ func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, `"counters":[]`) {
 		t.Errorf("expected empty array in body, got %s", body)
+	}
+}
+
+func TestApplyInvokesTcAfterNft(t *testing.T) {
+	fake := &fakeApplier{}
+	d := newTestDaemon(t)
+	d.applier = fake
+	d.iface = "eth42"
+
+	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, BandwidthMbps: 50}}
+	body, _ := json.Marshal(map[string]any{"rules": rules})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+
+	if w.Code/100 != 2 {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if len(fake.nftCalls) != 1 || len(fake.tcCalls) != 1 {
+		t.Fatalf("expected one nft+tc call, got nft=%d tc=%d", len(fake.nftCalls), len(fake.tcCalls))
+	}
+	if fake.tcCalls[0].iface != "eth42" {
+		t.Errorf("tc iface = %q, want eth42", fake.tcCalls[0].iface)
 	}
 }

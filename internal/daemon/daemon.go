@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nft-forward/internal/nft"
+	"nft-forward/internal/tc"
 )
 
 const (
@@ -32,6 +33,7 @@ type Config struct {
 	// files (TUI rules.json, agent-state.json, embedded-agent-state.json).
 	// Production defaults populated by New; tests inject a temp dir.
 	LegacyPaths LegacyMigrationPaths
+	Iface       string
 	CountersFn  func() ([]nft.Counter, error)
 }
 
@@ -57,12 +59,20 @@ func New(cfg Config) *Daemon {
 	if cfg.CountersFn == nil {
 		cfg.CountersFn = defaultCounters
 	}
+	iface := cfg.Iface
+	if iface == "" {
+		iface = tc.DefaultIface()
+		if iface == "" {
+			iface = "eth0"
+		}
+	}
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
 		groupName:   cfg.GroupName,
 		applier:     cfg.Applier,
 		legacyPaths: cfg.LegacyPaths,
+		iface:       iface,
 		countersFn:  cfg.CountersFn,
 	}
 }
@@ -97,7 +107,7 @@ func (d *Daemon) Bootstrap() error {
 		return fmt.Errorf("persisted state has conflict: %w", err)
 	}
 	if len(merged) > 0 {
-		if err := d.applier.Apply(merged); err != nil {
+		if err := d.applier.Apply(merged, d.iface); err != nil {
 			return fmt.Errorf("apply persisted state: %w", err)
 		}
 	}

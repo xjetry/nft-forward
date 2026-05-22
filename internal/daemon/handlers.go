@@ -18,6 +18,7 @@ type Daemon struct {
 	groupName   string
 	applier     Applier
 	legacyPaths LegacyMigrationPaths
+	iface       string
 	countersFn  func() ([]nft.Counter, error)
 
 	mu     sync.Mutex
@@ -105,7 +106,7 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := d.applier.Apply(merged); err != nil {
+	if err := d.applier.Apply(merged, d.iface); err != nil {
 		http.Error(w, "apply: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
