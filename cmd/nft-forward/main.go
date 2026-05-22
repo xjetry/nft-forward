@@ -17,7 +17,6 @@ import (
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/server"
-	"nft-forward/internal/store"
 	"nft-forward/internal/sysdeps"
 	"nft-forward/internal/tui"
 )
@@ -29,8 +28,6 @@ func main() {
 			os.Exit(runDaemon(os.Args[2:]))
 		case "server":
 			os.Exit(runServer(os.Args[2:]))
-		case "apply":
-			os.Exit(runApplyCompat(os.Args[2:]))
 		}
 	}
 	os.Exit(runTUI())
@@ -159,38 +156,6 @@ func runServer(args []string) int {
 	_ = httpSrv.Shutdown(ctx)
 	return 0
 }
-
-func runApplyCompat(args []string) int {
-	fs := flag.NewFlagSet("apply", flag.ExitOnError)
-	fs.Parse(args)
-
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "必须以 root 身份运行")
-		return 1
-	}
-
-	client, err := daemonclient.New(daemonclient.DefaultSocketPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "daemon client creation failed:", err)
-		return 1
-	}
-
-	// store.Load() uses NFT_FORWARD_CONFIG env var if set, otherwise /etc/nft-forward/rules.json
-	rules, err := store.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "加载规则失败:", err)
-		return 1
-	}
-
-	if err := client.PostRuleset("tui", rules); err != nil {
-		fmt.Fprintln(os.Stderr, "post rules failed:", err)
-		return 1
-	}
-
-	fmt.Printf("nft-forward: 已发送 %d 条规则到 daemon\n", len(rules))
-	return 0
-}
-
 
 func runTUI() int {
 	client, err := daemonclient.New(daemonclient.DefaultSocketPath)

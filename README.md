@@ -1,128 +1,132 @@
 # nft-forward
 
-基于 nftables 的轻量端口转发工具。一份代码、一个仓库提供三种运行形态：
-
-| 二进制 | 角色 | 体积 |
-|---|---|---:|
-| `nft-forward` | 单机 TUI（直接管本机 nftables） | ~3.7 MB |
-| `nft-agent` | 受控节点（被 panel 推送规则） | ~5.9 MB |
-| `nft-server` | 控制面板（Web UI + SQLite + 多租户 + 配额 + 限速） | ~13 MB |
-
-设计取舍详见 [架构](#架构)；功能完整度对照 flux-panel 的 Spring Boot + MySQL + GOST + React 体系，**整套依赖只剩下 nftables 与 iproute2**。
+基于 nftables 的轻量端口转发工具。**单一二进制，角色按需叠加**：一份发布产物在同一台主机上可以同时充当本机转发 TUI、多租户 Web 控制面板以及远程受控节点，三种功能共用同一个 host daemon，规则互不覆盖。整套运行时依赖只有 nftables 与 iproute2；无 gRPC、无额外守护进程。
 
 ---
 
 ## 目录
 
-- [一键安装](#一键安装)
-- [快速构建（从源码）](#快速构建从源码)
-- [运行模式 1：单机 TUI](#运行模式-1单机-tui)
-- [运行模式 2：中心面板 + 远程节点](#运行模式-2中心面板--远程节点)
-  - [启动 server](#启动-server)
-  - [启动 agent](#启动-agent)
-  - [Server 主动连接 Agent](#server-主动连接-agent)
-- [多租户使用](#多租户使用)
-- [流量配额与带宽限速](#流量配额与带宽限速)
-- [域名 / DDNS 目标](#域名--ddns-目标)
-- [常用配置项](#常用配置项)
-- [忘记 admin 密码 / 故障恢复](#忘记-admin-密码--故障恢复)
+- [介绍](#介绍)
+- [快速开始](#快速开始)
 - [架构](#架构)
+- [命令表面](#命令表面)
+- [配置与持久化](#配置与持久化)
+- [升级与迁移](#升级与迁移)
+- [开发](#开发)
+- [协议参考](#协议参考)
 
 ---
 
-## 一键安装
+## 介绍
 
-```bash
-# 交互式（脚本会问你装哪种模式 + 端口）
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash
+`nft-forward` 让一台普通 Linux 主机变成可管理的端口转发节点，同时解决了"单机 TUI 用户想扩展成面板托管节点"时过去需要重装三个不同二进制的痛点。
 
-# server：默认端口 8080
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
-  | sudo bash -s -- server
+核心设计是一个 **host daemon**（`nft-forward daemon`）：它是主机上**唯一**调用 nftables 和 tc 的进程，监听 Unix socket `/var/run/nft-forward.sock`，其他所有角色（TUI、Web 面板、远程推送接入）都是这个 daemon 的 HTTP client。daemon 在内部把规则按 *owner* 分段管理（`tui` 段、`panel` 段），每次有一方提交新规则时，daemon 合并所有段后原子地刷新内核 nftables 表，跨段端口冲突在合并时被拒绝并报告给调用方。
 
-# server：自定义端口
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
-  | sudo bash -s -- server --port 9000
-
-# agent：必须传 --token（从面板"添加节点"页拷贝）
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
-  | sudo bash -s -- agent --port 7878 --token <从面板拷贝的 64hex token>
-
-# TUI 单机：装好后跑 sudo nft-forward
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh \
-  | sudo bash -s -- tui
-```
-
-脚本会：
-
-1. 从 [GitHub releases](https://github.com/xjetry/nft-forward/releases/latest) 下载对应模式的二进制 + SHA256 校验
-2. 安装到 `/usr/local/sbin/`
-3. server / agent 模式自动写入 `systemd` 单元并 `enable --now`
-4. 打印登录入口、systemctl 命令、日志位置等
-
-`--port` 留空时使用默认（server=8080，agent=7878，TUI 不需要端口）。完整用法 `install.sh --help`。
+这一设计意味着你可以在同一台机器上**同时**运行 TUI（本地交互）、Web 面板（多租户管理）和远程节点接收（panel 的 HTTP push），彼此不干扰。规则持久化由 daemon 独立完成，进程重启后自动从 `state.json` 恢复，不依赖外部"开机重放"机制。
 
 ---
 
-## 快速构建（从源码）
+## 快速开始
 
-依赖：Go ≥ 1.21（推荐 1.22+）。无 CGO，跨平台编译。
+所有安装路径都从同一个 `install.sh` 开始，下载单一 `nft-forward` 二进制并按角色配置 systemd 单元。
 
 ```bash
-git clone <repo> nft-forward && cd nft-forward
-mkdir -p build
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/nft-forward ./cmd/nft-forward
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/nft-agent   ./cmd/nft-agent
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/nft-server  ./cmd/nft-server
+# TUI 单机（自动安装 daemon systemd 服务）
+sudo bash install.sh tui
+# 安装完成后运行 TUI：
+sudo nft-forward
+
+# Web 控制面板（daemon + server 两个 unit 都会启用）
+sudo bash install.sh server
+
+# 指定面板端口
+sudo bash install.sh server --addr :9000
+
+# 远程受控节点（daemon 额外监听 HTTP，接受远程 panel 推送；token 从面板"添加节点"页拷贝）
+sudo bash install.sh agent --token <64位hex>
+
+# 指定 agent 监听端口
+sudo bash install.sh agent --port 7900 --token <64位hex>
+
+# 交互式（无参数时脚本会询问模式）
+sudo bash install.sh
 ```
 
-arm64 把 `GOARCH=amd64` 换成 `GOARCH=arm64`。三个二进制完全独立，按需分发。
+脚本会自动完成：
 
-### 目标机系统要求
+1. 从 [GitHub releases](https://github.com/xjetry/nft-forward/releases/latest) 下载对应架构的 `nft-forward` 二进制并 sha256 校验；
+2. 安装到 `/usr/local/sbin/nft-forward`；
+3. 写入并启用 `nft-forward-daemon.service`（以及 server 角色时的 `nft-forward-server.service`）；
+4. 检测并清理旧版遗留的 `nft-forward.service` / `nft-server.service` / `nft-agent.service` unit 和旧二进制（详见[升级与迁移](#升级与迁移)）；
+5. 打印访问地址、systemctl 命令和日志位置。
+
+### 系统要求
 
 - Linux 内核 ≥ 5.10，支持 nftables（Debian 12 自带 6.1，满足）
-- Debian / Ubuntu 系（用 apt-get）—— 启动时若缺 `nftables` / `iproute2` 会**非交互自动 apt-get 安装**
-- 其他发行版（RHEL/Arch/Alpine）：自己装好 `nftables` + `iproute2` 即可，二进制不会自动调 apt
-
-### 运行时依赖一览
-
-| 二进制 | 必装 | 启动时自动兜底 |
-|---|---|---|
-| `nft-forward`（TUI） | `nftables` | ✅ 启动若缺会自动 `apt-get install -y nftables` + `modprobe nf_tables` |
-| `nft-agent` | `nftables` + `iproute2` | ✅ 同上，二者皆自动装 |
-| `nft-server` | `nftables` + `iproute2` | ✅ 同上 |
-
-自动兜底的行为：
-
-- 用 `DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends <missing>` 安装
-- 全程不弹任何 y/N 提示
-- 非 root 启动 / 没 apt-get → 立即报错给清晰说明，不死撑
-
-预先一次装好也可以（适合 image baking）：
-
-```bash
-sudo apt-get install -y nftables iproute2
-```
+- Debian / Ubuntu 系：若 `nftables` / `iproute2` 未安装，daemon 启动时会非交互自动 `apt-get install`
+- 其他发行版（RHEL / Arch / Alpine）：预先 `apt-get install -y nftables iproute2`（或对应包管理器）即可；daemon 不会调用非 apt 系包管理器
+- 必须以 root 运行 daemon（操作 nftables 和 tc 需要）
 
 ---
 
-## 运行模式 1：单机 TUI
+## 架构
 
-适用：自己一台机器，没有面板需求。直接编辑本机 nftables。
-
-```bash
-sudo ./nft-forward
+```
+┌─────────────────────────────┐         ┌──────────────────────────┐
+│      浏览器（admin/tenant）  │  HTTPS  │  Caddy / Nginx（TLS 终结）│
+│                             │ ──────► │  反向代理（可选）          │
+└─────────────────────────────┘         └────────────┬─────────────┘
+                                                     │ HTTP :8080
+                                        ┌────────────▼───────────────┐
+                                        │    nft-forward server      │
+                                        │  chi router + HTML 模板    │
+                                        │  SQLite WAL (panel.db)     │
+                                        │  Pusher goroutine          │
+                                        │  Poller goroutine          │
+                                        └────────────┬───────────────┘
+                                                     │ HTTP over unix socket
+                                        ┌────────────▼───────────────┐
+                                        │   nft-forward daemon       │
+                                        │  /var/run/nft-forward.sock │
+                                        │  owner-segmented ruleset   │
+                                        │  nftables + tc HTB         │
+                                        └────────────────────────────┘
+                                          │ Bearer token, HTTP
+                                          │ POST /v1/ruleset/panel
+                                 ┌────────┴──────────┐
+                             ┌───▼────────┐   ┌──────▼─────────┐
+                             │  远程节点 1 │   │  远程节点 2     │
+                             │ nft-forward│   │ nft-forward    │
+                             │ daemon     │   │ daemon         │
+                             │ --listen   │   │ --listen :7878 │
+                             │ :7878      │   │                │
+                             └────────────┘   └────────────────┘
 ```
 
-首次启动会：
+**关键设计约束**：
 
-1. 检查 root；
-2. 若未装 nftables → 询问是否 `apt-get install`，拒绝则退出；
-3. 若 `net.ipv4.ip_forward=0` → 自动启用，并写入 `/etc/sysctl.d/99-nft-forward.conf` 让重启后保留；
-4. 询问是否启用开机持久化（推荐 Y）。同意后：
-   - 复制自身到 `/usr/local/sbin/nft-forward`
-   - 注册 `/etc/systemd/system/nft-forward.service`
-   - `systemctl enable` 它，开机自动用 `nft-forward --apply` 重放 `/etc/nft-forward/rules.json`
+- `nft-forward daemon` 是主机上**唯一**直接操作 nftables 和 tc 的进程。TUI 和 server 都不再直接调用 `nft`，全部通过 daemon 的 Unix socket HTTP API 提交规则。
+- Daemon 内部维护 **owner-segmented ruleset**：每个 owner（`tui`、`panel`）独占自己的规则段。Pusher 可以只替换 `panel` 段，不影响用户在 TUI 里添加的 `tui` 段规则；反过来也是。跨段端口冲突时，daemon 拒绝**后提交**的请求并说明被哪个 owner 占用。
+- Server（Web 面板）把本机 daemon 视为一个普通节点，地址为 `unix:///var/run/nft-forward.sock`；远程节点地址为 `http(s)://host:7878`。Pusher / Poller 对两种 transport 使用同一套逻辑，仅 URL scheme 不同。
+- Daemon HTTP-enable 模式（`--listen :7878 --token-file ...`）让 daemon 在 Unix socket 之外额外监听 HTTP，接受远程 panel 的 Bearer token 认证推送。远程节点本质上是"socket + HTTP 双接入的 daemon"，不是另一种进程。
+- Nftables 使用专用表 `ip nft_forward`，不影响主机已有的防火墙规则；每次 apply 是原子的三步（add → delete → recreate）。
+
+---
+
+## 命令表面
+
+```
+nft-forward                                     默认进 TUI（要求 daemon 已运行）
+nft-forward daemon                              前台启动 daemon（systemd 通常负责）
+nft-forward daemon --listen :7878 \
+    --token-file /etc/nft-forward/daemon.token  daemon 额外监听 HTTP，充当远程受控节点角色
+nft-forward server [--addr :8080] [--db PATH]   启动 Web 面板
+```
+
+TUI 启动时通过 `GET /v1/health` 探活 daemon。若 daemon 未运行，TUI 会打印错误并提示 `sudo systemctl start nft-forward-daemon.service`；不会 fallback 到直接操作 nftables（保持单一控制路径）。
+
+`nft-forward server` 首次启动会创建 `admin` 账号并打印随机密码到 stdout。传 `--bootstrap-admin-password` 可预设密码。若忘记密码，停服后用同一二进制带 `--reset-admin-password` 执行一次即可重置，不影响其他数据。
 
 TUI 键位：
 
@@ -132,400 +136,120 @@ TUI 键位：
 | a / n / + | 新增转发 |
 | d | 删除当前选中 |
 | c | 清空全部 |
-| r | 从磁盘重新加载 |
+| r | 重新加载 |
 | q | 退出 |
 
-新增表单字段：协议（tcp/udp）、监听端口、目标 IPv4、目标端口、备注。`Tab` 切换字段，`Enter` 保存，`Esc` 取消。
-
-其他命令行参数：
-
-```text
---apply              加载 rules.json 并应用到内核后退出（开机由 systemd 调用）
---install-service    安装 systemd 持久化单元后退出
---uninstall-service  卸载 systemd 单元（rules.json 与内核状态保留）
-```
-
 ---
 
-## 运行模式 2：中心面板 + 远程节点
-
-适用：一台 panel + N 台分布在各处的 VPS 节点。Panel 不直接转发流量，只做控制面；节点跑 agent 接收推送。
-
-### 启动 server
-
-Server **必须以 root 运行**：它在启动时自动把自己注册成名为 `localhost` 的节点，进程内拉起 agent 处理本机的 nftables / tc。所以 server 所在的 host 也成了一个受控节点，admin 可以直接在面板上给它绑通道、推转发。首次启动若缺 `nftables` / `iproute2` 会**非交互自动 apt 安装**。
-
-```bash
-# 最简
-sudo ./nft-server --addr :8080
-
-# 生产推荐：固定 admin 密码、自定义 DB 路径
-sudo ./nft-server \
-  --addr :8080 \
-  --db /var/lib/nft-forward/panel.db \
-  --bootstrap-admin-password 'YourStrongPassword!' \
-  --agent-iface eth0
-```
-
-首次启动会创建 `admin` 账号。若没传 `--bootstrap-admin-password`，会**随机生成密码并打印到 stdout**：
-
-```
-================================================
- 首次启动 - 已创建管理员账号
- 用户名: admin
- 密  码: <随机 16 位 hex>
- 请妥善保存。可通过 --bootstrap-admin-password 自定义。
-================================================
-```
-
-打开 `http://<server-ip>:8080`，用 admin / 上面那个密码登录。**强烈建议**先点右上「修改密码」改成自己的。
-
-Server 启动时会：
-
-1. 检查 root + nftables + tc，自动启用 `ip_forward`
-2. 在 DB 中创建 / 复用名为 `localhost` 的节点，地址为 `local://`（特殊 sentinel scheme，不开端口、不走网络）
-3. 进程内启动 agent 实例并 `Bootstrap`（从 `/var/lib/nft-forward/embedded-agent-state.json` 恢复上次 ruleset）
-4. 启动两个后台 goroutine：
-   - **Pusher**：当节点/通道/转发任何一处变更时，把新 ruleset 推到对应节点。远程节点走 HTTP，本机节点直接 Go 方法调用（零网络开销，不暴露任何端口）。节点离线时标记 dirty，30s 周期自动 reconcile。
-   - **Poller**：每 5s 拉一次每个节点的计数；远程节点拉 `/v1/counters`，本机节点直接调内嵌 agent 的方法。把 nft 计数差量累加到 `tenants.traffic_used_bytes`；超额或过期则自动禁用租户并清空规则。
-
-Server flag：
-
-| flag | 默认 | 说明 |
-|---|---|---|
-| `--addr` | `:8080` | 面板 HTTP 监听地址 |
-| `--db` | `/var/lib/nft-forward/panel.db` | SQLite 数据库路径（WAL 模式） |
-| `--bootstrap-admin-password` | _空_ | 首次启动给 admin 设的密码；空则随机 16 hex 字符并打印 |
-| `--agent-iface` | 自动检测默认路由 | 内嵌 agent 的数据面网卡（tc HTB 作用对象） |
-| `--reset-admin-password` | _空_ | 非空时把指定 admin 账号密码重置为该值后退出（见[故障恢复](#忘记-admin-密码--故障恢复)） |
-| `--reset-admin-username` | `admin` | 配合 `--reset-admin-password` 指定账号名 |
-
-生产部署建议在 server 前面放 Caddy/Nginx 做 TLS 终结。Server 本身只跑 HTTP（远程 agent 的 token 在调用时走 Bearer 头；面板登录必须由 TLS 反代保护）。
-
-### 启动 agent
-
-Agent **必须 root**（因为要操作 nftables 和 tc）。每个节点：
-
-```bash
-# 1. 把 token 写到节点上（Server 添加节点时会显示）
-sudo install -d /etc/nft-forward /var/lib/nft-forward
-echo '<server 给的 64 位 hex token>' | sudo tee /etc/nft-forward/agent.token >/dev/null
-sudo chmod 600 /etc/nft-forward/agent.token
-
-# 2. 启 agent；首次启动若缺 nftables / iproute2 会自动 apt 安装
-sudo ./nft-agent \
-  --listen :7878 \
-  --token-file /etc/nft-forward/agent.token
-```
-
-Agent flag：
-
-| flag | 默认 | 说明 |
-|---|---|---|
-| `--listen` | `:7878` | HTTP 监听地址；`:7878` 监听全部 IP，`192.168.1.10:7878` 只监听指定 NIC IP |
-| `--iface` | 自动检测（解析默认路由）| tc HTB 作用的数据面网卡。识别失败回落到 `eth0`，可手动指定如 `ens3` |
-| `--token-file` | `/etc/nft-forward/agent.token` | bearer token 文件 |
-| `--token` | _空_ | 调试用，直接传 token 字符串 |
-| `--state` | `/var/lib/nft-forward/agent-state.json` | 本地缓存的最近 ruleset；agent 重启时用它先恢复内核状态，不必等 panel 重连 |
-| `--skip-nft-check` | false | 跳过 nft / ip_forward 启动检查 |
-
-生产环境部署成 systemd unit（agent 不自己装，避免和 panel 控制范围冲突，自己写或用以下模板）：
-
-```ini
-# /etc/systemd/system/nft-agent.service
-[Unit]
-Description=nft-forward agent
-After=network-online.target nftables.service
-Wants=network-online.target
-
-[Service]
-ExecStart=/usr/local/sbin/nft-agent --listen :7878 --token-file /etc/nft-forward/agent.token
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now nft-agent
-```
-
-### Server 主动连接 Agent
-
-**方向**：panel → agent（panel 是 HTTP client，agent 是 server）。Agent 端必须能被 panel 的出口访问到（节点 7878 端口对 panel 开放）。
-
-流程：
-
-1. 在 panel 上 **节点 → 添加节点**：
-   - 名称：随意，比如 `hk-1`
-   - Agent 地址：`http://10.0.0.1:7878` 或 `https://node-1.example.com:7878`
-   - Token：留空 = 由 panel 随机生成 64 位 hex；也可以填一个自己定的串
-2. 提交后跳到节点详情页，会显示**完整的一行 systemd 安装命令**（含 token），直接复制到目标机器执行即可
-3. 节点上 agent 启动后，下一次 panel 任何变更触发 push 都会自动验证连通性；详情页 30s 内会从「待同步」变成「已同步」
-
-注意事项：
-
-- agent 不主动连 panel，因此 agent **不需要出口公网**。Panel 必须能反向访问 agent 的 7878。如果节点在 NAT 后，需要把 panel 放到节点能访问的位置（VPN / Tailscale / 反向隧道）或在节点上开放端口
-- Token 全程经过 `Authorization: Bearer` 头传递。建议在 panel 前置 TLS（Caddy / Nginx），并在 agent 前置 TLS 或绑定到内网 IP（`--listen 10.0.0.1:7878`）以避免明文传输 token
-- 如果只想让 panel 这台机器本身作为节点（不部署任何远程 agent），不用额外做什么——server 启动时已自动注册自身为 `localhost` 节点
-
----
-
-## 多租户使用
-
-完整 admin 操作流（典型一次新租户开通）：
-
-1. **节点 → 添加节点**：登记一台或多台节点
-2. **通道 → 新建通道**：在某个节点上划定一个端口段 + 协议 + 目标 CIDR 白名单 + 可选带宽
-   - 例：`name=t-hk1, node=hk-1, proto=tcp+udp, port_start=20000, port_end=20999, target_cidr_allow=10.0.0.0/24, bandwidth_mbps=10`
-3. **租户 → 新建租户**：填名称、最大转发数（默认 100）、流量配额 MB（0 = 不限）
-4. **租户详情 → 授权通道**：把刚建好的通道授权给这个租户，设置在该通道内的最大转发数
-5. **租户详情 → 添加账号**：填用户名 / 密码 → 把这两个字段交给租户
-
-租户拿到账号后：
-
-- 登录 panel → 自动跳到「我的面板」（只能看自己的配额和被授权的通道，看不到节点/其他租户等信息）
-- 「我的转发」→ 新增：监听端口必须落在通道允许的端口段内、目标 IP 必须在 CIDR 白名单内，否则被拒
-- 可随时删除自己的转发；管理员侧 audit_logs 会记录
-
-Admin 对租户的额外操作（租户详情页）：
-
-| 操作 | 行为 |
-|---|---|
-| 禁用 / 启用 | 立即推空规则给所有节点 / 重新下发 |
-| 重置流量并启用 | 清零已用流量，撤销「超额自动禁用」 |
-| 自定义 quota 字节 | 测试用，精度到字节（UI 上 MB 粒度不够时） |
-| 删除租户 | 连带删除其全部转发，释放占用的端口 |
-
-Admin 对用户的操作（用户列表 / 租户详情）：
-
-- **禁用账号**：账号 = tenant 时**同步禁用租户**（转发立即失效）；admin 账号只禁用登录
-- **重置密码**：生成 16 位 hex 随机密码，**一次性**通过 flash 提示框下发，刷新即丢
-- **删除账号**：如果是某租户的最后一个账号 → 连带删除租户和它的全部转发；否则只删账号
-
-任何登录用户都可以右上角「修改密码」自助改密。
-
----
-
-## 流量配额与带宽限速
-
-**配额（A）**：每条转发的 nft 规则都带 `counter`。Poller 每 5s 把 (proto, listen_port) 对应的字节数累到 `tenants.traffic_used_bytes`：
-
-- `traffic_quota_bytes == 0`：不限
-- `traffic_used_bytes >= traffic_quota_bytes`：自动 `disabled=1`，立即清空该租户在所有节点的规则；audit_logs 留痕
-- 也会因 `expires_at` 到期触发
-
-**限速（B）**：在通道上设置 `bandwidth_mbps > 0`，agent 会：
-
-1. 在 nft 规则前加 `meta mark set <listen_port>`，给匹配的包打标
-2. 在数据面网卡上建立 HTB 树：
-   - `qdisc 1: htb default 1`，class `1:1` 为兜底（100Gbit，等于不限速）
-   - 每条限速规则 `class 1:<port-hex> rate <mbps>mbit ceil <mbps>mbit`
-   - filter `fw handle 0x<port-hex> classid 1:<port-hex>` 路由打标的包到对应 class
-
-只生效在**egress 方向**（数据出本机网卡时）。需要双向限速可以下一轮加 ifb，目前未实现。
-
-校验命令：
-
-```bash
-sudo nft list table ip nft_forward     # 找到带 meta mark 的规则
-sudo tc qdisc show dev eth0            # 应有 qdisc htb 1: root
-sudo tc class show dev eth0            # 应有 class htb 1:<port-hex>
-sudo tc filter show dev eth0           # 应有 fw filter -> classid
-```
-
----
-
-## 域名 / DDNS 目标
-
-转发目标除 IPv4 外，也接受域名（如 `home.example.ddns.net`、`localhost`），适合家宽 + 动态 IP + DDNS 这类场景。
-
-行为：
-
-- 域名只在执行端（agent / TUI）解析，server 不解析也不缓存——这样 server 离线时 agent 仍能感知 DDNS 变化。
-- agent 启动一个后台 goroutine，按 `NFT_FORWARD_DNS_INTERVAL`（默认 60s）周期重解析所有带域名的规则；底层 IP 变化即重建 nftables 规则，新连接落到新 IP。
-- 解析失败时**保留上一次成功的 IP**，仅在日志里打 warn——避免 DNS 抽风把已生效的转发撕掉。
-- 解析结果会随 ruleset 一起持久化（`agent-state.json` / `rules.json`），agent 重启后即便上游 DNS 暂时不可达，也能用最近一次成功的 IP 先把规则装回去。
-- nftables 真正下发的是解析后的 IPv4；域名仅作为「源头」存在于 agent / TUI 的状态中，不会进入内核规则。
-
-约束（安全 / 行为）：
-
-- 仅解析 IPv4（A 记录）。AAAA 暂未支持。
-- **多租户场景**：当 tunnel 设置了 `target_cidr_allow` 时，对应租户**只能填 IPv4**。原因：无法静态证明域名解析结果落在白名单 CIDR 内，否则 tenant 可以用 DNS 绕过 CIDR 限制。Admin 直建的 forward 不受此限。
-- 当域名永远无法解析（NXDOMAIN 等）时，`POST /v1/apply` 会以 error 返回；server 端会将该 push 标记失败并重试。
-
-调整周期：
-
-```bash
-# 改成 5 秒（DDNS 切换更激进时有用）
-echo 'NFT_FORWARD_DNS_INTERVAL=5s' >> /etc/default/nft-agent
-systemctl restart nft-agent
-```
-
----
-
-## 常用配置项
-
-环境变量 / 文件位置：
+## 配置与持久化
 
 | 路径 | 用途 |
 |---|---|
-| `/var/lib/nft-forward/panel.db` | server SQLite |
-| `/var/lib/nft-forward/agent-state.json` | 远程 agent 最近一次 ruleset 缓存 |
-| `/var/lib/nft-forward/embedded-agent-state.json` | server 内嵌 agent 缓存 |
-| `/etc/nft-forward/agent.token` | agent 的 bearer token |
-| `/etc/nft-forward/rules.json` | TUI 模式的真相源 |
+| `/var/run/nft-forward.sock` | Daemon Unix socket（group `nft-forward`，mode `0660`） |
+| `/var/lib/nft-forward/state.json` | Daemon 状态文件，owner-segmented，daemon 独占写 |
+| `/var/lib/nft-forward/panel.db` | Server（面板）SQLite 数据库（WAL 模式） |
+| `/etc/nft-forward/daemon.token` | Agent 角色的 bearer token（mode `0600`） |
 | `/etc/sysctl.d/99-nft-forward.conf` | ip_forward 持久化 |
-| `/etc/systemd/system/nft-forward.service` | TUI 模式的开机持久化 unit |
 
 环境变量：
 
 | 变量 | 作用 |
 |---|---|
-| `NFT_FORWARD_CONFIG` | 覆盖 TUI 模式默认的 `rules.json` 路径 |
-| `NFT_FORWARD_DNS_INTERVAL` | agent 后台重解析周期（如 `30s`、`2m`），缺省 60s |
+| `NFT_FORWARD_DNS_INTERVAL` | Agent / TUI 后台重解析 DDNS 周期（如 `30s`、`2m`），缺省 60s |
+
+**DDNS 目标**：转发目标支持域名（如 `home.example.ddns.net`）。解析只在 daemon 侧进行，按 `NFT_FORWARD_DNS_INTERVAL` 周期重解析；底层 IP 变化时自动重建 nftables 规则。解析失败时保留上次成功的 IP，不撕掉已生效的转发。多租户场景下，设置了 `target_cidr_allow` 的通道只允许直接填 IPv4，不允许域名，避免通过 DNS 绕过 CIDR 限制。
+
+**流量配额与限速**：Server 的 Poller 每 5s 读取 daemon 的 `/v1/counters` 并累加到 `tenants.traffic_used_bytes`；超额时自动禁用租户并清空其规则。限速通过 tc HTB 实现：daemon 在数据面网卡上建 HTB 树，按规则的监听端口打 nfmark 后路由到对应 class。
 
 ---
 
-## 忘记 admin 密码 / 故障恢复
+## 升级与迁移
 
-### 方法 1（推荐）：用 server 自带的重置命令
+**从旧版（三二进制布局）升级**，运行新版 `install.sh` 时脚本会自动：
 
-停掉正在跑的 server（systemctl / docker / Ctrl-C 任意一种），然后用同一个二进制带上 `--reset-admin-password` 跑一次：
+1. 检测并 `systemctl disable --now` 旧的 `nft-forward.service`、`nft-server.service`、`nft-agent.service`，删除对应 unit 文件；
+2. 删除旧的独立二进制 `/usr/local/sbin/nft-server` 和 `/usr/local/sbin/nft-agent`（这两个名字在新架构中已不存在，功能分别由 `nft-forward server` 和 `nft-forward daemon --listen` 承担）；
+3. 安装新的单一二进制并写入 `nft-forward-daemon.service`（和 server 角色的 `nft-forward-server.service`）。
 
-```bash
-sudo /usr/local/sbin/nft-server \
-  --db /var/lib/nft-forward/panel.db \
-  --reset-admin-password 'MyNewStrongPw!'
-```
+**旧 state 文件迁移**：daemon 首次启动时（`state.json` 尚不存在），自动检测并导入旧格式文件：
 
-输出 `已重置 admin 的密码（同时清空其所有活跃会话、解除禁用状态）` 后进程退出。然后正常 `systemctl start nft-server`（或其他启动方式）即可用新密码登录。
+| 旧文件 | 导入到 |
+|---|---|
+| `/etc/nft-forward/rules.json` | `state.json` → `tui` segment |
+| `/var/lib/nft-forward/agent-state.json` | `state.json` → `panel` segment |
+| `/var/lib/nft-forward/embedded-agent-state.json` | `state.json` → `panel` segment（优先级高于上一条） |
 
-行为：
+每个被处理的文件重命名为 `<原路径>.migrated`（不删除，留人工备份）。后续 daemon 重启不重复迁移：只要 `state.json` 已存在，迁移跳过。
 
-- 只改密码，**其他数据全部保留**（节点、用户、转发、计数）
-- 顺手清掉该账号的 `disabled` 标志，万一你之前把自己禁用了也能救回来
-- 清空该账号的所有 `sessions` 行——意外泄露的 cookie 立刻失效
-- 写入 `audit_logs`（`action=admin.reset_password_cli`）
-- 不启动 HTTP server，单次执行后退出
-
-想要随机密码：
-
-```bash
-NEW_PW=$(openssl rand -hex 8)
-sudo nft-server --db /var/lib/nft-forward/panel.db --reset-admin-password "$NEW_PW"
-echo "新密码: $NEW_PW"  # 自行保管
-```
-
-只能重置 `role=admin` 的账号；要重置租户用户的密码请走面板 `/users/{id}/reset-password`（管理员登录后操作）。
-
-### 方法 2（兜底）：直接改 SQLite
-
-如果手里的 server 还没更新到带 `--reset-admin-password` 的版本，可用 sqlite3 工具 + 生成 bcrypt hash：
-
-```bash
-sudo apt-get install -y sqlite3 python3-bcrypt
-HASH=$(python3 -c 'import bcrypt; print(bcrypt.hashpw(b"MyNewStrongPw!", bcrypt.gensalt()).decode())')
-
-sudo systemctl stop nft-server
-sudo sqlite3 /var/lib/nft-forward/panel.db \
-  "UPDATE users SET pw_hash='$HASH', disabled=0 WHERE username='admin';
-   DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username='admin');"
-sudo systemctl start nft-server
-```
-
-### 方法 3（核选项）：admin 账号都被误删了
-
-如果连 admin 用户记录都没了：
-
-```bash
-sudo systemctl stop nft-server
-sudo sqlite3 /var/lib/nft-forward/panel.db "DELETE FROM users WHERE role='admin';"
-sudo nft-server --db /var/lib/nft-forward/panel.db --bootstrap-admin-password 'MyNewPw!'
-```
-
-`bootstrap` 逻辑检测到没有用户后会自动重建 admin。业务数据（节点 / 通道 / 用户 / 转发）保持不变。
-
-### 防呆建议
-
-- 用密码管理器保存初始 / 重置后的密码，少靠记忆
-- 定期备份 `panel.db`：`cp /var/lib/nft-forward/panel.db /backup/panel.db.$(date +%F)`
-- 多创建一个 admin 账号互为备份（目前需要直接写 SQL；后续会加多 admin 管理 UI）
+**面板数据库迁移**：旧版 `nft-server` 的 `panel.db` 直接复用，新版 `nft-forward server` 首次启动会执行 schema migration，把本机节点的地址由旧的 `local://` 更新为 `unix:///var/run/nft-forward.sock`，业务数据（节点、通道、租户、转发记录）保持不变。
 
 ---
 
-## 架构
+## 开发
 
+依赖：Go ≥ 1.22，无 CGO，跨平台编译。运行时依赖 `nftables` + `iproute2`（仅 Linux）。
+
+```bash
+# 构建
+git clone <repo> nft-forward && cd nft-forward
+GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+    -o build/nft-forward ./cmd/nft-forward
+
+# arm64
+GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+    -o build/nft-forward-arm64 ./cmd/nft-forward
+
+# 跑测试
+go test ./...
+go vet ./...
+
+# docker dev fixture（1 个 daemon 容器 + 1 个 server 容器）
+docker compose --file docker/docker-compose.yml up
 ```
-┌────────────────────────┐         ┌────────────────────────┐
-│      Browser           │  HTTPS  │  Caddy / Nginx (TLS)   │
-│  (admin / tenant)      │ ──────► │  reverse proxy         │
-└────────────────────────┘         └───────────┬────────────┘
-                                               │ HTTP :8080
-                                   ┌───────────▼────────────────┐
-                                   │      nft-server (root)      │
-                                   │  ┌──────────────────────┐   │
-                                   │  │ chi router + UI      │   │
-                                   │  │ SQLite (WAL)         │   │
-                                   │  │ Pusher goroutine     │   │
-                                   │  │ Poller goroutine     │   │
-                                   │  │ 内嵌 agent (in-proc) │   │
-                                   │  │  ↳ 进程内方法调用    │   │
-                                   │  │  ↳ 节点名 localhost  │   │
-                                   │  │  ↳ 地址 local://     │   │
-                                   │  └────────┬─────────────┘   │
-                                   └───────────┼─────────────────┘
-                                               │ Bearer token, JSON
-                                               │ POST /v1/apply
-                                               │ GET  /v1/counters
-                                               │ GET  /v1/status
-                                  ┌────────────┴─────────┐
-                                  │                      │
-                          ┌───────▼──────┐      ┌────────▼─────┐
-                          │  nft-agent   │      │  nft-agent   │
-                          │  (hk-1)      │      │  (us-1)      │
-                          │              │      │              │
-                          │  • nft       │      │  • nft       │
-                          │  • tc HTB    │      │  • tc HTB    │
-                          └──────────────┘      └──────────────┘
-```
-
-**核心约束**：
-
-- panel 是 HTTP client，远程 agent 是 server。**节点不主动连 panel**，因此节点不需要出口；但 panel 必须能反向访问节点 7878
-- panel 启动时强制把自己也作为节点纳入：进程内嵌 agent，地址 `local://`，pusher / poller 走 Go 方法调用，不开任何端口
-- nftables 用专用表 `ip nft_forward`，不污染用户已有规则；每次 apply 是「add table + delete table + recreate」的原子三步
-- 远程 agent 本地缓存最近一次 ruleset；agent 单独重启时不依赖 panel 也能恢复（内嵌 agent 缓存到 `embedded-agent-state.json`）
-- panel 把 SQLite 当唯一真相源；任何节点上的差异都会在下一次 push / 30s reconcile 中被覆盖
-- 所有写操作 → `audit_logs` 表
 
 代码组织（Go 3700+ 行 / HTML 模板 660+ 行）：
 
 ```
 nft-forward/
-├── cmd/
-│   ├── nft-forward/  TUI 入口
-│   ├── nft-agent/    Agent 入口
-│   └── nft-server/   Server 入口（启动时强制注册自身为 localhost 节点）
+├── cmd/nft-forward/        TUI / daemon / server subcommand 入口
 ├── internal/
-│   ├── nft/          nftables 渲染 + apply + counter 解析
-│   ├── tc/           HTB qdisc/class/filter 重建
-│   ├── store/        TUI 的 rules.json 持久化
-│   ├── systemd/      开机持久化 unit
-│   ├── tui/          bubbletea 实现
-│   ├── db/           SQLite schema + migrations + 查询
-│   ├── agent/        Agent HTTP API（/v1/apply、/v1/counters、/v1/status）
-│   └── server/       Panel：路由、Auth、handlers、Pusher、Poller、HTML 模板
-└── docker/           e2e 测试（1 server + 3 agents）
+│   ├── daemon/             owner-segmented ruleset、Unix socket HTTP handler、state 持久化与迁移
+│   ├── daemonclient/       HTTP-over-unix-socket / HTTP client 抽象（TUI 和 server 共用）
+│   ├── nft/                nftables 渲染 + apply + counter 解析
+│   ├── tc/                 tc HTB qdisc/class/filter 重建
+│   ├── tui/                bubbletea TUI 实现（daemonclient 调用 daemon）
+│   ├── db/                 SQLite schema + migrations + 查询
+│   └── server/             Web 面板：路由、认证、handler、Pusher、Poller、HTML 模板
+└── docker/                 dev fixture（Dockerfile + docker-compose.yml）
 ```
+
+Socket 权限：daemon 创建 `nft-forward` system group（若不存在），socket 文件属于该 group（`0660`）。希望不带 `sudo` 运行 TUI 的用户加入该 group 即可；`install.sh` 文档中有说明。
+
+---
+
+## 协议参考
+
+Daemon 暴露的 HTTP API（Unix socket 和可选的 TCP HTTP-enable 模式共用同一套端点）：
+
+| Method | Path | 用途 |
+|---|---|---|
+| `GET` | `/v1/health` | 探活，返回 `{"ok":true}` |
+| `GET` | `/v1/ruleset` | 返回当前完整 ruleset（按 owner 分段）`{"owners":{"tui":[...],"panel":[...]}}` |
+| `POST` | `/v1/ruleset/{owner}` | 全量替换该 owner 的 segment，body `{"rules":[...]}` |
+| `GET` | `/v1/counters` | 每条规则的字节 / 包计数（按 proto + src_port keyed） |
+
+`POST /v1/ruleset/{owner}` 的冲突语义：同 owner 内端口重复返回 `400`；跨 owner 端口冲突（后提交抢占已占端口）返回 `409`，响应体说明被哪个 owner 占用。`GET /v1/ruleset`（不带 `{owner}`）返回只读视图，`POST /v1/ruleset`（扁平，无 owner 路径段）返回 `410 Gone`，不再接受。
+
+远程节点的 HTTP-enable 接口与 Unix socket 端点完全等价，额外要求 `Authorization: Bearer <token>` 头（token 从 `--token-file` 读取）。详细设计与数据类型见：
+
+> `docs/superpowers/specs/2026-05-21-single-binary-daemon-design.md`
 
 ---
 
 ## 已知限制
 
-- 仅 IPv4。IPv6 没做（架构上加一份 `ip6 nft_forward` 表即可）
+- 仅 IPv4。IPv6 架构上加 `ip6 nft_forward` 表即可，暂未实现
 - 限速只在 egress 方向。双向限速需 ifb，未实现
-- panel 单实例。SQLite + 单文件，没做水平扩展（也不打算做）
-- 没做 mTLS，节点 token 走 Bearer。需要更强保护时前置反代 + 客户端证书
-- 没做计费 / 套餐 / 自助注册 / 邮件 / 多语言。请用其他工具的话用 flux-panel
+- 面板单实例（SQLite，无水平扩展）
+- daemon HTTP-enable 模式不内置 TLS；建议在前置反代（Caddy / Nginx）处做 TLS 终结，并把 agent token 通过安全信道分发
+- 所有自动化测试覆盖 `internal/daemon` 与 `internal/daemonclient` 单元层；端到端 systemd / `install.sh` 流程仍需手动验证
