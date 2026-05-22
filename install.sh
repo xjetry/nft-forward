@@ -102,16 +102,20 @@ switch_role_cleanup() {
   local new="$1"
   local existing
   existing="$(detect_existing_roles)"
+  # Use explicit if-blocks (not `&&` short-circuit) — a case branch
+  # ending in a failed `[[ … ]] && …` returns nonzero, which would make
+  # this function return nonzero and trip `set -e` in the caller on a
+  # fresh host where `existing` is empty.
   case "$new" in
     tui)
-      [[ "$existing" == *server* ]] && do_uninstall server 0
-      [[ "$existing" == *agent*  ]] && do_uninstall agent  0
+      if [[ "$existing" == *server* ]]; then do_uninstall server 0; fi
+      if [[ "$existing" == *agent*  ]]; then do_uninstall agent  0; fi
       ;;
     server)
-      [[ "$existing" == *agent* ]] && do_uninstall agent 0
+      if [[ "$existing" == *agent* ]]; then do_uninstall agent 0; fi
       ;;
     agent)
-      [[ "$existing" == *server* ]] && do_uninstall server 0
+      if [[ "$existing" == *server* ]]; then do_uninstall server 0; fi
       ;;
   esac
 }
