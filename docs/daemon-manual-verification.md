@@ -187,4 +187,4 @@ ls /tmp/nft-forward.sock
 
 - **HTTP daemon 与 panel 已整合** — daemon 支持 HTTP listen 和 Bearer token 认证；server / TUI 皆已接入 daemon
 - **Socket 权限** — unix socket 只有文件权限控制（生产部署只让 root + nft-forward group 用户能连）
-- **安装和启动流程** — `install.sh` 和 legacy `nft-forward.service` unit 仍反映旧的预 daemon-ization 布局，这些会在后续阶段统一更新
+- **自动化测试覆盖范围** — 当前所有自动化测试都在 `internal/daemon` 与 `internal/daemonclient` 单元层级覆盖；端到端 systemd / install.sh 流程仍依赖手工验证
