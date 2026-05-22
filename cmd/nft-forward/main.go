@@ -2,14 +2,23 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"database/sql"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"nft-forward/internal/daemon"
 	"nft-forward/internal/daemonclient"
+	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/server"
 	"nft-forward/internal/store"
 	"nft-forward/internal/sysdeps"
 	"nft-forward/internal/systemd"
@@ -17,36 +26,20 @@ import (
 )
 
 func main() {
-	// Subcommand dispatch must precede flag.Parse() so the global flag set
-	// does not try to consume subcommand-specific args.
-	if len(os.Args) > 1 && os.Args[1] == "daemon" {
-		os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
-		os.Exit(runDaemon())
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "daemon":
+			os.Exit(runDaemon(os.Args[2:]))
+		case "server":
+			os.Exit(runServer(os.Args[2:]))
+		case "apply":
+			os.Exit(runApplyCompat(os.Args[2:]))
+		}
 	}
-
-	var (
-		applyOnly  bool
-		uninstall  bool
-		installSvc bool
-	)
-	flag.BoolVar(&applyOnly, "apply", false, "加载 rules.json 并应用到内核后退出（开机由 systemd 调用）")
-	flag.BoolVar(&installSvc, "install-service", false, "安装 systemd 单元以实现开机持久化后退出")
-	flag.BoolVar(&uninstall, "uninstall-service", false, "卸载 systemd 持久化单元后退出")
-	flag.Parse()
-
-	switch {
-	case applyOnly:
-		os.Exit(runApply())
-	case installSvc:
-		os.Exit(runInstallService())
-	case uninstall:
-		os.Exit(runUninstall())
-	default:
-		os.Exit(runTUI())
-	}
+	os.Exit(runTUI())
 }
 
-func runDaemon() int {
+func runDaemon(args []string) int {
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "nft-forward daemon 必须以 root 身份运行")
 		return 1
@@ -56,12 +49,18 @@ func runDaemon() int {
 		socketPath string
 		statePath  string
 		groupName  string
+		iface      string
+		httpListen string
+		tokenFile  string
 	)
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
 	fs.StringVar(&statePath, "state", daemon.DefaultStatePath, "持久化 state 文件路径")
 	fs.StringVar(&groupName, "group", daemon.DefaultGroupName, "socket 文件 group（不存在时回落到默认 group）")
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	fs.StringVar(&iface, "iface", "", "tc data-plane iface (auto-detect if empty)")
+	fs.StringVar(&httpListen, "listen", "", "additionally serve HTTP on this address for remote pushes")
+	fs.StringVar(&tokenFile, "token-file", "/etc/nft-forward/daemon.token", "bearer token file (required when --listen is set)")
+	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
@@ -84,11 +83,17 @@ func runDaemon() int {
 		}
 	}
 
-	d, err := daemon.New(daemon.Config{
+	cfg := daemon.Config{
 		SocketPath: socketPath,
 		StatePath:  statePath,
 		GroupName:  groupName,
-	})
+		Iface:      iface,
+		HTTPListen: httpListen,
+	}
+	if httpListen != "" {
+		cfg.TokenPath = tokenFile
+	}
+	d, err := daemon.New(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "daemon 构造失败:", err)
 		return 1
@@ -97,6 +102,96 @@ func runDaemon() int {
 		fmt.Fprintln(os.Stderr, "daemon 运行失败:", err)
 		return 1
 	}
+	return 0
+}
+
+func runServer(args []string) int {
+	var (
+		addr, dbPath, bootstrapPw  string
+		resetAdminPw, resetAdminUser string
+	)
+	fs := flag.NewFlagSet("server", flag.ExitOnError)
+	fs.StringVar(&addr,         "addr",                    ":8080",                       "panel HTTP address")
+	fs.StringVar(&dbPath,       "db",                      "/var/lib/nft-forward/panel.db", "SQLite database path")
+	fs.StringVar(&bootstrapPw,  "bootstrap-admin-password","",                            "set admin password on first boot")
+	fs.StringVar(&resetAdminPw, "reset-admin-password",    "",                            "reset admin password and exit")
+	fs.StringVar(&resetAdminUser,"reset-admin-username",   "admin",                       "admin username for reset")
+	fs.Parse(args)
+
+	if resetAdminPw != "" {
+		return runResetAdmin(dbPath, resetAdminUser, resetAdminPw)
+	}
+
+	d, err := db.Open(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := bootstrap(d, bootstrapPw); err != nil {
+		log.Fatalf("bootstrap: %v", err)
+	}
+
+	pusher := server.NewPusher(d)
+	go pusher.Run()
+	poller := server.NewPoller(d, pusher, 5*time.Second)
+	go poller.Run()
+
+	srv, err := server.New(d, pusher)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
+	httpSrv := &http.Server{
+		Addr:              addr,
+		Handler:           srv.Router(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		log.Printf("nft-forward server listening on %s", addr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	poller.Stop()
+	pusher.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(ctx)
+	return 0
+}
+
+func runApplyCompat(args []string) int {
+	var rulesPath string
+	fs := flag.NewFlagSet("apply", flag.ExitOnError)
+	fs.StringVar(&rulesPath, "rules", "/etc/nft-forward/rules.json", "rules file path")
+	fs.Parse(args)
+
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "必须以 root 身份运行")
+		return 1
+	}
+
+	client, err := daemonclient.New(daemonclient.DefaultSocketPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "daemon client creation failed:", err)
+		return 1
+	}
+
+	rules, err := store.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "加载规则失败:", err)
+		return 1
+	}
+
+	if err := client.PostRuleset("tui", rules); err != nil {
+		fmt.Fprintln(os.Stderr, "post rules failed:", err)
+		return 1
+	}
+
+	fmt.Printf("nft-forward: 已发送 %d 条规则到 daemon\n", len(rules))
 	return 0
 }
 
@@ -166,6 +261,68 @@ func runTUI() int {
 		return 1
 	}
 	return 0
+}
+
+// runResetAdmin opens the DB without starting the panel and rewrites the
+// password of a single admin account. All live sessions for that user are
+// invalidated so any leaked cookie immediately stops working.
+func runResetAdmin(dbPath, username, newPw string) int {
+	d, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "打开数据库:", err)
+		return 1
+	}
+	defer d.Close()
+
+	u, err := db.GetUserByUsername(d, username)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "找不到用户 %q: %v\n", username, err)
+		return 1
+	}
+	if u.Role != "admin" {
+		fmt.Fprintf(os.Stderr, "用户 %q 角色为 %s，不是 admin；本命令只重置 admin 账号\n", username, u.Role)
+		return 1
+	}
+	hash, err := server.HashPassword(newPw)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "哈希失败:", err)
+		return 1
+	}
+	if _, err := d.Exec(`UPDATE users SET pw_hash=?, disabled=0 WHERE id=?`, hash, u.ID); err != nil {
+		fmt.Fprintln(os.Stderr, "写入失败:", err)
+		return 1
+	}
+	_, _ = d.Exec(`DELETE FROM sessions WHERE user_id=?`, u.ID)
+	db.WriteAudit(d, u.ID, "admin.reset_password_cli", username, "")
+	fmt.Printf("已重置 %s 的密码（同时清空其所有活跃会话、解除禁用状态）\n", username)
+	return 0
+}
+
+func bootstrap(d *sql.DB, pw string) error {
+	n, err := db.CountUsers(d)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if pw == "" {
+		pw = db.RandToken(8)
+	}
+	hash, err := server.HashPassword(pw)
+	if err != nil {
+		return err
+	}
+	if _, err := db.CreateUser(d, "admin", hash, "admin"); err != nil {
+		return err
+	}
+	fmt.Println("================================================")
+	fmt.Println(" 首次启动 - 已创建管理员账号")
+	fmt.Println(" 用户名: admin")
+	fmt.Println(" 密  码:", pw)
+	fmt.Println(" 请妥善保存。可通过 --bootstrap-admin-password 自定义。")
+	fmt.Println("================================================")
+	return nil
 }
 
 func preflight() error {
