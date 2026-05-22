@@ -24,6 +24,7 @@ type fakeApplier struct {
 	nftCalls [][]nft.Rule
 	tcCalls  []fakeTcCall
 	err      error
+	tcErr    error
 }
 
 func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
@@ -31,6 +32,9 @@ func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
 		return f.err
 	}
 	f.nftCalls = append(f.nftCalls, append([]nft.Rule(nil), rules...))
+	if f.tcErr != nil {
+		return f.tcErr
+	}
 	f.tcCalls = append(f.tcCalls, fakeTcCall{
 		rules: append([]nft.Rule(nil), rules...),
 		iface: iface,
@@ -327,7 +331,7 @@ func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
 	}
 }
 
-func TestApplyInvokesTcAfterNft(t *testing.T) {
+func TestApplyInvokesNftAndTcWithIface(t *testing.T) {
 	fake := &fakeApplier{}
 	d := newTestDaemon(t)
 	d.applier = fake
@@ -347,5 +351,28 @@ func TestApplyInvokesTcAfterNft(t *testing.T) {
 	}
 	if fake.tcCalls[0].iface != "eth42" {
 		t.Errorf("tc iface = %q, want eth42", fake.tcCalls[0].iface)
+	}
+}
+
+func TestApply_TcFailure_StillReturnsErrorAfterNftRan(t *testing.T) {
+	fake := &fakeApplier{tcErr: fmt.Errorf("tc broke")}
+	d := newTestDaemon(t)
+	d.applier = fake
+	d.iface = "eth0"
+
+	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}
+	body, _ := json.Marshal(map[string]any{"rules": rules})
+	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if len(fake.nftCalls) != 1 {
+		t.Errorf("nft should still have been invoked, got nftCalls=%d", len(fake.nftCalls))
+	}
+	if len(fake.tcCalls) != 0 {
+		t.Errorf("tc should not have recorded a successful call, got tcCalls=%d", len(fake.tcCalls))
 	}
 }
