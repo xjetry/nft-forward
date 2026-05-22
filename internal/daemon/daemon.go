@@ -165,15 +165,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(l) }()
 
+	var httpSrv *http.Server
 	if d.httpListen != "" {
+		httpSrv = &http.Server{
+			Addr:              d.httpListen,
+			Handler:           d.httpHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 		go func() {
-			srv := &http.Server{
-				Addr:              d.httpListen,
-				Handler:           d.httpHandler(),
-				ReadHeaderTimeout: 5 * time.Second,
-			}
 			log.Printf("nft-forward daemon listening on %s (http)", d.httpListen)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("http listener: %v", err)
 			}
 		}()
@@ -185,6 +186,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if httpSrv != nil {
+			_ = httpSrv.Shutdown(shutCtx)
+		}
 		return srv.Shutdown(shutCtx)
 	case err := <-serveErr:
 		if err == http.ErrServerClosed {
