@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"flag"
@@ -10,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +19,6 @@ import (
 	"nft-forward/internal/server"
 	"nft-forward/internal/store"
 	"nft-forward/internal/sysdeps"
-	"nft-forward/internal/systemd"
 	"nft-forward/internal/tui"
 )
 
@@ -194,53 +191,6 @@ func runApplyCompat(args []string) int {
 	return 0
 }
 
-func runApply() int {
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "必须以 root 身份运行")
-		return 1
-	}
-	if !nft.Available() {
-		fmt.Fprintln(os.Stderr, "未找到 nft 命令")
-		return 1
-	}
-	rules, err := store.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "加载规则失败:", err)
-		return 1
-	}
-	if err := nft.Apply(rules); err != nil {
-		fmt.Fprintln(os.Stderr, "应用规则失败:", err)
-		return 1
-	}
-	fmt.Printf("nft-forward: 已应用 %d 条规则\n", len(rules))
-	return 0
-}
-
-func runInstallService() int {
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "必须以 root 身份运行")
-		return 1
-	}
-	if err := systemd.Install(); err != nil {
-		fmt.Fprintln(os.Stderr, "安装失败:", err)
-		return 1
-	}
-	fmt.Println("已安装 systemd 单元 nft-forward.service；规则将在开机时自动恢复")
-	return 0
-}
-
-func runUninstall() int {
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "必须以 root 身份运行")
-		return 1
-	}
-	if err := systemd.Uninstall(); err != nil {
-		fmt.Fprintln(os.Stderr, "卸载失败:", err)
-		return 1
-	}
-	fmt.Println("已移除 systemd 单元；rules.json 与当前内核规则保持不变")
-	return 0
-}
 
 func runTUI() int {
 	client, err := daemonclient.New(daemonclient.DefaultSocketPath)
@@ -324,45 +274,3 @@ func bootstrap(d *sql.DB, pw string) error {
 	return nil
 }
 
-func preflight() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("必须以 root 身份运行（尝试: sudo %s）", os.Args[0])
-	}
-
-	if err := sysdeps.Ensure("nftables"); err != nil {
-		return err
-	}
-
-	if err := nft.Probe(); err != nil {
-		return err
-	}
-
-	if !nft.IPForwardEnabled() {
-		fmt.Println("net.ipv4.ip_forward 未启用，正在启用...")
-		if err := nft.EnableIPForward(); err != nil {
-			return fmt.Errorf("启用 ip_forward 失败: %w", err)
-		}
-	}
-	return nil
-}
-
-func promptPersist() bool {
-	fmt.Println("尚未配置开机持久化。")
-	fmt.Println("启用后将把本程序复制到 /usr/local/sbin/nft-forward，")
-	fmt.Println("并注册 systemd 单元，使保存的规则在每次开机时自动恢复。")
-	return promptYes("现在启用持久化？[Y/n]: ", true)
-}
-
-func promptYes(prompt string, defaultYes bool) bool {
-	fmt.Print(prompt)
-	r := bufio.NewReader(os.Stdin)
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return false
-	}
-	ans := strings.ToLower(strings.TrimSpace(line))
-	if ans == "" {
-		return defaultYes
-	}
-	return ans == "y" || ans == "yes"
-}
