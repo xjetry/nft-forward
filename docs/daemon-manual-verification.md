@@ -114,9 +114,77 @@ ls /tmp/nft-forward.sock
 
 后续 daemon 重启不会重复迁移：只要 `--state` 指向的文件已存在，迁移就被跳过。
 
+## Server (panel) + daemon
+
+此场景验证 daemon 与 server（panel web UI）一起工作，展示 TUI、panel、daemon 三者如何并存且互相隔离。
+
+1. 启动 daemon：
+   ```bash
+   sudo nft-forward daemon
+   ```
+   预期输出：`nft-forward daemon: listening on /var/run/nft-forward.sock`
+
+2. 启动 server（panel）：
+   ```bash
+   sudo nft-forward server --addr :8080
+   ```
+   首次启动会生成 admin 密码并打印到 stdout。
+
+3. 打开浏览器访问 `http://host:8080`，使用 admin 密码登录。
+
+4. 在 panel 确认 `localhost` 节点已自动注册，其地址为 `unix:///var/run/nft-forward.sock`。
+
+5. 通过 panel UI 在 localhost 节点上创建一条 forward。
+
+6. 在终端验证 panel 创建的 forward 出现在 daemon 的 `panel` segment 中：
+   ```bash
+   curl -s --unix-socket /var/run/nft-forward.sock http://daemon/v1/ruleset
+   # → {"owners":{"panel":[{...}]}}
+   ```
+
+7. 在另一个终端启动 TUI 并添加一条 rule：
+   ```bash
+   sudo nft-forward
+   ```
+   （TUI 会通过 unix socket 与 daemon 对话）
+
+8. 再次查询 ruleset，应看到两个 owner 各自的 rules：
+   ```bash
+   curl -s --unix-socket /var/run/nft-forward.sock http://daemon/v1/ruleset
+   # → {"owners":{"panel":[{...}],"tui":[{...}]}}
+   ```
+
+## Remote daemon (HTTP) role
+
+此场景验证 daemon 监听 HTTP 端口并支持 Bearer token 认证，用于跨主机部署。
+
+1. 在 panel 主机上启动 server：
+   ```bash
+   nft-forward server --addr :8080
+   ```
+
+2. 在第二个主机上启动 daemon 并配置 HTTP listen 和 token：
+   ```bash
+   # 创建 token 文件
+   echo "my-secret-token" | sudo tee /etc/nft-forward/daemon.token
+   
+   # 启动 daemon 监听 HTTP
+   sudo nft-forward daemon --listen :7878 --token-file /etc/nft-forward/daemon.token
+   ```
+
+3. 在 panel 中注册新节点：输入节点地址 `http://second-host:7878`，secret 设置为与 `daemon.token` 相同的值。
+
+4. 在该节点上通过 panel 创建一条 forward。
+
+5. 在第二个主机上验证 panel 创建的 forward 已推送到 daemon：
+   ```bash
+   curl -s -H "Authorization: Bearer my-secret-token" \
+        http://localhost:7878/v1/ruleset
+   # → {"owners":{"panel":[{...}]}}
+   ```
+
 ## 已知限制
 
-- **仅 unix socket** — 远程接入（HTTP + Bearer token）会在接入 server/agent 时再加
-- **无认证** — 只有 socket 文件权限是访问控制（生产部署只让 root + nft-forward group 用户能连）
-- **TUI 已接入 daemon** — 运行 `sudo nft-forward`（默认子命令）会通过 unix socket 与 daemon 对话；daemon 没起会立即报错，不再 fallback 直接管 nftables
-- **server / agent 仍走旧路径** — `nft-server` / `nft-agent` 二进制各自直接操作 nftables，与 daemon 并存会撞表。生产部署目前仍只能选一种：要么单机跑 daemon + TUI，要么跑 server/agent 集群（不要混用）
+- **HTTP daemon 与 panel 已整合** — daemon 支持 HTTP listen 和 Bearer token 认证；server / TUI 皆已接入 daemon
+- **Socket 权限** — unix socket 只有文件权限控制（生产部署只让 root + nft-forward group 用户能连）
+- **安装和启动流程** — `install.sh` 和 legacy `nft-forward.service` unit 仍反映旧的预 daemon-ization 布局，这些会在后续阶段统一更新
