@@ -9,6 +9,7 @@ REPO="xjetry/nft-forward"
 RELEASE="${NFTF_RELEASE:-latest}"
 INSTALL_DIR="/usr/local/sbin"
 SYSTEMD_DIR="/etc/systemd/system"
+_update_tmp=""
 
 write_daemon_unit() {
   local extra_args="${1:-}"
@@ -124,49 +125,40 @@ do_update() {
   systemctl list-unit-files --no-legend | grep -q '^nft-forward-daemon\.service ' \
     || die "未安装：nft-forward-daemon.service 不存在；请先 install.sh tui/server/agent"
 
-  # ---- 架构防护（本机侧）----
-  local arch
-  arch=$(uname -m)
-  case "$arch" in
-    x86_64|amd64) ;;
-    *) die "目前仅 amd64 二进制可用（当前: $arch）" ;;
-  esac
-
   # ---- 下载到 tmp ----
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  _update_tmp="$(mktemp -d)"
+  trap 'rm -rf "$_update_tmp"' EXIT
 
   note "[1/5] 下载 nft-forward (latest) ..."
-  curl -fL --progress-bar "$base/nft-forward" -o "$tmp/nft-forward" \
+  curl -fL --progress-bar "$base/nft-forward" -o "$_update_tmp/nft-forward" \
     || die "下载失败: $base/nft-forward"
 
   note "[2/5] 校验 sha256 ..."
-  if curl -fLs "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-    (cd "$tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
+  if curl -fLs "$base/SHA256SUMS" -o "$_update_tmp/SHA256SUMS" 2>/dev/null; then
+    (cd "$_update_tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
       || die "sha256 校验失败"
   else
-    die "未取到 SHA256SUMS：update 必须强校验，拒绝裸跑"
+    die "未取到 SHA256SUMS：update 必须强校验，拒绝裸跑（检查网络或稍后重试）"
   fi
 
   # ---- 架构防护（产物侧）----
-  file "$tmp/nft-forward" | grep -q 'ELF 64-bit LSB.*x86-64' \
-    || die "下载到的二进制不是 ELF 64-bit x86-64（content: $(file "$tmp/nft-forward"))"
+  file "$_update_tmp/nft-forward" | grep -q 'ELF 64-bit LSB.*x86-64' \
+    || die "下载到的二进制不是 ELF 64-bit x86-64（content: $(file "$_update_tmp/nft-forward"))"
 
   # ---- exec 自检 ----
-  if ! "$tmp/nft-forward" --version >/dev/null 2>&1; then
-    if [[ $? -gt 125 ]]; then
-      die "新二进制无法执行（exec format / 缺权限）"
-    fi
+  local exec_rc=0
+  "$_update_tmp/nft-forward" --version >/dev/null 2>&1 || exec_rc=$?
+  if [[ $exec_rc -gt 125 ]]; then
+    die "新二进制无法执行（exec format / 缺权限，退出码 $exec_rc）"
   fi
 
   # ---- 备份旧二进制 ----
   note "[3/5] 备份旧二进制到 $INSTALL_DIR/nft-forward.bak ..."
   cp -a "$INSTALL_DIR/nft-forward" "$INSTALL_DIR/nft-forward.bak"
-  trap 'rm -rf "$tmp"; rollback_update' ERR INT TERM
+  trap 'rm -rf "$_update_tmp"; rollback_update' ERR INT TERM
 
   # ---- 原子替换 ----
-  install -m 0755 "$tmp/nft-forward" "$INSTALL_DIR/nft-forward"
+  install -m 0755 "$_update_tmp/nft-forward" "$INSTALL_DIR/nft-forward"
 
   # ---- 重启 unit ----
   note "[4/5] 重启 daemon (+ server, if present) ..."
@@ -179,24 +171,22 @@ do_update() {
 
   # ---- health-check 10 秒预算 ----
   note "[5/5] health-check (10s) ..."
-  local i
+  local i ok_count=0
   for i in $(seq 1 10); do
     if systemctl is-active --quiet nft-forward-daemon.service \
        && curl -sf --unix-socket /var/run/nft-forward.sock \
                http://daemon/v1/health 2>/dev/null \
           | grep -q '"ok":true'; then
+      ok_count=1
       break
     fi
     sleep 1
   done
-  systemctl is-active --quiet nft-forward-daemon.service \
-    && curl -sf --unix-socket /var/run/nft-forward.sock \
-            http://daemon/v1/health 2>/dev/null \
-       | grep -q '"ok":true' \
-    || rollback_update
+  [[ "$ok_count" -eq 1 ]] || rollback_update
 
   # ---- 成功收尾 ----
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'rm -rf "$_update_tmp"' EXIT
+  trap - ERR INT TERM
   rm -f "$INSTALL_DIR/nft-forward.bak"
   local sha size
   sha=$(sha256sum "$INSTALL_DIR/nft-forward" | awk '{print $1}')
