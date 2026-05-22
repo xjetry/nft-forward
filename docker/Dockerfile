@@ -8,8 +8,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nft-forward ./cmd/
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends nftables iproute2 ca-certificates curl \
+ && apt-get install -y --no-install-recommends nftables iproute2 ca-certificates curl python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/nft-forward /usr/local/sbin/nft-forward
+COPY install.sh /usr/local/sbin/nft-forward-install
+RUN chmod +x /usr/local/sbin/nft-forward-install
 # No ENTRYPOINT — docker-compose.yml supplies the per-service command so the
 # same image serves daemon, server, or agent roles.

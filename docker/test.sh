@@ -31,7 +31,49 @@ docker compose exec daemon \
   || fail "daemon unix socket 健康检查未返回 {\"ok\":true}"
 green "  daemon unix socket 健康正常"
 
-note "4. 停止并清理 (compose down -v)"
+note "5. update 子命令 dry-run（语法 + URL 替换）"
+docker compose exec daemon bash -c '
+  set -e
+  # Sanity: usage text 含 update
+  /usr/local/sbin/nft-forward-install --help | grep -q "update" \
+    || { echo "usage 缺 update"; exit 1; }
+  # 错误用法：--release 与 update 互斥
+  if /usr/local/sbin/nft-forward-install update --release v1.0 2>&1 \
+     | grep -q "update 只拉 latest"; then
+    echo "  --release guard 生效"
+  else
+    echo "  --release guard 未生效"; exit 1
+  fi
+  # 错误用法：--purge 仅 uninstall 有效
+  if /usr/local/sbin/nft-forward-install update --purge 2>&1 \
+     | grep -q "--purge 仅 uninstall 模式有效"; then
+    echo "  --purge guard 生效"
+  else
+    echo "  --purge guard 未生效"; exit 1
+  fi
+  # NFTF_RELEASE_BASE_URL 接管：mock release artifact
+  mkdir -p /tmp/relmock
+  cp /usr/local/sbin/nft-forward /tmp/relmock/nft-forward
+  ( cd /tmp/relmock && sha256sum nft-forward > SHA256SUMS )
+  ( cd /tmp/relmock && python3 -m http.server 8765 >/tmp/http.log 2>&1 & disown )
+  sleep 1
+  # 预探：URL 替换链路工作
+  curl -sf http://127.0.0.1:8765/nft-forward -o /tmp/check.bin
+  test "$(sha256sum /tmp/check.bin | awk "{print \$1}")" \
+       = "$(sha256sum /usr/local/sbin/nft-forward | awk "{print \$1}")" \
+    || { echo "URL 替换/sha 校验链路异常"; exit 1; }
+' || fail "step 5 失败"
+green "  update 子命令 dry-run 通过（systemd 依赖见手工章节）"
+
+note "6. uninstall --purge 参数 guards"
+docker compose exec daemon bash -c '
+  /usr/local/sbin/nft-forward-install tui --purge 2>&1 \
+    | grep -q "--purge 仅 uninstall 模式有效" \
+    || { echo "tui --purge guard 未生效"; exit 1; }
+' || fail "step 6 失败"
+green "  uninstall guard 验证通过"
+
+note "7. 停止并清理 (compose down -v)"
 # EXIT trap handles compose down -v; disable it to avoid double-run and
 # run explicitly so the exit code from compose down is visible.
 trap - EXIT
