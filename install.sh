@@ -70,29 +70,33 @@ remove_legacy_units() {
 
 usage() {
   cat <<USAGE
-nft-forward 一键安装脚本
+nft-forward 一键安装/卸载/升级脚本
 
 用法:
-  $0 [tui|server|agent|uninstall] [选项]
+  $0 [tui|server|agent|update|uninstall] [选项]
 
 模式:
   tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
   server           控制面板（依赖 daemon；自动叠加安装）
   agent            受控节点（让 daemon 额外监听 HTTP；接受远程 panel 推送）
+  update           拉 latest 二进制原子替换 + restart + 失败回滚
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
 
 选项 / 环境变量:
   --port PORT      (PORT)          agent 监听端口；默认 7878
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
-  --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
+  --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
+  --purge                          uninstall 模式专用：按角色 scope 清残留数据
   -h, --help                       显示此帮助
 
 示例:
   sudo $0                                # 交互式
   sudo $0 server --addr :9000            # 自定义面板端口
   sudo $0 agent --port 7900 --token abc  # 远程节点
+  sudo $0 update                         # 拉 latest 二进制升级
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
+  sudo $0 uninstall daemon --purge       # 完整擦除 daemon 残留
 USAGE
 }
 
@@ -100,22 +104,127 @@ die() { echo "错误: $*" >&2; exit 1; }
 note() { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 
+rollback_update() {
+  echo "update 失败，回滚到旧二进制" >&2
+  if [[ -f "$INSTALL_DIR/nft-forward.bak" ]]; then
+    mv -f "$INSTALL_DIR/nft-forward.bak" "$INSTALL_DIR/nft-forward"
+  fi
+  systemctl restart nft-forward-daemon.service 2>/dev/null || true
+  if systemctl list-unit-files --no-legend \
+     | grep -q '^nft-forward-server\.service '; then
+    systemctl restart nft-forward-server.service 2>/dev/null || true
+  fi
+  exit 1
+}
+
+do_update() {
+  # ---- 前置探测 ----
+  [[ -x "$INSTALL_DIR/nft-forward" ]] \
+    || die "未安装：$INSTALL_DIR/nft-forward 不存在；请先 install.sh tui/server/agent"
+  systemctl list-unit-files --no-legend | grep -q '^nft-forward-daemon\.service ' \
+    || die "未安装：nft-forward-daemon.service 不存在；请先 install.sh tui/server/agent"
+
+  # ---- 架构防护（本机侧）----
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) ;;
+    *) die "目前仅 amd64 二进制可用（当前: $arch）" ;;
+  esac
+
+  # ---- 下载到 tmp ----
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+
+  note "[1/5] 下载 nft-forward (latest) ..."
+  curl -fL --progress-bar "$base/nft-forward" -o "$tmp/nft-forward" \
+    || die "下载失败: $base/nft-forward"
+
+  note "[2/5] 校验 sha256 ..."
+  if curl -fLs "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
+    (cd "$tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
+      || die "sha256 校验失败"
+  else
+    die "未取到 SHA256SUMS：update 必须强校验，拒绝裸跑"
+  fi
+
+  # ---- 架构防护（产物侧）----
+  file "$tmp/nft-forward" | grep -q 'ELF 64-bit LSB.*x86-64' \
+    || die "下载到的二进制不是 ELF 64-bit x86-64（content: $(file "$tmp/nft-forward"))"
+
+  # ---- exec 自检 ----
+  if ! "$tmp/nft-forward" --version >/dev/null 2>&1; then
+    if [[ $? -gt 125 ]]; then
+      die "新二进制无法执行（exec format / 缺权限）"
+    fi
+  fi
+
+  # ---- 备份旧二进制 ----
+  note "[3/5] 备份旧二进制到 $INSTALL_DIR/nft-forward.bak ..."
+  cp -a "$INSTALL_DIR/nft-forward" "$INSTALL_DIR/nft-forward.bak"
+  trap 'rm -rf "$tmp"; rollback_update' ERR INT TERM
+
+  # ---- 原子替换 ----
+  install -m 0755 "$tmp/nft-forward" "$INSTALL_DIR/nft-forward"
+
+  # ---- 重启 unit ----
+  note "[4/5] 重启 daemon (+ server, if present) ..."
+  systemctl daemon-reload
+  systemctl restart nft-forward-daemon.service
+  if systemctl list-unit-files --no-legend \
+     | grep -q '^nft-forward-server\.service '; then
+    systemctl restart nft-forward-server.service
+  fi
+
+  # ---- health-check 10 秒预算 ----
+  note "[5/5] health-check (10s) ..."
+  local i
+  for i in $(seq 1 10); do
+    if systemctl is-active --quiet nft-forward-daemon.service \
+       && curl -sf --unix-socket /var/run/nft-forward.sock \
+               http://daemon/v1/health 2>/dev/null \
+          | grep -q '"ok":true'; then
+      break
+    fi
+    sleep 1
+  done
+  systemctl is-active --quiet nft-forward-daemon.service \
+    && curl -sf --unix-socket /var/run/nft-forward.sock \
+            http://daemon/v1/health 2>/dev/null \
+       | grep -q '"ok":true' \
+    || rollback_update
+
+  # ---- 成功收尾 ----
+  trap 'rm -rf "$tmp"' EXIT
+  rm -f "$INSTALL_DIR/nft-forward.bak"
+  local sha size
+  sha=$(sha256sum "$INSTALL_DIR/nft-forward" | awk '{print $1}')
+  size=$(stat -c %s "$INSTALL_DIR/nft-forward" 2>/dev/null || stat -f %z "$INSTALL_DIR/nft-forward")
+  ok "===== Update 完成 ====="
+  echo "二进制 sha256: $sha"
+  echo "二进制 size:   $size 字节"
+  echo "建议查看启动日志: journalctl -u nft-forward-daemon.service --since '1 minute ago'"
+}
+
 # 参数解析（--help 不需要 root）
 mode=""
 port=""
 token=""
 addr=""
+purge=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    tui|server|agent|uninstall) mode="$1"; shift ;;
+    tui|server|agent|update|uninstall) mode="$1"; shift ;;
     --port) port="${2:?--port 需要值}"; shift 2 ;;
     --port=*) port="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
     --token=*) token="${1#*=}"; shift ;;
     --addr) addr="${2:?--addr 需要值}"; shift 2 ;;
     --addr=*) addr="${1#*=}"; shift ;;
-    --release) RELEASE="${2:?--release 需要值}"; shift 2 ;;
-    --release=*) RELEASE="${1#*=}"; shift ;;
+    --release) RELEASE="${2:?--release 需要值}"; RELEASE_EXPLICIT=1; shift 2 ;;
+    --release=*) RELEASE="${1#*=}"; RELEASE_EXPLICIT=1; shift ;;
+    --purge) purge=1; shift ;;
     server|agent|daemon)
       if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
       die "未知参数: $1" ;;
@@ -149,6 +258,13 @@ if [[ -z "$mode" ]]; then
     4|uninstall) mode=uninstall ;;
     *) die "未知选项: $choice" ;;
   esac
+fi
+
+if [[ "$mode" == "update" && -n "${RELEASE_EXPLICIT:-}" ]]; then
+  die "update 只拉 latest，要锁版本请用 install（如 sudo $0 tui --release v1.2.3）"
+fi
+if [[ "$mode" != "uninstall" && "$purge" -eq 1 ]]; then
+  die "--purge 仅 uninstall 模式有效"
 fi
 
 # Per-mode parameter prompts.
@@ -204,6 +320,17 @@ if [[ "$mode" == "uninstall" ]]; then
       ;;
     *) die "未知卸载目标: $UNINSTALL_TARGET" ;;
   esac
+  exit 0
+fi
+
+# Update is its own code path: no role unit changes, only binary swap.
+if [[ "$mode" == "update" ]]; then
+  if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
+    base="$NFTF_RELEASE_BASE_URL"
+  else
+    base="https://github.com/$REPO/releases/latest/download"
+  fi
+  do_update
   exit 0
 fi
 
