@@ -164,9 +164,7 @@ func runServer(args []string) int {
 }
 
 func runApplyCompat(args []string) int {
-	var rulesPath string
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
-	fs.StringVar(&rulesPath, "rules", "/etc/nft-forward/rules.json", "rules file path")
 	fs.Parse(args)
 
 	if os.Geteuid() != 0 {
@@ -180,6 +178,7 @@ func runApplyCompat(args []string) int {
 		return 1
 	}
 
+	// store.Load() uses NFT_FORWARD_CONFIG env var if set, otherwise /etc/nft-forward/rules.json
 	rules, err := store.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "加载规则失败:", err)
