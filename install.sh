@@ -73,28 +73,26 @@ usage() {
 nft-forward 一键安装脚本
 
 用法:
-  $0 [tui|server|agent] [选项]
+  $0 [tui|server|agent|uninstall] [选项]
 
 模式:
-  tui      单机 TUI（直接编辑本机 nftables）
-  server   控制面板 + 内嵌 agent
-  agent    受控节点（接收 panel 推送）
+  tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
+  server           控制面板（依赖 daemon；自动叠加安装）
+  agent            受控节点（让 daemon 额外监听 HTTP；接受远程 panel 推送）
+  uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
 
 选项 / 环境变量:
-  --port PORT          (PORT)         端口；server 默认 8080，agent 默认 7878
-  --token TOKEN        (AGENT_TOKEN)  agent bearer token（agent 模式必填）
-  --release VER        (NFTF_RELEASE) GitHub release tag，默认 latest
-  -h, --help                          显示此帮助
+  --port PORT      (PORT)          端口；server 默认 8080，agent 默认 7878
+  --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
+  --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
+  --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
+  -h, --help                       显示此帮助
 
 示例:
-  sudo $0                                   # 交互式
-  sudo $0 server                            # server 走默认端口
-  sudo $0 server --port 9000                # 自定义面板端口
-  sudo $0 agent --port 7900 --token abc...  # 节点端口和 token
-
-  # 一行 curl 安装 (无 TTY)
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh \\
-    | sudo bash -s -- agent --port 7878 --token <从面板拷贝的 token>
+  sudo $0                                # 交互式
+  sudo $0 server --addr :9000            # 自定义面板端口
+  sudo $0 agent --port 7900 --token abc  # 远程节点
+  sudo $0 uninstall server               # 仅卸面板，保留 daemon
 USAGE
 }
 
@@ -106,15 +104,21 @@ ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 mode=""
 port=""
 token=""
+addr=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    tui|server|agent) mode="$1"; shift ;;
+    tui|server|agent|uninstall) mode="$1"; shift ;;
     --port) port="${2:?--port 需要值}"; shift 2 ;;
     --port=*) port="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
     --token=*) token="${1#*=}"; shift ;;
+    --addr) addr="${2:?--addr 需要值}"; shift 2 ;;
+    --addr=*) addr="${1#*=}"; shift ;;
     --release) RELEASE="${2:?--release 需要值}"; shift 2 ;;
     --release=*) RELEASE="${1#*=}"; shift ;;
+    server|agent|daemon)
+      if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
+      die "未知参数: $1" ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数: $1（用 --help 查看用法）" ;;
   esac
@@ -129,177 +133,161 @@ case "$arch" in
   *) die "目前仅 amd64 二进制可用（当前: $arch）。请等待后续 release 或自行交叉编译。" ;;
 esac
 
-# 模式选择
+# Mode selection (interactive when no TTY arg).
 if [[ -z "$mode" ]]; then
   [[ -t 0 ]] || die "未指定模式且无 TTY；--help 查看用法"
   echo "请选择安装模式:"
-  echo "  1) tui      单机 TUI"
-  echo "  2) server   控制面板（含内嵌 agent）"
-  echo "  3) agent    受控节点"
-  read -rp "输入数字或名称 [1/2/3 或 tui/server/agent]: " choice
+  echo "  1) tui        单机 TUI（自动装 daemon）"
+  echo "  2) server     控制面板（叠加 daemon）"
+  echo "  3) agent      远程节点（让 daemon 额外开 HTTP）"
+  echo "  4) uninstall  卸载（再问要卸哪个角色）"
+  read -rp "输入数字或名称: " choice
   case "$choice" in
-    1|tui)    mode=tui ;;
-    2|server) mode=server ;;
-    3|agent)  mode=agent ;;
+    1|tui)       mode=tui ;;
+    2|server)    mode=server ;;
+    3|agent)     mode=agent ;;
+    4|uninstall) mode=uninstall ;;
     *) die "未知选项: $choice" ;;
   esac
 fi
 
-# 端口（server / agent 模式）
+# Per-mode parameter prompts.
 case "$mode" in
-  server) default_port=8080 ;;
-  agent)  default_port=7878 ;;
-  tui)    default_port="" ;;
+  agent)
+    port="${port:-${PORT:-7878}}"
+    token="${token:-${AGENT_TOKEN:-}}"
+    if [[ -z "$token" && -t 0 ]]; then
+      read -rp "Agent bearer token（从面板节点详情页拷贝）: " token
+    fi
+    [[ -n "$token" ]] || die "agent 模式需要 --token 或 AGENT_TOKEN"
+    ;;
+  server)
+    addr="${addr:-${PANEL_ADDR:-:8080}}"
+    ;;
+  uninstall)
+    if [[ -z "${UNINSTALL_TARGET:-}" && -t 0 ]]; then
+      read -rp "卸载哪个角色 [server/agent/daemon]: " UNINSTALL_TARGET
+    fi
+    UNINSTALL_TARGET="${UNINSTALL_TARGET:-}"
+    [[ -n "$UNINSTALL_TARGET" ]] || die "uninstall 需要指定角色"
+    ;;
 esac
 
-port="${port:-${PORT:-}}"
-if [[ -z "$port" && -n "$default_port" ]]; then
-  if [[ -t 0 ]]; then
-    read -rp "$mode 端口 [$default_port]: " port
-  fi
-  port="${port:-$default_port}"
+# Uninstall takes a separate code path (no download needed).
+if [[ "$mode" == "uninstall" ]]; then
+  case "$UNINSTALL_TARGET" in
+    server)
+      systemctl disable --now nft-forward-server.service 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/nft-forward-server.service"
+      systemctl daemon-reload
+      ok "已卸载 server 角色（daemon 保留）"
+      ;;
+    agent)
+      # Restore the daemon unit to a no-listen ExecStart and remove the token file.
+      write_daemon_unit ""
+      rm -f /etc/nft-forward/daemon.token
+      systemctl daemon-reload
+      systemctl restart nft-forward-daemon.service
+      ok "已卸载 agent 角色（daemon 保留，去掉 --listen）"
+      ;;
+    daemon)
+      if systemctl is-active --quiet nft-forward-server.service \
+         || systemctl list-unit-files --no-legend \
+            | grep -qE '^nft-forward-server\.service '; then
+        die "请先卸载 server 角色：sudo $0 uninstall server"
+      fi
+      systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/nft-forward-daemon.service"
+      rm -f "$INSTALL_DIR/nft-forward"
+      systemctl daemon-reload
+      ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
+      ;;
+    *) die "未知卸载目标: $UNINSTALL_TARGET" ;;
+  esac
+  exit 0
 fi
 
-# Token（仅 agent 模式）
-if [[ "$mode" == "agent" ]]; then
-  token="${token:-${AGENT_TOKEN:-}}"
-  if [[ -z "$token" && -t 0 ]]; then
-    read -rp "Agent bearer token（从面板节点详情页拷贝）: " token
-  fi
-  [[ -n "$token" ]] || die "agent 模式需要 --token 或 AGENT_TOKEN"
-fi
+# All install modes need the binary + the daemon unit. Download once, install
+# once, then layer the role-specific unit on top.
+remove_legacy_units
 
-# 决定二进制名
-case "$mode" in
-  tui)    binary="nft-forward" ;;
-  server) binary="nft-server" ;;
-  agent)  binary="nft-agent" ;;
-esac
-
-# 下载 URL
 if [[ "$RELEASE" == "latest" ]]; then
   base="https://github.com/$REPO/releases/latest/download"
 else
   base="https://github.com/$REPO/releases/download/$RELEASE"
 fi
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-note "[1/4] 下载 $binary ($RELEASE) ..."
-curl -fL --progress-bar "$base/$binary" -o "$tmp/$binary" || die "下载失败: $base/$binary"
+note "[1/3] 下载 nft-forward ($RELEASE) ..."
+curl -fL --progress-bar "$base/nft-forward" -o "$tmp/nft-forward" \
+  || die "下载失败: $base/nft-forward"
 
-note "[2/4] 校验 sha256 ..."
+note "[2/3] 校验 sha256 ..."
 if curl -fLs "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-  (cd "$tmp" && grep -E "  $binary$" SHA256SUMS | sha256sum -c -) || die "sha256 校验失败"
+  (cd "$tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
+    || die "sha256 校验失败"
 else
   echo "    (SHA256SUMS 不可用，跳过校验)"
 fi
 
-note "[3/4] 安装到 $INSTALL_DIR/$binary ..."
-install -m 0755 "$tmp/$binary" "$INSTALL_DIR/$binary"
+note "[3/3] 安装到 $INSTALL_DIR/nft-forward ..."
+install -m 0755 "$tmp/nft-forward" "$INSTALL_DIR/nft-forward"
 
 primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 primary_ip="${primary_ip:-<本机IP>}"
 
 case "$mode" in
   tui)
-    note "[4/4] 完成"
+    write_daemon_unit ""
+    systemctl daemon-reload
+    systemctl enable --now nft-forward-daemon.service
     cat <<EOF
 
 $(ok "===== TUI 安装完成 =====")
-运行:  sudo $INSTALL_DIR/$binary
-首次启动会询问是否启用开机持久化（推荐选 Y），同意后自动安装 systemd 单元
-nft-forward.service，规则在重启后自动恢复。
+host daemon 已作为 systemd 服务启动：nft-forward-daemon.service
+运行 TUI:   sudo $INSTALL_DIR/nft-forward
+TUI 会自动连接到上面的 daemon；规则在 daemon 重启后自动恢复。
 
 文档:  https://github.com/$REPO#readme
 EOF
     ;;
 
   server)
-    cat >"$SYSTEMD_DIR/nft-server.service" <<EOF
-[Unit]
-Description=nft-forward panel + embedded agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=$INSTALL_DIR/nft-server --addr :$port
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    write_daemon_unit ""
+    write_server_unit "$addr"
     systemctl daemon-reload
-    systemctl enable --now nft-server.service
-
-    note "[4/4] 服务启动中 ..."
+    systemctl enable --now nft-forward-daemon.service
+    systemctl enable --now nft-forward-server.service
     sleep 2
-
     cat <<EOF
 
 $(ok "===== Server 安装完成 =====")
-面板地址:  http://${primary_ip}:${port}
-systemd:   nft-server.service
-状态:      systemctl status nft-server
-日志:      journalctl -u nft-server -e
-配置文件:  $SYSTEMD_DIR/nft-server.service
-
-首次启动的随机 admin 密码已写入日志，运行以下命令查看:
-  sudo journalctl -u nft-server -n 30 --no-pager | grep -A1 '密  码'
-
-下一步:
-  1. 浏览器打开面板，用 admin + 上述密码登录
-  2. 右上「修改密码」改成自己的
-  3. 在「节点」页添加远程节点，复制安装命令到目标机器执行
-     （或者本机也已经作为 "localhost" 节点自动注册了）
-
-文档:  https://github.com/$REPO#readme
+面板:        http://$primary_ip$addr
+daemon unit: nft-forward-daemon.service
+server unit: nft-forward-server.service
+首次启动的 admin 密码: journalctl -u nft-forward-server.service | grep 密 \
+  （或查看 server 启动日志）
 EOF
     ;;
 
   agent)
-    install -d /etc/nft-forward /var/lib/nft-forward
-    echo "$token" > /etc/nft-forward/agent.token
-    chmod 600 /etc/nft-forward/agent.token
-
-    cat >"$SYSTEMD_DIR/nft-agent.service" <<EOF
-[Unit]
-Description=nft-forward agent
-After=network-online.target nftables.service
-Wants=network-online.target
-
-[Service]
-ExecStart=$INSTALL_DIR/nft-agent --listen :$port --token-file /etc/nft-forward/agent.token
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    mkdir -p /etc/nft-forward
+    install -m 0600 /dev/stdin /etc/nft-forward/daemon.token <<<"$token"
+    write_daemon_unit " --listen :$port --token-file /etc/nft-forward/daemon.token"
     systemctl daemon-reload
-    systemctl enable --now nft-agent.service
-
-    note "[4/4] 服务启动中 ..."
-    sleep 2
-
+    systemctl enable --now nft-forward-daemon.service
     cat <<EOF
 
 $(ok "===== Agent 安装完成 =====")
-监听地址:  ${primary_ip}:${port}
-systemd:   nft-agent.service
-状态:      systemctl status nft-agent
-日志:      journalctl -u nft-agent -e
-Token:     /etc/nft-forward/agent.token
-
-下一步: 回到面板「节点详情页」，点「重新同步」，状态应转为「已同步」。
-
-如果一直「错误」:
-  - 防火墙/安全组是否放行入站 ${port}/tcp
-  - panel 是否能 reach 本机 ${primary_ip}:${port}
-  - token 是否与面板上节点详情页一致:
-      cat /etc/nft-forward/agent.token
+daemon 现在同时监听 unix socket 与 :$port (HTTP, bearer auth)
+在远端 panel 注册节点:
+  地址: http://$primary_ip:$port
+  Secret: $token
 
 文档:  https://github.com/$REPO#readme
 EOF
     ;;
+
+  *) die "内部错误: 未处理的模式 $mode" ;;
 esac
