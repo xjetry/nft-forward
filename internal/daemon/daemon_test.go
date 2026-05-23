@@ -289,6 +289,30 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 	}
 }
 
+func TestDetectForwardDropNoShim_FalseWhenPolicyAccept(t *testing.T) {
+	if detectForwardDropNoShim("Chain FORWARD (policy ACCEPT 0 packets)", []string{"docker-user"}) {
+		t.Fatal("policy ACCEPT must not trigger warning")
+	}
+}
+
+func TestDetectForwardDropNoShim_FalseWhenShimDetected(t *testing.T) {
+	if detectForwardDropNoShim("Chain FORWARD (policy DROP 100 packets)", []string{"docker-user"}) {
+		t.Fatal("known shim detected: no warning")
+	}
+}
+
+func TestDetectForwardDropNoShim_TrueWhenDropAndNoShim(t *testing.T) {
+	if !detectForwardDropNoShim("Chain FORWARD (policy DROP 100 packets)", nil) {
+		t.Fatal("policy DROP + no shim must trigger warning")
+	}
+}
+
+func TestDetectForwardDropNoShim_EmptyInput(t *testing.T) {
+	if detectForwardDropNoShim("", nil) {
+		t.Fatal("empty input (probe failed) must not trigger warning")
+	}
+}
+
 func TestDaemonRunCallsCleanupOnShutdown(t *testing.T) {
 	dir := t.TempDir()
 	fa := &fakeApplier{}

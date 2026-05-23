@@ -125,6 +125,18 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// DetectedNames returns the names of shims whose Detect() returns true
+// right now. Cheap; used by daemon startup probe.
+func (r *Registry) DetectedNames() []string {
+	var names []string
+	for _, s := range r.shims {
+		if s.Detect() {
+			names = append(names, s.Name())
+		}
+	}
+	return names
+}
+
 // SyncAll runs Sync on every detected shim. A failure in one shim does
 // not skip the others — failures are aggregated and returned at the
 // end so the caller can log them. Detect failures are not surfaced.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -180,6 +181,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}()
 	}
 
+	go d.probeFirewallEnvironment()
 	go d.refreshLoop(ctx)
 
 	var shutdownErr error
@@ -202,6 +204,36 @@ func (d *Daemon) Run(ctx context.Context) error {
 		log.Printf("applier cleanup: %v", cleanupErr)
 	}
 	return shutdownErr
+}
+
+// detectForwardDropNoShim returns true when the iptables FORWARD chain
+// has a drop default policy AND no known shim was detected. Pure
+// function so tests can drive it with fixture input.
+func detectForwardDropNoShim(iptablesForwardListOutput string, detectedShims []string) bool {
+	if iptablesForwardListOutput == "" {
+		return false
+	}
+	if !strings.Contains(iptablesForwardListOutput, "policy DROP") {
+		return false
+	}
+	return len(detectedShims) == 0
+}
+
+func (d *Daemon) probeFirewallEnvironment() {
+	out, err := exec.Command("iptables", "-nL", "FORWARD").CombinedOutput()
+	if err != nil {
+		return // probe failed; silently skip — no signal to surface
+	}
+	var detected []string
+	if d.applier != nil {
+		if probed, ok := d.applier.(interface{ DetectedShims() []string }); ok {
+			detected = probed.DetectedShims()
+		}
+	}
+	if detectForwardDropNoShim(string(out), detected) {
+		log.Printf("WARN: FORWARD chain has drop policy but no known firewall shim detected; " +
+			"forwarded traffic may be blocked. supported shims: docker-user, ufw.")
+	}
 }
 
 // refreshLoop periodically re-resolves and re-applies the ruleset on a

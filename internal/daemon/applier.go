@@ -50,6 +50,16 @@ func (a nftApplier) Cleanup() error {
 	return a.shims.CleanupAll()
 }
 
+// DetectedShims returns the names of shims that detect their target
+// chain right now. Used by daemon's startup probe to decide whether
+// to warn about FORWARD policy=drop environments.
+func (a nftApplier) DetectedShims() []string {
+	if a.shims == nil {
+		return nil
+	}
+	return a.shims.DetectedNames()
+}
+
 // DefaultApplier returns the production applier wired with the built-in
 // shim registry.
 func DefaultApplier() Applier {
