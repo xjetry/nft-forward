@@ -97,3 +97,85 @@ func joinArgs(a []string) string {
 	}
 	return out
 }
+
+// Registry holds the built-in shims and dispatches Sync/Cleanup across
+// all of them. The set of shims is fixed at construction time; we don't
+// support dynamic registration because the list is small and known.
+type Registry struct {
+	shims []ForwardShim
+}
+
+// DefaultRegistry returns the built-in shim set: docker-user, ufw.
+// Tests can construct a Registry literal with arbitrary stubs.
+func DefaultRegistry() *Registry {
+	return &Registry{
+		shims: []ForwardShim{
+			NewDockerUserShim(),
+			NewUfwShim(),
+		},
+	}
+}
+
+// Names lists the shim Name()s in registration order, for logging.
+func (r *Registry) Names() []string {
+	names := make([]string, 0, len(r.shims))
+	for _, s := range r.shims {
+		names = append(names, s.Name())
+	}
+	return names
+}
+
+// SyncAll runs Sync on every detected shim. A failure in one shim does
+// not skip the others — failures are aggregated and returned at the
+// end so the caller can log them. Detect failures are not surfaced.
+func (r *Registry) SyncAll(rules []nft.Rule) error {
+	var errs []string
+	for _, s := range r.shims {
+		if !s.Detect() {
+			continue
+		}
+		if err := s.Sync(rules); err != nil {
+			errs = append(errs, s.Name()+": "+err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return &aggregateError{errs}
+}
+
+// CleanupAll mirrors SyncAll for shutdown / uninstall paths.
+func (r *Registry) CleanupAll() error {
+	var errs []string
+	for _, s := range r.shims {
+		if !s.Detect() {
+			continue
+		}
+		if err := s.Cleanup(); err != nil {
+			errs = append(errs, s.Name()+": "+err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return &aggregateError{errs}
+}
+
+type aggregateError struct {
+	errs []string
+}
+
+func (e *aggregateError) Error() string {
+	return "shim: " + joinStr(e.errs, "; ")
+}
+
+func joinStr(xs []string, sep string) string {
+	out := ""
+	for i, s := range xs {
+		if i > 0 {
+			out += sep
+		}
+		out += s
+	}
+	return out
+}
