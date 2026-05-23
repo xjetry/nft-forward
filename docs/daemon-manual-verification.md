@@ -296,3 +296,27 @@ sudo systemctl restart nft-forward-daemon.service
 ```
 
 跑 update 才能验证完整回滚流；正式场景失败原因通常是新二进制 broken 而非 unit 错。
+
+## 6. 防火墙 shim 验证（Docker 主机）
+
+在装了 Docker 的真实 VM 上验证 daemon 自动处理 DOCKER-USER：
+
+```bash
+# 前置：清理之前测试残留
+sudo iptables -F DOCKER-USER 2>/dev/null || true
+
+# 1. 装 daemon + 加一条规则
+sudo bash install.sh tui
+sudo nft-forward    # 添加规则 58443 → 10.20.1.20:8443，退出
+
+# 2. 验证 DOCKER-USER 出现 owner-tagged 规则
+sudo nft list chain ip filter DOCKER-USER | grep "nft-forward managed"
+#   ct state established,related counter ... accept comment "nft-forward managed"
+#   ip daddr 10.20.1.20 tcp dport 8443 counter accept comment "nft-forward managed"
+
+# 3. 真实客户端从外网测：应该能连通（之前的"DNAT 后 SYN 没出去"问题消失）
+
+# 4. 停 daemon，验证清理
+sudo systemctl stop nft-forward-daemon.service
+sudo nft list chain ip filter DOCKER-USER | grep "nft-forward managed" && echo "FAIL: 残留" || echo "OK: 已清理"
+```
