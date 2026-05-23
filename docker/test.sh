@@ -79,6 +79,48 @@ docker compose exec daemon bash -c '
 ' || fail "step 6 失败"
 green "  uninstall guard 验证通过"
 
+note "8. shim: DOCKER-USER 同步与清理"
+docker compose exec daemon bash -c '
+  set -e
+  # 容器里手工建 DOCKER-USER chain 模拟 Docker 主机环境
+  nft add table ip filter 2>/dev/null || true
+  nft add chain ip filter DOCKER-USER 2>/dev/null || true
+
+  # 提交一条 DNAT 规则到 daemon
+  curl -sf --unix-socket /var/run/nft-forward.sock \
+       -X POST -H "Content-Type: application/json" \
+       http://daemon/v1/ruleset/tui \
+       -d "{\"rules\":[{\"id\":\"a\",\"proto\":\"tcp\",\"src_port\":58443,\"dest_ip\":\"10.20.1.20\",\"dest_port\":8443}]}" \
+       >/dev/null
+
+  # 验证 DOCKER-USER 里出现 nft-forward managed rule
+  if ! nft list chain ip filter DOCKER-USER | grep -q "nft-forward managed"; then
+    echo "shim 未注入 DOCKER-USER"
+    nft list chain ip filter DOCKER-USER
+    exit 1
+  fi
+  if ! nft list chain ip filter DOCKER-USER | grep -q "10.20.1.20"; then
+    echo "DNAT 目标 IP 未出现在 shim 规则中"
+    exit 1
+  fi
+  echo "  注入验证通过"
+
+  # 提交空 ruleset，触发 shim 同步删除
+  curl -sf --unix-socket /var/run/nft-forward.sock \
+       -X POST -H "Content-Type: application/json" \
+       http://daemon/v1/ruleset/tui \
+       -d "{\"rules\":[]}" \
+       >/dev/null
+
+  # 此时 ct state 兜底规则应仍在（每次 sync 都会重写一条），但 dest_ip 那条应消失
+  if nft list chain ip filter DOCKER-USER | grep -q "10.20.1.20"; then
+    echo "shim 未清除 10.20.1.20 对应的 accept rule"
+    exit 1
+  fi
+  echo "  同步删除验证通过"
+' || fail "step 8 失败"
+green "  shim 注入与同步验证通过"
+
 note "7. 停止并清理 (compose down -v)"
 # EXIT trap handles compose down -v; disable it to avoid double-run and
 # run explicitly so the exit code from compose down is visible.
