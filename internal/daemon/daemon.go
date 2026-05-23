@@ -182,6 +182,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	go d.refreshLoop(ctx)
 
+	var shutdownErr error
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -189,13 +190,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if httpSrv != nil {
 			_ = httpSrv.Shutdown(shutCtx)
 		}
-		return srv.Shutdown(shutCtx)
+		shutdownErr = srv.Shutdown(shutCtx)
 	case err := <-serveErr:
 		if err == http.ErrServerClosed {
-			return nil
+			shutdownErr = nil
+		} else {
+			shutdownErr = err
 		}
-		return err
 	}
+	if cleanupErr := d.applier.Cleanup(); cleanupErr != nil {
+		log.Printf("applier cleanup: %v", cleanupErr)
+	}
+	return shutdownErr
 }
 
 // refreshLoop periodically re-resolves and re-applies the ruleset on a

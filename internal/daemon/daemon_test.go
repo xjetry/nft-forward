@@ -288,3 +288,29 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 		t.Fatalf("expected DestIP=10.0.0.5 after resolution, got %q", fa.nftCalls[0][0].DestIP)
 	}
 }
+
+func TestDaemonRunCallsCleanupOnShutdown(t *testing.T) {
+	dir := t.TempDir()
+	fa := &fakeApplier{}
+	d, err := New(Config{
+		SocketPath: filepath.Join(shortSockDir(t), "sock"),
+		StatePath:  filepath.Join(dir, "missing.json"),
+		GroupName:  "",
+		Applier:    fa,
+		Iface:      "lo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	if err := d.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fa.cleanupCalls != 1 {
+		t.Fatalf("expected Cleanup called once on shutdown, got %d", fa.cleanupCalls)
+	}
+}
