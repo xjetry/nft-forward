@@ -219,6 +219,14 @@ sudo bash install.sh uninstall daemon --purge   # 卸 daemon 同时清 state / s
 
 **面板数据库迁移**：旧版 `nft-server` 的 `panel.db` 直接复用，新版 `nft-forward server` 首次启动会执行 schema migration，把本机节点的地址由旧的 `local://` 更新为 `unix:///var/run/nft-forward.sock`，业务数据（节点、通道、租户、转发记录）保持不变。
 
+### 防火墙兼容
+
+daemon 启动 / 每次 apply 时会自动同步 `DOCKER-USER`（如果装了 Docker）和 `ufw-user-forward`（如果装了 ufw）chain 里的放行规则，让 nft-forward 的 DNAT 流量穿透 Docker / ufw 把 FORWARD policy 设成 drop 的环境。daemon 卸载或停止时这些规则自动清除。
+
+无 Docker / 无 ufw 的纯净系统：daemon 不动任何 chain，启动日志没有 shim 相关输出。
+
+如果你装了别的 firewall 工具（firewalld 等）让 FORWARD policy=drop 但 daemon 不能自动处理，启动日志会有一行 `WARN: FORWARD chain has drop policy but no known firewall shim detected`——这时需要手动在你的 firewall 里放行 nft-forward DNAT 后的流量。
+
 ---
 
 ## 开发

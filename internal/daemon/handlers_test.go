@@ -22,10 +22,11 @@ type fakeTcCall struct {
 }
 
 type fakeApplier struct {
-	nftCalls [][]nft.Rule
-	tcCalls  []fakeTcCall
-	err      error
-	tcErr    error
+	nftCalls     [][]nft.Rule
+	tcCalls      []fakeTcCall
+	err          error
+	tcErr        error
+	cleanupCalls int
 }
 
 func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
@@ -40,6 +41,11 @@ func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
 		rules: append([]nft.Rule(nil), rules...),
 		iface: iface,
 	})
+	return nil
+}
+
+func (f *fakeApplier) Cleanup() error {
+	f.cleanupCalls++
 	return nil
 }
 
