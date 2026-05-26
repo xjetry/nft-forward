@@ -29,6 +29,7 @@ type Daemon struct {
 
 	mu           sync.Mutex
 	owners       OwnerRuleset
+	meta         AgentMeta
 	lastResolved []nft.Rule
 }
 
@@ -151,7 +152,7 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "apply: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := SaveState(d.statePath, candidate); err != nil {
+	if err := SaveState(d.statePath, candidate, d.meta); err != nil {
 		// Kernel ruleset is already updated by the Apply above; the disk
 		// state lags behind. A daemon restart would reload the old state
 		// and Apply that, rolling the kernel back. We accept this rare

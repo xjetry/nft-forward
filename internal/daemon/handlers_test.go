@@ -138,7 +138,7 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 	if len(fa.nftCalls) != 1 || fa.nftCalls[0][0].SrcPort != 8080 {
 		t.Fatalf("Apply not called with merged ruleset: %+v", fa.nftCalls)
 	}
-	saved, err := LoadState(d.statePath)
+	saved, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testin
 	if _, exists := d.owners["tui"]; exists {
 		t.Fatalf("d.owners mutated despite apply error: %+v", d.owners)
 	}
-	saved, err := LoadState(d.statePath)
+	saved, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestApplyResolvesDestHost(t *testing.T) {
 		t.Errorf("DestIP = %q, want 192.0.2.5", got.DestIP)
 	}
 	// State persists raw rules so a refresh can re-resolve.
-	state, err := LoadState(d.statePath)
+	state, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}

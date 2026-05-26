@@ -110,13 +110,13 @@ func (d *Daemon) Bootstrap() error {
 			return fmt.Errorf("migrate legacy state: %w", mErr)
 		}
 		if len(migrated) > 0 {
-			if err := SaveState(d.statePath, migrated); err != nil {
+			if err := SaveState(d.statePath, migrated, AgentMeta{}); err != nil {
 				return fmt.Errorf("save migrated state: %w", err)
 			}
 		}
 	}
 
-	owners, err := LoadState(d.statePath)
+	owners, meta, err := LoadState(d.statePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
@@ -142,6 +142,7 @@ func (d *Daemon) Bootstrap() error {
 	}
 	d.mu.Lock()
 	d.owners = owners
+	d.meta = meta
 	if len(resolved) > 0 {
 		d.lastResolved = append([]nft.Rule(nil), resolved...)
 	}
