@@ -94,7 +94,7 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := dl.runOnce(ctx); err != nil && err != context.DeadlineExceeded {
+	if _, err := dl.runOnce(ctx); err != nil && err != context.DeadlineExceeded {
 		t.Logf("runOnce returned: %v (expected timeout)", err)
 	}
 
@@ -132,7 +132,7 @@ func TestDialerSendsRegisterLocalWhenTuiPresentAndNotMigrated(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	go dl.runOnce(ctx)
+	go func() { _, _ = dl.runOnce(ctx) }()
 
 	select {
 	case got := <-registered:
@@ -168,7 +168,7 @@ func TestDialerSkipsRegisterWhenMigratedAtIsNonzero(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	_ = dl.runOnce(ctx)
+	_, _ = dl.runOnce(ctx)
 
 	frames := fh.Frames()
 	for _, f := range frames {

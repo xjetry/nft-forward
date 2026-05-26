@@ -78,10 +78,16 @@ func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
 	case d.tuiCh <- cp:
 	default:
 		d.pendingTui.Store(&cp)
-		select {
-		case d.tuiCh <- *d.pendingTui.Swap(nil):
-		default:
-			// channel already has fresher; drop oldest
+		// Pull whichever snapshot is now pending (might be ours, might be a
+		// later concurrent caller's). The Swap returns nil if another caller
+		// already drained between our Store and Swap — that's fine, they got
+		// the more recent snapshot through.
+		if p := d.pendingTui.Swap(nil); p != nil {
+			select {
+			case d.tuiCh <- *p:
+			default:
+				// channel still full; a fresher snapshot will come through
+			}
 		}
 	}
 }
@@ -98,9 +104,17 @@ func (d *Dialer) Run(ctx context.Context) {
 			return
 		default:
 		}
-		err := d.runOnce(ctx)
+		helloAcked, err := d.runOnce(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("dialer: connection ended: %v", err)
+		}
+		// Reset backoff when a session got past hello_ack: a node that's
+		// been authenticated and serving for a while shouldn't pay a
+		// minute-long reconnect penalty for one panel hiccup. Quick-fail
+		// sessions (token bad, dial refused, hello timeout) keep growing
+		// the backoff so we don't hammer a broken panel.
+		if helloAcked {
+			backoff = dialerBackoffInitial
 		}
 		sleep := jitter(backoff)
 		select {
@@ -118,13 +132,16 @@ func (d *Dialer) Run(ctx context.Context) {
 }
 
 // runOnce dials, performs hello + optional register, then enters the
-// read/write loop until disconnection.
-func (d *Dialer) runOnce(ctx context.Context) error {
+// read/write loop until disconnection. helloAcked is true when the session
+// successfully completed hello_ack — the caller uses this to reset the
+// reconnect backoff so long-lived sessions don't pay a minute-long penalty
+// after a single panel hiccup.
+func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	ws, _, err := websocket.Dial(dctx, d.cfg.URL, nil)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", d.cfg.URL, err)
+		return false, fmt.Errorf("dial %s: %w", d.cfg.URL, err)
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
@@ -137,21 +154,22 @@ func (d *Dialer) runOnce(ctx context.Context) error {
 		LastAppliedRev: currentMeta.LastAppliedRev,
 	})
 	if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHello, ID: "hello-1", Payload: helloPayload}); err != nil {
-		return fmt.Errorf("write hello: %w", err)
+		return false, fmt.Errorf("write hello: %w", err)
 	}
 
 	helloAck, err := readOne(ctx, ws, dialerReadTimeout)
 	if err != nil {
-		return fmt.Errorf("read hello_ack: %w", err)
+		return false, fmt.Errorf("read hello_ack: %w", err)
 	}
 	if helloAck.Type != wsproto.TypeHelloAck {
-		return fmt.Errorf("unexpected first reply %q", helloAck.Type)
+		return false, fmt.Errorf("unexpected first reply %q", helloAck.Type)
 	}
 	var ha wsproto.HelloAck
 	_ = json.Unmarshal(helloAck.Payload, &ha)
 	if ha.Error != "" {
-		return fmt.Errorf("hello rejected: %s", ha.Error)
+		return false, fmt.Errorf("hello rejected: %s", ha.Error)
 	}
+	helloAcked = true
 
 	// Trigger register_local if needed.
 	owners, meta := d.cfg.GetState()
@@ -159,11 +177,11 @@ func (d *Dialer) runOnce(ctx context.Context) error {
 		fwds := rulesToForwards(owners["tui"])
 		rlp, _ := json.Marshal(wsproto.RegisterLocal{Forwards: fwds})
 		if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeRegisterLocal, ID: "reg-1", Payload: rlp}); err != nil {
-			return fmt.Errorf("write register_local: %w", err)
+			return helloAcked, fmt.Errorf("write register_local: %w", err)
 		}
 		rlAck, err := readOne(ctx, ws, dialerReadTimeout)
 		if err != nil {
-			return fmt.Errorf("read register_local_ack: %w", err)
+			return helloAcked, fmt.Errorf("read register_local_ack: %w", err)
 		}
 		if rlAck.Type == wsproto.TypeRegisterLocalAck {
 			var ack wsproto.RegisterLocalAck
@@ -174,7 +192,10 @@ func (d *Dialer) runOnce(ctx context.Context) error {
 		}
 	}
 
-	// Enter loop: reader and tickers.
+	// Reader runs in its own goroutine because ws.Read blocks; the serve
+	// loop pulls frames via readCh + errors via errCh. errCh is buffered
+	// (1) so the reader can always push its terminal error and exit even
+	// after the serve loop has already returned and stopped draining.
 	readCh := make(chan wsproto.Envelope, 4)
 	errCh := make(chan error, 1)
 	go func() {
@@ -195,11 +216,11 @@ func (d *Dialer) runOnce(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return helloAcked, ctx.Err()
 		case <-d.stop:
-			return nil
+			return helloAcked, nil
 		case err := <-errCh:
-			return err
+			return helloAcked, err
 		case env := <-readCh:
 			switch env.Type {
 			case wsproto.TypeApplyRuleset:
@@ -223,7 +244,7 @@ func (d *Dialer) runOnce(ctx context.Context) error {
 		case <-pingT.C:
 			pp, _ := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePing, ID: "ping-" + strconv.FormatInt(time.Now().UnixMilli(), 36), Payload: pp}); err != nil {
-				return err
+				return helloAcked, err
 			}
 		case <-countersT.C:
 			if d.cfg.CountersFn == nil {
