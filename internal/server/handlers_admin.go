@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/wsproto"
 )
 
 // --- Tunnels ---
@@ -439,6 +441,61 @@ func validateCIDRList(s string) error {
 		}
 	}
 	return nil
+}
+
+// handleImportTuiSnapshot takes the latest tui-segment snapshot the agent
+// reported for a node and INSERTs each entry into the panel-managed
+// forwards table, then re-dispatches the node so the agent receives the
+// new panel-segment ruleset. The agent's own tui segment still owns the
+// rules in-kernel until the next operator TUI run; this handler doesn't
+// try to clear it (that's a separate flow).
+func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	nodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad node id", http.StatusBadRequest)
+		return
+	}
+	snap, _, err := db.GetTuiSnapshot(s.DB, nodeID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if snap == "" {
+		setFlash(w, "暂无 TUI 快照可导入")
+		http.Redirect(w, r, fmt.Sprintf("/nodes/%d", nodeID), http.StatusSeeOther)
+		return
+	}
+	var forwards []wsproto.Forward
+	if err := json.Unmarshal([]byte(snap), &forwards); err != nil {
+		http.Error(w, "malformed snapshot", http.StatusInternalServerError)
+		return
+	}
+	imported := 0
+	for _, f := range forwards {
+		if _, err := db.CreateForward(s.DB, &db.Forward{
+			NodeID:     nodeID,
+			Proto:      f.Proto,
+			ListenPort: f.ListenPort,
+			TargetIP:   f.TargetIP,
+			TargetPort: f.TargetPort,
+			Comment:    f.Comment,
+		}); err != nil {
+			log.Printf("import-tui: create forward (node=%d port=%d proto=%s): %v",
+				nodeID, f.ListenPort, f.Proto, err)
+			continue
+		}
+		imported++
+	}
+	if u != nil {
+		db.WriteAudit(s.DB, u.ID, "node.import_tui", strconv.FormatInt(nodeID, 10),
+			fmt.Sprintf("imported=%d/%d", imported, len(forwards)))
+	}
+	if err := s.dispatchToNode(nodeID); err != nil {
+		log.Printf("import-tui dispatch node %d: %v", nodeID, err)
+	}
+	setFlash(w, fmt.Sprintf("已导入 %d/%d 条规则", imported, len(forwards)))
+	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", nodeID), http.StatusSeeOther)
 }
 
 // targetIPInCIDR reports whether ip falls within any of the CIDR entries in

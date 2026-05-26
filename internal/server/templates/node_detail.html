@@ -62,6 +62,8 @@ systemctl enable --now nft-agent.service</pre>
 {{else}}<div class="empty">该节点尚无转发规则。<a href="/forwards">去添加</a></div>{{end}}
 </div>
 
+{{template "_tui_snapshot_partial.html" .}}
+
 <div>
 <form method="post" action="/nodes/{{.Node.ID}}/resync" class="inline"><button class="ghost" type="submit">重新同步</button></form>
 <a href="/nodes" style="margin-left:8px">← 返回</a>

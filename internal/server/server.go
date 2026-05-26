@@ -13,12 +13,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
+	"nft-forward/internal/wsproto"
 )
 
 var urlParse = url.Parse
@@ -185,6 +188,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/nodes/{id}", s.showNode)
 		r.Post("/nodes/{id}/delete", s.deleteNode)
 		r.Post("/nodes/{id}/resync", s.resyncNode)
+		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)
 
 		r.Get("/forwards", s.listForwards)
 		r.Post("/forwards", s.createForward)
@@ -300,11 +304,22 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	forwards, _ := db.ListForwardsByNode(s.DB, n.ID)
+	tuiSnapJSON, ts, _ := db.GetTuiSnapshot(s.DB, n.ID)
+	var tuiSnap []wsproto.Forward
+	if tuiSnapJSON != "" {
+		_ = json.Unmarshal([]byte(tuiSnapJSON), &tuiSnap)
+	}
+	age := ""
+	if ts != nil {
+		age = humanize.Time(time.Unix(*ts, 0))
+	}
 	s.render(w, "node_detail.html", map[string]any{
-		"User":     u,
-		"Node":     n,
-		"Forwards": forwards,
-		"Flash":    flashFromCookie(w, r),
+		"User":           u,
+		"Node":           n,
+		"Forwards":       forwards,
+		"TuiSnapshot":    tuiSnap,
+		"TuiSnapshotAge": age,
+		"Flash":          flashFromCookie(w, r),
 	})
 }
 
