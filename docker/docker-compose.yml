@@ -1,5 +1,6 @@
 services:
   daemon:
+    # Host network is a hard constraint: nft + tc operate on the host kernel.
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -16,11 +17,24 @@ services:
     image: nft-forward:dev
     depends_on: [daemon]
     container_name: nftf-server
-    network_mode: host
+    # The server is HTTP-only; bridge isolation is fine and lets a sibling
+    # reverse-proxy container reach it via the nftf network without ever
+    # exposing :8080 on the host.
+    networks: [nftf]
+    # By default the panel is reachable only from within the nftf bridge
+    # network. To expose it on the host uncomment the ports block, or
+    # add your own caddy/nginx service into nftf and reverse-proxy
+    # nftf-server:8080.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
     volumes:
-      - daemon-run:/var/run             # share the daemon's unix socket
+      - daemon-run:/var/run          # share the daemon's unix socket
       - server-data:/var/lib/nft-forward
     command: ["/usr/local/sbin/nft-forward", "server", "--addr", ":8080"]
+
+networks:
+  nftf:
+    driver: bridge
 
 volumes:
   daemon-state:
