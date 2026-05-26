@@ -4,13 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"nft-forward/internal/nft"
 )
 
 func TestLoadState_MissingFileReturnsEmpty(t *testing.T) {
-	owners, err := LoadState(filepath.Join(t.TempDir(), "missing.json"))
+	owners, _, err := LoadState(filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil {
 		t.Fatalf("LoadState missing: %v", err)
 	}
@@ -30,10 +32,10 @@ func TestSaveLoad_RoundTrip_V2(t *testing.T) {
 			{ID: "p2", Proto: "tcp+udp", SrcPort: 443, DestHost: "example.com", DestIP: "203.0.113.5", DestPort: 8443, BandwidthMbps: 100, Comment: "with bandwidth"},
 		},
 	}
-	if err := SaveState(path, in); err != nil {
+	if err := SaveState(path, in, AgentMeta{}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	out, err := LoadState(path)
+	out, _, err := LoadState(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestLoadState_V1CompatibilityReadsAsTuiSegment(t *testing.T) {
 	if err := os.WriteFile(path, v1, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	out, err := LoadState(path)
+	out, _, err := LoadState(path)
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestLoadState_UnknownVersionErrors(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"version":99,"owners":{}}`), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadState(path); err == nil {
+	if _, _, err := LoadState(path); err == nil {
 		t.Fatal("expected version error for v99")
 	}
 }
@@ -83,7 +85,7 @@ func TestSaveState_AtomicViaTempFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	in := OwnerRuleset{"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 1, DestPort: 1}}}
-	if err := SaveState(path, in); err != nil {
+	if err := SaveState(path, in, AgentMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
@@ -93,15 +95,84 @@ func TestSaveState_AtomicViaTempFile(t *testing.T) {
 
 func TestSaveState_EmptyOwnersWritesValidFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := SaveState(path, OwnerRuleset{}); err != nil {
+	if err := SaveState(path, OwnerRuleset{}, AgentMeta{}); err != nil {
 		t.Fatalf("save empty: %v", err)
 	}
-	out, err := LoadState(path)
+	out, _, err := LoadState(path)
 	if err != nil {
 		t.Fatalf("load empty: %v", err)
 	}
 	if len(out) != 0 {
 		t.Fatalf("expected empty owners, got %+v", out)
+	}
+}
+
+func TestLoadStateV2UpgradesToV3WithZeroAgentMeta(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "state.json")
+	v2 := `{"version":2,"owners":{"tui":[{"proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]}}`
+	if err := os.WriteFile(p, []byte(v2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owners, meta, err := LoadState(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owners["tui"]) != 1 {
+		t.Fatalf("expected 1 tui rule, got %d", len(owners["tui"]))
+	}
+	if !meta.MigratedAt.IsZero() {
+		t.Fatalf("expected zero MigratedAt, got %v", meta.MigratedAt)
+	}
+	if meta.LastAppliedRev != "" {
+		t.Fatalf("expected empty LastAppliedRev, got %q", meta.LastAppliedRev)
+	}
+}
+
+func TestSaveLoadStateV3Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "state.json")
+	owners := OwnerRuleset{"panel": {{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.2", DestPort: 443}}}
+	meta := AgentMeta{
+		MigratedAt:     time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC),
+		LastAppliedRev: "abc123",
+		PanelURL:       "wss://panel/v1/agents",
+	}
+	if err := SaveState(p, owners, meta); err != nil {
+		t.Fatal(err)
+	}
+	got, gotMeta, err := LoadState(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["panel"]) != 1 {
+		t.Fatalf("expected 1 panel rule, got %d", len(got["panel"]))
+	}
+	if !gotMeta.MigratedAt.Equal(meta.MigratedAt) || gotMeta.LastAppliedRev != "abc123" || gotMeta.PanelURL != "wss://panel/v1/agents" {
+		t.Fatalf("meta roundtrip mismatch: %+v", gotMeta)
+	}
+}
+
+func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
+	// Operators reading state.json by hand must see a canonical layout:
+	// the agent_meta block (and its migrated_at field) is always present,
+	// even when zero. Guards against accidentally re-adding omitempty on
+	// the struct-valued / time.Time fields where it would be silently
+	// ignored by encoding/json anyway.
+	p := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(p, OwnerRuleset{}, AgentMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)
+	if !strings.Contains(body, `"agent_meta"`) {
+		t.Fatalf("agent_meta key missing from on-disk state: %s", body)
+	}
+	if !strings.Contains(body, `"migrated_at"`) {
+		t.Fatalf("migrated_at key missing from on-disk state: %s", body)
 	}
 }
 

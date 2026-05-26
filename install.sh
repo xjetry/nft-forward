@@ -81,7 +81,7 @@ detect_existing_roles() {
     roles+=(server)
   fi
   if [[ -f "$SYSTEMD_DIR/nft-forward-daemon.service" ]] \
-     && grep -q -- '--listen' "$SYSTEMD_DIR/nft-forward-daemon.service"; then
+     && grep -q -- '--connect' "$SYSTEMD_DIR/nft-forward-daemon.service"; then
     roles+=(agent)
   fi
   # Use an if-block (not `&&` short-circuit) so an empty array doesn't
@@ -96,7 +96,7 @@ detect_existing_roles() {
 # The matrix:
 #   tui    -> uninstall server, uninstall agent
 #   server -> uninstall agent  (server unit gets rewritten in place)
-#   agent  -> uninstall server (daemon unit gets rewritten with --listen)
+#   agent  -> uninstall server (daemon unit gets rewritten with --connect)
 # Re-installing the same role doesn't trigger cleanup.
 switch_role_cleanup() {
   local new="$1"
@@ -149,24 +149,26 @@ do_uninstall() {
       ;;
     agent)
       if [[ "$purge" -eq 1 ]]; then
-        # POST empty panel segment first so daemon persists the clear into
-        # state.json before we restart it under the new unit.
         curl -sf --unix-socket /var/run/nft-forward.sock \
              -X POST -H 'Content-Type: application/json' \
              http://daemon/v1/ruleset/panel \
              -d '{"rules":[]}' >/dev/null 2>&1 \
           || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+      else
+        # Migrate panel segment back into tui segment so live forwards survive.
+        curl -sf --unix-socket /var/run/nft-forward.sock \
+             -X POST http://daemon/v1/admin/demote-to-tui >/dev/null 2>&1 \
+          || echo "警告: 未能通过 daemon API 降级 panel→tui 段（daemon 可能已停）" >&2
       fi
-      # Restore the daemon unit to a no-listen ExecStart and remove the token file.
       write_daemon_unit ""
-      rm -f /etc/nft-forward/daemon.token
+      rm -f /etc/nft-forward/panel.token
       systemctl daemon-reload
       systemctl restart nft-forward-daemon.service
       if [[ "$purge" -eq 1 ]]; then
         rm -rf /etc/nft-forward/
         ok "已卸载 agent 角色 + 清 /etc/nft-forward/ 与 daemon panel 段"
       else
-        ok "已卸载 agent 角色（daemon 保留，去掉 --listen；token 文件已删，panel 段保留）"
+        ok "已卸载 agent 角色（daemon 保留；panel 段已迁回 tui 段，token 文件已删）"
       fi
       ;;
     daemon)
@@ -208,12 +210,12 @@ nft-forward 一键安装/卸载/升级脚本
 模式:
   tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
   server           控制面板（依赖 daemon；自动叠加安装）
-  agent            受控节点（让 daemon 额外监听 HTTP；接受远程 panel 推送）
+  agent            受控节点（daemon 主动 dial panel WebSocket 反向纳管）
   update           拉 latest 二进制原子替换 + restart + 失败回滚
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
 
 选项 / 环境变量:
-  --port PORT      (PORT)          agent 监听端口；默认 7878
+  --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
@@ -223,7 +225,7 @@ nft-forward 一键安装/卸载/升级脚本
 示例:
   sudo $0                                # 交互式
   sudo $0 server --addr :9000            # 自定义面板端口
-  sudo $0 agent --port 7900 --token abc  # 远程节点
+  sudo $0 agent --panel-url https://panel.example.com --token abc...  # 远程节点
   sudo $0 update                         # 拉 latest 二进制升级
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
   sudo $0 uninstall daemon --purge       # 完整擦除 daemon 残留
@@ -328,15 +330,15 @@ do_update() {
 
 # 参数解析（--help 不需要 root）
 mode=""
-port=""
+panel_url=""
 token=""
 addr=""
 purge=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     tui|server|agent|update|uninstall) mode="$1"; shift ;;
-    --port) port="${2:?--port 需要值}"; shift 2 ;;
-    --port=*) port="${1#*=}"; shift ;;
+    --panel-url) panel_url="${2:?--panel-url 需要值}"; shift 2 ;;
+    --panel-url=*) panel_url="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
     --token=*) token="${1#*=}"; shift ;;
     --addr) addr="${2:?--addr 需要值}"; shift 2 ;;
@@ -367,7 +369,7 @@ if [[ -z "$mode" ]]; then
   echo "请选择安装模式:"
   echo "  1) tui        单机 TUI（自动装 daemon）"
   echo "  2) server     控制面板（叠加 daemon）"
-  echo "  3) agent      远程节点（让 daemon 额外开 HTTP）"
+  echo "  3) agent      远程节点（daemon 反向 dial panel WebSocket）"
   echo "  4) uninstall  卸载（再问要卸哪个角色）"
   read -rp "输入数字或名称: " choice
   case "$choice" in
@@ -389,11 +391,15 @@ fi
 # Per-mode parameter prompts.
 case "$mode" in
   agent)
-    port="${port:-${PORT:-7878}}"
+    panel_url="${panel_url:-${PANEL_URL:-}}"
     token="${token:-${AGENT_TOKEN:-}}"
+    if [[ -z "$panel_url" && -t 0 ]]; then
+      read -rp "Panel URL（如 https://panel.example.com）: " panel_url
+    fi
     if [[ -z "$token" && -t 0 ]]; then
       read -rp "Agent bearer token（从面板节点详情页拷贝）: " token
     fi
+    [[ -n "$panel_url" ]] || die "agent 模式需要 --panel-url 或 PANEL_URL"
     [[ -n "$token" ]] || die "agent 模式需要 --token 或 AGENT_TOKEN"
     ;;
   server)
@@ -495,18 +501,31 @@ EOF
 
   agent)
     switch_role_cleanup agent
+    # Normalize URL: http→ws, https→wss; append /v1/agents if path empty.
+    panel_url="${panel_url:-${PANEL_URL:-}}"
+    [[ -n "$panel_url" ]] || die "agent 模式需要 --panel-url 或 PANEL_URL"
+    case "$panel_url" in
+      https://*) panel_url="wss://${panel_url#https://}" ;;
+      http://*)  panel_url="ws://${panel_url#http://}" ;;
+      wss://*|ws://*) ;;
+      *) die "panel-url 必须以 http(s):// 或 ws(s):// 开头" ;;
+    esac
+    case "$panel_url" in
+      *"/v1/agents"|*"/v1/agents/") ;;
+      */) panel_url="${panel_url}v1/agents" ;;
+      *)  panel_url="${panel_url}/v1/agents" ;;
+    esac
     mkdir -p /etc/nft-forward
-    install -m 0600 /dev/stdin /etc/nft-forward/daemon.token <<<"$token"
-    write_daemon_unit " --listen :$port --token-file /etc/nft-forward/daemon.token"
+    install -m 0600 /dev/stdin /etc/nft-forward/panel.token <<<"$token"
+    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token"
     systemctl daemon-reload
     systemctl enable --now nft-forward-daemon.service
     cat <<EOF
 
 $(ok "===== Agent 安装完成 =====")
-daemon 现在同时监听 unix socket 与 :$port (HTTP, bearer auth)
-在远端 panel 注册节点:
-  地址: http://$primary_ip:$port
-  Secret: $token
+daemon 已通过 WebSocket 连向 $panel_url
+本机不再暴露任何 HTTP 端口给 panel；如要排查，查看
+  journalctl -u nft-forward-daemon.service -f
 
 文档:  https://github.com/$REPO#readme
 EOF

@@ -154,38 +154,39 @@ ls /tmp/nft-forward.sock
    # → {"owners":{"panel":[{...}],"tui":[{...}]}}
    ```
 
-## Remote daemon (HTTP) role
+## Remote agent (WSS) role
 
-此场景验证 daemon 监听 HTTP 端口并支持 Bearer token 认证，用于跨主机部署。
+此场景验证 daemon 以 agent 角色反向连接 panel 的 `/v1/agents` WebSocket，
+适用于跨主机部署、agent 宿主机完全不暴露端口的场景。
 
 1. 在 panel 主机上启动 server：
    ```bash
    nft-forward server --addr :8080
    ```
+   并在面板"节点"页生成新节点，记录返回的 token（64 位 hex）。
 
-2. 在第二个主机上启动 daemon 并配置 HTTP listen 和 token：
+2. 在第二个主机上启动 agent 模式的 daemon：
    ```bash
-   # 创建 token 文件
-   echo "my-secret-token" | sudo tee /etc/nft-forward/daemon.token
-   
-   # 启动 daemon 监听 HTTP
-   sudo nft-forward daemon --listen :7878 --token-file /etc/nft-forward/daemon.token
+   # 写 panel token 文件
+   echo "<panel 生成的 token>" | sudo tee /etc/nft-forward/panel.token
+
+   # 启动 daemon 反向连接 panel
+   sudo nft-forward daemon \
+       --connect wss://panel.example.com/v1/agents \
+       --panel-token-file /etc/nft-forward/panel.token
    ```
 
-3. 在 panel 中注册新节点：输入节点地址 `http://second-host:7878`，secret 设置为与 `daemon.token` 相同的值。
+3. 在 panel 上对该节点下发一条 forward。
 
-4. 在该节点上通过 panel 创建一条 forward。
-
-5. 在第二个主机上验证 panel 创建的 forward 已推送到 daemon：
+4. 在第二个主机上验证规则被 hub 通过 WS 应用到 daemon 的 panel 段：
    ```bash
-   curl -s -H "Authorization: Bearer my-secret-token" \
-        http://localhost:7878/v1/ruleset
+   curl -s --unix-socket /var/run/nft-forward.sock http://daemon/v1/ruleset
    # → {"owners":{"panel":[{...}]}}
    ```
 
 ## 已知限制
 
-- **HTTP daemon 与 panel 已整合** — daemon 支持 HTTP listen 和 Bearer token 认证；server / TUI 皆已接入 daemon
+- **WSS 反向通道** — daemon 不再开放 HTTP 监听；远程 agent 必须能 dial panel 的 `/v1/agents`，反代要允许 WebSocket Upgrade 并保留长连接（idle ≥ 60s）
 - **Socket 权限** — unix socket 只有文件权限控制（生产部署只让 root + nft-forward group 用户能连）
 - **自动化测试覆盖范围** — 当前所有自动化测试都在 `internal/daemon` 与 `internal/daemonclient` 单元层级覆盖；端到端 systemd / install.sh 流程仍依赖手工验证
 
@@ -214,12 +215,12 @@ sudo nft-forward          # 回 TUI 看刚才那条规则是否还在
 ### 2. agent 角色 update 保留 token
 
 ```bash
-sudo bash install.sh agent --port 7878 --token deadbeef...64hex
-ls -l /etc/nft-forward/daemon.token   # 记录 inode 和 mtime
+sudo bash install.sh agent --panel-url https://panel.example.com --token deadbeef...64hex
+ls -l /etc/nft-forward/panel.token    # 记录 inode 和 mtime
 sudo bash install.sh update
-ls -l /etc/nft-forward/daemon.token   # 应当与上面一致，inode 不变
+ls -l /etc/nft-forward/panel.token    # 应当与上面一致，inode 不变
 cat /etc/systemd/system/nft-forward-daemon.service | grep ExecStart
-                                       # 应仍含 --listen :7878 --token-file ...
+                                       # 应仍含 --connect wss://panel.example.com/v1/agents --panel-token-file ...
 ```
 
 ### 3. 角色切换链路 tui → server → tui

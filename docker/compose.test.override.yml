@@ -1,0 +1,8 @@
+services:
+  server:
+    # Expose the panel on 127.0.0.1:8080 so the host-network daemon
+    # container can reach it for integration tests. Production deployments
+    # should NOT use this override; instead, add a reverse-proxy service
+    # into the nftf network.
+    ports:
+      - "127.0.0.1:8080:8080"

@@ -58,7 +58,7 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 		"panel": []nft.Rule{
 			{ID: "p1", Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
 		},
-	}); err != nil {
+	}, AgentMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	fa := &fakeApplier{}
@@ -154,7 +154,7 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].ID != "rZ" {
 		t.Fatalf("applier did not see POSTed rule: %+v", fa.nftCalls)
 	}
-	saved, err := LoadState(statePath)
+	saved, _, err := LoadState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 	statePath := filepath.Join(root, "state.json")
 	if err := SaveState(statePath, OwnerRuleset{
 		"tui": []nft.Rule{{ID: "from-v2", Proto: "tcp", SrcPort: 90, DestIP: "9.0.0.0", DestPort: 90}},
-	}); err != nil {
+	}, AgentMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	legacyPath := filepath.Join(root, "rules.json")
@@ -248,7 +248,7 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	if err := SaveState(statePath, OwnerRuleset{
 		"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestHost: "x.example.com", DestPort: 80}},
-	}); err != nil {
+	}, AgentMeta{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,6 +310,32 @@ func TestDetectForwardDropNoShim_TrueWhenDropAndNoShim(t *testing.T) {
 func TestDetectForwardDropNoShim_EmptyInput(t *testing.T) {
 	if detectForwardDropNoShim("", nil) {
 		t.Fatal("empty input (probe failed) must not trigger warning")
+	}
+}
+
+func TestOnLocalMigratedClearsTuiSegmentAndSetsMeta(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    &fakeApplier{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.owners = OwnerRuleset{"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}}
+	if err := d.OnLocalMigrated(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.owners["tui"]) != 0 {
+		t.Fatalf("expected tui cleared, got %d", len(d.owners["tui"]))
+	}
+	if d.meta.MigratedAt.IsZero() {
+		t.Fatalf("expected MigratedAt set")
+	}
+	_, meta, _ := LoadState(d.statePath)
+	if meta.MigratedAt.IsZero() {
+		t.Fatalf("MigratedAt not persisted")
 	}
 }
 

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/wsproto"
 )
 
 // --- Tunnels ---
@@ -80,7 +83,9 @@ func (s *Server) deleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "tunnel.delete", strconv.FormatInt(id, 10), "")
 	if t != nil {
-		s.Pusher.Schedule(t.NodeID)
+		if err := s.dispatchToNode(t.NodeID); err != nil {
+			log.Printf("dispatch node %d: %v", t.NodeID, err)
+		}
 	}
 	http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
 }
@@ -168,7 +173,9 @@ func (s *Server) deleteAdminTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.delete", strconv.FormatInt(id, 10), "")
 	for _, n := range nodes {
-		s.Pusher.Schedule(n)
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d: %v", n, err)
+		}
 	}
 	http.Redirect(w, r, "/tenants", http.StatusSeeOther)
 }
@@ -194,7 +201,9 @@ func (s *Server) toggleTenant(w http.ResponseWriter, r *http.Request) {
 	db.WriteAudit(s.DB, u.ID, "tenant.toggle", strconv.FormatInt(id, 10), fmt.Sprintf("disabled=%v", target))
 	nodes, _ := db.DistinctTenantNodes(s.DB, id)
 	for _, n := range nodes {
-		s.Pusher.Schedule(n)
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d: %v", n, err)
+		}
 	}
 	http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
 }
@@ -229,7 +238,9 @@ func (s *Server) resetTenantTraffic(w http.ResponseWriter, r *http.Request) {
 	db.WriteAudit(s.DB, u.ID, "tenant.reset_traffic", strconv.FormatInt(id, 10), "")
 	nodes, _ := db.DistinctTenantNodes(s.DB, id)
 	for _, n := range nodes {
-		s.Pusher.Schedule(n)
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d: %v", n, err)
+		}
 	}
 	setFlash(w, "已重置流量计数并重新启用用户")
 	http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
@@ -337,7 +348,9 @@ func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
 		_ = db.SetTenantDisabled(s.DB, target.TenantID.Int64, willDisable, reason)
 		if nodes, err := db.DistinctTenantNodes(s.DB, target.TenantID.Int64); err == nil {
 			for _, n := range nodes {
-				s.Pusher.Schedule(n)
+				if err := s.dispatchToNode(n); err != nil {
+					log.Printf("dispatch node %d: %v", n, err)
+				}
 			}
 		}
 	}
@@ -407,7 +420,9 @@ func (s *Server) deleteUserHandler(w http.ResponseWriter, r *http.Request) {
 		setFlash(w, err.Error())
 	}
 	for _, n := range affected {
-		s.Pusher.Schedule(n)
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d: %v", n, err)
+		}
 	}
 	db.WriteAudit(s.DB, u.ID, "user.delete", strconv.FormatInt(id, 10), "")
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
@@ -426,6 +441,61 @@ func validateCIDRList(s string) error {
 		}
 	}
 	return nil
+}
+
+// handleImportTuiSnapshot takes the latest tui-segment snapshot the agent
+// reported for a node and INSERTs each entry into the panel-managed
+// forwards table, then re-dispatches the node so the agent receives the
+// new panel-segment ruleset. The agent's own tui segment still owns the
+// rules in-kernel until the next operator TUI run; this handler doesn't
+// try to clear it (that's a separate flow).
+func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	nodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad node id", http.StatusBadRequest)
+		return
+	}
+	snap, _, err := db.GetTuiSnapshot(s.DB, nodeID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if snap == "" {
+		setFlash(w, "暂无 TUI 快照可导入")
+		http.Redirect(w, r, fmt.Sprintf("/nodes/%d", nodeID), http.StatusSeeOther)
+		return
+	}
+	var forwards []wsproto.Forward
+	if err := json.Unmarshal([]byte(snap), &forwards); err != nil {
+		http.Error(w, "malformed snapshot", http.StatusInternalServerError)
+		return
+	}
+	imported := 0
+	for _, f := range forwards {
+		if _, err := db.CreateForward(s.DB, &db.Forward{
+			NodeID:     nodeID,
+			Proto:      f.Proto,
+			ListenPort: f.ListenPort,
+			TargetIP:   f.TargetIP,
+			TargetPort: f.TargetPort,
+			Comment:    f.Comment,
+		}); err != nil {
+			log.Printf("import-tui: create forward (node=%d port=%d proto=%s): %v",
+				nodeID, f.ListenPort, f.Proto, err)
+			continue
+		}
+		imported++
+	}
+	if u != nil {
+		db.WriteAudit(s.DB, u.ID, "node.import_tui", strconv.FormatInt(nodeID, 10),
+			fmt.Sprintf("imported=%d/%d", imported, len(forwards)))
+	}
+	if err := s.dispatchToNode(nodeID); err != nil {
+		log.Printf("import-tui dispatch node %d: %v", nodeID, err)
+	}
+	setFlash(w, fmt.Sprintf("已导入 %d/%d 条规则", imported, len(forwards)))
+	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", nodeID), http.StatusSeeOther)
 }
 
 // targetIPInCIDR reports whether ip falls within any of the CIDR entries in

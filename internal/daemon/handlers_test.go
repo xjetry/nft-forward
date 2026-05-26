@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"nft-forward/internal/nft"
 )
@@ -138,7 +139,7 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 	if len(fa.nftCalls) != 1 || fa.nftCalls[0][0].SrcPort != 8080 {
 		t.Fatalf("Apply not called with merged ruleset: %+v", fa.nftCalls)
 	}
-	saved, err := LoadState(d.statePath)
+	saved, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testin
 	if _, exists := d.owners["tui"]; exists {
 		t.Fatalf("d.owners mutated despite apply error: %+v", d.owners)
 	}
-	saved, err := LoadState(d.statePath)
+	saved, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +426,7 @@ func TestApplyResolvesDestHost(t *testing.T) {
 		t.Errorf("DestIP = %q, want 192.0.2.5", got.DestIP)
 	}
 	// State persists raw rules so a refresh can re-resolve.
-	state, err := LoadState(d.statePath)
+	state, _, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
@@ -500,6 +501,92 @@ func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 	}
 }
 
+func TestPostRulesetTUIInvokesDialerHook(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    &fakeApplier{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan []nft.Rule, 1)
+	d.tuiHook = func(r []nft.Rule) { called <- r }
+
+	if err := d.setOwnerRuleset(context.Background(), "tui",
+		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-called:
+		if len(got) != 1 {
+			t.Fatalf("expected 1 rule, got %d", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("tuiHook never called")
+	}
+}
+
+func TestPostRulesetPanelDoesNotInvokeDialerHook(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    &fakeApplier{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.tuiHook = func(r []nft.Rule) {
+		t.Fatalf("tuiHook fired on panel owner write")
+	}
+	if err := d.setOwnerRuleset(context.Background(), "panel",
+		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDemoteToTuiMergesPanelIntoTuiWithPanelWinning(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    &fakeApplier{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.owners = OwnerRuleset{
+		"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}},
+		"panel": {
+			{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.99", DestPort: 80}, // collides on tcp/80 — panel wins
+			{Proto: "udp", SrcPort: 53, DestIP: "10.0.0.2", DestPort: 53},
+		},
+	}
+	d.meta.MigratedAt = time.Now()
+	d.meta.LastAppliedRev = "rev1"
+	d.meta.PanelURL = "wss://panel/v1/agents"
+	if err := d.demoteToTui(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.owners["panel"]; ok {
+		t.Fatal("panel segment should be gone")
+	}
+	tui := d.owners["tui"]
+	if len(tui) != 2 {
+		t.Fatalf("expected 2 merged tui rules, got %d", len(tui))
+	}
+	for _, r := range tui {
+		if r.Proto == "tcp" && r.SrcPort == 80 && r.DestIP != "10.0.0.99" {
+			t.Fatalf("panel collision should win, got DestIP=%s", r.DestIP)
+		}
+	}
+	if !d.meta.MigratedAt.IsZero() || d.meta.LastAppliedRev != "" || d.meta.PanelURL != "" {
+		t.Fatalf("meta not reset: %+v", d.meta)
+	}
+}
+
 func TestRefreshAndHandlerNoRace(t *testing.T) {
 	// Should pass under `go test -race`. Drives concurrent
 	// handleRulesetOwner POST + refreshOnce calls to ensure no data race
@@ -527,34 +614,3 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	<-done
 }
 
-func TestHTTPListenerRequiresBearerToken(t *testing.T) {
-	d := newTestDaemon(t)
-	d.httpToken = "shhh"
-	handler := d.httpHandler() // wraps Handler() with bearer middleware
-
-	// Missing token.
-	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("missing token: status = %d", w.Code)
-	}
-
-	// Wrong token.
-	req = httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	req.Header.Set("Authorization", "Bearer nope")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("wrong token: status = %d", w.Code)
-	}
-
-	// Right token.
-	req = httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	req.Header.Set("Authorization", "Bearer shhh")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("right token: status = %d", w.Code)
-	}
-}

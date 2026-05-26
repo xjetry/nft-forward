@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"time"
 )
 
@@ -21,12 +22,27 @@ type Node struct {
 	Name        string
 	Address     string
 	Secret      string
-	LastSeenAt  sql.NullInt64
-	LastApplyAt sql.NullInt64
-	LastError   sql.NullString
-	Dirty       bool
+	LastSeenAt  sql.NullInt64  // legacy push-era field
+	LastApplyAt sql.NullInt64  // legacy push-era field
+	LastError   sql.NullString // legacy push-era field
+	Dirty       bool           // legacy push-era field
 	Disabled    bool
 	CreatedAt   int64
+
+	// Agent-dialer model: replaces the periodic-poller liveness view.
+	// LocalMigratedAt anchors register_local idempotency; without it a retried
+	// register would duplicate-INSERT instead of becoming a no-op. NodeKind
+	// distinguishes the panel's built-in self-node so dispatch can short-
+	// circuit to the local unix socket without a token round-trip.
+	//
+	// New nullable columns use *T (not sql.NullT) since they are not surfaced
+	// in HTML templates; the legacy fields above must stay sql.Null* because
+	// existing templates call .Valid / nullstr on them.
+	LocalMigratedAt *int64
+	LastSeen        *int64
+	Online          int
+	AgentVersion    string
+	NodeKind        string
 }
 
 type Forward struct {
@@ -199,8 +215,10 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
+const nodeCols = `id,name,address,secret,last_seen_at,last_apply_at,last_error,dirty,disabled,created_at,local_migrated_at,last_seen,online,agent_version,node_kind`
+
 func GetNode(d *sql.DB, id int64) (*Node, error) {
-	row := d.QueryRow(`SELECT id,name,address,secret,last_seen_at,last_apply_at,last_error,dirty,disabled,created_at FROM nodes WHERE id = ?`, id)
+	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
 	return scanNode(row)
 }
 
@@ -209,16 +227,34 @@ type rowScanner interface{ Scan(...any) error }
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
 	var dirty, disabled int
-	if err := r.Scan(&n.ID, &n.Name, &n.Address, &n.Secret, &n.LastSeenAt, &n.LastApplyAt, &n.LastError, &dirty, &disabled, &n.CreatedAt); err != nil {
+	var localMigratedAt, lastSeen sql.NullInt64
+	var agentVersion sql.NullString
+	if err := r.Scan(
+		&n.ID, &n.Name, &n.Address, &n.Secret,
+		&n.LastSeenAt, &n.LastApplyAt, &n.LastError,
+		&dirty, &disabled, &n.CreatedAt,
+		&localMigratedAt, &lastSeen, &n.Online, &agentVersion, &n.NodeKind,
+	); err != nil {
 		return nil, err
 	}
 	n.Dirty = dirty == 1
 	n.Disabled = disabled == 1
+	if localMigratedAt.Valid {
+		v := localMigratedAt.Int64
+		n.LocalMigratedAt = &v
+	}
+	if lastSeen.Valid {
+		v := lastSeen.Int64
+		n.LastSeen = &v
+	}
+	if agentVersion.Valid {
+		n.AgentVersion = agentVersion.String
+	}
 	return n, nil
 }
 
 func ListNodes(d *sql.DB) ([]*Node, error) {
-	rows, err := d.Query(`SELECT id,name,address,secret,last_seen_at,last_apply_at,last_error,dirty,disabled,created_at FROM nodes ORDER BY id`)
+	rows, err := d.Query(`SELECT ` + nodeCols + ` FROM nodes ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -236,17 +272,6 @@ func ListNodes(d *sql.DB) ([]*Node, error) {
 
 func DeleteNode(d *sql.DB, id int64) error {
 	_, err := d.Exec(`DELETE FROM nodes WHERE id = ?`, id)
-	return err
-}
-
-func MarkNodeApplied(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_seen_at=?, last_error=NULL, dirty=0 WHERE id=?`,
-		now(), now(), id)
-	return err
-}
-
-func MarkNodeError(d *sql.DB, id int64, msg string) error {
-	_, err := d.Exec(`UPDATE nodes SET last_error=?, dirty=1 WHERE id=?`, msg, id)
 	return err
 }
 
@@ -440,4 +465,83 @@ func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
 func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
 	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
 		userID, action, target, payload, now())
+}
+
+// Agent-dialer helpers
+
+// UpsertSelfNode ensures the panel's built-in self-node exists and is marked
+// online. The partial unique index idx_nodes_self guarantees there is at most
+// one row with node_kind='self', so re-running on every boot is safe.
+func UpsertSelfNode(d *sql.DB) (*Node, error) {
+	_, err := d.Exec(`
+		INSERT INTO nodes (name, address, secret, node_kind, online, last_seen, created_at)
+		VALUES ('self', 'unix:///var/run/nft-forward.sock', '', 'self', 1, ?, ?)
+		ON CONFLICT(node_kind) WHERE node_kind='self'
+		DO UPDATE SET last_seen=excluded.last_seen, online=1`,
+		now(), now())
+	if err != nil {
+		return nil, err
+	}
+	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE node_kind='self'`)
+	return scanNode(row)
+}
+
+// MarkNodeOnline records a successful hello/heartbeat from an agent and
+// refreshes the reported binary version.
+func MarkNodeOnline(d *sql.DB, id int64, agentVersion string) error {
+	_, err := d.Exec(
+		`UPDATE nodes SET online=1, last_seen=?, agent_version=? WHERE id=?`,
+		now(), agentVersion, id)
+	return err
+}
+
+// MarkNodeOffline flips a node back to offline when its websocket drops; we
+// keep last_seen as-is so the UI can still show "last seen N minutes ago".
+func MarkNodeOffline(d *sql.DB, id int64) error {
+	_, err := d.Exec(`UPDATE nodes SET online=0 WHERE id=?`, id)
+	return err
+}
+
+// MarkLocalMigrated stamps nodes.local_migrated_at on the first call; later
+// calls are no-ops by design (idempotency anchor for register_local retries).
+// Returns (true, nil) when this call did the stamping, (false, nil) when the
+// node was already marked. The boolean lets callers distinguish first
+// registration from a retried one without an extra SELECT.
+func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
+	res, err := d.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, now(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// UpsertTuiSnapshot stores the daemon-side TUI view of forwards for a node so
+// the panel UI can render it on demand without an extra round-trip to the agent.
+func UpsertTuiSnapshot(d *sql.DB, nodeID int64, forwardsJSON string) error {
+	_, err := d.Exec(`
+		INSERT INTO node_tui_snapshot (node_id, forwards_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(node_id) DO UPDATE
+		  SET forwards_json=excluded.forwards_json, updated_at=excluded.updated_at`,
+		nodeID, forwardsJSON, now())
+	return err
+}
+
+// GetTuiSnapshot returns the last TUI snapshot for a node, or ("", nil, nil)
+// if none has been recorded yet.
+func GetTuiSnapshot(d *sql.DB, nodeID int64) (string, *int64, error) {
+	var fj string
+	var ts int64
+	err := d.QueryRow(`SELECT forwards_json, updated_at FROM node_tui_snapshot WHERE node_id=?`, nodeID).Scan(&fj, &ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return fj, &ts, nil
 }
