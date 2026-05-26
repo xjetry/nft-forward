@@ -34,6 +34,10 @@ type Node struct {
 	// register would duplicate-INSERT instead of becoming a no-op. NodeKind
 	// distinguishes the panel's built-in self-node so dispatch can short-
 	// circuit to the local unix socket without a token round-trip.
+	//
+	// New nullable columns use *T (not sql.NullT) since they are not surfaced
+	// in HTML templates; the legacy fields above must stay sql.Null* because
+	// existing templates call .Valid / nullstr on them.
 	LocalMigratedAt *int64
 	LastSeen        *int64
 	Online          int
@@ -509,12 +513,21 @@ func MarkNodeOffline(d *sql.DB, id int64) error {
 	return err
 }
 
-// MarkLocalMigrated stamps the first-time register_local. The WHERE clause
-// makes the second call a no-op so a retried register (e.g. ack lost mid-flight)
-// can't overwrite the original migration timestamp.
-func MarkLocalMigrated(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, now(), id)
-	return err
+// MarkLocalMigrated stamps nodes.local_migrated_at on the first call; later
+// calls are no-ops by design (idempotency anchor for register_local retries).
+// Returns (true, nil) when this call did the stamping, (false, nil) when the
+// node was already marked. The boolean lets callers distinguish first
+// registration from a retried one without an extra SELECT.
+func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
+	res, err := d.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, now(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // UpsertTuiSnapshot stores the daemon-side TUI view of forwards for a node so
