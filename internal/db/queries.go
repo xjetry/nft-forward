@@ -502,6 +502,23 @@ func MarkNodeOffline(d *sql.DB, id int64) error {
 	return err
 }
 
+// MarkNodeApplied stamps last_apply_at and clears last_error after a
+// successful dispatch. Templates render "已同步" when last_apply_at is
+// set and last_error is empty.
+func MarkNodeApplied(d *sql.DB, id int64) error {
+	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_error=NULL WHERE id=?`, now(), id)
+	return err
+}
+
+// MarkNodeDispatchError records a dispatch failure so the panel UI can
+// flag the node as out-of-sync. last_apply_at is deliberately not touched
+// — the admin needs to see both "last successful apply was at T" and
+// "but the most recent attempt failed with msg".
+func MarkNodeDispatchError(d *sql.DB, id int64, msg string) error {
+	_, err := d.Exec(`UPDATE nodes SET last_error=? WHERE id=?`, msg, id)
+	return err
+}
+
 // MarkLocalMigrated stamps nodes.local_migrated_at on the first call; later
 // calls are no-ops by design (idempotency anchor for register_local retries).
 // Returns (true, nil) when this call did the stamping, (false, nil) when the
