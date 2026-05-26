@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,21 @@ func sendJSON(t *testing.T, c *websocket.Conn, v any) {
 	}
 }
 
+// syncByPing sends a ping after a one-way notification frame and waits
+// for the matching pong. readerLoop is a single goroutine that processes
+// frames serially, so the pong's arrival proves the prior notification
+// has finished its DB write — no fixed sleep needed.
+func syncByPing(t *testing.T, c *websocket.Conn) {
+	t.Helper()
+	p, _ := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
+	id := "sync-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypePing, ID: id, Payload: p})
+	env := recvEnvelope(t, c)
+	if env.Type != wsproto.TypePong {
+		t.Fatalf("expected pong from sync ping, got %s", env.Type)
+	}
+}
+
 func recvEnvelope(t *testing.T, c *websocket.Conn) wsproto.Envelope {
 	t.Helper()
 	_, b, err := c.Read(context.Background())
@@ -92,8 +108,8 @@ func TestHubAcceptsGoodToken(t *testing.T) {
 	if ack.NodeID != n.ID || ack.Error != "" {
 		t.Fatalf("hello_ack mismatch: %+v", ack)
 	}
-	// Wait briefly for register goroutine to run.
-	time.Sleep(50 * time.Millisecond)
+	// hello_ack only ships after registerConn has put the conn in the hub
+	// map, so the IsOnline check needs no wait.
 	if !hub.IsOnline(n.ID) {
 		t.Fatalf("expected node %d online after hello_ack", n.ID)
 	}
@@ -108,7 +124,8 @@ func TestHubSecondConnReplacesFirst(t *testing.T) {
 	c2 := dialWS(t, srv)
 	sendJSON(t, c2, wsproto.Envelope{Type: wsproto.TypeHello, ID: "2", Payload: hp})
 	_ = recvEnvelope(t, c2)
-	time.Sleep(50 * time.Millisecond)
+	// hello_ack arrives after the second conn has supplanted the first in
+	// the hub map; no wait needed before IsOnline.
 	if !hub.IsOnline(n.ID) {
 		t.Fatalf("expected node still online after replace")
 	}
@@ -214,7 +231,7 @@ func TestHubTuiSegmentChangedUpsertsSnapshot(t *testing.T) {
 		Forwards: []wsproto.Forward{{Proto: "tcp", ListenPort: 443, TargetIP: "10.0.0.3", TargetPort: 443}},
 	})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeTuiSegmentChanged, Payload: tsc})
-	time.Sleep(100 * time.Millisecond)
+	syncByPing(t, c)
 
 	got, _, err := db.GetTuiSnapshot(hub.DB, n.ID)
 	if err != nil {
@@ -254,7 +271,7 @@ func TestHubCountersUpdatesForwardBytes(t *testing.T) {
 		{ListenPort: 9000, Proto: "tcp", BytesDelta: 512},
 	}})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf2})
-	time.Sleep(100 * time.Millisecond)
+	syncByPing(t, c)
 
 	got, err := db.GetForward(hub.DB, fid)
 	if err != nil {
