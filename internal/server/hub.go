@@ -2,9 +2,9 @@ package server
 
 import "nft-forward/internal/nft"
 
-// Hub is implemented in full in a later commit. This stub exists so
-// selfnode.go compiles and the Dispatcher's remote-node branch can be
-// exercised in tests without the WebSocket machinery.
+// Hub is the WebSocket fan-out for remote agents. The no-op default
+// exists so Dispatcher can route to a non-nil Hub in tests, and so a
+// self-node-only deployment does not pay any WS cost at startup.
 type Hub struct{}
 
 func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) error {

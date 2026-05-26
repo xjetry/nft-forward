@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"nft-forward/internal/daemon"
 	"nft-forward/internal/daemonclient"
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
@@ -47,7 +46,7 @@ func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) error 
 }
 
 func sendLocalDefault(rules []nft.Rule) error {
-	c, err := daemonclient.New(daemon.DefaultSocketPath)
+	c, err := daemonclient.New(daemonclient.DefaultSocketPath)
 	if err != nil {
 		return err
 	}

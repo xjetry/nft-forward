@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"nft-forward/internal/db"
@@ -39,7 +40,10 @@ func TestEnsureSelfNodeCreatesOneRow(t *testing.T) {
 
 func TestDispatchRoutesSelfToUnixSocketStub(t *testing.T) {
 	d := openDB(t)
-	self, _ := EnsureSelfNode(d)
+	self, err := EnsureSelfNode(d)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var called string
 	disp := &Dispatcher{
@@ -55,5 +59,21 @@ func TestDispatchRoutesSelfToUnixSocketStub(t *testing.T) {
 	}
 	if called != "local" {
 		t.Fatalf("expected SendLocal to fire, got %q", called)
+	}
+}
+
+func TestDispatchRemoteWithNilHubReturnsClearError(t *testing.T) {
+	d := openDB(t)
+	n, err := db.CreateNode(d, "edge-1", "https://panel.example.com", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disp := &Dispatcher{DB: d, Hub: nil}
+	err = disp.Dispatch(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
+	if err == nil {
+		t.Fatal("expected error when Hub is nil and node is remote")
+	}
+	if !strings.Contains(err.Error(), "hub not wired") {
+		t.Fatalf("error message should mention 'hub not wired', got %q", err.Error())
 	}
 }
