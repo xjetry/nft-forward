@@ -10,8 +10,10 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -133,14 +135,31 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 // because the flash cookie holds only one message; per-node detail still
 // lands in last_error on each affected nodes row.
 func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, action string) {
-	var failed []string
+	type result struct {
+		nodeID int64
+		err    error
+	}
+	results := make(chan result, len(nodeIDs))
+	var wg sync.WaitGroup
 	for _, n := range nodeIDs {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("dispatch node %d (%s): %v", n, action, err)
-			failed = append(failed, fmt.Sprintf("节点 %d: %v", n, err))
+		wg.Add(1)
+		go func(nodeID int64) {
+			defer wg.Done()
+			results <- result{nodeID: nodeID, err: s.dispatchToNode(nodeID)}
+		}(n)
+	}
+	wg.Wait()
+	close(results)
+
+	var failed []string
+	for r := range results {
+		if r.err != nil {
+			log.Printf("dispatch node %d (%s): %v", r.nodeID, action, r.err)
+			failed = append(failed, fmt.Sprintf("节点 %d: %v", r.nodeID, r.err))
 		}
 	}
 	if len(failed) > 0 {
+		sort.Strings(failed) // deterministic flash ordering
 		setFlash(w, fmt.Sprintf("%s 已保存，但下发到 %d 个节点失败（%s）",
 			action, len(failed), strings.Join(failed, "；")))
 	}
