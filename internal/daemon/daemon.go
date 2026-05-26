@@ -181,6 +181,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 			OnTuiNotice: func(_ []wsproto.Forward) {},
 		})
 		d.dialer.Store(dl)
+		// Forward local tui-segment writes into the dialer so the panel
+		// learns about edits performed via the unix socket without
+		// having to poll. Read dialer through the atomic accessor so
+		// the closure stays correct even if Run is restructured later
+		// (defensive — Run only ever stores once today).
+		d.mu.Lock()
+		d.tuiHook = func(rules []nft.Rule) {
+			if dl := d.Dialer(); dl != nil {
+				dl.NotifyTuiChanged(rules)
+			}
+		}
+		d.mu.Unlock()
 		go dl.Run(ctx)
 	}
 

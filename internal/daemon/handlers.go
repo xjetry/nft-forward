@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +40,13 @@ type Daemon struct {
 	owners       OwnerRuleset
 	meta         AgentMeta
 	lastResolved []nft.Rule
+
+	// tuiHook, if non-nil, is invoked after a successful write to
+	// owners["tui"] via setOwnerRuleset. Production wires this to
+	// dialer.NotifyTuiChanged so the panel sees local TUI edits. Tests
+	// substitute a fake. Invoked outside d.mu so the callback (which may
+	// block on a channel send) cannot stall other writers.
+	tuiHook func(rules []nft.Rule)
 }
 
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
@@ -59,6 +68,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/v1/counters", d.handleCounters)
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
+	mux.HandleFunc("/v1/admin/demote-to-tui", d.handleDemoteToTui)
 	return mux
 }
 
@@ -105,39 +115,65 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	if err := d.setOwnerRuleset(r.Context(), owner, p.Rules); err != nil {
+		status := http.StatusInternalServerError
+		var oe *ownerWriteError
+		if errors.As(err, &oe) {
+			status = oe.status
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"count": len(p.Rules)})
+}
 
-	// Snapshot d.owners, replace the segment, merge, resolve, then apply.
-	// State persists the raw (pre-resolve) rules so the refresh loop can
-	// re-resolve when an upstream DNS answer changes.
+// ownerWriteError is the typed error returned by setOwnerRuleset so the
+// HTTP handler can map merge conflicts to 409 and unresolved hosts to 400
+// without reparsing the error message.
+type ownerWriteError struct {
+	status int
+	err    error
+}
+
+func (e *ownerWriteError) Error() string { return e.err.Error() }
+func (e *ownerWriteError) Unwrap() error { return e.err }
+
+// setOwnerRuleset is the unified write path for owner-segmented rules.
+// Snapshots d.owners, replaces the named segment, merges, resolves DNS,
+// applies to the kernel, persists, and finally — for owner=="tui" only —
+// invokes tuiHook outside the lock so the dialer can push the change to
+// the panel. The mutate / apply / save sequence runs under d.mu to keep
+// concurrent writers serialized; the hook fires after the lock is
+// released so a slow callback cannot stall other writes.
+func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.Rule) error {
+	d.mu.Lock()
 	candidate := cloneOwners(d.owners)
-	if len(p.Rules) == 0 {
+	if len(rules) == 0 {
 		delete(candidate, owner)
 	} else {
-		candidate[owner] = append([]nft.Rule(nil), p.Rules...)
+		candidate[owner] = append([]nft.Rule(nil), rules...)
 	}
 
 	merged, err := MergedRuleset(candidate)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
+		d.mu.Unlock()
+		return &ownerWriteError{status: http.StatusConflict, err: err}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	resolved, _, err := d.resolveFn(ctx, merged)
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	resolved, _, err := d.resolveFn(rctx, merged)
+	cancel()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		d.mu.Unlock()
+		return &ownerWriteError{status: http.StatusInternalServerError, err: err}
 	}
 	if err := requireResolvedHosts(resolved); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		d.mu.Unlock()
+		return &ownerWriteError{status: http.StatusBadRequest, err: err}
 	}
 	if err := d.applier.Apply(resolved, d.iface); err != nil {
-		http.Error(w, "apply: "+err.Error(), http.StatusInternalServerError)
-		return
+		d.mu.Unlock()
+		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("apply: %w", err)}
 	}
 	if err := SaveState(d.statePath, candidate, d.meta); err != nil {
 		// Kernel ruleset is already updated by the Apply above; the disk
@@ -146,18 +182,120 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		// window because SaveState failure is extremely unlikely outside
 		// of a disk full / read-only fs situation, and reporting 500 lets
 		// the client retry or escalate.
-		http.Error(w, "save state: "+err.Error(), http.StatusInternalServerError)
-		return
+		d.mu.Unlock()
+		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("save state: %w", err)}
 	}
 	d.owners = candidate
 	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	writeJSON(w, http.StatusOK, map[string]int{"count": len(p.Rules)})
+	hook := d.tuiHook
+	hookRules := append([]nft.Rule(nil), candidate[owner]...)
+	d.mu.Unlock()
+
+	if owner == "tui" && hook != nil {
+		hook(hookRules)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// demoteToTui folds the panel segment into the tui segment with panel
+// rules winning any (proto, src_port) collision, then clears panel
+// ownership and the panel-specific meta fields. Used when an agent
+// node leaves panel management (install.sh uninstall agent without
+// --purge) so panel-pushed forwards survive as locally-managed rules
+// instead of disappearing the moment the dialer goes away.
+func (d *Daemon) demoteToTui(ctx context.Context) error {
+	d.mu.Lock()
+	candidate := cloneOwners(d.owners)
+	tui := append([]nft.Rule(nil), candidate["tui"]...)
+	panel := candidate["panel"]
+
+	type key struct {
+		Proto string
+		Port  int
+	}
+	idx := make(map[key]int, len(tui))
+	for i, r := range tui {
+		idx[key{r.Proto, r.SrcPort}] = i
+	}
+	for _, p := range panel {
+		k := key{p.Proto, p.SrcPort}
+		if i, ok := idx[k]; ok {
+			tui[i] = p
+		} else {
+			tui = append(tui, p)
+			idx[k] = len(tui) - 1
+		}
+	}
+	if len(tui) == 0 {
+		delete(candidate, "tui")
+	} else {
+		candidate["tui"] = tui
+	}
+	delete(candidate, "panel")
+
+	newMeta := d.meta
+	newMeta.MigratedAt = time.Time{}
+	newMeta.LastAppliedRev = ""
+	newMeta.PanelURL = ""
+
+	merged, err := MergedRuleset(candidate)
+	if err != nil {
+		d.mu.Unlock()
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	resolved, _, err := d.resolveFn(rctx, merged)
+	cancel()
+	if err != nil {
+		d.mu.Unlock()
+		return err
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		d.mu.Unlock()
+		return err
+	}
+	if err := d.applier.Apply(resolved, d.iface); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("apply: %w", err)
+	}
+	if err := SaveState(d.statePath, candidate, newMeta); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("save state: %w", err)
+	}
+	d.owners = candidate
+	d.meta = newMeta
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
+	hook := d.tuiHook
+	hookRules := append([]nft.Rule(nil), candidate["tui"]...)
+	d.mu.Unlock()
+
+	// Notify the dialer (if any is still around between disengagement and
+	// process exit) so the panel sees the merged tui snapshot before the
+	// session tears down.
+	if hook != nil {
+		hook(hookRules)
+	}
+	return nil
+}
+
+// handleDemoteToTui serves POST /v1/admin/demote-to-tui. No request body
+// is read; the merge logic is fully driven by current daemon state.
+func (d *Daemon) handleDemoteToTui(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := d.demoteToTui(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // cloneOwners returns a deep-enough copy that the caller can mutate the
