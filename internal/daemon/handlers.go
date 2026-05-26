@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nft-forward/internal/nft"
@@ -26,9 +27,12 @@ type Daemon struct {
 
 	// connectURL/connectTok configure the outbound WebSocket dialer to
 	// the panel. Empty connectURL = tui/server-local mode (no dialer).
+	// dialer is atomic so unix-socket handlers running on their own
+	// goroutines can safely read it (e.g. to push tui_segment_changed)
+	// without coordinating with Run's lifecycle code.
 	connectURL string
 	connectTok string
-	dialer     *Dialer
+	dialer     atomic.Pointer[Dialer]
 
 	mu           sync.Mutex
 	owners       OwnerRuleset

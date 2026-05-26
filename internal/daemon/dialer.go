@@ -39,7 +39,7 @@ type DialerConfig struct {
 
 	GetState    func() (OwnerRuleset, AgentMeta)
 	OnRegister  func(forwards []wsproto.Forward) // called when register_local_ack arrives
-	OnApply     func(rev string, rules []nft.Rule) error
+	OnApply     func(ctx context.Context, rev string, rules []nft.Rule) error
 	OnTuiNotice func(forwards []wsproto.Forward) // optional; nil = skip notice
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
@@ -54,6 +54,7 @@ type Dialer struct {
 
 	stopOnce sync.Once
 	stop     chan struct{}
+	done     chan struct{} // closed when Run() returns
 }
 
 func NewDialer(cfg DialerConfig) *Dialer {
@@ -61,11 +62,20 @@ func NewDialer(cfg DialerConfig) *Dialer {
 		cfg:   cfg,
 		tuiCh: make(chan []nft.Rule, 1),
 		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
 	}
 }
 
 func (d *Dialer) Stop() {
 	d.stopOnce.Do(func() { close(d.stop) })
+}
+
+// Done returns a channel that is closed when Run has fully returned.
+// Callers use it to wait for goroutine teardown before tearing down
+// shared state (e.g. the applier) that the dialer's OnApply callback
+// may still be writing to.
+func (d *Dialer) Done() <-chan struct{} {
+	return d.done
 }
 
 // NotifyTuiChanged accepts a new tui-segment snapshot from the
@@ -93,8 +103,12 @@ func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
 }
 
 // Run loops forever, dialing + serving + reconnecting with backoff.
-// Returns when ctx is canceled or Stop() is called.
+// Returns when ctx is canceled or Stop() is called. Closes d.done on
+// exit so external shutdown coordinators can wait for any in-flight
+// OnApply (which writes nft rules) to finish before tearing down the
+// applier.
 func (d *Dialer) Run(ctx context.Context) {
+	defer close(d.done)
 	backoff := dialerBackoffInitial
 	for {
 		select {
@@ -229,7 +243,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				ok := true
 				errMsg := ""
 				if d.cfg.OnApply != nil {
-					if err := d.cfg.OnApply(ar.Rev, ar.Rules); err != nil {
+					if err := d.cfg.OnApply(ctx, ar.Rev, ar.Rules); err != nil {
 						ok = false
 						errMsg = err.Error()
 					}

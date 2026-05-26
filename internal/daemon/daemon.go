@@ -168,7 +168,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.refreshLoop(ctx)
 
 	if d.connectURL != "" {
-		d.dialer = NewDialer(DialerConfig{
+		dl := NewDialer(DialerConfig{
 			URL:          d.connectURL,
 			Token:        d.connectTok,
 			AgentVersion: agentVersion(),
@@ -180,7 +180,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// its tuiCh, so this callback itself is a no-op.
 			OnTuiNotice: func(_ []wsproto.Forward) {},
 		})
-		go d.dialer.Run(ctx)
+		d.dialer.Store(dl)
+		go dl.Run(ctx)
 	}
 
 	var shutdownErr error
@@ -188,8 +189,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if d.dialer != nil {
-			d.dialer.Stop()
+		// Wait for the dialer goroutine to finish so any in-flight
+		// SetPanelRuleset (which writes nft rules + shim INSERTs via
+		// applier.Apply) completes before we proceed to applier.Cleanup
+		// (shim DELETEs). Without this, Cleanup could race the INSERT
+		// and leave the shim chain half-cleaned. Bounded by the same
+		// 5s budget that srv.Shutdown gets — they run sequentially.
+		if dl := d.dialer.Load(); dl != nil {
+			dl.Stop()
+			select {
+			case <-dl.Done():
+			case <-shutCtx.Done():
+				log.Printf("daemon: dialer shutdown timeout — proceeding with applier cleanup")
+			}
 		}
 		shutdownErr = srv.Shutdown(shutCtx)
 	case err := <-serveErr:
@@ -285,7 +297,9 @@ func (d *Daemon) OnLocalMigrated() error {
 // arrives. Replaces the panel segment wholesale, re-merges with any
 // remaining segments, resolves hostnames, applies to the kernel, and
 // persists the new rev so a reconnect won't replay the same payload.
-func (d *Daemon) SetPanelRuleset(rev string, rules []nft.Rule) error {
+// The caller's ctx bounds the DNS resolve so a cancelled session can
+// abort the work in flight.
+func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.owners == nil {
@@ -300,9 +314,9 @@ func (d *Daemon) SetPanelRuleset(rev string, rules []nft.Rule) error {
 	if err != nil {
 		return fmt.Errorf("merge: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	resolved, _, err := d.resolveFn(ctx, merged)
+	resolved, _, err := d.resolveFn(rctx, merged)
 	if err != nil {
 		return fmt.Errorf("resolve: %w", err)
 	}
@@ -315,6 +329,12 @@ func (d *Daemon) SetPanelRuleset(rev string, rules []nft.Rule) error {
 	d.lastResolved = append([]nft.Rule(nil), resolved...)
 	d.meta.LastAppliedRev = rev
 	return SaveState(d.statePath, d.owners, d.meta)
+}
+
+// Dialer returns the currently-active Dialer, or nil when --connect
+// was not set. Safe for concurrent read from goroutines outside Run.
+func (d *Daemon) Dialer() *Dialer {
+	return d.dialer.Load()
 }
 
 // SnapshotForDialer returns defensive copies of owners and meta so the

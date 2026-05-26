@@ -90,7 +90,7 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 			return OwnerRuleset{}, AgentMeta{}
 		},
 		OnRegister: func(forwards []wsproto.Forward) {},
-		OnApply:    func(rev string, rules []nft.Rule) error { return nil },
+		OnApply:    func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -128,7 +128,7 @@ func TestDialerSendsRegisterLocalWhenTuiPresentAndNotMigrated(t *testing.T) {
 		OnRegister: func(forwards []wsproto.Forward) {
 			registered <- forwards
 		},
-		OnApply: func(rev string, rules []nft.Rule) error { return nil },
+		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -164,7 +164,7 @@ func TestDialerSkipsRegisterWhenMigratedAtIsNonzero(t *testing.T) {
 		OnRegister: func(forwards []wsproto.Forward) {
 			t.Errorf("OnRegister called despite MigratedAt set")
 		},
-		OnApply: func(rev string, rules []nft.Rule) error { return nil },
+		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
