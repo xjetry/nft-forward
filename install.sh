@@ -370,13 +370,15 @@ if [[ -z "$mode" ]]; then
   echo "  1) tui        单机 TUI（自动装 daemon）"
   echo "  2) server     控制面板（叠加 daemon）"
   echo "  3) agent      远程节点（daemon 反向 dial panel WebSocket）"
-  echo "  4) uninstall  卸载（再问要卸哪个角色）"
+  echo "  4) update     拉 latest 二进制原子升级（保留现有角色）"
+  echo "  5) uninstall  卸载（再问要卸哪个角色）"
   read -rp "输入数字或名称: " choice
   case "$choice" in
     1|tui)       mode=tui ;;
     2|server)    mode=server ;;
     3|agent)     mode=agent ;;
-    4|uninstall) mode=uninstall ;;
+    4|update)    mode=update ;;
+    5|uninstall) mode=uninstall ;;
     *) die "未知选项: $choice" ;;
   esac
 fi
