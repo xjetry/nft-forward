@@ -125,11 +125,11 @@ func TestHubSendApplyRulesetReturnsAck(t *testing.T) {
 	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
 	_ = recvEnvelope(t, c)
-	// hello_ack is written before the conn is registered in the map, so
-	// wait for IsOnline to flip before issuing SendApplyRuleset; otherwise
-	// the lookup races (and fails with "not connected") under -race.
-	for i := 0; i < 100 && !hub.IsOnline(n.ID); i++ {
-		time.Sleep(10 * time.Millisecond)
+	// hello_ack arrives only after the conn is in the hub map, so the
+	// lookup in SendApplyRuleset is guaranteed to find it without any
+	// wait.
+	if !hub.IsOnline(n.ID) {
+		t.Fatalf("expected node %d online immediately after hello_ack", n.ID)
 	}
 
 	// In a goroutine, server SendApplyRuleset and wait for ack.

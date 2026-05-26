@@ -98,16 +98,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name})
-	if err := writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ackPayload}); err != nil {
-		ws.Close(websocket.StatusInternalError, "ack write failed")
-		return
-	}
-
-	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion); err != nil {
-		log.Printf("hub: MarkNodeOnline: %v", err)
-	}
-
+	// Register the conn before sending hello_ack so both sides can rely
+	// on the invariant "hello_ack visible ⇒ conn is in the hub map":
+	// the agent may immediately push counters/register_local, and panel
+	// dispatch may immediately call SendApplyRuleset, with no
+	// goroutine-startup window where the lookup would miss.
 	ac := &agentConn{
 		nodeID:  node.ID,
 		ws:      ws,
@@ -117,6 +112,16 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	h.registerConn(ac)
 	defer h.unregisterConn(ac)
+
+	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name})
+	if err := writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ackPayload}); err != nil {
+		ws.Close(websocket.StatusInternalError, "ack write failed")
+		return
+	}
+
+	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion); err != nil {
+		log.Printf("hub: MarkNodeOnline: %v", err)
+	}
 
 	go h.writerLoop(ac)
 	h.readerLoop(ctx, ac, hello.LastAppliedRev)
