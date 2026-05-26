@@ -1,8 +1,11 @@
 package server
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -24,12 +27,18 @@ var urlParse = url.Parse
 var templatesFS embed.FS
 
 type Server struct {
-	DB     *sql.DB
-	Pusher *Pusher
-	tmpl   *template.Template
+	DB         *sql.DB
+	Hub        *Hub
+	Dispatcher *Dispatcher
+	tmpl       *template.Template
 }
 
-func New(d *sql.DB, p *Pusher) (*Server, error) {
+func New(d *sql.DB) (*Server, error) {
+	if _, err := EnsureSelfNode(d); err != nil {
+		return nil, fmt.Errorf("ensure self node: %w", err)
+	}
+	hub := NewHub(d)
+	disp := &Dispatcher{DB: d, Hub: hub}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"unix": func(i sql.NullInt64) string {
 			if !i.Valid {
@@ -89,7 +98,68 @@ func New(d *sql.DB, p *Pusher) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{DB: d, Pusher: p, tmpl: tmpl}, nil
+	return &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}, nil
+}
+
+// dispatchToNode builds the panel-segment ruleset for nodeID from the
+// forwards DB and dispatches it via the Hub (or unix socket for the
+// self-node). Called after admin CRUD on forwards/tunnels/tenants.
+func (s *Server) dispatchToNode(nodeID int64) error {
+	forwards, err := db.ActiveForwardsForPush(s.DB, nodeID)
+	if err != nil {
+		return err
+	}
+	rules := buildRules(s.DB, forwards)
+	rev := computeRev(rules)
+	return s.Dispatcher.Dispatch(nodeID, rules, rev)
+}
+
+// buildRules converts panel-side Forward rows into kernel-side nft.Rule
+// values, stamping per-rule bandwidth from the owning tunnel (forwards
+// without a tunnel are unmetered admin-mode rules).
+func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
+	tunnels := map[int64]*db.Tunnel{}
+	rules := make([]nft.Rule, 0, len(forwards))
+	for _, f := range forwards {
+		bw := 0
+		if f.TunnelID.Valid {
+			t, ok := tunnels[f.TunnelID.Int64]
+			if !ok {
+				t, _ = db.GetTunnel(d, f.TunnelID.Int64)
+				if t != nil {
+					tunnels[f.TunnelID.Int64] = t
+				}
+			}
+			if t != nil {
+				bw = t.BandwidthMbps
+			}
+		}
+		rule := nft.Rule{
+			Proto:         f.Proto,
+			SrcPort:       f.ListenPort,
+			DestPort:      f.TargetPort,
+			Comment:       f.Comment,
+			BandwidthMbps: bw,
+		}
+		if resolver.IsHostname(f.TargetIP) {
+			rule.DestHost = f.TargetIP
+		} else {
+			rule.DestIP = f.TargetIP
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+// computeRev returns a stable hash of the ruleset so a reconnecting
+// agent whose last_applied_rev matches can be skipped. Determinism
+// hinges on ActiveForwardsForPush returning rows in a stable order
+// (it sorts by listen_port).
+func computeRev(rules []nft.Rule) string {
+	h := sha256.New()
+	b, _ := json.Marshal(rules)
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func (s *Server) Router() http.Handler {
@@ -98,6 +168,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/login", s.getLogin)
 	r.Post("/login", s.postLogin)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	r.HandleFunc("/v1/agents", s.Hub.ServeWS)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
@@ -214,7 +285,9 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), name)
-	s.Pusher.Schedule(n.ID)
+	if err := s.dispatchToNode(n.ID); err != nil {
+		log.Printf("dispatch node %d: %v", n.ID, err)
+	}
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", n.ID), http.StatusSeeOther)
 }
 
@@ -249,8 +322,11 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) resyncNode(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	s.Pusher.Schedule(id)
-	setFlash(w, "已触发重新同步")
+	if err := s.dispatchToNode(id); err != nil {
+		setFlash(w, "重新同步失败: "+err.Error())
+	} else {
+		setFlash(w, "已触发重新同步")
+	}
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", id), http.StatusSeeOther)
 }
 
@@ -306,7 +382,9 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.create", strconv.FormatInt(id, 10),
 		fmt.Sprintf("node=%d %s/%d→%s:%d", nodeID, proto, listenPort, targetIP, targetPort))
-	s.Pusher.Schedule(nodeID)
+	if err := s.dispatchToNode(nodeID); err != nil {
+		log.Printf("dispatch node %d: %v", nodeID, err)
+	}
 	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 
@@ -320,7 +398,9 @@ func (s *Server) deleteForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.delete", strconv.FormatInt(id, 10), "")
-	s.Pusher.Schedule(nodeID)
+	if err := s.dispatchToNode(nodeID); err != nil {
+		log.Printf("dispatch node %d: %v", nodeID, err)
+	}
 	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 
