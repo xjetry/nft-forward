@@ -39,8 +39,10 @@ type Envelope struct {
 }
 
 // Forward is the panel-side rule view shared by register_local and
-// tui_segment_changed. Renamed from nft.Rule because the server side
-// stores forwards in a separate table whose columns match these fields.
+// tui_segment_changed. It intentionally differs from nft.Rule: panel
+// storage doesn't need DestHost (daemon-resolved) or the wire-internal
+// ID, and uses listen_port/target_ip/target_port field names that match
+// the forwards DB schema rather than nft.Rule's kernel-side names.
 type Forward struct {
 	Proto         string `json:"proto"`
 	ListenPort    int    `json:"listen_port"`
@@ -58,6 +60,9 @@ type Hello struct {
 	LastAppliedRev string `json:"last_applied_rev,omitempty"`
 }
 
+// HelloAck is the panel's response to Hello. Error == "" means the
+// node_token was accepted and NodeID/Name are populated; a non-empty
+// Error means the daemon should not proceed (token revoked or unknown).
 type HelloAck struct {
 	NodeID int64  `json:"node_id,omitempty"`
 	Name   string `json:"name,omitempty"`
@@ -68,12 +73,20 @@ type RegisterLocal struct {
 	Forwards []Forward `json:"forwards"`
 }
 
+// ImportedForward identifies a single row inserted into the forwards
+// table during register_local processing. RuleID is the server-assigned
+// DB rowid; the agent uses (ListenPort, Proto) to correlate it back to
+// the source tui-segment rule.
 type ImportedForward struct {
 	ListenPort int    `json:"listen_port"`
 	Proto      string `json:"proto"`
 	RuleID     int64  `json:"rule_id"`
 }
 
+// RegisterLocalAck is the panel's response to RegisterLocal. Error == ""
+// indicates the tui-segment forwards were persisted (Imported lists the
+// new DB rule IDs; empty Imported on a repeat call means the node was
+// already migrated and the request was a no-op).
 type RegisterLocalAck struct {
 	Imported []ImportedForward `json:"imported"`
 	Error    string            `json:"error,omitempty"`
@@ -90,6 +103,10 @@ type ApplyAck struct {
 	Error string `json:"error,omitempty"`
 }
 
+// CounterSample is a per-rule traffic delta since the last counters
+// frame. The server adds BytesDelta to forwards.total_bytes; the rule
+// is located by (node_id, listen_port, proto) — there is no explicit
+// rule_id on the wire because agent restarts re-key the same rule.
 type CounterSample struct {
 	ListenPort int    `json:"listen_port"`
 	Proto      string `json:"proto"`
@@ -112,6 +129,10 @@ type Pong struct {
 	TS int64 `json:"ts"`
 }
 
+// Error is a server-initiated notification frame (not a req/resp ack).
+// Code is a short machine-friendly identifier; Message is human-readable
+// detail. Agents should log it; they should not assume the connection
+// will close.
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
