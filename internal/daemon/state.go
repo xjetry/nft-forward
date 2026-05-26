@@ -22,10 +22,14 @@ type OwnerRuleset map[string][]nft.Rule
 
 // stateFile is the on-disk JSON layout for the current schema version.
 // New fields go here; reading older versions converts into this shape.
+// AgentMeta is written unconditionally — encoding/json's omitempty does
+// not apply to struct values, and forcing the canonical layout avoids a
+// confusing "field appears later" shift on disk after the dialer first
+// populates it.
 type stateFile struct {
 	Version   int          `json:"version"`
 	Owners    OwnerRuleset `json:"owners"`
-	AgentMeta AgentMeta    `json:"agent_meta,omitempty"`
+	AgentMeta AgentMeta    `json:"agent_meta"`
 }
 
 // legacyV1File is the pre-v2 on-disk layout where rules were stored as a
@@ -37,8 +41,10 @@ type legacyV1File struct {
 }
 
 // legacyV2File is the pre-v3 on-disk layout: owner-segmented rules without
-// the agent_meta block. Migration produces a zero AgentMeta so the dialer
-// re-runs the local→panel handoff on its first connect after upgrade.
+// the agent_meta block. We keep this type defined purely to recognize and
+// migrate it; we do not write v2 anymore. Migration produces a zero
+// AgentMeta so the dialer re-runs the local→panel handoff on its first
+// connect after upgrade.
 type legacyV2File struct {
 	Version int          `json:"version"`
 	Owners  OwnerRuleset `json:"owners"`

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +150,29 @@ func TestSaveLoadStateV3Roundtrip(t *testing.T) {
 	}
 	if !gotMeta.MigratedAt.Equal(meta.MigratedAt) || gotMeta.LastAppliedRev != "abc123" || gotMeta.PanelURL != "wss://panel/v1/agents" {
 		t.Fatalf("meta roundtrip mismatch: %+v", gotMeta)
+	}
+}
+
+func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
+	// Operators reading state.json by hand must see a canonical layout:
+	// the agent_meta block (and its migrated_at field) is always present,
+	// even when zero. Guards against accidentally re-adding omitempty on
+	// the struct-valued / time.Time fields where it would be silently
+	// ignored by encoding/json anyway.
+	p := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(p, OwnerRuleset{}, AgentMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)
+	if !strings.Contains(body, `"agent_meta"`) {
+		t.Fatalf("agent_meta key missing from on-disk state: %s", body)
+	}
+	if !strings.Contains(body, `"migrated_at"`) {
+		t.Fatalf("migrated_at key missing from on-disk state: %s", body)
 	}
 }
 

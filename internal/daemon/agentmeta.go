@@ -10,8 +10,10 @@ type AgentMeta struct {
 	// MigratedAt is the timestamp at which the daemon last received a
 	// register_local_ack from the panel. Zero means the local tui
 	// segment has never been handed off — the dialer will try again on
-	// every successful (re)connect.
-	MigratedAt time.Time `json:"migrated_at,omitempty"`
+	// every successful (re)connect. Always serialized (encoding/json's
+	// omitempty has no effect on time.Time), so the on-disk shape stays
+	// canonical instead of carrying a phantom-omitted zero value.
+	MigratedAt time.Time `json:"migrated_at"`
 
 	// LastAppliedRev is the panel-segment version identifier the daemon
 	// has most recently acknowledged. Reported in hello so the server
