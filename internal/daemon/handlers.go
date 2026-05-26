@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -24,8 +23,12 @@ type Daemon struct {
 	iface       string
 	countersFn  func() ([]nft.Counter, error)
 	resolveFn   resolveFunc
-	httpListen  string
-	httpToken   string
+
+	// connectURL/connectTok configure the outbound WebSocket dialer to
+	// the panel. Empty connectURL = tui/server-local mode (no dialer).
+	connectURL string
+	connectTok string
+	dialer     *Dialer
 
 	mu           sync.Mutex
 	owners       OwnerRuleset
@@ -53,26 +56,6 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
 	return mux
-}
-
-// httpHandler wraps Handler() with bearer token authentication middleware.
-func (d *Daemon) httpHandler() http.Handler {
-	inner := d.Handler()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "Bearer "
-		got := r.Header.Get("Authorization")
-		if len(got) <= len(prefix) || got[:len(prefix)] != prefix {
-			http.Error(w, "missing bearer token", http.StatusUnauthorized)
-			return
-		}
-		expect := []byte(d.httpToken)
-		actual := []byte(got[len(prefix):])
-		if len(expect) != len(actual) || subtle.ConstantTimeCompare(expect, actual) != 1 {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
-		}
-		inner.ServeHTTP(w, r)
-	})
 }
 
 func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {

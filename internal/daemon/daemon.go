@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
+	"nft-forward/internal/wsproto"
 )
 
 const (
@@ -38,8 +40,14 @@ type Config struct {
 	LegacyPaths LegacyMigrationPaths
 	Iface       string
 	CountersFn  func() ([]nft.Counter, error)
-	HTTPListen  string
-	TokenPath   string
+
+	// ConnectURL, when non-empty, makes the daemon dial out to a panel
+	// WebSocket endpoint (e.g. wss://panel/v1/agents). When empty the
+	// daemon stays in tui/server-local mode and only serves its unix
+	// socket. ConnectToken is the bearer credential sent in the hello
+	// frame; required when ConnectURL is set.
+	ConnectURL   string
+	ConnectToken string
 }
 
 // New constructs a Daemon ready to Bootstrap and Run. Applier defaults to
@@ -70,17 +78,6 @@ func New(cfg Config) (*Daemon, error) {
 			iface = "eth0"
 		}
 	}
-	var httpToken string
-	if cfg.TokenPath != "" {
-		tok, err := os.ReadFile(cfg.TokenPath)
-		if err != nil {
-			return nil, fmt.Errorf("read token file: %w", err)
-		}
-		httpToken = strings.TrimSpace(string(tok))
-		if httpToken == "" {
-			return nil, fmt.Errorf("token file is empty")
-		}
-	}
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
@@ -90,8 +87,8 @@ func New(cfg Config) (*Daemon, error) {
 		iface:       iface,
 		countersFn:  cfg.CountersFn,
 		resolveFn:   defaultResolver(resolver.New()),
-		httpListen:  cfg.HTTPListen,
-		httpToken:   httpToken,
+		connectURL:  cfg.ConnectURL,
+		connectTok:  cfg.ConnectToken,
 	}, nil
 }
 
@@ -167,31 +164,32 @@ func (d *Daemon) Run(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(l) }()
 
-	var httpSrv *http.Server
-	if d.httpListen != "" {
-		httpSrv = &http.Server{
-			Addr:              d.httpListen,
-			Handler:           d.httpHandler(),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			log.Printf("nft-forward daemon listening on %s (http)", d.httpListen)
-			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("http listener: %v", err)
-			}
-		}()
-	}
-
 	go d.probeFirewallEnvironment()
 	go d.refreshLoop(ctx)
+
+	if d.connectURL != "" {
+		d.dialer = NewDialer(DialerConfig{
+			URL:          d.connectURL,
+			Token:        d.connectTok,
+			AgentVersion: agentVersion(),
+			GetState:     d.SnapshotForDialer,
+			OnRegister:   func(_ []wsproto.Forward) { _ = d.OnLocalMigrated() },
+			OnApply:      d.SetPanelRuleset,
+			// Non-nil marker so the dialer emits tui_segment_changed
+			// frames; payloads are constructed inside the dialer from
+			// its tuiCh, so this callback itself is a no-op.
+			OnTuiNotice: func(_ []wsproto.Forward) {},
+		})
+		go d.dialer.Run(ctx)
+	}
 
 	var shutdownErr error
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if httpSrv != nil {
-			_ = httpSrv.Shutdown(shutCtx)
+		if d.dialer != nil {
+			d.dialer.Stop()
 		}
 		shutdownErr = srv.Shutdown(shutCtx)
 	case err := <-serveErr:
@@ -265,4 +263,78 @@ func (d *Daemon) RunWithSignals() error {
 	defer stop()
 	log.Printf("nft-forward daemon: listening on %s", d.socketPath)
 	return d.Run(ctx)
+}
+
+// OnLocalMigrated is invoked by the dialer after the panel ACKs a
+// register_local. Clears the tui segment, stamps meta.MigratedAt the
+// first time, and persists. Honors the "ACK before clear" invariant:
+// once MigratedAt is non-zero we never re-emit register_local for the
+// same agent lifetime, so a subsequent invocation only ever reconciles
+// the cleared segment back to disk.
+func (d *Daemon) OnLocalMigrated() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.owners, "tui")
+	if d.meta.MigratedAt.IsZero() {
+		d.meta.MigratedAt = time.Now().UTC()
+	}
+	return SaveState(d.statePath, d.owners, d.meta)
+}
+
+// SetPanelRuleset is invoked by the dialer when an apply_ruleset frame
+// arrives. Replaces the panel segment wholesale, re-merges with any
+// remaining segments, resolves hostnames, applies to the kernel, and
+// persists the new rev so a reconnect won't replay the same payload.
+func (d *Daemon) SetPanelRuleset(rev string, rules []nft.Rule) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.owners == nil {
+		d.owners = OwnerRuleset{}
+	}
+	if len(rules) == 0 {
+		delete(d.owners, "panel")
+	} else {
+		d.owners["panel"] = append([]nft.Rule(nil), rules...)
+	}
+	merged, err := MergedRuleset(d.owners)
+	if err != nil {
+		return fmt.Errorf("merge: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resolved, _, err := d.resolveFn(ctx, merged)
+	if err != nil {
+		return fmt.Errorf("resolve: %w", err)
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		return err
+	}
+	if err := d.applier.Apply(resolved, d.iface); err != nil {
+		return fmt.Errorf("apply: %w", err)
+	}
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
+	d.meta.LastAppliedRev = rev
+	return SaveState(d.statePath, d.owners, d.meta)
+}
+
+// SnapshotForDialer returns defensive copies of owners and meta so the
+// dialer can read state without holding d.mu past the call boundary.
+func (d *Daemon) SnapshotForDialer() (OwnerRuleset, AgentMeta) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cp := OwnerRuleset{}
+	for k, v := range d.owners {
+		cp[k] = append([]nft.Rule(nil), v...)
+	}
+	return cp, d.meta
+}
+
+// agentVersion is a coarse identifier surfaced in the hello frame for
+// ops visibility. Falls back to "dev" when build info is unavailable
+// (e.g. `go run` or a binary stripped of module data).
+func agentVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
 }

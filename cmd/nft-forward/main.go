@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,20 +41,20 @@ func runDaemon(args []string) int {
 	}
 
 	var (
-		socketPath string
-		statePath  string
-		groupName  string
-		iface      string
-		httpListen string
-		tokenFile  string
+		socketPath     string
+		statePath      string
+		groupName      string
+		iface          string
+		connectURL     string
+		panelTokenFile string
 	)
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
 	fs.StringVar(&statePath, "state", daemon.DefaultStatePath, "持久化 state 文件路径")
 	fs.StringVar(&groupName, "group", daemon.DefaultGroupName, "socket 文件 group（不存在时回落到默认 group）")
 	fs.StringVar(&iface, "iface", "", "tc data-plane iface (auto-detect if empty)")
-	fs.StringVar(&httpListen, "listen", "", "additionally serve HTTP on this address for remote pushes")
-	fs.StringVar(&tokenFile, "token-file", "/etc/nft-forward/daemon.token", "bearer token file (required when --listen is set)")
+	fs.StringVar(&connectURL, "connect", "", "panel WebSocket URL (e.g. wss://panel/v1/agents); empty = tui/server mode")
+	fs.StringVar(&panelTokenFile, "panel-token-file", "/etc/nft-forward/panel.token", "bearer token file (required when --connect is set)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -82,10 +83,19 @@ func runDaemon(args []string) int {
 		StatePath:  statePath,
 		GroupName:  groupName,
 		Iface:      iface,
-		HTTPListen: httpListen,
+		ConnectURL: connectURL,
 	}
-	if httpListen != "" {
-		cfg.TokenPath = tokenFile
+	if connectURL != "" {
+		tok, err := os.ReadFile(panelTokenFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "读取 panel token:", err)
+			return 1
+		}
+		cfg.ConnectToken = strings.TrimSpace(string(tok))
+		if cfg.ConnectToken == "" {
+			fmt.Fprintln(os.Stderr, "panel token 文件为空")
+			return 1
+		}
 	}
 	d, err := daemon.New(cfg)
 	if err != nil {

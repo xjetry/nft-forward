@@ -313,6 +313,32 @@ func TestDetectForwardDropNoShim_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestOnLocalMigratedClearsTuiSegmentAndSetsMeta(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    &fakeApplier{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.owners = OwnerRuleset{"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}}
+	if err := d.OnLocalMigrated(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.owners["tui"]) != 0 {
+		t.Fatalf("expected tui cleared, got %d", len(d.owners["tui"]))
+	}
+	if d.meta.MigratedAt.IsZero() {
+		t.Fatalf("expected MigratedAt set")
+	}
+	_, meta, _ := LoadState(d.statePath)
+	if meta.MigratedAt.IsZero() {
+		t.Fatalf("MigratedAt not persisted")
+	}
+}
+
 func TestDaemonRunCallsCleanupOnShutdown(t *testing.T) {
 	dir := t.TempDir()
 	fa := &fakeApplier{}

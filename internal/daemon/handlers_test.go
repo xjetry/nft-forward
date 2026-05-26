@@ -527,34 +527,3 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	<-done
 }
 
-func TestHTTPListenerRequiresBearerToken(t *testing.T) {
-	d := newTestDaemon(t)
-	d.httpToken = "shhh"
-	handler := d.httpHandler() // wraps Handler() with bearer middleware
-
-	// Missing token.
-	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("missing token: status = %d", w.Code)
-	}
-
-	// Wrong token.
-	req = httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	req.Header.Set("Authorization", "Bearer nope")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("wrong token: status = %d", w.Code)
-	}
-
-	// Right token.
-	req = httptest.NewRequest(http.MethodGet, "/v1/health", nil)
-	req.Header.Set("Authorization", "Bearer shhh")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("right token: status = %d", w.Code)
-	}
-}
