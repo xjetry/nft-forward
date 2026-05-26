@@ -88,14 +88,62 @@ func New(d *sql.DB) (*Server, error) {
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
 // forwards DB and dispatches it via the Hub (or unix socket for the
 // self-node). Called after admin CRUD on forwards/tunnels/tenants.
+//
+// The outcome is reflected on the nodes row so the panel UI can show
+// "已同步 / 错误" without each handler having to write that itself:
+// success stamps last_apply_at and clears last_error; failure stamps
+// last_error while preserving last_apply_at (so admins can read both
+// "last successful apply was at T" and "but the most recent attempt
+// failed with msg"). DB-write failures of these status columns are
+// swallowed because the dispatch error is the load-bearing signal we
+// owe the caller.
 func (s *Server) dispatchToNode(nodeID int64) error {
 	forwards, err := db.ActiveForwardsForPush(s.DB, nodeID)
 	if err != nil {
+		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
 	}
 	rules := buildRules(s.DB, forwards)
 	rev := computeRev(rules)
-	return s.Dispatcher.Dispatch(nodeID, rules, rev)
+	if err := s.Dispatcher.Dispatch(nodeID, rules, rev); err != nil {
+		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
+		return err
+	}
+	_ = db.MarkNodeApplied(s.DB, nodeID)
+	return nil
+}
+
+// dispatchAfterMutation wraps the common "CRUD-handler dispatches to a
+// node and wants to surface failure to the admin doing the mutation"
+// pattern. action is a short Chinese label describing what was just
+// mutated (e.g. "转发新增"); on failure it becomes part of the flash
+// message so the admin sees both what they did and why the kernel
+// didn't catch up. Background / non-handler call sites should invoke
+// dispatchToNode directly and log.
+func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, action string) {
+	if err := s.dispatchToNode(nodeID); err != nil {
+		setFlash(w, fmt.Sprintf("%s 已保存，但下发到节点失败：%v", action, err))
+		log.Printf("dispatch node %d (%s): %v", nodeID, action, err)
+	}
+}
+
+// dispatchAfterFanout dispatches to every node touched by a tenant-scope
+// mutation (e.g. tenant toggle/delete affects every node that ran the
+// tenant's forwards). Per-node errors are aggregated into a single flash
+// because the flash cookie holds only one message; per-node detail still
+// lands in last_error on each affected nodes row.
+func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, action string) {
+	var failed []string
+	for _, n := range nodeIDs {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d (%s): %v", n, action, err)
+			failed = append(failed, fmt.Sprintf("节点 %d: %v", n, err))
+		}
+	}
+	if len(failed) > 0 {
+		setFlash(w, fmt.Sprintf("%s 已保存，但下发到 %d 个节点失败（%s）",
+			action, len(failed), strings.Join(failed, "；")))
+	}
 }
 
 // buildRules converts panel-side Forward rows into kernel-side nft.Rule
@@ -270,9 +318,7 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), name)
-	if err := s.dispatchToNode(n.ID); err != nil {
-		log.Printf("dispatch node %d: %v", n.ID, err)
-	}
+	s.dispatchAfterMutation(w, n.ID, "节点创建")
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", n.ID), http.StatusSeeOther)
 }
 
@@ -378,9 +424,7 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.create", strconv.FormatInt(id, 10),
 		fmt.Sprintf("node=%d %s/%d→%s:%d", nodeID, proto, listenPort, targetIP, targetPort))
-	if err := s.dispatchToNode(nodeID); err != nil {
-		log.Printf("dispatch node %d: %v", nodeID, err)
-	}
+	s.dispatchAfterMutation(w, nodeID, "转发新增")
 	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 
@@ -394,9 +438,7 @@ func (s *Server) deleteForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.delete", strconv.FormatInt(id, 10), "")
-	if err := s.dispatchToNode(nodeID); err != nil {
-		log.Printf("dispatch node %d: %v", nodeID, err)
-	}
+	s.dispatchAfterMutation(w, nodeID, "转发删除")
 	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 

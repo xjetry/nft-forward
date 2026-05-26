@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -171,9 +170,7 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.tenant_create", strconv.FormatInt(id, 10),
 		fmt.Sprintf("tenant=%d tunnel=%d %s/%d→%s:%d", t.ID, tunnel.ID, proto, listenPort, targetIP, targetPort))
-	if err := s.dispatchToNode(tunnel.NodeID); err != nil {
-		log.Printf("dispatch node %d: %v", tunnel.NodeID, err)
-	}
+	s.dispatchAfterMutation(w, tunnel.NodeID, "转发新增")
 	http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
 }
 
@@ -201,9 +198,7 @@ func (s *Server) tenantDeleteForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.tenant_delete", strconv.FormatInt(id, 10), "")
-	if err := s.dispatchToNode(nodeID); err != nil {
-		log.Printf("dispatch node %d: %v", nodeID, err)
-	}
+	s.dispatchAfterMutation(w, nodeID, "转发删除")
 	http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
 }
 

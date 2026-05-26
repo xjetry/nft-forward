@@ -82,6 +82,36 @@ func TestMarkLocalMigratedSetsTimestamp(t *testing.T) {
 	}
 }
 
+func TestDispatchOutcomeRecording(t *testing.T) {
+	d := openMemDB(t)
+	n, err := CreateNode(d, "edge-1", "https://p", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Failure first.
+	if err := MarkNodeDispatchError(d, n.ID, "node not connected"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := GetNode(d, n.ID)
+	if !got.LastError.Valid || got.LastError.String != "node not connected" {
+		t.Fatalf("expected last_error stored, got %+v", got.LastError)
+	}
+	if got.LastApplyAt.Valid {
+		t.Fatalf("LastApplyAt should still be unset after failure")
+	}
+	// Now success: last_error clears, last_apply_at is stamped.
+	if err := MarkNodeApplied(d, n.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = GetNode(d, n.ID)
+	if got.LastError.Valid {
+		t.Fatalf("last_error should be cleared on success, got %q", got.LastError.String)
+	}
+	if !got.LastApplyAt.Valid {
+		t.Fatalf("LastApplyAt should be set on success")
+	}
+}
+
 func TestTuiSnapshotRoundTrip(t *testing.T) {
 	d := openMemDB(t)
 	n, err := CreateNode(d, "edge-1", "https://p", "tok")
