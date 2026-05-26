@@ -186,11 +186,37 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 			pong, _ := json.Marshal(wsproto.Pong{TS: time.Now().UnixMilli()})
 			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypePong, ID: env.ID, Payload: pong})
 		case wsproto.TypeCounters:
-			log.Printf("hub: node %d counters frame (size=%d)", ac.nodeID, len(env.Payload))
+			var co wsproto.Counters
+			if err := json.Unmarshal(env.Payload, &co); err != nil {
+				log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
+				continue
+			}
+			if err := h.applyCounters(ac.nodeID, co.Samples); err != nil {
+				log.Printf("hub: node %d counters update: %v", ac.nodeID, err)
+			}
 		case wsproto.TypeTuiSegmentChanged:
-			log.Printf("hub: node %d tui_segment_changed (size=%d)", ac.nodeID, len(env.Payload))
+			var tsc wsproto.TuiSegmentChanged
+			if err := json.Unmarshal(env.Payload, &tsc); err != nil {
+				log.Printf("hub: node %d malformed tui_segment_changed: %v", ac.nodeID, err)
+				continue
+			}
+			fjb, _ := json.Marshal(tsc.Forwards)
+			if err := db.UpsertTuiSnapshot(h.DB, ac.nodeID, string(fjb)); err != nil {
+				log.Printf("hub: node %d upsert tui snapshot: %v", ac.nodeID, err)
+			}
 		case wsproto.TypeRegisterLocal:
-			log.Printf("hub: node %d register_local (size=%d)", ac.nodeID, len(env.Payload))
+			var rl wsproto.RegisterLocal
+			if err := json.Unmarshal(env.Payload, &rl); err != nil {
+				sendAckErr(ac, env.ID, wsproto.TypeRegisterLocalAck, "malformed payload")
+				continue
+			}
+			imported, err := h.handleRegisterLocal(ac.nodeID, rl.Forwards)
+			if err != nil {
+				sendAckErr(ac, env.ID, wsproto.TypeRegisterLocalAck, err.Error())
+				continue
+			}
+			ackP, _ := json.Marshal(wsproto.RegisterLocalAck{Imported: imported})
+			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRegisterLocalAck, ID: env.ID, Payload: ackP})
 		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeRegisterLocalAck:
 			ac.dispatchAck(env)
 		default:
@@ -304,4 +330,70 @@ func writeEnvelope(ctx context.Context, ws *websocket.Conn, env wsproto.Envelope
 func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 	p, _ := json.Marshal(wsproto.Error{Code: code, Message: msg})
 	_ = writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeError, Payload: p})
+}
+
+// handleRegisterLocal persists the agent's tui-segment forwards into the
+// panel's forwards table on first call; subsequent calls (e.g. the ack was
+// lost on the wire and the agent retries) return an empty Imported slice
+// so the agent still clears its local tui segment. The
+// nodes.local_migrated_at stamp is the idempotency anchor: without it a
+// retry would duplicate-INSERT and trip the (node_id, proto, listen_port)
+// UNIQUE constraint. Forwards imported this way are admin-owned (no
+// tenant/tunnel) — they're whatever the operator was running directly on
+// the daemon before the panel took over.
+func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]wsproto.ImportedForward, error) {
+	n, err := db.GetNode(h.DB, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if n.LocalMigratedAt != nil {
+		return []wsproto.ImportedForward{}, nil
+	}
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	out := make([]wsproto.ImportedForward, 0, len(forwards))
+	for _, f := range forwards {
+		res, err := tx.Exec(
+			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix())
+		if err != nil {
+			return nil, err
+		}
+		id, _ := res.LastInsertId()
+		out = append(out, wsproto.ImportedForward{ListenPort: f.ListenPort, Proto: f.Proto, RuleID: id})
+	}
+	if _, err := tx.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=?`, time.Now().Unix(), nodeID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// applyCounters folds per-rule bytes_delta into the forwards table:
+// last_bytes is the most recent delta (UI surfaces it as "current rate
+// input"); total_bytes is monotonically accumulated. The (node_id,
+// listen_port, proto) tuple identifies the rule — there is no rule_id on
+// the wire because agent restarts re-key the same forward.
+func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) error {
+	for _, s := range samples {
+		if _, err := h.DB.Exec(
+			`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE node_id=? AND listen_port=? AND proto=?`,
+			s.BytesDelta, s.BytesDelta, nodeID, s.ListenPort, s.Proto); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sendAckErr writes a {error: msg} payload on a typed ack envelope so the
+// agent can decode it as the appropriate RegisterLocalAck shape (its
+// Error string `json:"error,omitempty"` field captures the message).
+func sendAckErr(ac *agentConn, id, ackType, msg string) {
+	p, _ := json.Marshal(map[string]string{"error": msg})
+	ac.enqueueWrite(wsproto.Envelope{Type: ackType, ID: id, Payload: p})
 }
