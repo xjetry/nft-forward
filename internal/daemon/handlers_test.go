@@ -614,9 +614,11 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	<-done
 }
 
-// concurrencyProbeApplier records whether two Apply calls overlap.
+// concurrencyProbeApplier records whether two Apply calls overlap, or
+// whether a Cleanup overlaps an Apply.
 type concurrencyProbeApplier struct {
-	onApply func()
+	onApply   func()
+	onCleanup func()
 }
 
 func (a *concurrencyProbeApplier) Apply(rules []nft.Rule, iface string) error {
@@ -626,7 +628,12 @@ func (a *concurrencyProbeApplier) Apply(rules []nft.Rule, iface string) error {
 	return nil
 }
 
-func (a *concurrencyProbeApplier) Cleanup() error { return nil }
+func (a *concurrencyProbeApplier) Cleanup() error {
+	if a.onCleanup != nil {
+		a.onCleanup()
+	}
+	return nil
+}
 
 func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
 	dir := t.TempDir()
@@ -670,6 +677,54 @@ func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
 	wg.Wait()
 	if maxInFlight > 1 {
 		t.Fatalf("applier ran concurrently: maxInFlight=%d", maxInFlight)
+	}
+}
+
+func TestCleanupIsSerializedAgainstApply(t *testing.T) {
+	dir := t.TempDir()
+	var (
+		mu          sync.Mutex
+		inFlight    int
+		maxInFlight int
+	)
+	track := func() {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+	}
+	fake := &concurrencyProbeApplier{onApply: track, onCleanup: track}
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    fake,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.applySerialized([]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = d.cleanupSerialized()
+	}()
+	wg.Wait()
+	if maxInFlight > 1 {
+		t.Fatalf("cleanup overlapped apply: maxInFlight=%d", maxInFlight)
 	}
 }
 

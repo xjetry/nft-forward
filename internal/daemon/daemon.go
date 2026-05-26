@@ -223,7 +223,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			shutdownErr = err
 		}
 	}
-	if cleanupErr := d.applier.Cleanup(); cleanupErr != nil {
+	if cleanupErr := d.cleanupSerialized(); cleanupErr != nil {
 		log.Printf("applier cleanup: %v", cleanupErr)
 	}
 	return shutdownErr

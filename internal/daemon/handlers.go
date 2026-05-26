@@ -68,6 +68,17 @@ func (d *Daemon) applySerialized(resolved []nft.Rule) error {
 	return d.applier.Apply(resolved, d.iface)
 }
 
+// cleanupSerialized runs applier.Cleanup under the same applierMu as
+// applySerialized so a shutdown-time cleanup (shim DELETEs) can't overlap
+// an in-flight refresh-loop apply (shim INSERTs) and leave the shim chain
+// half-cleaned. The refresh loop exits on ctx cancel, but a tick already
+// inside applySerialized when the signal lands would otherwise race here.
+func (d *Daemon) cleanupSerialized() error {
+	d.applierMu.Lock()
+	defer d.applierMu.Unlock()
+	return d.applier.Cleanup()
+}
+
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
 // entire ruleset segment owned by {owner}.
 type segmentPayload struct {
