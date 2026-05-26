@@ -614,3 +614,62 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	<-done
 }
 
+// concurrencyProbeApplier records whether two Apply calls overlap.
+type concurrencyProbeApplier struct {
+	onApply func()
+}
+
+func (a *concurrencyProbeApplier) Apply(rules []nft.Rule, iface string) error {
+	if a.onApply != nil {
+		a.onApply()
+	}
+	return nil
+}
+
+func (a *concurrencyProbeApplier) Cleanup() error { return nil }
+
+func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
+	dir := t.TempDir()
+	var (
+		mu          sync.Mutex
+		inFlight    int
+		maxInFlight int
+	)
+	fake := &concurrencyProbeApplier{
+		onApply: func() {
+			mu.Lock()
+			inFlight++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond) // widen the race window
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+		},
+	}
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Applier:    fake,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.owners = OwnerRuleset{"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.applySerialized([]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
+		}()
+	}
+	wg.Wait()
+	if maxInFlight > 1 {
+		t.Fatalf("applier ran concurrently: maxInFlight=%d", maxInFlight)
+	}
+}
+

@@ -43,6 +43,12 @@ type agentConn struct {
 	writeCh chan []byte
 	closed  chan struct{}
 
+	// closeOnce guards closed so the multiple close paths (a displaced
+	// conn in registerConn, unregisterConn on disconnect, and Hub.Close
+	// on shutdown) can race without double-closing the channel (which
+	// would panic).
+	closeOnce sync.Once
+
 	pendMu  sync.Mutex
 	pending map[string]chan json.RawMessage
 
@@ -51,6 +57,12 @@ type agentConn struct {
 
 func (a *agentConn) nextID() string {
 	return strconv.FormatUint(a.idSeq.Add(1), 36)
+}
+
+// signalClose closes ac.closed exactly once, signalling the reader and
+// writer loops (and any pending SendApplyRuleset) to stop.
+func (a *agentConn) signalClose() {
+	a.closeOnce.Do(func() { close(a.closed) })
 }
 
 func (h *Hub) IsOnline(nodeID int64) bool {
@@ -130,7 +142,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) registerConn(ac *agentConn) {
 	h.mu.Lock()
 	if old, ok := h.conns[ac.nodeID]; ok {
-		close(old.closed)
+		old.signalClose()
 		old.ws.Close(websocket.StatusGoingAway, "replaced by newer connection")
 	}
 	h.conns[ac.nodeID] = ac
@@ -143,12 +155,31 @@ func (h *Hub) unregisterConn(ac *agentConn) {
 		delete(h.conns, ac.nodeID)
 	}
 	h.mu.Unlock()
-	select {
-	case <-ac.closed:
-	default:
-		close(ac.closed)
-	}
+	ac.signalClose()
 	_ = db.MarkNodeOffline(h.DB, ac.nodeID)
+}
+
+// Close gracefully shuts down every agent connection by sending a
+// StatusGoingAway close frame, so agents distinguish an intentional
+// panel shutdown from a crash and can reconnect without alarm. Bounded
+// by the caller's expectation of a quick shutdown — each close is
+// best-effort and non-blocking.
+func (h *Hub) Close() {
+	h.mu.Lock()
+	conns := make([]*agentConn, 0, len(h.conns))
+	for _, ac := range h.conns {
+		conns = append(conns, ac)
+	}
+	h.conns = make(map[int64]*agentConn)
+	h.mu.Unlock()
+
+	for _, ac := range conns {
+		// Signal the reader/writer loops to stop, then send a polite
+		// close frame. The websocket Close is best-effort: if the conn
+		// is already broken it returns an error we don't care about.
+		ac.signalClose()
+		_ = ac.ws.Close(websocket.StatusGoingAway, "panel shutting down")
+	}
 }
 
 func (h *Hub) writerLoop(ac *agentConn) {
