@@ -97,6 +97,12 @@ type ApplyRuleset struct {
 	Rules []nft.Rule `json:"rules"`
 }
 
+// ApplyAck is the agent's response to apply_ruleset. Peers must
+// disambiguate success vs failure using OK *and* Error together:
+// OK==true requires Error==""; OK==false requires Error!="". A peer
+// that ever sees OK==false && Error=="" (or vice versa) should treat
+// the ack as malformed — the OK bool is the load-bearing signal, the
+// Error string is human-readable context for it.
 type ApplyAck struct {
 	Rev   string `json:"rev"`
 	OK    bool   `json:"ok"`

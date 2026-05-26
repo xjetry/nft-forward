@@ -515,7 +515,7 @@ func TestPostRulesetTUIInvokesDialerHook(t *testing.T) {
 	d.tuiHook = func(r []nft.Rule) { called <- r }
 
 	if err := d.setOwnerRuleset(context.Background(), "tui",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}); err != nil {
+		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -542,7 +542,7 @@ func TestPostRulesetPanelDoesNotInvokeDialerHook(t *testing.T) {
 		t.Fatalf("tuiHook fired on panel owner write")
 	}
 	if err := d.setOwnerRuleset(context.Background(), "panel",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}); err != nil {
+		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
 		t.Fatal(err)
 	}
 }

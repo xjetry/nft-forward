@@ -115,7 +115,7 @@ func (d *Daemon) handleRulesetOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := d.setOwnerRuleset(r.Context(), owner, p.Rules); err != nil {
+	if err := d.setOwnerRuleset(r.Context(), owner, p.Rules, ""); err != nil {
 		status := http.StatusInternalServerError
 		var oe *ownerWriteError
 		if errors.As(err, &oe) {
@@ -145,7 +145,14 @@ func (e *ownerWriteError) Unwrap() error { return e.err }
 // the panel. The mutate / apply / save sequence runs under d.mu to keep
 // concurrent writers serialized; the hook fires after the lock is
 // released so a slow callback cannot stall other writes.
-func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.Rule) error {
+//
+// When owner=="panel" and rev is non-empty, the panel-segment revision
+// identifier is recorded in agent_meta.LastAppliedRev under the same
+// d.mu so a single SaveState persists both the new ruleset and the
+// rev together, letting the dialer short-circuit a redundant
+// apply_ruleset push on the next reconnect. rev is ignored for other
+// owners.
+func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.Rule, rev string) error {
 	d.mu.Lock()
 	candidate := cloneOwners(d.owners)
 	if len(rules) == 0 {
@@ -175,7 +182,11 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 		d.mu.Unlock()
 		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("apply: %w", err)}
 	}
-	if err := SaveState(d.statePath, candidate, d.meta); err != nil {
+	meta := d.meta
+	if owner == "panel" && rev != "" {
+		meta.LastAppliedRev = rev
+	}
+	if err := SaveState(d.statePath, candidate, meta); err != nil {
 		// Kernel ruleset is already updated by the Apply above; the disk
 		// state lags behind. A daemon restart would reload the old state
 		// and Apply that, rolling the kernel back. We accept this rare
@@ -186,6 +197,7 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("save state: %w", err)}
 	}
 	d.owners = candidate
+	d.meta = meta
 	d.lastResolved = append([]nft.Rule(nil), resolved...)
 	hook := d.tuiHook
 	hookRules := append([]nft.Rule(nil), candidate[owner]...)

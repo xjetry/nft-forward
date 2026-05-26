@@ -306,41 +306,12 @@ func (d *Daemon) OnLocalMigrated() error {
 }
 
 // SetPanelRuleset is invoked by the dialer when an apply_ruleset frame
-// arrives. Replaces the panel segment wholesale, re-merges with any
-// remaining segments, resolves hostnames, applies to the kernel, and
-// persists the new rev so a reconnect won't replay the same payload.
-// The caller's ctx bounds the DNS resolve so a cancelled session can
-// abort the work in flight.
+// arrives. Thin wrapper over the unified write path so every panel-
+// segment mutation funnels through setOwnerRuleset; rev is recorded in
+// agent_meta.LastAppliedRev as part of the same SaveState transaction
+// so a reconnect won't replay the same payload.
 func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.owners == nil {
-		d.owners = OwnerRuleset{}
-	}
-	if len(rules) == 0 {
-		delete(d.owners, "panel")
-	} else {
-		d.owners["panel"] = append([]nft.Rule(nil), rules...)
-	}
-	merged, err := MergedRuleset(d.owners)
-	if err != nil {
-		return fmt.Errorf("merge: %w", err)
-	}
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	resolved, _, err := d.resolveFn(rctx, merged)
-	if err != nil {
-		return fmt.Errorf("resolve: %w", err)
-	}
-	if err := requireResolvedHosts(resolved); err != nil {
-		return err
-	}
-	if err := d.applier.Apply(resolved, d.iface); err != nil {
-		return fmt.Errorf("apply: %w", err)
-	}
-	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	d.meta.LastAppliedRev = rev
-	return SaveState(d.statePath, d.owners, d.meta)
+	return d.setOwnerRuleset(ctx, "panel", rules, rev)
 }
 
 // Dialer returns the currently-active Dialer, or nil when --connect

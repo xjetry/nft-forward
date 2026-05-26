@@ -275,17 +275,6 @@ func DeleteNode(d *sql.DB, id int64) error {
 	return err
 }
 
-func MarkNodeApplied(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_seen_at=?, last_error=NULL, dirty=0 WHERE id=?`,
-		now(), now(), id)
-	return err
-}
-
-func MarkNodeError(d *sql.DB, id int64, msg string) error {
-	_, err := d.Exec(`UPDATE nodes SET last_error=?, dirty=1 WHERE id=?`, msg, id)
-	return err
-}
-
 func MarkNodeSeen(d *sql.DB, id int64) error {
 	_, err := d.Exec(`UPDATE nodes SET last_seen_at=? WHERE id=?`, now(), id)
 	return err
