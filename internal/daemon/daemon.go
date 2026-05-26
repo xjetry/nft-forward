@@ -133,7 +133,7 @@ func (d *Daemon) Bootstrap() error {
 		if err := requireResolvedHosts(resolved); err != nil {
 			return fmt.Errorf("bootstrap: %w", err)
 		}
-		if err := d.applier.Apply(resolved, d.iface); err != nil {
+		if err := d.applySerialized(resolved); err != nil {
 			return fmt.Errorf("bootstrap apply: %w", err)
 		}
 	}

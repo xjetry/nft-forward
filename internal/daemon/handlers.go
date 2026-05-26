@@ -36,6 +36,14 @@ type Daemon struct {
 	connectTok string
 	dialer     atomic.Pointer[Dialer]
 
+	// applierMu serializes every applier.Apply call. setOwnerRuleset and
+	// demoteToTui apply while holding d.mu; refreshOnce applies without it.
+	// Without this lock those paths could flush the nft table concurrently.
+	// Lock order is always d.mu → applierMu (never the reverse), so the two
+	// write paths that nest both locks can't deadlock against refreshOnce
+	// which takes only applierMu.
+	applierMu sync.Mutex
+
 	mu           sync.Mutex
 	owners       OwnerRuleset
 	meta         AgentMeta
@@ -47,6 +55,17 @@ type Daemon struct {
 	// substitute a fake. Invoked outside d.mu so the callback (which may
 	// block on a channel send) cannot stall other writers.
 	tuiHook func(rules []nft.Rule)
+}
+
+// applySerialized runs applier.Apply under applierMu so concurrent
+// callers (the DNS refresh loop and the unix-socket / dialer write
+// paths) never flush the kernel ruleset at the same time. Callers may
+// or may not hold d.mu; this method never takes d.mu, so the d.mu →
+// applierMu lock order is preserved.
+func (d *Daemon) applySerialized(resolved []nft.Rule) error {
+	d.applierMu.Lock()
+	defer d.applierMu.Unlock()
+	return d.applier.Apply(resolved, d.iface)
 }
 
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
@@ -178,7 +197,7 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 		d.mu.Unlock()
 		return &ownerWriteError{status: http.StatusBadRequest, err: err}
 	}
-	if err := d.applier.Apply(resolved, d.iface); err != nil {
+	if err := d.applySerialized(resolved); err != nil {
 		d.mu.Unlock()
 		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("apply: %w", err)}
 	}
@@ -272,7 +291,7 @@ func (d *Daemon) demoteToTui(ctx context.Context) error {
 		d.mu.Unlock()
 		return err
 	}
-	if err := d.applier.Apply(resolved, d.iface); err != nil {
+	if err := d.applySerialized(resolved); err != nil {
 		d.mu.Unlock()
 		return fmt.Errorf("apply: %w", err)
 	}
