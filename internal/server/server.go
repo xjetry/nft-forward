@@ -10,7 +10,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,8 +22,6 @@ import (
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/wsproto"
 )
-
-var urlParse = url.Parse
 
 //go:embed templates/*.html
 var templatesFS embed.FS
@@ -80,22 +77,6 @@ func New(d *sql.DB) (*Server, error) {
 				m[k] = pairs[i+1]
 			}
 			return m
-		},
-		"port": func(addr string) string {
-			// Pull the port out of a "http(s)://host:port" address so the
-			// node install command's `--listen` matches whatever port the
-			// admin configured when adding the node.
-			u, err := urlParse(addr)
-			if err != nil {
-				return "7878"
-			}
-			if p := u.Port(); p != "" {
-				return p
-			}
-			if u.Scheme == "https" {
-				return "443"
-			}
-			return "80"
 		},
 	}).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {

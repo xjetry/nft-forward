@@ -19,27 +19,12 @@
 
 <div class="card">
 <h2>节点安装命令</h2>
-<p>在目标节点（已安装 nftables，root 用户）执行下列命令；将 <code>nft-agent</code> 二进制提前传到 <code>/usr/local/sbin/</code>：</p>
-<pre>install -m 0755 -d /etc/nft-forward /var/lib/nft-forward
-echo '{{.Node.Secret}}' &gt; /etc/nft-forward/agent.token
-chmod 600 /etc/nft-forward/agent.token
-
-cat &gt;/etc/systemd/system/nft-agent.service &lt;&lt;'EOF'
-[Unit]
-Description=nft-forward agent
-After=network-online.target nftables.service
-Wants=network-online.target
-
-[Service]
-ExecStart=/usr/local/sbin/nft-agent --listen :{{port .Node.Address}} --token-file /etc/nft-forward/agent.token
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now nft-agent.service</pre>
-<p style="color:#86868b;font-size:13px">完成后回到面板，点击「重新同步」即可验证连通性。</p>
+<p>在目标节点（已安装 nftables，root 用户）执行下列命令。把 <code>https://YOUR-PANEL</code> 换成 agent 可达到的面板 URL（反代后的公网域名或内网地址）：</p>
+<pre>curl -fsSL https://github.com/xjetry/nft-forward/releases/latest/download/install.sh -o install.sh
+sudo bash install.sh agent \
+  --panel-url https://YOUR-PANEL \
+  --token {{.Node.Secret}}</pre>
+<p style="color:#86868b;font-size:13px">install.sh 会装好 daemon、把 token 写入 <code>/etc/nft-forward/panel.token</code>、并把 daemon unit 配成 <code>--connect wss://YOUR-PANEL/v1/agents</code>。无需在节点本机开放任何端口。</p>
 </div>
 
 <div class="card">
