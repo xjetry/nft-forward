@@ -191,9 +191,7 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 				log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
 				continue
 			}
-			if err := h.applyCounters(ac.nodeID, co.Samples); err != nil {
-				log.Printf("hub: node %d counters update: %v", ac.nodeID, err)
-			}
+			h.applyCounters(ac.nodeID, co.Samples)
 		case wsproto.TypeTuiSegmentChanged:
 			var tsc wsproto.TuiSegmentChanged
 			if err := json.Unmarshal(env.Payload, &tsc); err != nil {
@@ -365,7 +363,7 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 		id, _ := res.LastInsertId()
 		out = append(out, wsproto.ImportedForward{ListenPort: f.ListenPort, Proto: f.Proto, RuleID: id})
 	}
-	if _, err := tx.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=?`, time.Now().Unix(), nodeID); err != nil {
+	if _, err := tx.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, time.Now().Unix(), nodeID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -379,15 +377,25 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 // input"); total_bytes is monotonically accumulated. The (node_id,
 // listen_port, proto) tuple identifies the rule — there is no rule_id on
 // the wire because agent restarts re-key the same forward.
-func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) error {
+//
+// Per-sample failures (DB error, or zero-row match meaning the rule was
+// deleted on the panel side between the agent's count and the frame's
+// arrival) are logged and the loop continues: counters are recoverable
+// on the next frame, but abandoning the rest of the batch on the first
+// hiccup would lose observability for unrelated rules.
+func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	for _, s := range samples {
-		if _, err := h.DB.Exec(
+		res, err := h.DB.Exec(
 			`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE node_id=? AND listen_port=? AND proto=?`,
-			s.BytesDelta, s.BytesDelta, nodeID, s.ListenPort, s.Proto); err != nil {
-			return err
+			s.BytesDelta, s.BytesDelta, nodeID, s.ListenPort, s.Proto)
+		if err != nil {
+			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
+			continue
+		}
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 		}
 	}
-	return nil
 }
 
 // sendAckErr writes a {error: msg} payload on a typed ack envelope so the
