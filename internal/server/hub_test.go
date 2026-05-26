@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -282,5 +283,25 @@ func TestHubCountersUpdatesForwardBytes(t *testing.T) {
 	}
 	if got.LastBytes != 512 {
 		t.Fatalf("expected LastBytes 512 (most recent delta), got %d", got.LastBytes)
+	}
+}
+
+func TestHubCloseSendsGoingAway(t *testing.T) {
+	srv, hub, _ := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c) // hello_ack
+
+	hub.Close()
+
+	// The client's next read should observe a close frame with StatusGoingAway.
+	_, _, err := c.Read(context.Background())
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected websocket.CloseError, got %v", err)
+	}
+	if ce.Code != websocket.StatusGoingAway {
+		t.Fatalf("expected StatusGoingAway, got %v", ce.Code)
 	}
 }
