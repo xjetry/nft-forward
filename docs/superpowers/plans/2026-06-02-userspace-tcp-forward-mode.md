@@ -2179,3 +2179,143 @@ git commit -m "forward: finalize userspace mode after end-to-end smoke"
 - TUI mode 选择器 → Task 9。
 - 回归/竞态/冒烟 → Task 10。
 - 兼容性(旧 panel↔新 daemon、新 panel↔旧 daemon)→ 由 `EffectiveMode` 摄入归一(Task 1/7)+ `omitempty` 字段(Task 1/8)保证,Task 6 集成测试与 Task 10 回归覆盖。
+
+---
+
+## Addendum:接通计数→租户用量→配额执法 + 原有代码清理(审计后追加)
+
+审计发现「计数→租户用量→配额」整条链路在本分支从未接线(dialer 不发计数、hub 不累加租户用量、无配额判定),且牵出一批死代码。已决定:**接通整条链路并做配额执法**。同时把若干清理项归并进相应任务。下列为对前述任务的增补/修订。
+
+### 增补 A:agent 端下发计数增量(并入 Task 6)
+
+`internal/daemon` 新增按 (proto,port) 算增量的方法,接到 dialer 的 `CountersFn`。wire 字段 `wsproto.CounterSample.BytesDelta` 仍是**增量**语义;reset 处理放 agent 端(nft 表每次 reconcile 会 flush 重建 → 计数归零,故 `cur<last` 视为 reset)。
+
+- `daemon.go` Daemon 结构体加:`countersMu sync.Mutex` 与 `lastCounters map[string]int64`。
+- 新增方法(放 `counters.go`):
+```go
+// counterSamples computes per-rule byte deltas since the last call, for the
+// dialer to push to the panel. nft re-applies (flush+recreate) the table on
+// every reconcile, zeroing kernel counters, so a current value below the last
+// observed one is treated as a reset (delta = current).
+func (d *Daemon) counterSamples() []wsproto.CounterSample {
+	cur, err := d.dp.Counters()
+	if err != nil {
+		log.Printf("counters: %v", err)
+		return nil
+	}
+	d.countersMu.Lock()
+	defer d.countersMu.Unlock()
+	if d.lastCounters == nil {
+		d.lastCounters = map[string]int64{}
+	}
+	seen := make(map[string]bool, len(cur))
+	var out []wsproto.CounterSample
+	for _, c := range cur {
+		key := c.Proto + "/" + strconv.Itoa(c.ListenPort)
+		seen[key] = true
+		last := d.lastCounters[key]
+		delta := c.Bytes - last
+		if c.Bytes < last {
+			delta = c.Bytes // counter reset
+		}
+		d.lastCounters[key] = c.Bytes
+		if delta > 0 {
+			out = append(out, wsproto.CounterSample{ListenPort: c.ListenPort, Proto: c.Proto, BytesDelta: delta})
+		}
+	}
+	for key := range d.lastCounters {
+		if !seen[key] {
+			delete(d.lastCounters, key) // a removed rule restarts from 0 if re-created
+		}
+	}
+	return out
+}
+```
+(import `strconv`、`log`、`nft-forward/internal/wsproto` 视需要补。)
+- `daemon.go` Run() 的 `NewDialer(DialerConfig{...})` 增加一行:`CountersFn: d.counterSamples,`。
+- 测试(`internal/daemon/counters_test.go` 或 handlers_test):用 fake Dataplane 的 `Counters()` 返回递增/重置序列,断言 `counterSamples()` 的增量与 reset 处理正确。
+
+### 增补 B:server 端累加租户用量 + 配额执法(新任务,放 Task 8 之后)
+
+**Files:** `internal/server/hub.go`(`applyCounters` 重写 + `OnTrafficUpdate` 回调字段)、`internal/server/server.go`(`enforceTenantQuota` + 注册回调)、测试 `internal/server/hub_test.go`。
+
+- `Hub` 结构体加回调字段:`OnTrafficUpdate func(tenantID int64)`(Server 注册;Hub 不依赖 Dispatcher,保持纯传输)。
+- `applyCounters` 重写为:按样本查到 forward(用既有 `db.GetForwardByNodeProtoPort` —— 该函数因此**不再是死代码**)→ 累加 forward 字节 → 若属租户且增量>0,`db.AddTenantTraffic` 累加并记下受影响租户 → 循环后对每个受影响租户回调一次:
+```go
+func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
+	touched := map[int64]bool{}
+	for _, s := range samples {
+		f, err := db.GetForwardByNodeProtoPort(h.DB, nodeID, s.Proto, s.ListenPort)
+		if err != nil {
+			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
+			continue
+		}
+		if _, err := h.DB.Exec(`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
+			s.BytesDelta, s.BytesDelta, f.ID); err != nil {
+			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
+			continue
+		}
+		if f.TenantID.Valid && s.BytesDelta > 0 {
+			if err := db.AddTenantTraffic(h.DB, f.TenantID.Int64, s.BytesDelta); err != nil {
+				log.Printf("hub: tenant %d traffic add: %v", f.TenantID.Int64, err)
+				continue
+			}
+			touched[f.TenantID.Int64] = true
+		}
+	}
+	if h.OnTrafficUpdate != nil {
+		for tid := range touched {
+			h.OnTrafficUpdate(tid)
+		}
+	}
+}
+```
+- `server.go` 加执法器,并在构造 Hub 处注册 `s.Hub.OnTrafficUpdate = s.enforceTenantQuota`:
+```go
+// enforceTenantQuota disables a tenant that has reached its traffic quota and
+// re-pushes every node it had forwards on so ActiveForwardsForPush (which
+// excludes disabled tenants) removes them from the kernel. Quota 0 = unlimited.
+func (s *Server) enforceTenantQuota(tenantID int64) {
+	t, err := db.GetTenant(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: load tenant %d: %v", tenantID, err)
+		return
+	}
+	if t.Disabled || t.TrafficQuotaBytes <= 0 || t.TrafficUsedBytes < t.TrafficQuotaBytes {
+		return
+	}
+	if err := db.SetTenantDisabled(s.DB, tenantID, true, "流量超额"); err != nil {
+		log.Printf("quota: disable tenant %d: %v", tenantID, err)
+		return
+	}
+	log.Printf("tenant %d disabled: traffic quota reached (%d/%d bytes)", tenantID, t.TrafficUsedBytes, t.TrafficQuotaBytes)
+	nodes, err := db.DistinctTenantNodes(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: tenant %d nodes: %v", tenantID, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("quota: re-dispatch node %d after disabling tenant %d: %v", n, tenantID, err)
+		}
+	}
+}
+```
+> 确认 `db.Tenant` 字段名(`TrafficQuotaBytes`/`TrafficUsedBytes`/`Disabled`)与上面一致;若不同按实际改。Hub 构造点在 `server.go`(找 `&Hub{` 或 `NewHub`),在那之后注册回调。
+- 测试:`hub_test.go` 造一个有配额的租户 + 其 forward,喂 `applyCounters` 一批超额 `CounterSample`,断言:`forwards.total_bytes`/`tenants.traffic_used_bytes` 累加正确;超额后租户被 `disabled`(`OnTrafficUpdate` 用真实 `enforceTenantQuota` 或 fake 断言被调用)。
+
+### 清理归并(按设计原则,随相应任务一并做)
+
+- **并入 Task 4(重写 shim)**:删手写 `itoa`(`docker_user.go`)→ `strconv.Itoa`;`joinArgs`/`joinStr`(`shim.go`)→ `strings.Join`;把 `nft.protoMatch`/`nft.protoPostMatch`(字节相同)合并为一个未导出 helper,导出供 shim 的 `protoForwardMatch` 复用(三处合一)。注:Task 4 后 ufw 多管 INPUT 链,Docker/Ufw 不再同构,**不强求**把两者合并成单一 `chainShim`。
+- **并入 Task 8(动 db/面板)**:
+  - 删确认无调用的死函数:`db.MarkNodeSeen`、`db.ListForwardsByTunnel`、`db.UpdateForwardBytes`(delta-wire 模型下不需要;reset 处理在 agent 端)。**保留** `db.GetForwardByNodeProtoPort`(增补 B 要用)。
+  - 删死字段 `Node.Dirty`(`queries.go` struct + `scanNode` + `nodeCols`)。
+  - **修面板「最近心跳」永远显示「—」**:`node_detail.html` 读的是只被死函数写的 `LastSeenAt`,改为展示实时的 `LastSeen`/`Online`(`MarkNodeOnline` 写)。属交互层「好用」。
+- **删死客户端计数包装**:`daemonclient.GetCounters` 与 `daemonclient.Counter`(无生产调用方;计数走 WS 链路与 daemon `/v1/counters` 调试端点)。daemon `/v1/counters` 端点**保留**(Task 6 接 `dp.Counters`,轻量调试用)。
+- **独立小提交**:`gofmt -w .` 统一格式化(审计报告 9 个文件未格式化)。
+- 其余 L8(`AgentMeta.PanelURL` 未写)、L9(`Hub.IsOnline` 仅测试用)、L11(命名)等:低优先级,顺手或留待,不阻塞。
+
+### 自检对照增补
+- 计数下发(agent)→ 增补 A(并入 Task 6)。
+- 租户用量累加 + 配额超限自动禁用 + 重新下发 → 增补 B(Task 8 之后的新任务)。
+- 死代码/重复/格式化清理 → 归并 Task 4 / Task 8 + gofmt 提交。
