@@ -152,7 +152,7 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 		t.Fatalf("POST status = %d", resp.StatusCode)
 	}
 	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].ID != "rZ" {
-		t.Fatalf("applier did not see POSTed rule: %+v", fa.nftCalls)
+		t.Fatalf("data plane did not Reconcile the POSTed rule: %+v", fa.nftCalls)
 	}
 	saved, _, err := LoadState(statePath)
 	if err != nil {

@@ -144,6 +144,27 @@ func TestDialerSendsRegisterLocalWhenTuiPresentAndNotMigrated(t *testing.T) {
 	}
 }
 
+func TestRulesToForwardsCarriesMode(t *testing.T) {
+	rules := []nft.Rule{
+		{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, Mode: nft.ModeUserspace},
+		{Proto: "tcp", SrcPort: 81, DestIP: "10.0.0.2", DestPort: 81, Mode: nft.ModeKernel},
+		{Proto: "tcp", SrcPort: 82, DestIP: "10.0.0.3", DestPort: 82}, // empty mode
+	}
+	fwds := rulesToForwards(rules)
+	if len(fwds) != 3 {
+		t.Fatalf("want 3 forwards, got %d", len(fwds))
+	}
+	if fwds[0].Mode != nft.ModeUserspace {
+		t.Errorf("userspace rule lost mode: got %q want %q", fwds[0].Mode, nft.ModeUserspace)
+	}
+	if fwds[1].Mode != nft.ModeKernel {
+		t.Errorf("kernel rule lost mode: got %q want %q", fwds[1].Mode, nft.ModeKernel)
+	}
+	if fwds[2].Mode != "" {
+		t.Errorf("empty-mode rule should round-trip empty, got %q", fwds[2].Mode)
+	}
+}
+
 func TestDialerSkipsRegisterWhenMigratedAtIsNonzero(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {

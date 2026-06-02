@@ -41,13 +41,14 @@ type Daemon struct {
 	connectTok string
 	dialer     atomic.Pointer[Dialer]
 
-	// applierMu serializes every dp.Reconcile/dp.Close call. setOwnerRuleset
-	// and demoteToTui reconcile while holding d.mu; refreshOnce reconciles
-	// without it. Without this lock those paths could mutate the data plane
-	// concurrently. Lock order is always d.mu → applierMu (never the reverse),
-	// so the two write paths that nest both locks can't deadlock against
-	// refreshOnce which takes only applierMu.
-	applierMu sync.Mutex
+	// reconcileMu serializes the data-plane reconcile/close calls against the
+	// DNS refresh and write paths. setOwnerRuleset and demoteToTui reconcile
+	// while holding d.mu; refreshOnce reconciles without it. Without this lock
+	// those paths could mutate the data plane concurrently. Lock order is
+	// always d.mu → reconcileMu (never the reverse), so the two write paths
+	// that nest both locks can't deadlock against refreshOnce which takes only
+	// reconcileMu.
+	reconcileMu sync.Mutex
 
 	mu           sync.Mutex
 	owners       OwnerRuleset
@@ -62,26 +63,26 @@ type Daemon struct {
 	tuiHook func(rules []nft.Rule)
 }
 
-// applySerialized runs dp.Reconcile under applierMu so concurrent callers
+// applySerialized runs dp.Reconcile under reconcileMu so concurrent callers
 // (the DNS refresh loop and the unix-socket / dialer write paths) never
 // mutate the data plane at the same time. Callers may or may not hold d.mu;
-// this method never takes d.mu, so the d.mu → applierMu lock order is
+// this method never takes d.mu, so the d.mu → reconcileMu lock order is
 // preserved.
 func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error {
-	d.applierMu.Lock()
-	defer d.applierMu.Unlock()
+	d.reconcileMu.Lock()
+	defer d.reconcileMu.Unlock()
 	return d.dp.Reconcile(ctx, resolved)
 }
 
-// closeSerialized runs dp.Close under the same applierMu as applySerialized
+// closeSerialized runs dp.Close under the same reconcileMu as applySerialized
 // so a shutdown-time close (firewall-shim DELETEs, relay teardown) can't
 // overlap an in-flight refresh-loop reconcile (shim INSERTs) and leave the
 // shim chain half-cleaned. The refresh loop exits on ctx cancel, but a tick
 // already inside applySerialized when the signal lands would otherwise race
 // here.
 func (d *Daemon) closeSerialized(ctx context.Context) error {
-	d.applierMu.Lock()
-	defer d.applierMu.Unlock()
+	d.reconcileMu.Lock()
+	defer d.reconcileMu.Unlock()
 	return d.dp.Close(ctx)
 }
 

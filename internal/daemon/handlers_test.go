@@ -598,7 +598,7 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 }
 
 // concurrencyProbeDataplane records whether two Reconcile calls overlap,
-// or whether a Close overlaps a Reconcile, so the applierMu serialization
+// or whether a Close overlaps a Reconcile, so the reconcileMu serialization
 // invariant can be asserted.
 type concurrencyProbeDataplane struct {
 	onReconcile func()

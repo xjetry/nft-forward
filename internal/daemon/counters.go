@@ -35,6 +35,11 @@ func (d *Daemon) handleCounters(w http.ResponseWriter, r *http.Request) {
 // dialer to push to the panel. nft re-applies (flush+recreate) the table on
 // every reconcile, zeroing kernel counters, so a current value below the last
 // observed one is treated as a reset (delta = current).
+//
+// Limitation: bytes accumulated within a reconcile window that is flushed
+// before it is ever polled are lost, so quota accounting is approximate, not
+// exact. This is acceptable because reconciles are infrequent relative to the
+// poll interval and the panel only needs coarse traffic totals.
 func (d *Daemon) counterSamples() []wsproto.CounterSample {
 	cur, err := d.dp.Counters()
 	if err != nil {

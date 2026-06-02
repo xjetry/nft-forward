@@ -290,6 +290,7 @@ func rulesToForwards(rs []nft.Rule) []wsproto.Forward {
 			TargetPort:    r.DestPort,
 			Comment:       r.Comment,
 			BandwidthMbps: r.BandwidthMbps,
+			Mode:          r.Mode,
 		}
 		if r.DestIP != "" {
 			f.TargetIP = r.DestIP
