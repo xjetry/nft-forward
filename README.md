@@ -4,8 +4,25 @@
 
 ---
 
+## 一键安装
+
+```bash
+# 交互式（依次可选 tui / server / agent / update / uninstall）
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh)
+
+# 或直接指定角色（可管道，无需 TTY）—— tui 单机 / server 面板 / agent 受控节点
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash -s -- tui
+# wget 版
+wget -qO- https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash -s -- tui
+```
+
+> 仅支持 amd64 Linux；脚本下载单一二进制并按角色配置 systemd 服务，需 root。升级用 `update`，卸载用 `uninstall <角色>`。
+
+---
+
 ## 目录
 
+- [一键安装](#一键安装)
 - [介绍](#介绍)
 - [快速开始](#快速开始)
 - [架构](#架构)
