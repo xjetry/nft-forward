@@ -97,7 +97,41 @@ func New(d *sql.DB) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}, nil
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}
+	// The Hub accumulates tenant usage but owns no policy; the Server decides
+	// what a quota breach means and drives the re-dispatch, keeping the Hub a
+	// pure transport that never imports the dispatch path.
+	hub.OnTrafficUpdate = s.enforceTenantQuota
+	return s, nil
+}
+
+// enforceTenantQuota disables a tenant that has reached its traffic quota and
+// re-pushes every node it had forwards on so ActiveForwardsForPush (which
+// excludes disabled tenants) removes them from the kernel. Quota 0 = unlimited.
+func (s *Server) enforceTenantQuota(tenantID int64) {
+	t, err := db.GetTenant(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: load tenant %d: %v", tenantID, err)
+		return
+	}
+	if t.Disabled || t.TrafficQuotaBytes <= 0 || t.TrafficUsedBytes < t.TrafficQuotaBytes {
+		return
+	}
+	if err := db.SetTenantDisabled(s.DB, tenantID, true, "流量超额"); err != nil {
+		log.Printf("quota: disable tenant %d: %v", tenantID, err)
+		return
+	}
+	log.Printf("tenant %d disabled: traffic quota reached (%d/%d bytes)", tenantID, t.TrafficUsedBytes, t.TrafficQuotaBytes)
+	nodes, err := db.DistinctTenantNodes(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: tenant %d nodes: %v", tenantID, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("quota: re-dispatch node %d after disabling tenant %d: %v", n, tenantID, err)
+		}
+	}
 }
 
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
