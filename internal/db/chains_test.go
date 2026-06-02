@@ -54,6 +54,20 @@ func TestOccupiedPortsExcludesGivenChain(t *testing.T) {
 	}
 }
 
+func TestOccupiedPortsNoSnapshot(t *testing.T) {
+	d := openMemDB(t)
+	n, _ := CreateNode(d, "n1", "https://p", "t")
+	// A node with no forwards and no tui snapshot occupies nothing; the missing
+	// node_tui_snapshot row must yield an empty map, not an error.
+	occ, err := OccupiedPortsOnNode(d, n.ID, "tcp", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occ) != 0 {
+		t.Fatalf("fresh node should occupy no ports: %v", occ)
+	}
+}
+
 func TestRelayHostRoundTrip(t *testing.T) {
 	d := openMemDB(t)
 	n, err := CreateNode(d, "gomami", "https://p", "tok")

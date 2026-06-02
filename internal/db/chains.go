@@ -40,9 +40,10 @@ func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeChainID int6
 	defer rows.Close()
 	for rows.Next() {
 		var p int
-		if err := rows.Scan(&p); err == nil {
-			out[p] = true
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
 		}
+		out[p] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
