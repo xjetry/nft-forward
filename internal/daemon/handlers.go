@@ -11,21 +11,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
 )
 
-// Daemon holds the in-memory owner-segmented ruleset and applier wiring
+// Daemon holds the in-memory owner-segmented ruleset and data-plane wiring
 // shared by the HTTP handlers and the lifecycle code.
 // Fields are unexported; production callers go through New().
 type Daemon struct {
 	socketPath  string
 	statePath   string
 	groupName   string
-	applier     Applier
+	dp          Dataplane
 	legacyPaths LegacyMigrationPaths
-	iface       string
-	countersFn  func() ([]nft.Counter, error)
+	countersFn  func() ([]forward.Counter, error)
 	resolveFn   resolveFunc
+
+	// countersMu guards lastCounters, the per-rule byte total observed on the
+	// previous counterSamples call. The sampler computes deltas against it.
+	countersMu   sync.Mutex
+	lastCounters map[string]int64
 
 	// connectURL/connectTok configure the outbound WebSocket dialer to
 	// the panel. Empty connectURL = tui/server-local mode (no dialer).
@@ -36,12 +41,12 @@ type Daemon struct {
 	connectTok string
 	dialer     atomic.Pointer[Dialer]
 
-	// applierMu serializes every applier.Apply call. setOwnerRuleset and
-	// demoteToTui apply while holding d.mu; refreshOnce applies without it.
-	// Without this lock those paths could flush the nft table concurrently.
-	// Lock order is always d.mu → applierMu (never the reverse), so the two
-	// write paths that nest both locks can't deadlock against refreshOnce
-	// which takes only applierMu.
+	// applierMu serializes every dp.Reconcile/dp.Close call. setOwnerRuleset
+	// and demoteToTui reconcile while holding d.mu; refreshOnce reconciles
+	// without it. Without this lock those paths could mutate the data plane
+	// concurrently. Lock order is always d.mu → applierMu (never the reverse),
+	// so the two write paths that nest both locks can't deadlock against
+	// refreshOnce which takes only applierMu.
 	applierMu sync.Mutex
 
 	mu           sync.Mutex
@@ -57,26 +62,27 @@ type Daemon struct {
 	tuiHook func(rules []nft.Rule)
 }
 
-// applySerialized runs applier.Apply under applierMu so concurrent
-// callers (the DNS refresh loop and the unix-socket / dialer write
-// paths) never flush the kernel ruleset at the same time. Callers may
-// or may not hold d.mu; this method never takes d.mu, so the d.mu →
-// applierMu lock order is preserved.
-func (d *Daemon) applySerialized(resolved []nft.Rule) error {
+// applySerialized runs dp.Reconcile under applierMu so concurrent callers
+// (the DNS refresh loop and the unix-socket / dialer write paths) never
+// mutate the data plane at the same time. Callers may or may not hold d.mu;
+// this method never takes d.mu, so the d.mu → applierMu lock order is
+// preserved.
+func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error {
 	d.applierMu.Lock()
 	defer d.applierMu.Unlock()
-	return d.applier.Apply(resolved, d.iface)
+	return d.dp.Reconcile(ctx, resolved)
 }
 
-// cleanupSerialized runs applier.Cleanup under the same applierMu as
-// applySerialized so a shutdown-time cleanup (shim DELETEs) can't overlap
-// an in-flight refresh-loop apply (shim INSERTs) and leave the shim chain
-// half-cleaned. The refresh loop exits on ctx cancel, but a tick already
-// inside applySerialized when the signal lands would otherwise race here.
-func (d *Daemon) cleanupSerialized() error {
+// closeSerialized runs dp.Close under the same applierMu as applySerialized
+// so a shutdown-time close (firewall-shim DELETEs, relay teardown) can't
+// overlap an in-flight refresh-loop reconcile (shim INSERTs) and leave the
+// shim chain half-cleaned. The refresh loop exits on ctx cancel, but a tick
+// already inside applySerialized when the signal lands would otherwise race
+// here.
+func (d *Daemon) closeSerialized(ctx context.Context) error {
 	d.applierMu.Lock()
 	defer d.applierMu.Unlock()
-	return d.applier.Cleanup()
+	return d.dp.Close(ctx)
 }
 
 // segmentPayload is the body of POST /v1/ruleset/{owner} — replaces the
@@ -208,7 +214,7 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 		d.mu.Unlock()
 		return &ownerWriteError{status: http.StatusBadRequest, err: err}
 	}
-	if err := d.applySerialized(resolved); err != nil {
+	if err := d.applySerialized(ctx, resolved); err != nil {
 		d.mu.Unlock()
 		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("apply: %w", err)}
 	}
@@ -302,7 +308,7 @@ func (d *Daemon) demoteToTui(ctx context.Context) error {
 		d.mu.Unlock()
 		return err
 	}
-	if err := d.applySerialized(resolved); err != nil {
+	if err := d.applySerialized(ctx, resolved); err != nil {
 		d.mu.Unlock()
 		return fmt.Errorf("apply: %w", err)
 	}

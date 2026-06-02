@@ -17,7 +17,7 @@ const stateSchemaVersion = 3
 
 // OwnerRuleset is the in-memory representation: each known controller
 // ("tui", "panel", future additions) owns a slice of rules. The daemon
-// merges all owners into one ruleset before calling Applier.Apply.
+// merges all owners into one ruleset before calling dp.Reconcile.
 type OwnerRuleset map[string][]nft.Rule
 
 // stateFile is the on-disk JSON layout for the current schema version.

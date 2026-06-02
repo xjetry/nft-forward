@@ -14,48 +14,39 @@ import (
 	"testing"
 	"time"
 
+	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
 )
 
-type fakeTcCall struct {
-	rules []nft.Rule
-	iface string
-}
-
-type fakeApplier struct {
-	nftCalls     [][]nft.Rule
-	tcCalls      []fakeTcCall
-	err          error
-	tcErr        error
+type fakeDataplane struct {
+	mu           sync.Mutex
+	nftCalls     [][]nft.Rule // records each Reconcile's rule slice
 	cleanupCalls int
+	err          error             // Reconcile error
+	counters     []forward.Counter // returned by Counters()
 }
 
-func (f *fakeApplier) Apply(rules []nft.Rule, iface string) error {
-	if f.err != nil {
-		return f.err
-	}
+func (f *fakeDataplane) Reconcile(ctx context.Context, rules []nft.Rule) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.nftCalls = append(f.nftCalls, append([]nft.Rule(nil), rules...))
-	if f.tcErr != nil {
-		return f.tcErr
-	}
-	f.tcCalls = append(f.tcCalls, fakeTcCall{
-		rules: append([]nft.Rule(nil), rules...),
-		iface: iface,
-	})
-	return nil
+	return f.err
 }
 
-func (f *fakeApplier) Cleanup() error {
+func (f *fakeDataplane) Counters() ([]forward.Counter, error) { return f.counters, nil }
+
+func (f *fakeDataplane) Close(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.cleanupCalls++
 	return nil
 }
 
-func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
+func newTestServer(t *testing.T, dp Dataplane) (*Daemon, *httptest.Server) {
 	t.Helper()
 	d := &Daemon{
-		applier:   applier,
+		dp:        dp,
 		statePath: filepath.Join(t.TempDir(), "state.json"),
-		iface:     "eth0",
 		resolveFn: func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
 			// Default: passthrough resolver returns rules unchanged
 			return rules, true, nil
@@ -69,10 +60,9 @@ func newTestServer(t *testing.T, applier Applier) (*Daemon, *httptest.Server) {
 func newTestDaemon(t *testing.T) *Daemon {
 	t.Helper()
 	d := &Daemon{
-		applier:   &fakeApplier{},
+		dp:        &fakeDataplane{},
 		statePath: filepath.Join(t.TempDir(), "state.json"),
-		iface:     "eth0",
-		countersFn: func() ([]nft.Counter, error) {
+		countersFn: func() ([]forward.Counter, error) {
 			panic("countersFn not injected — every test must set d.countersFn explicitly")
 		},
 		resolveFn: func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
@@ -86,7 +76,7 @@ func newTestDaemon(t *testing.T) *Daemon {
 }
 
 func TestHandler_Health(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/health")
 	if err != nil {
@@ -106,7 +96,7 @@ func TestHandler_Health(t *testing.T) {
 }
 
 func TestHandler_GetRuleset_EmptyReturnsEmptyOwnersMap(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/ruleset")
 	if err != nil {
@@ -123,7 +113,7 @@ func TestHandler_GetRuleset_EmptyReturnsEmptyOwnersMap(t *testing.T) {
 }
 
 func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
@@ -162,7 +152,7 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 }
 
 func TestHandler_PostOwnerSegment_CrossOwnerPortConflictReturns409(t *testing.T) {
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
@@ -191,7 +181,7 @@ func TestHandler_PostOwnerSegment_CrossOwnerPortConflictReturns409(t *testing.T)
 }
 
 func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testing.T) {
-	fa := &fakeApplier{err: errors.New("nft failed")}
+	fa := &fakeDataplane{err: errors.New("nft failed")}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
@@ -217,7 +207,7 @@ func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testin
 }
 
 func TestHandler_PostOwnerSegment_EmptyRulesClearsSegment(t *testing.T) {
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
@@ -238,7 +228,7 @@ func TestHandler_PostOwnerSegment_EmptyRulesClearsSegment(t *testing.T) {
 }
 
 func TestHandler_PostFlatRulesetReturns410Gone(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/v1/ruleset", "application/json",
 		strings.NewReader(`{"rules":[]}`))
@@ -252,7 +242,7 @@ func TestHandler_PostFlatRulesetReturns410Gone(t *testing.T) {
 }
 
 func TestHandler_BadJSONOnOwnerEndpoint(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
 		strings.NewReader("not json"))
@@ -266,7 +256,7 @@ func TestHandler_BadJSONOnOwnerEndpoint(t *testing.T) {
 }
 
 func TestHandler_MissingOwnerInPathRejected(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/v1/ruleset/", "application/json",
 		strings.NewReader(`{"rules":[]}`))
@@ -280,7 +270,7 @@ func TestHandler_MissingOwnerInPathRejected(t *testing.T) {
 }
 
 func TestHandler_PutRulesetNotAllowed(t *testing.T) {
-	_, srv := newTestServer(t, &fakeApplier{})
+	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/v1/ruleset", nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -295,8 +285,8 @@ func TestHandler_PutRulesetNotAllowed(t *testing.T) {
 
 func TestHandleCounters(t *testing.T) {
 	d := newTestDaemon(t)
-	d.countersFn = func() ([]nft.Counter, error) {
-		return []nft.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100, Packets: 2}}, nil
+	d.countersFn = func() ([]forward.Counter, error) {
+		return []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100, Packets: 2}}, nil
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
@@ -307,7 +297,7 @@ func TestHandleCounters(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	var got struct {
-		Counters []nft.Counter `json:"counters"`
+		Counters []forward.Counter `json:"counters"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -319,7 +309,7 @@ func TestHandleCounters(t *testing.T) {
 
 func TestHandleCounters_Error(t *testing.T) {
 	d := newTestDaemon(t)
-	d.countersFn = func() ([]nft.Counter, error) {
+	d.countersFn = func() ([]forward.Counter, error) {
 		return nil, fmt.Errorf("nft not available")
 	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
@@ -332,7 +322,7 @@ func TestHandleCounters_Error(t *testing.T) {
 
 func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
 	d := newTestDaemon(t)
-	d.countersFn = func() ([]nft.Counter, error) { return nil, nil }
+	d.countersFn = func() ([]forward.Counter, error) { return nil, nil }
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
 	w := httptest.NewRecorder()
@@ -347,11 +337,10 @@ func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
 	}
 }
 
-func TestApplyInvokesNftAndTcWithIface(t *testing.T) {
-	fake := &fakeApplier{}
+func TestPostOwnerSegment_PassesResolvedRulesToReconcile(t *testing.T) {
+	fake := &fakeDataplane{}
 	d := newTestDaemon(t)
-	d.applier = fake
-	d.iface = "eth42"
+	d.dp = fake
 
 	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, BandwidthMbps: 50}}
 	body, _ := json.Marshal(map[string]any{"rules": rules})
@@ -362,19 +351,19 @@ func TestApplyInvokesNftAndTcWithIface(t *testing.T) {
 	if w.Code/100 != 2 {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if len(fake.nftCalls) != 1 || len(fake.tcCalls) != 1 {
-		t.Fatalf("expected one nft+tc call, got nft=%d tc=%d", len(fake.nftCalls), len(fake.tcCalls))
+	if len(fake.nftCalls) != 1 || len(fake.nftCalls[0]) != 1 {
+		t.Fatalf("expected one Reconcile with one rule, got %+v", fake.nftCalls)
 	}
-	if fake.tcCalls[0].iface != "eth42" {
-		t.Errorf("tc iface = %q, want eth42", fake.tcCalls[0].iface)
+	got := fake.nftCalls[0][0]
+	if got.SrcPort != 80 || got.BandwidthMbps != 50 {
+		t.Errorf("resolved rule did not reach Reconcile intact: %+v", got)
 	}
 }
 
-func TestApply_TcFailure_StillReturnsErrorAfterNftRan(t *testing.T) {
-	fake := &fakeApplier{tcErr: fmt.Errorf("tc broke")}
+func TestPostOwnerSegment_ReconcileErrorReturns500(t *testing.T) {
+	fake := &fakeDataplane{err: fmt.Errorf("tc broke")}
 	d := newTestDaemon(t)
-	d.applier = fake
-	d.iface = "eth0"
+	d.dp = fake
 
 	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}
 	body, _ := json.Marshal(map[string]any{"rules": rules})
@@ -385,18 +374,12 @@ func TestApply_TcFailure_StillReturnsErrorAfterNftRan(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
-	if len(fake.nftCalls) != 1 {
-		t.Errorf("nft should still have been invoked, got nftCalls=%d", len(fake.nftCalls))
-	}
-	if len(fake.tcCalls) != 0 {
-		t.Errorf("tc should not have recorded a successful call, got tcCalls=%d", len(fake.tcCalls))
-	}
 }
 
 func TestApplyResolvesDestHost(t *testing.T) {
-	fake := &fakeApplier{}
+	fake := &fakeDataplane{}
 	d := newTestDaemon(t)
-	d.applier = fake
+	d.dp = fake
 	// fake resolver: example.com -> 192.0.2.5
 	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
 		out := make([]nft.Rule, len(in))
@@ -453,7 +436,7 @@ func TestApplyRejectsUnresolvableHost(t *testing.T) {
 
 func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 	d := newTestDaemon(t)
-	fake := d.applier.(*fakeApplier)
+	fake := d.dp.(*fakeDataplane)
 
 	// Seed an owner segment with a host-only rule.
 	d.owners = OwnerRuleset{
@@ -506,7 +489,7 @@ func TestPostRulesetTUIInvokesDialerHook(t *testing.T) {
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    &fakeApplier{},
+		Dataplane:  &fakeDataplane{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +516,7 @@ func TestPostRulesetPanelDoesNotInvokeDialerHook(t *testing.T) {
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    &fakeApplier{},
+		Dataplane:  &fakeDataplane{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -552,7 +535,7 @@ func TestDemoteToTuiMergesPanelIntoTuiWithPanelWinning(t *testing.T) {
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    &fakeApplier{},
+		Dataplane:  &fakeDataplane{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -614,23 +597,26 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	<-done
 }
 
-// concurrencyProbeApplier records whether two Apply calls overlap, or
-// whether a Cleanup overlaps an Apply.
-type concurrencyProbeApplier struct {
-	onApply   func()
-	onCleanup func()
+// concurrencyProbeDataplane records whether two Reconcile calls overlap,
+// or whether a Close overlaps a Reconcile, so the applierMu serialization
+// invariant can be asserted.
+type concurrencyProbeDataplane struct {
+	onReconcile func()
+	onClose     func()
 }
 
-func (a *concurrencyProbeApplier) Apply(rules []nft.Rule, iface string) error {
-	if a.onApply != nil {
-		a.onApply()
+func (a *concurrencyProbeDataplane) Reconcile(ctx context.Context, rules []nft.Rule) error {
+	if a.onReconcile != nil {
+		a.onReconcile()
 	}
 	return nil
 }
 
-func (a *concurrencyProbeApplier) Cleanup() error {
-	if a.onCleanup != nil {
-		a.onCleanup()
+func (a *concurrencyProbeDataplane) Counters() ([]forward.Counter, error) { return nil, nil }
+
+func (a *concurrencyProbeDataplane) Close(ctx context.Context) error {
+	if a.onClose != nil {
+		a.onClose()
 	}
 	return nil
 }
@@ -642,8 +628,8 @@ func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
 		inFlight    int
 		maxInFlight int
 	)
-	fake := &concurrencyProbeApplier{
-		onApply: func() {
+	fake := &concurrencyProbeDataplane{
+		onReconcile: func() {
 			mu.Lock()
 			inFlight++
 			if inFlight > maxInFlight {
@@ -659,7 +645,7 @@ func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    fake,
+		Dataplane:  fake,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -671,12 +657,12 @@ func TestApplyIsSerializedAcrossRefreshAndWrite(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = d.applySerialized([]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
+			_ = d.applySerialized(context.Background(), []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
 		}()
 	}
 	wg.Wait()
 	if maxInFlight > 1 {
-		t.Fatalf("applier ran concurrently: maxInFlight=%d", maxInFlight)
+		t.Fatalf("data plane reconciled concurrently: maxInFlight=%d", maxInFlight)
 	}
 }
 
@@ -699,11 +685,11 @@ func TestCleanupIsSerializedAgainstApply(t *testing.T) {
 		inFlight--
 		mu.Unlock()
 	}
-	fake := &concurrencyProbeApplier{onApply: track, onCleanup: track}
+	fake := &concurrencyProbeDataplane{onReconcile: track, onClose: track}
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    fake,
+		Dataplane:  fake,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -714,17 +700,34 @@ func TestCleanupIsSerializedAgainstApply(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = d.applySerialized([]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
+			_ = d.applySerialized(context.Background(), []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}})
 		}()
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = d.cleanupSerialized()
+		_ = d.closeSerialized(context.Background())
 	}()
 	wg.Wait()
 	if maxInFlight > 1 {
-		t.Fatalf("cleanup overlapped apply: maxInFlight=%d", maxInFlight)
+		t.Fatalf("close overlapped reconcile: maxInFlight=%d", maxInFlight)
 	}
 }
 
+func TestCounterSamples_DeltasAndReset(t *testing.T) {
+	d := &Daemon{dp: &fakeDataplane{counters: []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100}}}}
+	s1 := d.counterSamples()
+	if len(s1) != 1 || s1[0].BytesDelta != 100 {
+		t.Fatalf("first sample want delta 100, got %+v", s1)
+	}
+	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 250}}
+	s2 := d.counterSamples()
+	if len(s2) != 1 || s2[0].BytesDelta != 150 {
+		t.Fatalf("second sample want delta 150, got %+v", s2)
+	}
+	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 30}} // reset
+	s3 := d.counterSamples()
+	if len(s3) != 1 || s3[0].BytesDelta != 30 {
+		t.Fatalf("after reset want delta 30, got %+v", s3)
+	}
+}

@@ -72,7 +72,7 @@ func (d *Dialer) Stop() {
 
 // Done returns a channel that is closed when Run has fully returned.
 // Callers use it to wait for goroutine teardown before tearing down
-// shared state (e.g. the applier) that the dialer's OnApply callback
+// shared state (e.g. the data plane) that the dialer's OnApply callback
 // may still be writing to.
 func (d *Dialer) Done() <-chan struct{} {
 	return d.done
@@ -106,7 +106,7 @@ func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
 // Returns when ctx is canceled or Stop() is called. Closes d.done on
 // exit so external shutdown coordinators can wait for any in-flight
 // OnApply (which writes nft rules) to finish before tearing down the
-// applier.
+// data plane.
 func (d *Dialer) Run(ctx context.Context) {
 	defer close(d.done)
 	backoff := dialerBackoffInitial

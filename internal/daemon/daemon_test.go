@@ -27,18 +27,18 @@ func TestNew_DefaultsApplied(t *testing.T) {
 	if d.groupName != DefaultGroupName {
 		t.Errorf("groupName default = %q, want %q", d.groupName, DefaultGroupName)
 	}
-	if d.applier == nil {
-		t.Fatal("applier nil after New(Config{})")
+	if d.dp == nil {
+		t.Fatal("dp nil after New(Config{})")
 	}
 }
 
 func TestNew_ExplicitOverrides(t *testing.T) {
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		SocketPath: "/tmp/x.sock",
 		StatePath:  "/tmp/x.json",
 		GroupName:  "g",
-		Applier:    fa,
+		Dataplane:  fa,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +46,8 @@ func TestNew_ExplicitOverrides(t *testing.T) {
 	if d.socketPath != "/tmp/x.sock" || d.statePath != "/tmp/x.json" || d.groupName != "g" {
 		t.Fatalf("overrides not applied: %+v", d)
 	}
-	if d.applier != fa {
-		t.Fatal("custom applier not used")
+	if d.dp != fa {
+		t.Fatal("custom dataplane not used")
 	}
 }
 
@@ -61,11 +61,11 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	}, AgentMeta{}); err != nil {
 		t.Fatal(err)
 	}
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
-		Applier:    fa,
+		Dataplane:  fa,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestBootstrap_EmptyStateIsFine(t *testing.T) {
 	d, err := New(Config{
 		StatePath:  filepath.Join(t.TempDir(), "missing.json"),
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
-		Applier:    &fakeApplier{},
+		Dataplane:  &fakeDataplane{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,12 +98,12 @@ func TestBootstrap_EmptyStateIsFine(t *testing.T) {
 func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	sockPath := filepath.Join(shortSockDir(t), "test.sock")
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		SocketPath: sockPath,
 		StatePath:  statePath,
 		GroupName:  "",
-		Applier:    fa,
+		Dataplane:  fa,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,12 +174,12 @@ func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	statePath := filepath.Join(root, "state.json")
 	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
-		Applier:    fa,
+		Dataplane:  fa,
 		LegacyPaths: LegacyMigrationPaths{
 			TUI:           tuiPath,
 			Agent:         filepath.Join(root, "no-such-agent.json"),
@@ -220,11 +220,11 @@ func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		StatePath:   statePath,
 		SocketPath:  filepath.Join(shortSockDir(t), "s.sock"),
-		Applier:     fa,
+		Dataplane:   fa,
 		LegacyPaths: LegacyMigrationPaths{TUI: legacyPath},
 	})
 	if err != nil {
@@ -252,11 +252,11 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
-		Applier:    fa,
+		Dataplane:  fa,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestOnLocalMigratedClearsTuiSegmentAndSetsMeta(t *testing.T) {
 	d, err := New(Config{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		StatePath:  filepath.Join(dir, "state.json"),
-		Applier:    &fakeApplier{},
+		Dataplane:  &fakeDataplane{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -341,12 +341,12 @@ func TestOnLocalMigratedClearsTuiSegmentAndSetsMeta(t *testing.T) {
 
 func TestDaemonRunCallsCleanupOnShutdown(t *testing.T) {
 	dir := t.TempDir()
-	fa := &fakeApplier{}
+	fa := &fakeDataplane{}
 	d, err := New(Config{
 		SocketPath: filepath.Join(shortSockDir(t), "sock"),
 		StatePath:  filepath.Join(dir, "missing.json"),
 		GroupName:  "",
-		Applier:    fa,
+		Dataplane:  fa,
 		Iface:      "lo",
 	})
 	if err != nil {
