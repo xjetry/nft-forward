@@ -146,7 +146,10 @@ func TestChainCRUD(t *testing.T) {
 	if c.TenantID.Valid || c.EntryListenPort != 0 {
 		t.Fatalf("fresh admin chain should have NULL tenant + entry 0: %+v", c)
 	}
-	admin, _ := ListAdminChains(d)
+	admin, err := ListAdminChains(d)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(admin) != 1 {
 		t.Fatalf("ListAdminChains = %d, want 1", len(admin))
 	}
@@ -159,5 +162,69 @@ func TestChainCRUD(t *testing.T) {
 	}
 	if _, err := GetChain(d, id); err == nil {
 		t.Fatalf("chain should be gone after delete")
+	}
+}
+
+func TestDeleteChainReturnsAffectedNodes(t *testing.T) {
+	d := openMemDB(t)
+	n, err := CreateNode(d, "n1", "https://p", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, err := CreateChain(d, &Chain{Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 20000, TargetIP: "1.1.1.1", TargetPort: 1}
+	f.ChainID = sql.NullInt64{Int64: cid, Valid: true}
+	if _, err := CreateForward(d, f); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := DeleteChain(d, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0] != n.ID {
+		t.Fatalf("affected nodes = %v, want [%d]", nodes, n.ID)
+	}
+	// FK cascade on forwards.chain_id must clear the chain's forwards.
+	rest, err := ListForwardsByChain(d, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("chain forwards should be gone after delete: %v", rest)
+	}
+}
+
+func TestListChainsByTenant(t *testing.T) {
+	d := openMemDB(t)
+	tid, err := CreateTenant(d, &Tenant{Name: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := CreateChain(d, &Chain{TenantID: sql.NullInt64{Int64: tid, Valid: true}, Name: "owned", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateChain(d, &Chain{Name: "admin", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443}); err != nil {
+		t.Fatal(err)
+	}
+	byTenant, err := ListChainsByTenant(d, tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byTenant) != 1 || byTenant[0].ID != owned {
+		t.Fatalf("ListChainsByTenant = %+v, want only chain %d", byTenant, owned)
+	}
+	// ListAdminChains filters tenant_id IS NULL, so it must exclude the tenant chain.
+	admin, err := ListAdminChains(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range admin {
+		if c.ID == owned {
+			t.Fatalf("ListAdminChains must not include tenant-owned chain %d", owned)
+		}
 	}
 }
