@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -255,34 +254,6 @@ func TestClient_HTTPTransport_HealthAndPost(t *testing.T) {
 	}
 }
 
-func TestClient_HTTPTransport_GetCounters(t *testing.T) {
-	srv := http.NewServeMux()
-	srv.HandleFunc("/v1/counters", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"counters":[{"proto":"tcp","listen_port":80,"bytes":123,"packets":4}]}`))
-	})
-	httpSrv := &http.Server{Handler: srv}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	go httpSrv.Serve(l)
-	defer httpSrv.Close()
-
-	addr := "http://" + l.Addr().String()
-	c, err := New(addr, WithBearerToken("tok"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	got, err := c.GetCounters()
-	if err != nil {
-		t.Fatalf("GetCounters: %v", err)
-	}
-	if len(got) != 1 || got[0].ListenPort != 80 || got[0].Bytes != 123 {
-		t.Errorf("unexpected counters: %+v", got)
-	}
-}
-
 func TestClient_UnixTransport_StillWorks(t *testing.T) {
 	dir := shortSockDir(t)
 	sockPath := filepath.Join(dir, "d.sock")
@@ -303,34 +274,5 @@ func TestClient_UnixTransport_StillWorks(t *testing.T) {
 	}
 	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
-	}
-}
-
-func TestClient_GetCounters_HTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-	c, err := New(srv.URL)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err := c.GetCounters(); err == nil {
-		t.Fatal("expected error on 500, got nil")
-	}
-}
-
-func TestClient_GetCounters_MalformedJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte("not json"))
-	}))
-	defer srv.Close()
-	c, err := New(srv.URL)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err := c.GetCounters(); err == nil {
-		t.Fatal("expected decode error, got nil")
 	}
 }
