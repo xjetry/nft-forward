@@ -32,7 +32,7 @@ func (s *Server) buildChainView(c *db.Chain) chainView {
 			names = append(names, fmt.Sprintf("#%d", h.NodeID))
 		}
 	}
-	names = append(names, fmt.Sprintf("%s:%d", c.ExitHost, c.ExitPort))
+	names = append(names, net.JoinHostPort(c.ExitHost, strconv.Itoa(c.ExitPort)))
 	entry := "—"
 	if c.EntryNodeID.Valid && c.EntryListenPort > 0 {
 		if n, err := db.GetNode(s.DB, c.EntryNodeID.Int64); err == nil && n.RelayHost != "" {
@@ -204,12 +204,12 @@ func (s *Server) saveChain(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
-	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if name == "" || (proto != "tcp" && proto != "udp") {
 		setFlash(w, "名称必填，协议须为 tcp 或 udp")
 		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
 		return
 	}
+	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
 		setFlash(w, err.Error())
 		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
@@ -291,7 +291,12 @@ func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 	}
 	avoid := map[int64]int{hops[pos].NodeID: hops[pos].ListenPort}
 
-	tx, _ := s.DB.Begin()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		setFlash(w, err.Error())
+		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		return
+	}
 	_, affected, err := db.RegenerateChain(tx, c, inputs, avoid)
 	if err != nil {
 		tx.Rollback()
@@ -310,6 +315,10 @@ func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		http.Error(w, "节点不存在", http.StatusNotFound)
+		return
+	}
 	host := strings.TrimSpace(r.FormValue("relay_host"))
 	if host != "" && net.ParseIP(host) == nil && !resolver.IsHostname(host) {
 		setFlash(w, "中继地址须为 IPv4 或域名")
