@@ -13,7 +13,12 @@ CREATE TABLE chains (
   proto             TEXT NOT NULL CHECK(proto IN ('tcp','udp')),
   exit_host         TEXT NOT NULL,
   exit_port         INTEGER NOT NULL CHECK(exit_port BETWEEN 1 AND 65535),
+  -- SET NULL (not CASCADE): when the entry node is deleted the chain config is
+  -- preserved for re-assignment; only the entry endpoint goes unresolved.
   entry_node_id     INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  -- 0 = sentinel "not yet allocated by the chain orchestrator" (0 is not a legal
+  -- listen port, hence no CHECK like exit_port's); a real port lands on the first
+  -- regeneration.
   entry_listen_port INTEGER NOT NULL DEFAULT 0,
   created_at        INTEGER NOT NULL
 );

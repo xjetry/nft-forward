@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"database/sql"
+	"testing"
+)
 
 func TestRelayHostRoundTrip(t *testing.T) {
 	d := openMemDB(t)
@@ -39,5 +42,27 @@ func TestCreateForwardCarriesChainID(t *testing.T) {
 	}
 	if f.Mode != "userspace" {
 		t.Fatalf("mode = %q, want userspace", f.Mode)
+	}
+
+	// A forward tagged with a chain must round-trip that chain_id. CreateChain
+	// does not exist yet, so seed the chains row directly.
+	res, err := d.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfID, err := CreateForward(d, &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 20001, TargetIP: "5.6.7.8", TargetPort: 20002, ChainID: sql.NullInt64{Int64: cid, Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf, err := GetForward(d, cfID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cf.ChainID.Valid || cf.ChainID.Int64 != cid {
+		t.Fatalf("chain forward chain_id = %+v, want valid %d", cf.ChainID, cid)
 	}
 }
