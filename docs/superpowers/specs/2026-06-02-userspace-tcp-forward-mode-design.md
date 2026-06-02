@@ -333,9 +333,10 @@ state 旧),且 tc 失败不影响转发(只缺整形),不回滚 nft 以坚持「
 
 ```go
 type FirewallState struct {
-    ForwardRules []nft.Rule  // 内核 DNAT 目标(FORWARD accept 用)
-    ListenPorts  []PortProto // 用户态 TCP 监听端口(INPUT accept 用)
+    ForwardRules []nft.Rule   // 内核 DNAT 目标(FORWARD accept 用)
+    ListenPorts  []ListenPort // 用户态 TCP 监听端口(INPUT accept 用)
 }
+// ListenPort{ Proto string; Port int } 是用户态监听端口的轻量描述。
 // 各 shim 自行取用:
 //   DockerUserShim:用 ForwardRules 注 FORWARD accept;忽略 ListenPorts
 //     (Docker 不过滤到宿主的 INPUT)。
@@ -346,10 +347,11 @@ type FirewallState struct {
   `nft -f` 脚本——全部沿用,只是 ufw shim 多渲染 INPUT accept 行。
 - `Dataplane.Reconcile` 第 4 步在 kernel/userspace 都成功后调
   `firewall.Sync(kernelRules, userspaceTCPPorts)`,尽力而为。
-- **探针**:`probeFirewallEnvironment` 增补——当存在用户态规则、INPUT 默认
-  drop 且未检测到能放行 INPUT 的 shim 时,日志 WARN(类比现有 FORWARD=drop
-  警告)。裸 nft/iptables 手工 INPUT=drop 无 ufw 的环境,需运维自行放行端口
-  (与现有 FORWARD 立场一致)。
+- **探针(可选,不阻塞实现)**:可给 `probeFirewallEnvironment` 增补一条——
+  当存在用户态规则、INPUT 默认 drop 且未检测到能放行 INPUT 的 shim 时日志 WARN
+  (类比现有 FORWARD=drop 警告)。属交互/可观测性增强,**不在首版实现范围**;
+  ufw 经 shim 自动放行,默认 accept INPUT 的主机本就可达,仅「裸 iptables 手工
+  INPUT=drop 无 ufw」环境需运维自行放行端口(与现有 FORWARD 立场一致)。
 
 ## 9. 统一计数:`forward.Counter`
 
