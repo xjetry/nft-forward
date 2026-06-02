@@ -148,15 +148,15 @@ func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "tenant_detail.html", map[string]any{
-		"User":         u,
-		"Tenant":       t,
-		"Tunnels":      tunnels,
-		"Grants":       grants,
-		"AllTunnels":   allTunnels,
-		"AllNodes":     allNodes,
-		"Forwards":     forwards,
-		"TenantUsers":  tenantUsers,
-		"Flash":        flashFromCookie(w, r),
+		"User":        u,
+		"Tenant":      t,
+		"Tunnels":     tunnels,
+		"Grants":      grants,
+		"AllTunnels":  allTunnels,
+		"AllNodes":    allNodes,
+		"Forwards":    forwards,
+		"TenantUsers": tenantUsers,
+		"Flash":       flashFromCookie(w, r),
 	})
 }
 

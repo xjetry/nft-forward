@@ -67,8 +67,8 @@ func New(d *sql.DB) (*Server, error) {
 			}
 			return s.String
 		},
-		"upper":   strings.ToUpper,
-		"add":     func(a, b int) int { return a + b },
+		"upper": strings.ToUpper,
+		"add":   func(a, b int) int { return a + b },
 		"div": func(a, b int64) int64 {
 			if b == 0 {
 				return 0

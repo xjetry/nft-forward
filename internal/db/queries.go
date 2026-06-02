@@ -462,7 +462,7 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE node_kind='self'`)
+	row := d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_kind='self'`)
 	return scanNode(row)
 }
 
