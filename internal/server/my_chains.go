@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -91,6 +92,11 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if t.Disabled {
 		setFlash(w, "用户已被禁用")
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
+		return
+	}
+	if t.ExpiresAt.Valid && t.ExpiresAt.Int64 > 0 && t.ExpiresAt.Int64 < time.Now().Unix() {
+		setFlash(w, "用户已过期")
 		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
