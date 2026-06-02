@@ -12,6 +12,7 @@ package shim
 import (
 	"bytes"
 	"os/exec"
+	"strings"
 
 	"nft-forward/internal/nft"
 )
@@ -20,6 +21,20 @@ import (
 // inserts into a foreign chain. Cleanup walks the chain and deletes by
 // this exact comment.
 const OwnerComment = "nft-forward managed"
+
+// FirewallState carries what the shims need to make the host pass our traffic:
+// FORWARD accepts for kernel DNAT targets, and INPUT accepts for userspace TCP
+// listen ports.
+type FirewallState struct {
+	ForwardRules []nft.Rule
+	ListenPorts  []ListenPort
+}
+
+// ListenPort is one userspace listener the firewall must allow inbound.
+type ListenPort struct {
+	Proto string // "tcp"
+	Port  int
+}
 
 // ForwardShim is one firewall-tool integration. Implementations live
 // alongside this file (docker_user.go, ufw.go, ...).
@@ -31,12 +46,12 @@ type ForwardShim interface {
 	// now. Cheap; called on every Sync.
 	Detect() bool
 
-	// Sync makes the target chain reflect rules: deletes any leftover
-	// owner-tagged rule, inserts current ones. No-op when Detect is
+	// Sync makes the target chain(s) reflect state: deletes any leftover
+	// owner-tagged rules, inserts current ones. No-op when Detect is
 	// false. Idempotent.
-	Sync(rules []nft.Rule) error
+	Sync(state FirewallState) error
 
-	// Cleanup deletes every owner-tagged rule from the target chain.
+	// Cleanup deletes every owner-tagged rule from the target chain(s).
 	// No-op when Detect is false. Idempotent.
 	Cleanup() error
 }
@@ -81,21 +96,11 @@ type nftError struct {
 }
 
 func (e *nftError) Error() string {
+	joined := strings.Join(e.args, " ")
 	if e.stderr == "" {
-		return "nft " + joinArgs(e.args) + ": " + e.err.Error()
+		return "nft " + joined + ": " + e.err.Error()
 	}
-	return "nft " + joinArgs(e.args) + ": " + e.err.Error() + ": " + e.stderr
-}
-
-func joinArgs(a []string) string {
-	out := ""
-	for i, s := range a {
-		if i > 0 {
-			out += " "
-		}
-		out += s
-	}
-	return out
+	return "nft " + joined + ": " + e.err.Error() + ": " + e.stderr
 }
 
 // Registry holds the built-in shims and dispatches Sync/Cleanup across
@@ -140,13 +145,13 @@ func (r *Registry) DetectedNames() []string {
 // SyncAll runs Sync on every detected shim. A failure in one shim does
 // not skip the others — failures are aggregated and returned at the
 // end so the caller can log them. Detect failures are not surfaced.
-func (r *Registry) SyncAll(rules []nft.Rule) error {
+func (r *Registry) SyncAll(state FirewallState) error {
 	var errs []string
 	for _, s := range r.shims {
 		if !s.Detect() {
 			continue
 		}
-		if err := s.Sync(rules); err != nil {
+		if err := s.Sync(state); err != nil {
 			errs = append(errs, s.Name()+": "+err.Error())
 		}
 	}
@@ -178,16 +183,5 @@ type aggregateError struct {
 }
 
 func (e *aggregateError) Error() string {
-	return "shim: " + joinStr(e.errs, "; ")
-}
-
-func joinStr(xs []string, sep string) string {
-	out := ""
-	for i, s := range xs {
-		if i > 0 {
-			out += sep
-		}
-		out += s
-	}
-	return out
+	return "shim: " + strings.Join(e.errs, "; ")
 }

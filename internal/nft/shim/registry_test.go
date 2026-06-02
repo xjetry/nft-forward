@@ -17,14 +17,14 @@ type stubShim struct {
 	cleanErr   error
 	syncCalls  int
 	cleanCalls int
-	lastRules  []nft.Rule
+	lastState  FirewallState
 }
 
 func (s *stubShim) Name() string { return s.name }
 func (s *stubShim) Detect() bool { return s.detect }
-func (s *stubShim) Sync(rules []nft.Rule) error {
+func (s *stubShim) Sync(state FirewallState) error {
 	s.syncCalls++
-	s.lastRules = rules
+	s.lastState = state
 	return s.syncErr
 }
 func (s *stubShim) Cleanup() error {
@@ -36,7 +36,8 @@ func TestRegistrySyncAllSkipsUndetected(t *testing.T) {
 	a := &stubShim{name: "a", detect: false}
 	b := &stubShim{name: "b", detect: true}
 	r := &Registry{shims: []ForwardShim{a, b}}
-	if err := r.SyncAll([]nft.Rule{{Proto: "tcp", DestIP: "1.1.1.1", DestPort: 80}}); err != nil {
+	state := FirewallState{ForwardRules: []nft.Rule{{Proto: "tcp", DestIP: "1.1.1.1", DestPort: 80}}}
+	if err := r.SyncAll(state); err != nil {
 		t.Fatal(err)
 	}
 	if a.syncCalls != 0 {
@@ -52,7 +53,7 @@ func TestRegistrySyncAllAggregatesErrors(t *testing.T) {
 	b := &stubShim{name: "b", detect: true, syncErr: errors.New("boom-b")}
 	c := &stubShim{name: "c", detect: true}
 	r := &Registry{shims: []ForwardShim{a, b, c}}
-	err := r.SyncAll(nil)
+	err := r.SyncAll(FirewallState{})
 	if err == nil {
 		t.Fatal("expected aggregated error")
 	}

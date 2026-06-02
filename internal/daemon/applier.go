@@ -29,7 +29,7 @@ func (a nftApplier) Apply(rules []nft.Rule, iface string) error {
 		return err
 	}
 	if a.shims != nil {
-		if err := a.shims.SyncAll(rules); err != nil {
+		if err := a.shims.SyncAll(shim.FirewallState{ForwardRules: rules}); err != nil {
 			// shim failure is non-fatal: core nft_forward table already
 			// applied. Surface as a log line for ops visibility.
 			log.Printf("shim sync: %v", err)
