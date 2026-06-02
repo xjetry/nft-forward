@@ -17,6 +17,9 @@ import (
 const (
 	TableName   = "nft_forward"
 	TableFamily = "ip"
+
+	ModeKernel    = "kernel"
+	ModeUserspace = "userspace"
 )
 
 type Rule struct {
@@ -28,6 +31,19 @@ type Rule struct {
 	DestPort      int    `json:"dest_port"`
 	Comment       string `json:"comment,omitempty"`
 	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
+	// Mode selects the data plane for this forward: "" / "kernel" = nftables
+	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
+	Mode string `json:"mode,omitempty"`
+}
+
+// EffectiveMode normalizes the mode: an empty or unrecognized value means
+// kernel, so old state files and old-panel pushes (no mode field) default to
+// the existing zero-copy behavior. This is the single source of the default.
+func (r Rule) EffectiveMode() string {
+	if r.Mode == ModeUserspace {
+		return ModeUserspace
+	}
+	return ModeKernel
 }
 
 func (r Rule) Display() string {
@@ -80,6 +96,14 @@ func Validate(r Rule) error {
 		if !resolver.IsHostname(r.DestHost) {
 			return fmt.Errorf("目标域名格式非法")
 		}
+	}
+	switch r.Mode {
+	case "", ModeKernel, ModeUserspace:
+	default:
+		return fmt.Errorf("转发模式必须为 kernel 或 userspace")
+	}
+	if r.Mode == ModeUserspace && r.Proto == "udp" {
+		return fmt.Errorf("UDP 不支持用户态转发")
 	}
 	return nil
 }
