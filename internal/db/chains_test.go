@@ -31,7 +31,7 @@ func TestOccupiedPortsUnionsForwardsAndTuiSnapshot(t *testing.T) {
 func TestOccupiedPortsExcludesGivenChain(t *testing.T) {
 	d := openMemDB(t)
 	n, _ := CreateNode(d, "n1", "https://p", "t")
-	// Seed the chains row directly; CreateChain does not exist yet in this task.
+	// Seed a chains row directly so the chain-tagged forward's chain_id FK resolves.
 	res, err := d.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +93,8 @@ func TestCreateForwardCarriesChainID(t *testing.T) {
 		t.Fatalf("mode = %q, want userspace", f.Mode)
 	}
 
-	// A forward tagged with a chain must round-trip that chain_id. CreateChain
-	// does not exist yet, so seed the chains row directly.
+	// A forward tagged with a chain must round-trip that chain_id. Seed a chains
+	// row directly so the chain-tagged forward's chain_id FK resolves.
 	res, err := d.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
 	if err != nil {
 		t.Fatal(err)
