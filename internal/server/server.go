@@ -42,11 +42,24 @@ func New(d *sql.DB) (*Server, error) {
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"unix": func(i sql.NullInt64) string {
-			if !i.Valid {
+		// unix renders a unix-seconds timestamp. It accepts both the legacy
+		// sql.NullInt64 columns and the agent-dialer *int64 columns so a
+		// single helper covers every timestamp field templates display.
+		"unix": func(v any) string {
+			switch t := v.(type) {
+			case sql.NullInt64:
+				if !t.Valid {
+					return "—"
+				}
+				return fmtUnix(t.Int64)
+			case *int64:
+				if t == nil {
+					return "—"
+				}
+				return fmtUnix(*t)
+			default:
 				return "—"
 			}
-			return fmtUnix(i.Int64)
 		},
 		"nullstr": func(s sql.NullString) string {
 			if !s.Valid {
@@ -54,8 +67,8 @@ func New(d *sql.DB) (*Server, error) {
 			}
 			return s.String
 		},
-		"upper":   strings.ToUpper,
-		"add":     func(a, b int) int { return a + b },
+		"upper": strings.ToUpper,
+		"add":   func(a, b int) int { return a + b },
 		"div": func(a, b int64) int64 {
 			if b == 0 {
 				return 0
@@ -84,7 +97,41 @@ func New(d *sql.DB) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}, nil
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}
+	// The Hub accumulates tenant usage but owns no policy; the Server decides
+	// what a quota breach means and drives the re-dispatch, keeping the Hub a
+	// pure transport that never imports the dispatch path.
+	hub.OnTrafficUpdate = s.enforceTenantQuota
+	return s, nil
+}
+
+// enforceTenantQuota disables a tenant that has reached its traffic quota and
+// re-pushes every node it had forwards on so ActiveForwardsForPush (which
+// excludes disabled tenants) removes them from the kernel. Quota 0 = unlimited.
+func (s *Server) enforceTenantQuota(tenantID int64) {
+	t, err := db.GetTenant(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: load tenant %d: %v", tenantID, err)
+		return
+	}
+	if t.Disabled || t.TrafficQuotaBytes <= 0 || t.TrafficUsedBytes < t.TrafficQuotaBytes {
+		return
+	}
+	if err := db.SetTenantDisabled(s.DB, tenantID, true, "流量超额"); err != nil {
+		log.Printf("quota: disable tenant %d: %v", tenantID, err)
+		return
+	}
+	log.Printf("tenant %d disabled: traffic quota reached (%d/%d bytes)", tenantID, t.TrafficUsedBytes, t.TrafficQuotaBytes)
+	nodes, err := db.DistinctTenantNodes(s.DB, tenantID)
+	if err != nil {
+		log.Printf("quota: tenant %d nodes: %v", tenantID, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("quota: re-dispatch node %d after disabling tenant %d: %v", n, tenantID, err)
+		}
+	}
 }
 
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
@@ -191,6 +238,7 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 			DestPort:      f.TargetPort,
 			Comment:       f.Comment,
 			BandwidthMbps: bw,
+			Mode:          f.Mode,
 		}
 		if resolver.IsHostname(f.TargetIP) {
 			rule.DestHost = f.TargetIP
@@ -411,6 +459,7 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
 	comment := strings.TrimSpace(r.FormValue("comment"))
+	mode := strings.TrimSpace(r.FormValue("mode"))
 
 	f := &db.Forward{
 		NodeID:     nodeID,
@@ -419,11 +468,13 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		TargetIP:   targetIP,
 		TargetPort: targetPort,
 		Comment:    comment,
+		Mode:       mode,
 	}
 	testRule := nft.Rule{
 		Proto:    proto,
 		SrcPort:  listenPort,
 		DestPort: targetPort,
+		Mode:     mode,
 	}
 	if resolver.IsHostname(targetIP) {
 		testRule.DestHost = targetIP

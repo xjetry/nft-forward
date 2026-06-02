@@ -11,11 +11,11 @@ import (
 // recorder is a test runner that captures calls so we can assert on the
 // nft commands the shim issued.
 type recorder struct {
-	listOut    string
-	listErr    error
-	scripts    []string
-	scriptErr  error
-	listArgs   [][]string
+	listOut   string
+	listErr   error
+	scripts   []string
+	scriptErr error
+	listArgs  [][]string
 }
 
 func (r *recorder) run(args ...string) (string, error) {
@@ -58,7 +58,7 @@ func TestDockerUserShimDetectFalseOnError(t *testing.T) {
 func TestDockerUserShimSyncSkipsWhenAbsent(t *testing.T) {
 	r := &recorder{listErr: errors.New("no such chain")}
 	s := newDockerUserShimWith(r)
-	if err := s.Sync(nil); err != nil {
+	if err := s.Sync(FirewallState{}); err != nil {
 		t.Fatalf("Sync should swallow missing chain: %v", err)
 	}
 	if len(r.scripts) != 0 {
@@ -75,7 +75,7 @@ func TestDockerUserShimSyncInjectsRule(t *testing.T) {
 	}
 	s := newDockerUserShimWith(r)
 	rules := []nft.Rule{{Proto: "tcp", DestIP: "10.20.1.20", DestPort: 8443}}
-	if err := s.Sync(rules); err != nil {
+	if err := s.Sync(FirewallState{ForwardRules: rules}); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.scripts) != 1 {
@@ -96,7 +96,7 @@ func TestDockerUserShimSyncDeletesStaleThenAdds(t *testing.T) {
 }`,
 	}
 	s := newDockerUserShimWith(r)
-	if err := s.Sync(nil); err != nil {
+	if err := s.Sync(FirewallState{}); err != nil {
 		t.Fatal(err)
 	}
 	script := r.scripts[0]

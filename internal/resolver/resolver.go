@@ -39,7 +39,9 @@ type Resolver struct {
 
 func New() *Resolver {
 	return &Resolver{
-		Lookup:  func(ctx context.Context, host string) ([]string, error) { return net.DefaultResolver.LookupHost(ctx, host) },
+		Lookup: func(ctx context.Context, host string) ([]string, error) {
+			return net.DefaultResolver.LookupHost(ctx, host)
+		},
 		Timeout: 3 * time.Second,
 	}
 }

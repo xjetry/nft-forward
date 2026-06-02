@@ -111,15 +111,15 @@ func runDaemon(args []string) int {
 
 func runServer(args []string) int {
 	var (
-		addr, dbPath, bootstrapPw  string
+		addr, dbPath, bootstrapPw    string
 		resetAdminPw, resetAdminUser string
 	)
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	fs.StringVar(&addr,         "addr",                    ":8080",                       "panel HTTP address")
-	fs.StringVar(&dbPath,       "db",                      "/var/lib/nft-forward/panel.db", "SQLite database path")
-	fs.StringVar(&bootstrapPw,  "bootstrap-admin-password","",                            "set admin password on first boot")
-	fs.StringVar(&resetAdminPw, "reset-admin-password",    "",                            "reset admin password and exit")
-	fs.StringVar(&resetAdminUser,"reset-admin-username",   "admin",                       "admin username for reset")
+	fs.StringVar(&addr, "addr", ":8080", "panel HTTP address")
+	fs.StringVar(&dbPath, "db", "/var/lib/nft-forward/panel.db", "SQLite database path")
+	fs.StringVar(&bootstrapPw, "bootstrap-admin-password", "", "set admin password on first boot")
+	fs.StringVar(&resetAdminPw, "reset-admin-password", "", "reset admin password and exit")
+	fs.StringVar(&resetAdminUser, "reset-admin-username", "admin", "admin username for reset")
 	fs.Parse(args)
 
 	if resetAdminPw != "" {
@@ -242,4 +242,3 @@ func bootstrap(d *sql.DB, pw string) error {
 	fmt.Println("================================================")
 	return nil
 }
-

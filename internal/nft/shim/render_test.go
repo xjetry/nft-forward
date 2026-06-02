@@ -102,6 +102,20 @@ func TestRenderShimScriptOrderingDeleteBeforeAdd(t *testing.T) {
 	}
 }
 
+func TestRenderInputShimScript(t *testing.T) {
+	ports := []ListenPort{{Proto: "tcp", Port: 8443}, {Proto: "tcp", Port: 9000}}
+	out := renderInputShimScript("ip", "filter", "ufw-user-input", ports, []int{5})
+	if !strings.Contains(out, "delete rule ip filter ufw-user-input handle 5") {
+		t.Errorf("missing stale delete:\n%s", out)
+	}
+	if !strings.Contains(out, `tcp dport 8443 counter accept comment "`+OwnerComment+`"`) {
+		t.Errorf("missing input accept for 8443:\n%s", out)
+	}
+	if !strings.Contains(out, `tcp dport 9000 counter accept comment "`+OwnerComment+`"`) {
+		t.Errorf("missing input accept for 9000:\n%s", out)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

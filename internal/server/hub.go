@@ -29,6 +29,13 @@ const (
 type Hub struct {
 	DB *sql.DB
 
+	// OnTrafficUpdate, when set, is invoked once per tenant whose usage was
+	// advanced by a counters batch. The Hub stays a pure transport: it knows
+	// how to accumulate bytes but delegates quota policy (and the re-dispatch
+	// it may trigger) to the owner that wires this callback, so the dispatch
+	// path is never imported here.
+	OnTrafficUpdate func(tenantID int64)
+
 	mu    sync.RWMutex
 	conns map[int64]*agentConn
 }
@@ -386,8 +393,8 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 	out := make([]wsproto.ImportedForward, 0, len(forwards))
 	for _, f := range forwards {
 		res, err := tx.Exec(
-			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
-			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix())
+			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at, mode) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix(), db.NormalizeForwardMode(f.Mode))
 		if err != nil {
 			return nil, err
 		}
@@ -403,28 +410,47 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 	return out, nil
 }
 
-// applyCounters folds per-rule bytes_delta into the forwards table:
-// last_bytes is the most recent delta (UI surfaces it as "current rate
-// input"); total_bytes is monotonically accumulated. The (node_id,
-// listen_port, proto) tuple identifies the rule — there is no rule_id on
-// the wire because agent restarts re-key the same forward.
+// applyCounters folds per-rule bytes_delta into the forwards table and the
+// owning tenant's usage. last_bytes is the most recent delta (UI surfaces it
+// as "current rate input"); total_bytes is monotonically accumulated. The
+// (node_id, listen_port, proto) tuple identifies the rule — there is no
+// rule_id on the wire because agent restarts re-key the same forward.
 //
-// Per-sample failures (DB error, or zero-row match meaning the rule was
+// Each sample is resolved to its forward row so we learn the forward id and
+// the tenant it belongs to; tenant-owned bytes are added to the tenant's
+// usage. Touched tenants are collected and OnTrafficUpdate fires once per
+// tenant after the loop rather than once per sample, so a batch carrying many
+// of a tenant's rules triggers a single quota evaluation instead of N.
+//
+// Per-sample failures (DB error, or a lookup miss meaning the rule was
 // deleted on the panel side between the agent's count and the frame's
-// arrival) are logged and the loop continues: counters are recoverable
-// on the next frame, but abandoning the rest of the batch on the first
-// hiccup would lose observability for unrelated rules.
+// arrival) are logged and the loop continues: counters are recoverable on
+// the next frame, but abandoning the rest of the batch on the first hiccup
+// would lose observability for unrelated rules.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
+	touched := map[int64]bool{}
 	for _, s := range samples {
-		res, err := h.DB.Exec(
-			`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE node_id=? AND listen_port=? AND proto=?`,
-			s.BytesDelta, s.BytesDelta, nodeID, s.ListenPort, s.Proto)
+		f, err := db.GetForwardByNodeProtoPort(h.DB, nodeID, s.Proto, s.ListenPort)
 		if err != nil {
+			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
+			continue
+		}
+		if _, err := h.DB.Exec(`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
+			s.BytesDelta, s.BytesDelta, f.ID); err != nil {
 			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
 			continue
 		}
-		if n, err := res.RowsAffected(); err == nil && n == 0 {
-			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
+		if f.TenantID.Valid && s.BytesDelta > 0 {
+			if err := db.AddTenantTraffic(h.DB, f.TenantID.Int64, s.BytesDelta); err != nil {
+				log.Printf("hub: tenant %d traffic add: %v", f.TenantID.Int64, err)
+				continue
+			}
+			touched[f.TenantID.Int64] = true
+		}
+	}
+	if h.OnTrafficUpdate != nil {
+		for tid := range touched {
+			h.OnTrafficUpdate(tid)
 		}
 	}
 }

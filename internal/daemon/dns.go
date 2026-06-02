@@ -62,7 +62,7 @@ func (d *Daemon) refreshOnce(ctx context.Context) error {
 	if !rulesDiffer(prev, resolved) {
 		return nil
 	}
-	if err := d.applySerialized(resolved); err != nil {
+	if err := d.applySerialized(ctx, resolved); err != nil {
 		return err
 	}
 	d.mu.Lock()

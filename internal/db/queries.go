@@ -25,7 +25,6 @@ type Node struct {
 	LastSeenAt  sql.NullInt64  // legacy push-era field
 	LastApplyAt sql.NullInt64  // legacy push-era field
 	LastError   sql.NullString // legacy push-era field
-	Dirty       bool           // legacy push-era field
 	Disabled    bool
 	CreatedAt   int64
 
@@ -55,6 +54,7 @@ type Forward struct {
 	TargetIP   string
 	TargetPort int
 	Comment    string
+	Mode       string
 	Disabled   bool
 	LastBytes  int64
 	TotalBytes int64
@@ -215,7 +215,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,address,secret,last_seen_at,last_apply_at,last_error,dirty,disabled,created_at,local_migrated_at,last_seen,online,agent_version,node_kind`
+const nodeCols = `id,name,address,secret,last_seen_at,last_apply_at,last_error,disabled,created_at,local_migrated_at,last_seen,online,agent_version,node_kind`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -226,18 +226,17 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var dirty, disabled int
+	var disabled int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.Address, &n.Secret,
 		&n.LastSeenAt, &n.LastApplyAt, &n.LastError,
-		&dirty, &disabled, &n.CreatedAt,
+		&disabled, &n.CreatedAt,
 		&localMigratedAt, &lastSeen, &n.Online, &agentVersion, &n.NodeKind,
 	); err != nil {
 		return nil, err
 	}
-	n.Dirty = dirty == 1
 	n.Disabled = disabled == 1
 	if localMigratedAt.Valid {
 		v := localMigratedAt.Int64
@@ -275,28 +274,33 @@ func DeleteNode(d *sql.DB, id int64) error {
 	return err
 }
 
-func MarkNodeSeen(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET last_seen_at=? WHERE id=?`, now(), id)
-	return err
-}
-
 // Forwards
 
-const forwardCols = `id,node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,disabled,last_bytes,total_bytes,created_at`
+const forwardCols = `id,node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,disabled,last_bytes,total_bytes,created_at,mode`
 
 func scanForward(r rowScanner) (*Forward, error) {
 	f := &Forward{}
 	var disabled int
-	if err := r.Scan(&f.ID, &f.NodeID, &f.TenantID, &f.TunnelID, &f.Proto, &f.ListenPort, &f.TargetIP, &f.TargetPort, &f.Comment, &disabled, &f.LastBytes, &f.TotalBytes, &f.CreatedAt); err != nil {
+	if err := r.Scan(&f.ID, &f.NodeID, &f.TenantID, &f.TunnelID, &f.Proto, &f.ListenPort, &f.TargetIP, &f.TargetPort, &f.Comment, &disabled, &f.LastBytes, &f.TotalBytes, &f.CreatedAt, &f.Mode); err != nil {
 		return nil, err
 	}
 	f.Disabled = disabled == 1
 	return f, nil
 }
 
+// NormalizeForwardMode keeps the NOT NULL mode column valid: empty or any
+// unknown value means kernel. Centralizing it means the kernel default is
+// computed in one place across CreateForward and the register_local import.
+func NormalizeForwardMode(m string) string {
+	if m == "userspace" {
+		return "userspace"
+	}
+	return "kernel"
+}
+
 func CreateForward(d *sql.DB, f *Forward) (int64, error) {
-	res, err := d.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-		f.NodeID, f.TenantID, f.TunnelID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, now())
+	res, err := d.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		f.NodeID, f.TenantID, f.TunnelID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, now(), NormalizeForwardMode(f.Mode))
 	if err != nil {
 		return 0, err
 	}
@@ -387,10 +391,6 @@ func ListForwardsForTenant(d *sql.DB, tenantID int64) ([]*Forward, error) {
 	return listForwardsWhere(d, "tenant_id=?", tenantID)
 }
 
-func ListForwardsByTunnel(d *sql.DB, tunnelID int64) ([]*Forward, error) {
-	return listForwardsWhere(d, "tunnel_id=?", tunnelID)
-}
-
 func CountForwardsForTenant(d *sql.DB, tenantID int64) (int, error) {
 	var n int
 	err := d.QueryRow(`SELECT COUNT(*) FROM forwards WHERE tenant_id=?`, tenantID).Scan(&n)
@@ -421,26 +421,6 @@ func UsedPortsOnNode(d *sql.DB, nodeID int64, proto string, start, end int) (map
 		}
 	}
 	return out, rows.Err()
-}
-
-// AddForwardTraffic adds a delta to (last_bytes, total_bytes) for a forward,
-// returning the previous last_bytes so the caller can detect counter resets.
-func UpdateForwardBytes(d *sql.DB, id int64, currentBytes int64) (delta int64, err error) {
-	var prev int64
-	if err := d.QueryRow(`SELECT last_bytes FROM forwards WHERE id=?`, id).Scan(&prev); err != nil {
-		return 0, err
-	}
-	if currentBytes < prev {
-		// counter reset (agent reboot); treat the current value as the delta
-		delta = currentBytes
-	} else {
-		delta = currentBytes - prev
-	}
-	if _, err := d.Exec(`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
-		currentBytes, delta, id); err != nil {
-		return 0, err
-	}
-	return delta, nil
 }
 
 func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
@@ -482,7 +462,7 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE node_kind='self'`)
+	row := d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_kind='self'`)
 	return scanNode(row)
 }
 

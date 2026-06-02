@@ -81,7 +81,16 @@ func parseCounters(data []byte) ([]Counter, error) {
 								c.ListenPort = v
 							}
 							if proto, _ := pl["protocol"].(string); proto != "" && c.Proto == "" {
-								c.Proto = proto
+								// The tcp+udp set form matches on a generic
+								// transport header (`th dport`), which nft reports
+								// as protocol "th". Map it back to the rule's
+								// representation so the counter's proto stays
+								// consistent with how the rule is named elsewhere.
+								if proto == "th" {
+									c.Proto = "tcp+udp"
+								} else {
+									c.Proto = proto
+								}
 							}
 						}
 					}

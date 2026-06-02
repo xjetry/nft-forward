@@ -17,6 +17,9 @@ import (
 const (
 	TableName   = "nft_forward"
 	TableFamily = "ip"
+
+	ModeKernel    = "kernel"
+	ModeUserspace = "userspace"
 )
 
 type Rule struct {
@@ -28,6 +31,19 @@ type Rule struct {
 	DestPort      int    `json:"dest_port"`
 	Comment       string `json:"comment,omitempty"`
 	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
+	// Mode selects the data plane for this forward: "" / "kernel" = nftables
+	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
+	Mode string `json:"mode,omitempty"`
+}
+
+// EffectiveMode normalizes the mode: an empty or unrecognized value means
+// kernel, so old state files and old-panel pushes (no mode field) default to
+// the existing zero-copy behavior. This is the single source of the default.
+func (r Rule) EffectiveMode() string {
+	if r.Mode == ModeUserspace {
+		return ModeUserspace
+	}
+	return ModeKernel
 }
 
 func (r Rule) Display() string {
@@ -81,30 +97,25 @@ func Validate(r Rule) error {
 			return fmt.Errorf("目标域名格式非法")
 		}
 	}
+	switch r.Mode {
+	case "", ModeKernel, ModeUserspace:
+	default:
+		return fmt.Errorf("转发模式必须为 kernel 或 userspace")
+	}
+	if r.Mode == ModeUserspace && r.Proto == "udp" {
+		return fmt.Errorf("UDP 不支持用户态转发")
+	}
 	return nil
 }
 
-// protoMatch returns the nft match expression for the protocol and port.
-// For "tcp+udp", it uses set syntax with the transport-header dport keyword
-// so that nft accepts the multi-protocol match without error.
-func protoMatch(proto string, port int) string {
-	switch proto {
-	case "tcp+udp":
+// ProtoDportMatch returns the nft match clause for a proto + dport. For
+// "tcp+udp" it uses the l4proto set syntax so nft accepts the multi-protocol
+// match; otherwise a plain "<proto> dport <port>".
+func ProtoDportMatch(proto string, port int) string {
+	if proto == "tcp+udp" {
 		return fmt.Sprintf("meta l4proto { tcp, udp } th dport %d", port)
-	default:
-		return fmt.Sprintf("%s dport %d", proto, port)
 	}
-}
-
-// protoPostMatch returns the postrouting nft match for the protocol and port.
-// For "tcp+udp" the same set syntax is required.
-func protoPostMatch(proto string, port int) string {
-	switch proto {
-	case "tcp+udp":
-		return fmt.Sprintf("meta l4proto { tcp, udp } th dport %d", port)
-	default:
-		return fmt.Sprintf("%s dport %d", proto, port)
-	}
+	return fmt.Sprintf("%s dport %d", proto, port)
 }
 
 func RenderRuleset(rules []Rule) string {
@@ -120,14 +131,14 @@ func RenderRuleset(rules []Rule) string {
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
 		b.WriteString(fmt.Sprintf("\t\t%s %scounter dnat to %s:%d\n",
-			protoMatch(r.Proto, r.SrcPort), mark, r.DestIP, r.DestPort))
+			ProtoDportMatch(r.Proto, r.SrcPort), mark, r.DestIP, r.DestPort))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	for _, r := range rules {
 		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s masquerade\n",
-			r.DestIP, protoPostMatch(r.Proto, r.DestPort)))
+			r.DestIP, ProtoDportMatch(r.Proto, r.DestPort)))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")

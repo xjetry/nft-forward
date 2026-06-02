@@ -47,6 +47,7 @@ func WithBearerToken(token string) Option {
 // Accepted address forms:
 //   - "unix:///var/run/nft-forward.sock"
 //   - "http://host:port" or "https://host:port"
+//
 // Plain socket paths ("/var/run/foo.sock") are also accepted for callers that
 // haven't yet been updated to the URL form; they're treated as unix://.
 func New(address string, opts ...Option) (*Client, error) {
@@ -181,23 +182,4 @@ func (c *Client) PostRuleset(owner string, rules []nft.Rule) error {
 		return fmt.Errorf("daemon push %s: HTTP %d: %s", owner, code, strings.TrimSpace(string(buf)))
 	}
 	return nil
-}
-
-// GetCounters returns per-rule byte/packet counters from the daemon. The
-// poller uses this to attribute traffic to tenants.
-func (c *Client) GetCounters() ([]Counter, error) {
-	buf, code, err := c.do(http.MethodGet, "/v1/counters", nil)
-	if err != nil {
-		return nil, err
-	}
-	if code/100 != 2 {
-		return nil, fmt.Errorf("daemon counters: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
-	}
-	var payload struct {
-		Counters []Counter `json:"counters"`
-	}
-	if err := json.Unmarshal(buf, &payload); err != nil {
-		return nil, fmt.Errorf("daemon counters: decode: %w", err)
-	}
-	return payload.Counters, nil
 }

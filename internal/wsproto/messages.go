@@ -50,6 +50,7 @@ type Forward struct {
 	TargetPort    int    `json:"target_port"`
 	Comment       string `json:"comment,omitempty"`
 	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
+	Mode          string `json:"mode,omitempty"`
 }
 
 type Hello struct {

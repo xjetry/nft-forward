@@ -148,15 +148,15 @@ func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "tenant_detail.html", map[string]any{
-		"User":         u,
-		"Tenant":       t,
-		"Tunnels":      tunnels,
-		"Grants":       grants,
-		"AllTunnels":   allTunnels,
-		"AllNodes":     allNodes,
-		"Forwards":     forwards,
-		"TenantUsers":  tenantUsers,
-		"Flash":        flashFromCookie(w, r),
+		"User":        u,
+		"Tenant":      t,
+		"Tunnels":     tunnels,
+		"Grants":      grants,
+		"AllTunnels":  allTunnels,
+		"AllNodes":    allNodes,
+		"Forwards":    forwards,
+		"TenantUsers": tenantUsers,
+		"Flash":       flashFromCookie(w, r),
 	})
 }
 
@@ -460,6 +460,7 @@ func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request)
 			TargetIP:   f.TargetIP,
 			TargetPort: f.TargetPort,
 			Comment:    f.Comment,
+			Mode:       f.Mode,
 		}); err != nil {
 			log.Printf("import-tui: create forward (node=%d port=%d proto=%s): %v",
 				nodeID, f.ListenPort, f.Proto, err)

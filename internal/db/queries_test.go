@@ -112,6 +112,41 @@ func TestDispatchOutcomeRecording(t *testing.T) {
 	}
 }
 
+func TestForward_ModeRoundTrip(t *testing.T) {
+	d := openMemDB(t)
+	n, err := CreateNode(d, "edge-1", "https://p", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 8443, TargetIP: "10.0.0.1", TargetPort: 443, Mode: "userspace"}
+	id, err := CreateForward(d, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetForward(d, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != "userspace" {
+		t.Fatalf("mode lost: %q", got.Mode)
+	}
+
+	// An empty mode must normalize to the kernel default (the column is
+	// NOT NULL with a kernel default).
+	def := &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 8444, TargetIP: "10.0.0.1", TargetPort: 443}
+	defID, err := CreateForward(d, def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDef, err := GetForward(d, defID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDef.Mode != "kernel" {
+		t.Fatalf("empty mode should default to kernel, got %q", gotDef.Mode)
+	}
+}
+
 func TestTuiSnapshotRoundTrip(t *testing.T) {
 	d := openMemDB(t)
 	n, err := CreateNode(d, "edge-1", "https://p", "tok")

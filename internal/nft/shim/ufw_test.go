@@ -44,7 +44,7 @@ func TestUfwShimSyncTargetsUfwUserForward(t *testing.T) {
 	}
 	s := newUfwShimWith(r)
 	rules := []nft.Rule{{Proto: "tcp", DestIP: "192.168.1.5", DestPort: 443}}
-	if err := s.Sync(rules); err != nil {
+	if err := s.Sync(FirewallState{ForwardRules: rules}); err != nil {
 		t.Fatal(err)
 	}
 	script := r.scripts[0]
@@ -56,6 +56,28 @@ func TestUfwShimSyncTargetsUfwUserForward(t *testing.T) {
 	}
 	if !strings.Contains(script, "ip daddr 192.168.1.5 tcp dport 443") {
 		t.Fatalf("rule missing:\n%s", script)
+	}
+}
+
+func TestUfwSync_InputChainGetsListenPorts(t *testing.T) {
+	var scripts []string
+	s := &UfwShim{
+		runNft:       func(args ...string) (string, error) { return "", nil },
+		runNftScript: func(script string) error { scripts = append(scripts, script); return nil },
+	}
+	err := s.Sync(FirewallState{
+		ForwardRules: []nft.Rule{{Proto: "tcp", DestIP: "10.0.0.1", DestPort: 443}},
+		ListenPorts:  []ListenPort{{Proto: "tcp", Port: 8443}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(scripts, "\n")
+	if !strings.Contains(joined, "ufw-user-forward") || !strings.Contains(joined, "ip daddr 10.0.0.1") {
+		t.Errorf("forward chain not synced:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ufw-user-input") || !strings.Contains(joined, "tcp dport 8443") {
+		t.Errorf("input chain not synced:\n%s", joined)
 	}
 }
 

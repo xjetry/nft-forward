@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
@@ -32,14 +33,16 @@ type Config struct {
 	SocketPath string
 	StatePath  string
 	GroupName  string
-	Applier    Applier
+
+	// Dataplane is the kernel+userspace forwarding backend. Production
+	// defaults to forward.New (wired with Iface); tests inject a fake.
+	Dataplane Dataplane
 
 	// LegacyPaths configures where to look for the three pre-daemon state
 	// files (TUI rules.json, agent-state.json, embedded-agent-state.json).
 	// Production defaults populated by New; tests inject a temp dir.
 	LegacyPaths LegacyMigrationPaths
 	Iface       string
-	CountersFn  func() ([]nft.Counter, error)
 
 	// ConnectURL, when non-empty, makes the daemon dial out to a panel
 	// WebSocket endpoint (e.g. wss://panel/v1/agents). When empty the
@@ -50,8 +53,8 @@ type Config struct {
 	ConnectToken string
 }
 
-// New constructs a Daemon ready to Bootstrap and Run. Applier defaults to
-// the production nft-backed implementation.
+// New constructs a Daemon ready to Bootstrap and Run. Dataplane defaults to
+// the production forward backend wired with the resolved iface.
 func New(cfg Config) (*Daemon, error) {
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = DefaultSocketPath
@@ -62,14 +65,8 @@ func New(cfg Config) (*Daemon, error) {
 	if cfg.GroupName == "" {
 		cfg.GroupName = DefaultGroupName
 	}
-	if cfg.Applier == nil {
-		cfg.Applier = DefaultApplier()
-	}
 	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
 		cfg.LegacyPaths = DefaultLegacyPaths()
-	}
-	if cfg.CountersFn == nil {
-		cfg.CountersFn = defaultCounters
 	}
 	iface := cfg.Iface
 	if iface == "" {
@@ -78,14 +75,16 @@ func New(cfg Config) (*Daemon, error) {
 			iface = "eth0"
 		}
 	}
+	if cfg.Dataplane == nil {
+		cfg.Dataplane = forward.New(forward.Config{Iface: iface})
+	}
 	return &Daemon{
 		socketPath:  cfg.SocketPath,
 		statePath:   cfg.StatePath,
 		groupName:   cfg.GroupName,
-		applier:     cfg.Applier,
+		dp:          cfg.Dataplane,
 		legacyPaths: cfg.LegacyPaths,
-		iface:       iface,
-		countersFn:  cfg.CountersFn,
+		countersFn:  cfg.Dataplane.Counters,
 		resolveFn:   defaultResolver(resolver.New()),
 		connectURL:  cfg.ConnectURL,
 		connectTok:  cfg.ConnectToken,
@@ -133,7 +132,7 @@ func (d *Daemon) Bootstrap() error {
 		if err := requireResolvedHosts(resolved); err != nil {
 			return fmt.Errorf("bootstrap: %w", err)
 		}
-		if err := d.applySerialized(resolved); err != nil {
+		if err := d.applySerialized(ctx, resolved); err != nil {
 			return fmt.Errorf("bootstrap apply: %w", err)
 		}
 	}
@@ -179,6 +178,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// frames; payloads are constructed inside the dialer from
 			// its tuiCh, so this callback itself is a no-op.
 			OnTuiNotice: func(_ []wsproto.Forward) {},
+			CountersFn:  d.counterSamples,
 		})
 		d.dialer.Store(dl)
 		// Forward local tui-segment writes into the dialer so the panel
@@ -203,16 +203,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer cancel()
 		// Wait for the dialer goroutine to finish so any in-flight
 		// SetPanelRuleset (which writes nft rules + shim INSERTs via
-		// applier.Apply) completes before we proceed to applier.Cleanup
-		// (shim DELETEs). Without this, Cleanup could race the INSERT
-		// and leave the shim chain half-cleaned. Bounded by the same
-		// 5s budget that srv.Shutdown gets — they run sequentially.
+		// dp.Reconcile) completes before we proceed to dp.Close (shim
+		// DELETEs, relay teardown). Without this, Close could race the
+		// INSERT and leave the shim chain half-cleaned. Bounded by the
+		// same 5s budget that srv.Shutdown gets — they run sequentially.
 		if dl := d.dialer.Load(); dl != nil {
 			dl.Stop()
 			select {
 			case <-dl.Done():
 			case <-shutCtx.Done():
-				log.Printf("daemon: dialer shutdown timeout — proceeding with applier cleanup")
+				log.Printf("daemon: dialer shutdown timeout — proceeding with data-plane close")
 			}
 		}
 		shutdownErr = srv.Shutdown(shutCtx)
@@ -223,8 +223,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			shutdownErr = err
 		}
 	}
-	if cleanupErr := d.cleanupSerialized(); cleanupErr != nil {
-		log.Printf("applier cleanup: %v", cleanupErr)
+	if closeErr := d.closeSerialized(context.Background()); closeErr != nil {
+		log.Printf("data-plane close: %v", closeErr)
 	}
 	return shutdownErr
 }
@@ -248,8 +248,8 @@ func (d *Daemon) probeFirewallEnvironment() {
 		return // probe failed; silently skip — no signal to surface
 	}
 	var detected []string
-	if d.applier != nil {
-		if probed, ok := d.applier.(interface{ DetectedShims() []string }); ok {
+	if d.dp != nil {
+		if probed, ok := d.dp.(interface{ DetectedShims() []string }); ok {
 			detected = probed.DetectedShims()
 		}
 	}

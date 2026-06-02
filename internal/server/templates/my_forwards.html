@@ -9,7 +9,7 @@
 <h2>当前转发</h2>
 {{if .Forwards}}
 <table>
-<thead><tr><th>ID</th><th>节点</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
+<thead><tr><th>ID</th><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
 <tbody>
 {{range .Forwards}}
 {{ $n := index $.NodeByID .NodeID }}
@@ -19,6 +19,7 @@
 <td>{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
 <td>{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
 <td>{{upper .Proto}}</td>
+<td>{{.Mode}}</td>
 <td>{{.ListenPort}}</td>
 <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
 <td>{{.TotalBytes}}</td>
@@ -42,6 +43,7 @@
 </select>
 <label>协议</label>
 <select name="proto" id="my-proto-select"><option value="tcp">tcp</option><option value="udp">udp</option></select>
+<label>模式</label><select name="mode"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
 <label>监听端口</label><input type="number" name="listen_port" id="my-listen-port" min="1" max="65535" placeholder="">
 <label>目标 IPv4</label><input name="target_ip" id="my-target-ip" required>
 <label>目标端口</label><input type="number" name="target_port" min="1" max="65535" required>

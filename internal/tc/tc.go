@@ -16,10 +16,11 @@ import (
 // trivially correct.
 //
 // Layout:
-//   qdisc 1: htb default 1
-//     class 1:1 — default, no limit
-//     class 1:<port> — rate=ceil=<bw>mbit, one per shaped rule
-//   filter handle <port> fw → classid 1:<port>
+//
+//	qdisc 1: htb default 1
+//	  class 1:1 — default, no limit
+//	  class 1:<port> — rate=ceil=<bw>mbit, one per shaped rule
+//	filter handle <port> fw → classid 1:<port>
 //
 // Mark for shaped rules is set by nft (`meta mark set <port>`).
 func Apply(rules []nft.Rule, iface string) error {

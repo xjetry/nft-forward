@@ -17,13 +17,3 @@ type segmentPayload struct {
 type fullPayload struct {
 	Owners OwnerRuleset `json:"owners"`
 }
-
-// Counter mirrors nft.Counter for the daemonclient API. We don't import
-// internal/nft here for the same reason OwnerRuleset is mirrored: keep the
-// client wire shape free of indirect coupling to daemon internals.
-type Counter struct {
-	Proto      string `json:"proto"`
-	ListenPort int    `json:"listen_port"`
-	Bytes      uint64 `json:"bytes"`
-	Packets    uint64 `json:"packets"`
-}

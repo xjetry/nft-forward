@@ -5,7 +5,7 @@
 <h2>当前规则</h2>
 {{if .Forwards}}
 <table>
-<thead><tr><th>ID</th><th>节点</th><th>用户</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
+<thead><tr><th>ID</th><th>节点</th><th>用户</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th>累计字节</th><th>备注</th><th>操作</th></tr></thead>
 <tbody>
 {{range .Forwards}}
 <tr>
@@ -14,6 +14,7 @@
 <td>{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}<span style="color:#86868b">admin</span>{{end}}</td>
 <td>{{if .TunnelID.Valid}}#{{.TunnelID.Int64}}{{else}}—{{end}}</td>
 <td>{{upper .Proto}}</td>
+<td>{{.Mode}}</td>
 <td>{{.ListenPort}}</td>
 <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
 <td>{{.TotalBytes}}</td>
@@ -39,6 +40,7 @@
 </select>
 <label>协议</label>
 <select name="proto" required><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+<label>模式</label><select name="mode"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
 <label>监听端口</label><input type="number" name="listen_port" min="1" max="65535" required>
 <label>目标 IPv4</label><input name="target_ip" required>
 <label>目标端口</label><input type="number" name="target_port" min="1" max="65535" required>
