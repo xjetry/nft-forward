@@ -460,6 +460,7 @@ func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request)
 			TargetIP:   f.TargetIP,
 			TargetPort: f.TargetPort,
 			Comment:    f.Comment,
+			Mode:       f.Mode,
 		}); err != nil {
 			log.Printf("import-tui: create forward (node=%d port=%d proto=%s): %v",
 				nodeID, f.ListenPort, f.Proto, err)

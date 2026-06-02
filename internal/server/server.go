@@ -42,11 +42,24 @@ func New(d *sql.DB) (*Server, error) {
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"unix": func(i sql.NullInt64) string {
-			if !i.Valid {
+		// unix renders a unix-seconds timestamp. It accepts both the legacy
+		// sql.NullInt64 columns and the agent-dialer *int64 columns so a
+		// single helper covers every timestamp field templates display.
+		"unix": func(v any) string {
+			switch t := v.(type) {
+			case sql.NullInt64:
+				if !t.Valid {
+					return "—"
+				}
+				return fmtUnix(t.Int64)
+			case *int64:
+				if t == nil {
+					return "—"
+				}
+				return fmtUnix(*t)
+			default:
 				return "—"
 			}
-			return fmtUnix(i.Int64)
 		},
 		"nullstr": func(s sql.NullString) string {
 			if !s.Valid {
@@ -191,6 +204,7 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 			DestPort:      f.TargetPort,
 			Comment:       f.Comment,
 			BandwidthMbps: bw,
+			Mode:          f.Mode,
 		}
 		if resolver.IsHostname(f.TargetIP) {
 			rule.DestHost = f.TargetIP
@@ -411,6 +425,7 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
 	comment := strings.TrimSpace(r.FormValue("comment"))
+	mode := strings.TrimSpace(r.FormValue("mode"))
 
 	f := &db.Forward{
 		NodeID:     nodeID,
@@ -419,11 +434,13 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		TargetIP:   targetIP,
 		TargetPort: targetPort,
 		Comment:    comment,
+		Mode:       mode,
 	}
 	testRule := nft.Rule{
 		Proto:    proto,
 		SrcPort:  listenPort,
 		DestPort: targetPort,
+		Mode:     mode,
 	}
 	if resolver.IsHostname(targetIP) {
 		testRule.DestHost = targetIP

@@ -386,8 +386,8 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 	out := make([]wsproto.ImportedForward, 0, len(forwards))
 	for _, f := range forwards {
 		res, err := tx.Exec(
-			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
-			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix())
+			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at, mode) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix(), db.NormalizeForwardMode(f.Mode))
 		if err != nil {
 			return nil, err
 		}

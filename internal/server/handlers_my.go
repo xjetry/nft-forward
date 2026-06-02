@@ -100,6 +100,13 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
 	targetPort, _ := strconv.Atoi(r.FormValue("target_port"))
 	comment := strings.TrimSpace(r.FormValue("comment"))
+	mode := strings.TrimSpace(r.FormValue("mode"))
+
+	if mode == "userspace" && proto == "udp" {
+		setFlash(w, "UDP 不支持用户态转发")
+		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		return
+	}
 
 	grant, err := db.GetGrant(s.DB, t.ID, tunnelID)
 	if err != nil {
@@ -157,6 +164,7 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 		TargetIP:   targetIP,
 		TargetPort: targetPort,
 		Comment:    comment,
+		Mode:       mode,
 	}
 	f.TenantID.Int64 = t.ID
 	f.TenantID.Valid = true
