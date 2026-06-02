@@ -228,3 +228,146 @@ func TestListChainsByTenant(t *testing.T) {
 		}
 	}
 }
+
+// chainTestNode creates a node with a relay_host set so it can join a chain.
+func chainTestNode(t *testing.T, d *sql.DB, name, relay string) *Node {
+	t.Helper()
+	n, err := CreateNode(d, name, "https://p", name+"-tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateNodeRelayHost(d, n.ID, relay); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := GetNode(d, n.ID)
+	return got
+}
+
+func regen(t *testing.T, d *sql.DB, c *Chain, hops []HopInput) (string, []int64) {
+	t.Helper()
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, affected, err := RegenerateChain(tx, c, hops, nil)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("RegenerateChain: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return entry, affected
+}
+
+func TestRegenerateThreeHopWiring(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	h := chainTestNode(t, d, "nnc-hk", "2.2.2.2")
+	w := chainTestNode(t, d, "nnc-tw", "3.3.3.3")
+	cid, _ := CreateChain(d, &Chain{Name: "vless", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+
+	entry, affected := regen(t, d, c, []HopInput{
+		{NodeID: g.ID, Mode: "userspace"},
+		{NodeID: h.ID, Mode: "userspace"},
+		{NodeID: w.ID, Mode: "kernel"},
+	})
+
+	fws, _ := ListForwardsByChain(d, cid)
+	if len(fws) != 3 {
+		t.Fatalf("want 3 hop forwards, got %d", len(fws))
+	}
+	byNode := map[int64]*Forward{}
+	for _, f := range fws {
+		byNode[f.NodeID] = f
+	}
+	// 末跳打到出口
+	if byNode[w.ID].TargetIP != "9.9.9.9" || byNode[w.ID].TargetPort != 8443 {
+		t.Fatalf("last hop must target exit, got %s:%d", byNode[w.ID].TargetIP, byNode[w.ID].TargetPort)
+	}
+	// 中间跳打到下一跳的 relay_host:下一跳监听端口
+	if byNode[g.ID].TargetIP != "2.2.2.2" || byNode[g.ID].TargetPort != byNode[h.ID].ListenPort {
+		t.Fatalf("hop1 must target hop2 relay:port, got %s:%d (hop2 listen %d)", byNode[g.ID].TargetIP, byNode[g.ID].TargetPort, byNode[h.ID].ListenPort)
+	}
+	if byNode[h.ID].TargetIP != "3.3.3.3" || byNode[h.ID].TargetPort != byNode[w.ID].ListenPort {
+		t.Fatalf("hop2 must target hop3 relay:port")
+	}
+	// 入口 = 第一跳 relay_host:监听端口
+	wantEntry := hostPort("1.1.1.1", byNode[g.ID].ListenPort)
+	if entry != wantEntry {
+		t.Fatalf("entry = %q, want %q", entry, wantEntry)
+	}
+	if len(affected) != 3 {
+		t.Fatalf("affected nodes = %d, want 3", len(affected))
+	}
+	// 模式逐跳：g/h userspace、w kernel
+	if byNode[g.ID].Mode != "userspace" || byNode[w.ID].Mode != "kernel" {
+		t.Fatalf("per-hop mode not honored: g=%s w=%s", byNode[g.ID].Mode, byNode[w.ID].Mode)
+	}
+}
+
+func TestRegenerateRejectsMissingRelayHost(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	bare, _ := CreateNode(d, "bare", "https://p", "x") // 无 relay_host
+	cid, _ := CreateChain(d, &Chain{Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+	tx, _ := d.Begin()
+	_, _, err := RegenerateChain(tx, c, []HopInput{{NodeID: g.ID}, {NodeID: bare.ID}}, nil)
+	tx.Rollback()
+	if err == nil {
+		t.Fatalf("expected error for node without relay_host")
+	}
+}
+
+func TestRegenerateRejectsRepeatedNode(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	cid, _ := CreateChain(d, &Chain{Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+	tx, _ := d.Begin()
+	_, _, err := RegenerateChain(tx, c, []HopInput{{NodeID: g.ID}, {NodeID: g.ID}}, nil)
+	tx.Rollback()
+	if err == nil {
+		t.Fatalf("expected error for repeated node")
+	}
+}
+
+func TestRegenerateKeepsPortOnReorder(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	h := chainTestNode(t, d, "nnc-hk", "2.2.2.2")
+	cid, _ := CreateChain(d, &Chain{Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+	regen(t, d, c, []HopInput{{NodeID: g.ID}, {NodeID: h.ID}})
+	before, _ := ListForwardsByChain(d, cid)
+	portByNode := map[int64]int{}
+	for _, f := range before {
+		portByNode[f.NodeID] = f.ListenPort
+	}
+	// 交换顺序：节点未变，各自端口应保留
+	c, _ = GetChain(d, cid)
+	regen(t, d, c, []HopInput{{NodeID: h.ID}, {NodeID: g.ID}})
+	after, _ := ListForwardsByChain(d, cid)
+	for _, f := range after {
+		if portByNode[f.NodeID] != f.ListenPort {
+			t.Fatalf("node %d port changed on reorder: %d -> %d", f.NodeID, portByNode[f.NodeID], f.ListenPort)
+		}
+	}
+}
+
+func TestRegenerateUDPForcesKernel(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	h := chainTestNode(t, d, "nnc-hk", "2.2.2.2")
+	cid, _ := CreateChain(d, &Chain{Name: "c", Proto: "udp", ExitHost: "9.9.9.9", ExitPort: 53})
+	c, _ := GetChain(d, cid)
+	regen(t, d, c, []HopInput{{NodeID: g.ID, Mode: "userspace"}, {NodeID: h.ID, Mode: "userspace"}})
+	fws, _ := ListForwardsByChain(d, cid)
+	for _, f := range fws {
+		if f.Mode != "kernel" {
+			t.Fatalf("udp hop must be kernel, got %s", f.Mode)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"net"
 	"strconv"
@@ -241,4 +242,154 @@ func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
 		return nil, err
 	}
 	return nodes, nil
+}
+
+// HopInput is one ordered hop the caller wants the chain to have. TunnelID is
+// set for tenant chains (the granted tunnel the hop draws its port/range from)
+// and invalid for admin chains. Mode is the requested data plane; udp chains
+// coerce every hop to kernel.
+type HopInput struct {
+	NodeID   int64
+	TunnelID sql.NullInt64
+	Mode     string
+}
+
+// RegenerateChain rewrites chain c's hops + generated forwards for the given
+// ordered hops and returns the copyable entry endpoint plus the set of nodes
+// whose kernel state must be re-dispatched (current hops ∪ previously-touched
+// nodes). Ports are kept stable per node across edits; avoid[nodeID]=port forces
+// that node off a given port (used by the reallocate-on-conflict flow).
+//
+// Structural validation only: relay_host present, no repeated node, port-range
+// exhaustion, tunnel<->node match + proto_mask, udp=>kernel. Tenant policy
+// (grant ownership, exit CIDR, quota) is the caller's responsibility.
+func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (string, []int64, error) {
+	if len(hops) == 0 {
+		return "", nil, fmt.Errorf("链路至少需要一跳")
+	}
+
+	type resolved struct {
+		nodeID    int64
+		relayHost string
+		tunnelID  sql.NullInt64
+		mode      string
+		rangeLo   int
+		rangeHi   int
+	}
+	rs := make([]resolved, len(hops))
+	seen := map[int64]bool{}
+	for i, hop := range hops {
+		if seen[hop.NodeID] {
+			return "", nil, fmt.Errorf("同一节点不能在链路中重复")
+		}
+		seen[hop.NodeID] = true
+
+		var name, relay string
+		if err := tx.QueryRow(`SELECT name, relay_host FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay); err != nil {
+			return "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
+		}
+		if relay == "" {
+			return "", nil, fmt.Errorf("节点 %s 未设置中继地址", name)
+		}
+		mode := NormalizeForwardMode(hop.Mode)
+		if c.Proto == "udp" {
+			mode = "kernel" // userspace relay is TCP-only
+		}
+		lo, hi := ChainPortMin, ChainPortMax
+		tunnelID := hop.TunnelID
+		if tunnelID.Valid {
+			var pm string
+			var ps, pe int
+			var tNode int64
+			if err := tx.QueryRow(`SELECT node_id, proto_mask, port_start, port_end FROM tunnels WHERE id=?`, tunnelID.Int64).Scan(&tNode, &pm, &ps, &pe); err != nil {
+				return "", nil, fmt.Errorf("通道 %d 不存在", tunnelID.Int64)
+			}
+			if tNode != hop.NodeID {
+				return "", nil, fmt.Errorf("通道与节点不匹配")
+			}
+			if pm != "tcp+udp" && pm != c.Proto {
+				return "", nil, fmt.Errorf("通道 %d 不允许 %s", tunnelID.Int64, c.Proto)
+			}
+			lo, hi = ps, pe
+		}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, tunnelID: tunnelID, mode: mode, rangeLo: lo, rangeHi: hi}
+	}
+
+	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
+	// their port — entry endpoint + installed rules don't churn on edits.
+	prev, err := ListForwardsByChain(tx, c.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	prevPort := map[int64]int{}
+	affected := map[int64]bool{}
+	for _, f := range prev {
+		prevPort[f.NodeID] = f.ListenPort
+		affected[f.NodeID] = true
+	}
+
+	if _, err := tx.Exec(`DELETE FROM forwards WHERE chain_id=?`, c.ID); err != nil {
+		return "", nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM chain_hops WHERE chain_id=?`, c.ID); err != nil {
+		return "", nil, err
+	}
+
+	ports := make([]int, len(rs))
+	for i, h := range rs {
+		occ, err := OccupiedPortsOnNode(tx, h.nodeID, c.Proto, c.ID)
+		if err != nil {
+			return "", nil, err
+		}
+		if av, ok := avoid[h.nodeID]; ok {
+			occ[av] = true // force this node off its current port
+		}
+		p := prevPort[h.nodeID]
+		if p >= h.rangeLo && p <= h.rangeHi && !occ[p] {
+			// keep
+		} else {
+			p = PickFreePort(h.rangeLo, h.rangeHi, occ)
+			if p == 0 {
+				var name string
+				_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
+				return "", nil, fmt.Errorf("节点 %s 端口段(%d-%d)无可用端口", name, h.rangeLo, h.rangeHi)
+			}
+		}
+		ports[i] = p
+	}
+
+	for i, h := range rs {
+		var targetIP string
+		var targetPort int
+		if i < len(rs)-1 {
+			targetIP = rs[i+1].relayHost
+			targetPort = ports[i+1]
+		} else {
+			targetIP = c.ExitHost
+			targetPort = c.ExitPort
+		}
+		if _, err := tx.Exec(`INSERT INTO chain_hops(chain_id,position,node_id,tunnel_id,listen_port,mode) VALUES (?,?,?,?,?,?)`,
+			c.ID, i, h.nodeID, h.tunnelID, ports[i], h.mode); err != nil {
+			return "", nil, err
+		}
+		comment := fmt.Sprintf("链路 %s · 第%d跳", c.Name, i+1)
+		if _, err := tx.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			h.nodeID, c.TenantID, h.tunnelID, c.Proto, ports[i], targetIP, targetPort, comment, now(), h.mode, c.ID); err != nil {
+			return "", nil, err
+		}
+		affected[h.nodeID] = true
+	}
+
+	entryNodeID := rs[0].nodeID
+	if _, err := tx.Exec(`UPDATE chains SET entry_node_id=?, entry_listen_port=? WHERE id=?`, entryNodeID, ports[0], c.ID); err != nil {
+		return "", nil, err
+	}
+	c.EntryNodeID = sql.NullInt64{Int64: entryNodeID, Valid: true}
+	c.EntryListenPort = ports[0]
+
+	nodes := make([]int64, 0, len(affected))
+	for n := range affected {
+		nodes = append(nodes, n)
+	}
+	return hostPort(rs[0].relayHost, ports[0]), nodes, nil
 }
