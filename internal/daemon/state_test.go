@@ -176,6 +176,39 @@ func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
 	}
 }
 
+func TestLoadState_V3FillsKernelMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	v3 := `{"version":3,"owners":{"tui":[{"id":"a","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]},"agent_meta":{}}`
+	if err := os.WriteFile(path, []byte(v3), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owners, _, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := owners["tui"][0]
+	if r.Mode != nft.ModeKernel {
+		t.Fatalf("v3 rule should be normalized to kernel, got %q", r.Mode)
+	}
+}
+
+func TestSaveLoad_V4RoundTripUserspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	in := OwnerRuleset{"tui": {{ID: "a", Proto: "tcp", SrcPort: 8443, DestIP: "10.0.0.1", DestPort: 443, Mode: nft.ModeUserspace}}}
+	if err := SaveState(path, in, AgentMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["tui"][0].Mode != nft.ModeUserspace {
+		t.Fatalf("userspace mode lost on round trip: %+v", out["tui"][0])
+	}
+}
+
 func keysOf(m OwnerRuleset) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

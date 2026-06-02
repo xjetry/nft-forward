@@ -13,7 +13,7 @@ import (
 // stateSchemaVersion is bumped whenever the on-disk layout changes in a way
 // that requires migration. LoadState accepts older versions and converts in
 // memory; SaveState always writes the current version.
-const stateSchemaVersion = 3
+const stateSchemaVersion = 4
 
 // OwnerRuleset is the in-memory representation: each known controller
 // ("tui", "panel", future additions) owns a slice of rules. The daemon
@@ -48,6 +48,16 @@ type legacyV1File struct {
 type legacyV2File struct {
 	Version int          `json:"version"`
 	Owners  OwnerRuleset `json:"owners"`
+}
+
+// legacyV3File is the pre-v4 layout: owner-segmented rules + agent_meta, but
+// rules had no per-rule mode. Migration stamps Mode="kernel" on every rule so
+// the on-disk data is explicit after upgrade. (The normalization is also done
+// defensively at ingest via Rule.EffectiveMode, so wire pushes are covered.)
+type legacyV3File struct {
+	Version   int          `json:"version"`
+	Owners    OwnerRuleset `json:"owners"`
+	AgentMeta AgentMeta    `json:"agent_meta"`
 }
 
 // LoadState reads ruleset state from path. Missing file returns an empty
@@ -87,6 +97,16 @@ func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 			sf.Owners = OwnerRuleset{}
 		}
 		return sf.Owners, sf.AgentMeta, nil
+	case 3:
+		var v3 legacyV3File
+		if err := json.Unmarshal(b, &v3); err != nil {
+			return nil, AgentMeta{}, fmt.Errorf("parse v3 state: %w", err)
+		}
+		if v3.Owners == nil {
+			v3.Owners = OwnerRuleset{}
+		}
+		normalizeModes(v3.Owners)
+		return v3.Owners, v3.AgentMeta, nil
 	case 2:
 		var v2 legacyV2File
 		if err := json.Unmarshal(b, &v2); err != nil {
@@ -107,7 +127,18 @@ func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 		}
 		return out, AgentMeta{}, nil
 	default:
-		return nil, AgentMeta{}, fmt.Errorf("unsupported state version %d (want %d, 2, or 1)", probe.Version, stateSchemaVersion)
+		return nil, AgentMeta{}, fmt.Errorf("unsupported state version %d (want 4, 3, 2, or 1)", probe.Version)
+	}
+}
+
+// normalizeModes stamps the kernel default onto any rule whose mode is empty,
+// making upgraded state explicit on disk.
+func normalizeModes(owners OwnerRuleset) {
+	for owner, rules := range owners {
+		for i := range rules {
+			rules[i].Mode = rules[i].EffectiveMode()
+		}
+		owners[owner] = rules
 	}
 }
 
