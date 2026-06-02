@@ -1,5 +1,6 @@
 {{template "header" (mkmap "Title" "我的面板" "User" .User "Flash" .Flash)}}
 <h1>欢迎，{{.User.Username}}</h1>
+<p><a href="/my/chains">→ 我的链路</a></p>
 
 {{if .Tenant.Disabled}}
 <div class="flash" style="background:#fde2e2;color:#8a1a1a">您的账号已被禁用：{{nullstr .Tenant.DisableReason}}。请联系管理员。</div>

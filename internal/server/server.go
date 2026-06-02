@@ -327,6 +327,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/my/forwards", s.tenantListForwards)
 		r.Post("/my/forwards", s.tenantCreateForward)
 		r.Post("/my/forwards/{id}/delete", s.tenantDeleteForward)
+
+		r.Get("/my/chains", s.tenantListChains)
+		r.Get("/my/chains/new", s.tenantNewChain)
+		r.Post("/my/chains", s.tenantCreateChain)
+		r.Post("/my/chains/{id}/delete", s.tenantDeleteChain)
 	})
 
 	return r

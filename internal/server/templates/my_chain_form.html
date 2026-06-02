@@ -1,0 +1,39 @@
+{{template "header" (mkmap "Title" "新建链路" "User" .User "Flash" .Flash)}}
+<h1>新建中继链路</h1>
+<div class="card">
+{{if .Tunnels}}
+<form method="post" action="/my/chains">
+<div class="grid">
+<label>名称</label><input name="name" required>
+<label>协议</label><select name="proto" id="proto" onchange="syncModes()"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+<label>出口</label><input name="exit" required placeholder="目标 host:port（须落在末跳通道 CIDR 内）">
+</div>
+<h2>中继通道（按顺序）</h2>
+<table id="hops"><tbody></tbody></table>
+<p><button type="button" onclick="addHop()">+ 添加一跳</button></p>
+<p style="color:#86868b;font-size:13px">从你被授权的通道里挑选并排序；入口 IP:端口由系统自动生成并在保存后显示。每一跳消耗对应通道一条转发配额。</p>
+<div style="margin-top:12px"><button type="submit">创建链路</button> <a href="/my/chains" style="margin-left:8px">取消</a></div>
+</form>
+
+<template id="hopRow">
+<tr>
+<td><button type="button" onclick="moveHop(this,-1)" class="ghost">↑</button><button type="button" onclick="moveHop(this,1)" class="ghost">↓</button></td>
+<td><select name="hop_tunnel" required>
+<option value="">— 选择通道 —</option>
+{{$nb := .NodeByID}}
+{{range .Tunnels}}{{$n := index $nb .NodeID}}<option value="{{.ID}}">{{.Name}} @ {{if $n}}{{$n.Name}}{{if eq $n.RelayHost ""}}（节点未设中继地址）{{end}}{{else}}#{{.NodeID}}{{end}}（{{.PortStart}}-{{.PortEnd}}）</option>{{end}}
+</select></td>
+<td><select name="hop_mode" class="modeSel"><option value="userspace">用户态(split-TCP)</option><option value="kernel">内核态(零拷贝)</option></select></td>
+<td><button type="button" onclick="this.closest('tr').remove()" class="danger">删除</button></td>
+</tr>
+</template>
+
+<script>
+function addHop(){document.querySelector('#hops tbody').appendChild(document.getElementById('hopRow').content.cloneNode(true));syncModes();}
+function moveHop(btn,dir){const tr=btn.closest('tr'),tb=tr.parentNode;if(dir<0&&tr.previousElementSibling)tb.insertBefore(tr,tr.previousElementSibling);if(dir>0&&tr.nextElementSibling)tb.insertBefore(tr.nextElementSibling,tr);}
+function syncModes(){const udp=document.getElementById('proto').value==='udp';document.querySelectorAll('.modeSel').forEach(s=>{const us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
+addHop();
+</script>
+{{else}}<div class="empty">管理员尚未为你授权任何通道，无法建链路。请联系管理员。</div>{{end}}
+</div>
+{{template "footer" .}}
