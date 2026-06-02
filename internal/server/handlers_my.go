@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -120,17 +119,15 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
 		return
 	}
+	occupied, err := db.OccupiedPortsOnNode(s.DB, tunnel.NodeID, proto, 0)
+	if err != nil {
+		setFlash(w, "端口检查失败: "+err.Error())
+		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		return
+	}
 	var listenPort int
 	if listenPortStr == "" {
-		// Auto-allocate within the tunnel range, skipping anything already
-		// installed on the same (node, proto).
-		used, err := db.UsedPortsOnNode(s.DB, tunnel.NodeID, proto, tunnel.PortStart, tunnel.PortEnd)
-		if err != nil {
-			setFlash(w, "端口分配失败: "+err.Error())
-			http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
-			return
-		}
-		listenPort = pickFreePort(tunnel.PortStart, tunnel.PortEnd, used)
+		listenPort = db.PickFreePort(tunnel.PortStart, tunnel.PortEnd, occupied)
 		if listenPort == 0 {
 			setFlash(w, fmt.Sprintf("通道 %d-%d 内已无可用端口", tunnel.PortStart, tunnel.PortEnd))
 			http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
@@ -138,6 +135,11 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		listenPort, _ = strconv.Atoi(listenPortStr)
+		if occupied[listenPort] {
+			setFlash(w, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort))
+			http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+			return
+		}
 	}
 	if err := validateAgainstTunnel(tunnel, proto, listenPort, targetIP, targetPort); err != nil {
 		setFlash(w, err.Error())
@@ -261,22 +263,4 @@ func nullStr(s string) string {
 		return "(无说明)"
 	}
 	return s
-}
-
-// pickFreePort returns 0 when the range is exhausted. Random offset keeps
-// the assignment unpredictable so two near-simultaneous tenants don't keep
-// colliding on the same port.
-func pickFreePort(start, end int, used map[int]bool) int {
-	span := end - start + 1
-	if span <= 0 {
-		return 0
-	}
-	offset := rand.Intn(span)
-	for i := 0; i < span; i++ {
-		p := start + ((offset + i) % span)
-		if !used[p] {
-			return p
-		}
-	}
-	return 0
 }

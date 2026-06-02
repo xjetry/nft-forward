@@ -419,25 +419,6 @@ func CountForwardsForTenantTunnel(d *sql.DB, tenantID, tunnelID int64) (int, err
 	return n, err
 }
 
-// UsedPortsOnNode returns the set of (proto, listen_port) currently held on
-// a node within a given port range. Used by the random port allocator so it
-// can pick a port that won't collide with the unique constraint.
-func UsedPortsOnNode(d *sql.DB, nodeID int64, proto string, start, end int) (map[int]bool, error) {
-	rows, err := d.Query(`SELECT listen_port FROM forwards WHERE node_id=? AND proto=? AND listen_port BETWEEN ? AND ?`,
-		nodeID, proto, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int]bool{}
-	for rows.Next() {
-		var p int
-		if err := rows.Scan(&p); err == nil {
-			out[p] = true
-		}
-	}
-	return out, rows.Err()
-}
 
 func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
 	rows, err := d.Query(`SELECT DISTINCT node_id FROM forwards WHERE tenant_id=?`, tenantID)

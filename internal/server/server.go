@@ -486,6 +486,17 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 		return
 	}
+	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
+	if err != nil {
+		setFlash(w, "端口检查失败: "+err.Error())
+		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
+		return
+	}
+	if occupied[listenPort] {
+		setFlash(w, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort))
+		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
+		return
+	}
 	id, err := db.CreateForward(s.DB, f)
 	if err != nil {
 		setFlash(w, "创建失败: "+err.Error())

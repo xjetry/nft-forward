@@ -5,6 +5,55 @@ import (
 	"testing"
 )
 
+func TestOccupiedPortsUnionsForwardsAndTuiSnapshot(t *testing.T) {
+	d := openMemDB(t)
+	n, _ := CreateNode(d, "n1", "https://p", "t")
+	// panel segment: one tcp forward holds 20000
+	if _, err := CreateForward(d, &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 20000, TargetIP: "1.1.1.1", TargetPort: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// node-local tui segment snapshot: tcp holds 20001, udp holds 53
+	if err := UpsertTuiSnapshot(d, n.ID, `[{"proto":"tcp","listen_port":20001,"target_ip":"2.2.2.2","target_port":2},{"proto":"udp","listen_port":53,"target_ip":"3.3.3.3","target_port":3}]`); err != nil {
+		t.Fatal(err)
+	}
+	occ, err := OccupiedPortsOnNode(d, n.ID, "tcp", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !occ[20000] || !occ[20001] {
+		t.Fatalf("tcp occupancy should include panel(20000) ∪ tui(20001): %v", occ)
+	}
+	if occ[53] {
+		t.Fatalf("udp port 53 must not appear in tcp occupancy: %v", occ)
+	}
+}
+
+func TestOccupiedPortsExcludesGivenChain(t *testing.T) {
+	d := openMemDB(t)
+	n, _ := CreateNode(d, "n1", "https://p", "t")
+	// Seed the chains row directly; CreateChain does not exist yet in this task.
+	res, err := d.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, _ := res.LastInsertId()
+	f := &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 20000, TargetIP: "1.1.1.1", TargetPort: 1}
+	f.ChainID = sql.NullInt64{Int64: cid, Valid: true}
+	if _, err := CreateForward(d, f); err != nil {
+		t.Fatal(err)
+	}
+	// Excluding the chain: the chain's own port must not appear.
+	occ, _ := OccupiedPortsOnNode(d, n.ID, "tcp", cid)
+	if occ[20000] {
+		t.Fatalf("excludeChainID should drop the chain's own port: %v", occ)
+	}
+	// Without exclusion: port must be visible.
+	occ2, _ := OccupiedPortsOnNode(d, n.ID, "tcp", 0)
+	if !occ2[20000] {
+		t.Fatalf("without exclude the port must be occupied: %v", occ2)
+	}
+}
+
 func TestRelayHostRoundTrip(t *testing.T) {
 	d := openMemDB(t)
 	n, err := CreateNode(d, "gomami", "https://p", "tok")
