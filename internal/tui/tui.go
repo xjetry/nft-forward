@@ -41,6 +41,7 @@ const (
 	fDestIP   = 2
 	fDestPort = 3
 	fComment  = 4
+	fMode     = 5
 )
 
 var (
@@ -65,6 +66,11 @@ var (
 // protoOptions is the ordered list of protocol choices for the selector.
 var protoOptions = []string{"tcp", "udp", "tcp+udp"}
 
+// modeOptions is the ordered list of data-plane mode choices for the selector.
+// The zero index (kernel) is the default so that existing rules without an
+// explicit Mode field behave identically to before.
+var modeOptions = []string{nft.ModeKernel, nft.ModeUserspace}
+
 type model struct {
 	mode   viewMode
 	rules  []nft.Rule
@@ -73,6 +79,7 @@ type model struct {
 	inputs       []textinput.Model
 	focusedInput int
 	protoIdx     int // index into protoOptions; owned separately from inputs[fProto]
+	modeIdx      int // index into modeOptions; owned separately from inputs[fMode]
 
 	status string
 	err    string
@@ -127,17 +134,18 @@ func buildInputs() []textinput.Model {
 		ti.Width = width
 		return ti
 	}
-	// Slot 0 (fProto) is kept as a placeholder so that the focusedInput index
-	// constants (fProto=0 … fComment=4) remain valid and cycleFocus arithmetic
-	// is unchanged.  The slot is never rendered or updated — the proto selector
-	// widget is rendered from protoIdx instead.
-	protoPlaceholder := mk("", 0)
+	// Slot 0 (fProto) and slot 5 (fMode) are placeholders so that the
+	// focusedInput index constants (fProto=0 … fMode=5) remain valid and
+	// cycleFocus arithmetic is unchanged. The slots are never rendered or
+	// updated — their respective pill selectors are rendered from protoIdx /
+	// modeIdx instead.
 	return []textinput.Model{
-		protoPlaceholder,
+		mk("", 0), // fProto placeholder
 		mk("监听端口 1-65535", 12),
 		mk("目标 IPv4 或域名", 32),
 		mk("目标端口", 12),
 		mk("可选备注", 40),
+		mk("", 0), // fMode placeholder
 	}
 }
 
@@ -211,6 +219,7 @@ func (m *model) enterAddMode() {
 	m.inputs = buildInputs()
 	m.focusedInput = fProto
 	m.protoIdx = 0 // default: tcp
+	m.modeIdx = 0  // default: kernel
 }
 
 func (m *model) enterEditMode() {
@@ -231,6 +240,16 @@ func (m *model) enterEditMode() {
 		}
 	}
 	// If the stored proto is unknown (legacy data), we silently fall back to tcp (idx 0).
+
+	// Resolve modeIdx from the stored mode value via EffectiveMode so that
+	// rules with an empty Mode field (legacy kernel rules) map to index 0.
+	m.modeIdx = 0
+	for i, md := range modeOptions {
+		if md == r.EffectiveMode() {
+			m.modeIdx = i
+			break
+		}
+	}
 
 	m.inputs[fSrcPort].SetValue(strconv.Itoa(r.SrcPort))
 	destValue := r.DestIP
@@ -259,7 +278,7 @@ func (m model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitAdd()
 	}
-	// When the proto field is focused, route left/right to the selector;
+	// When a pill-selector field is focused, route left/right to that selector;
 	// all other keys are ignored (not forwarded to the placeholder textinput).
 	if m.focusedInput == fProto {
 		switch msg.String() {
@@ -267,6 +286,15 @@ func (m model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.protoIdx = (m.protoIdx - 1 + len(protoOptions)) % len(protoOptions)
 		case "right", "l":
 			m.protoIdx = (m.protoIdx + 1) % len(protoOptions)
+		}
+		return m, nil
+	}
+	if m.focusedInput == fMode {
+		switch msg.String() {
+		case "left", "h":
+			m.modeIdx = (m.modeIdx - 1 + len(modeOptions)) % len(modeOptions)
+		case "right", "l":
+			m.modeIdx = (m.modeIdx + 1) % len(modeOptions)
 		}
 		return m, nil
 	}
@@ -292,7 +320,7 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitEdit()
 	}
-	// When the proto field is focused, route left/right to the selector;
+	// When a pill-selector field is focused, route left/right to that selector;
 	// all other keys are ignored (not forwarded to the placeholder textinput).
 	if m.focusedInput == fProto {
 		switch msg.String() {
@@ -300,6 +328,15 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.protoIdx = (m.protoIdx - 1 + len(protoOptions)) % len(protoOptions)
 		case "right", "l":
 			m.protoIdx = (m.protoIdx + 1) % len(protoOptions)
+		}
+		return m, nil
+	}
+	if m.focusedInput == fMode {
+		switch msg.String() {
+		case "left", "h":
+			m.modeIdx = (m.modeIdx - 1 + len(modeOptions)) % len(modeOptions)
+		case "right", "l":
+			m.modeIdx = (m.modeIdx + 1) % len(modeOptions)
 		}
 		return m, nil
 	}
@@ -325,6 +362,7 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 	r := nft.Rule{
 		ID:       m.rules[m.cursor].ID,
 		Proto:    proto,
+		Mode:     modeOptions[m.modeIdx],
 		SrcPort:  srcPort,
 		DestPort: destPort,
 		Comment:  comment,
@@ -386,6 +424,7 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 	r := nft.Rule{
 		ID:       nft.NewRuleID(),
 		Proto:    proto,
+		Mode:     modeOptions[m.modeIdx],
 		SrcPort:  srcPort,
 		DestPort: destPort,
 		Comment:  comment,
@@ -600,9 +639,16 @@ func (m model) viewList() string {
 			if r.DestHost != "" {
 				destHost = r.DestHost
 			}
+			// Mark userspace forwards so the operator can distinguish them at a
+			// glance without opening the edit form. truncateCell handles overflow
+			// when proto+marker exceeds colProto.
+			protoCell := strings.ToLower(r.Proto)
+			if r.EffectiveMode() == nft.ModeUserspace {
+				protoCell += " (U)"
+			}
 			// Always render with a padded comment so selected highlight fills inner width.
 			paddedLine := renderTableRow(
-				strings.ToLower(r.Proto),
+				protoCell,
 				strconv.Itoa(r.SrcPort),
 				destHost,
 				strconv.Itoa(r.DestPort),
@@ -656,6 +702,26 @@ func (m model) renderProtoSelector() string {
 	return strings.Join(parts, " ")
 }
 
+// renderModeSelector renders the horizontal pill selector for the mode field.
+// The UX mirrors renderProtoSelector so both selectors behave consistently.
+func (m model) renderModeSelector() string {
+	focused := m.focusedInput == fMode
+	var parts []string
+	for i, opt := range modeOptions {
+		if i == m.modeIdx {
+			label := "[ " + opt + " ]"
+			if focused {
+				parts = append(parts, selectorFocusedStyle.Render(label))
+			} else {
+				parts = append(parts, selectorBlurredStyle.Render(label))
+			}
+		} else {
+			parts = append(parts, "  "+opt+"  ")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m model) viewForm() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(m.formTitle()) + "\n\n")
@@ -666,6 +732,7 @@ func (m model) viewForm() string {
 		"目标地址   ",
 		"目标端口   ",
 		"备注       ",
+		"模式       ",
 	}
 	for i, ti := range m.inputs {
 		marker := "  "
@@ -675,6 +742,8 @@ func (m model) viewForm() string {
 		var fieldView string
 		if i == fProto {
 			fieldView = m.renderProtoSelector()
+		} else if i == fMode {
+			fieldView = m.renderModeSelector()
 		} else {
 			fieldView = ti.View()
 		}
@@ -686,8 +755,8 @@ func (m model) viewForm() string {
 		b.WriteString(errStyle.Render("错误: "+m.err) + "\n\n")
 	}
 	helpText := "Tab 下一项 • Shift+Tab 上一项 • Enter 保存 • Esc 取消"
-	if m.focusedInput == fProto {
-		helpText = "← → 切换协议 • " + helpText
+	if m.focusedInput == fProto || m.focusedInput == fMode {
+		helpText = "← → 切换选项 • " + helpText
 	}
 	b.WriteString(helpStyle.Render(helpText))
 	return b.String()

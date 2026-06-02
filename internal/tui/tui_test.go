@@ -398,3 +398,41 @@ func TestCommitPostsRawRules(t *testing.T) {
 		t.Errorf("expected commit to return raw rule with DestHost set, got %+v", applied)
 	}
 }
+
+// TestSubmitAdd_CarriesUserspaceMode verifies that selecting the userspace mode
+// in the form produces a rule with Mode=ModeUserspace after submit.
+func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, nil)
+	m.enterAddMode()
+	m.protoIdx = 0 // tcp
+	m.modeIdx = 1  // userspace
+	m.inputs[fSrcPort].SetValue("8443")
+	m.inputs[fDestIP].SetValue("10.0.0.1")
+	m.inputs[fDestPort].SetValue("443")
+	nm, _ := m.submitAdd()
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	if len(mm.rules) != 1 || mm.rules[0].Mode != nft.ModeUserspace {
+		t.Fatalf("rule should carry userspace mode: %+v", mm.rules)
+	}
+}
+
+// TestSubmitAdd_RejectsUDPUserspace verifies that the existing nft.Validate
+// rejection of udp+userspace surfaces as a form error rather than a crash.
+func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, nil)
+	m.enterAddMode()
+	m.protoIdx = 1 // udp
+	m.modeIdx = 1  // userspace
+	m.inputs[fSrcPort].SetValue("8443")
+	m.inputs[fDestIP].SetValue("10.0.0.1")
+	m.inputs[fDestPort].SetValue("443")
+	nm, _ := m.submitAdd()
+	if nm.(model).err == "" {
+		t.Fatal("expected validation error for udp+userspace")
+	}
+}
