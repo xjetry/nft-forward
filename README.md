@@ -28,6 +28,7 @@ wget -qO- https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh |
 - [架构](#架构)
 - [命令表面](#命令表面)
 - [配置与持久化](#配置与持久化)
+- [中继链路（Relay Chain）](#中继链路relay-chain)
 - [升级与迁移](#升级与迁移)
 - [开发](#开发)
 - [协议参考](#协议参考)
@@ -210,6 +211,23 @@ TUI 键位：
 **DDNS 目标**：转发目标支持域名（如 `home.example.ddns.net`）。解析只在 daemon 侧进行，按 `NFT_FORWARD_DNS_INTERVAL` 周期重解析；底层 IP 变化时自动重建 nftables 规则。解析失败时保留上次成功的 IP，不撕掉已生效的转发。多租户场景下，设置了 `target_cidr_allow` 的通道只允许直接填 IPv4，不允许域名，避免通过 DNS 绕过 CIDR 限制。
 
 **流量配额与限速**：每个 agent daemon 在 WSS 上周期性 push `counters` 帧（默认 5s 一次），server 的 hub 入库累加到 `tenants.traffic_used_bytes`；超额时自动禁用租户并清空其规则。限速通过 tc HTB 实现：daemon 在数据面网卡上建 HTB 树，按规则的监听端口打 nfmark 后路由到对应 class。
+
+---
+
+## 中继链路（Relay Chain）
+
+面板「链路」页可把多台受管节点串成一条中继链：选有序的跳 + 填出口 `host:port`，
+系统自动分配并对齐各跳监听端口、生成可复制的入口 `IP:端口`。每个进链路的节点需先在
+节点详情页设置「中继地址」（数据面公网 IPv4 或域名，与控制面的反向连接地址分开存储）。
+逐跳可选内核态（零拷贝，DNAT 透明转发）或用户态（split-TCP，多跳 TCP-over-TCP 推荐）。
+重新编辑顺序时，端口在各节点上保持稳定，入口不变，只更新目标对齐。
+
+租户在「我的链路」里用自己被授权的通道串链，端口段、CIDR 限制、带宽配额和 max_forwards
+均沿用通道约束；每跳消耗对应通道一条转发配额。
+
+> **与 nftables FORWARD chain 的区分**：这里的"中继链路"是面板里的多跳编排对象（`chains`
+> 表），与 nftables 内核概念 FORWARD chain 无关；面板底层仍通过 daemon 写入 `ip nft_forward`
+> 表的 DNAT 规则。
 
 ---
 
