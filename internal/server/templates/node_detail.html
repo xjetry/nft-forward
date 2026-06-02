@@ -4,7 +4,8 @@
 <div class="card">
 <h2>基本信息</h2>
 <table>
-<tr><th style="width:140px">地址</th><td class="mono">{{.Node.Address}}</td></tr>
+<tr><th style="width:140px">地址（控制面）</th><td class="mono">{{.Node.Address}}</td></tr>
+<tr><th>中继地址（数据面）</th><td class="mono">{{if .Node.RelayHost}}{{.Node.RelayHost}}{{else}}<span style="color:#86868b">未设置（设置后才能进链路）</span>{{end}}</td></tr>
 <tr><th>Token</th><td class="mono">{{.Node.Secret}}</td></tr>
 <tr><th>最近同步</th><td>{{unix .Node.LastApplyAt}}</td></tr>
 <tr><th>最近心跳</th><td>{{unix .Node.LastSeen}} {{if eq .Node.Online 1}}<span class="pill ok">在线</span>{{else}}<span class="pill warn">离线</span>{{end}}</td></tr>
@@ -15,6 +16,11 @@
 {{else}}<span class="pill warn">待同步（agent 未连上或地址不通）</span>{{end}}
 </td></tr>
 </table>
+<form method="post" action="/nodes/{{.Node.ID}}/relay-host" style="margin-top:12px;display:flex;gap:8px;align-items:center">
+<input name="relay_host" value="{{.Node.RelayHost}}" placeholder="数据面公网 IPv4 或域名" style="flex:1">
+<button type="submit">保存中继地址</button>
+</form>
+<p style="color:#86868b;font-size:13px;margin-top:6px">中继链路用它作为上一跳打向本节点的目标地址；与上面的控制面地址（agent 反向连面板）不同。</p>
 </div>
 
 <div class="card">

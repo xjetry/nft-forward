@@ -286,6 +286,16 @@ func (s *Server) Router() http.Handler {
 		r.Post("/nodes/{id}/resync", s.resyncNode)
 		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)
 
+		r.Post("/nodes/{id}/relay-host", s.setNodeRelayHost)
+
+		r.Get("/chains", s.listChains)
+		r.Get("/chains/new", s.newChain)
+		r.Post("/chains", s.createChain)
+		r.Get("/chains/{id}", s.showChain)
+		r.Post("/chains/{id}", s.saveChain)
+		r.Post("/chains/{id}/delete", s.deleteChain)
+		r.Post("/chains/{id}/hops/{pos}/reallocate", s.reallocateHop)
+
 		r.Get("/forwards", s.listForwards)
 		r.Post("/forwards", s.createForward)
 		r.Post("/forwards/{id}/delete", s.deleteForward)
