@@ -30,6 +30,11 @@ const (
 // snapshot must be consulted or auto-allocation would pick ports the daemon
 // then refuses. excludeChainID>0 drops that chain's own forwards so a chain
 // regenerating in place doesn't see itself as occupying its ports.
+//
+// Invariant: node_tui_snapshot only ever holds the daemon's non-panel TUI-segment
+// ports; panel and chain forwards live in the forwards table. So the snapshot can
+// never contain a chain's own port, which is why it is unioned in unconditionally
+// (excludeChainID applies only to the forwards query) without breaking stable reuse.
 func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeChainID int64) (map[int]bool, error) {
 	out := map[int]bool{}
 	rows, err := d.Query(
@@ -337,6 +342,9 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 
 	ports := make([]int, len(rs))
 	for i, h := range rs {
+		// This chain's own old forwards were DELETEd just above, so passing c.ID
+		// is belt-and-suspenders here; it only matters for callers that query
+		// occupancy without pre-deleting the chain's rows.
 		occ, err := OccupiedPortsOnNode(tx, h.nodeID, c.Proto, c.ID)
 		if err != nil {
 			return "", nil, err

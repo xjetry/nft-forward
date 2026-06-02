@@ -371,3 +371,80 @@ func TestRegenerateUDPForcesKernel(t *testing.T) {
 		}
 	}
 }
+
+func TestRegenerateSingleHop(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	cid, _ := CreateChain(d, &Chain{Name: "solo", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+
+	entry, affected := regen(t, d, c, []HopInput{{NodeID: g.ID}})
+	if len(affected) != 1 || affected[0] != g.ID {
+		t.Fatalf("affected nodes = %v, want [%d]", affected, g.ID)
+	}
+
+	fws, _ := ListForwardsByChain(d, cid)
+	if len(fws) != 1 {
+		t.Fatalf("want 1 hop forward, got %d", len(fws))
+	}
+	hop := fws[0]
+	// The lone hop is also the last hop, so it must target the chain's exit.
+	if hop.TargetIP != "9.9.9.9" || hop.TargetPort != 8443 {
+		t.Fatalf("single hop must target exit, got %s:%d", hop.TargetIP, hop.TargetPort)
+	}
+	// Entry = the node's relay_host : its listen_port.
+	wantEntry := hostPort("1.1.1.1", hop.ListenPort)
+	if entry != wantEntry {
+		t.Fatalf("entry = %q, want %q", entry, wantEntry)
+	}
+	// entry_* must be persisted to the chains row.
+	got, _ := GetChain(d, cid)
+	if !got.EntryNodeID.Valid || got.EntryNodeID.Int64 != g.ID || got.EntryListenPort != hop.ListenPort {
+		t.Fatalf("persisted entry = (node %+v, port %d), want (node %d, port %d)", got.EntryNodeID, got.EntryListenPort, g.ID, hop.ListenPort)
+	}
+	// entry_* must also be set on the passed-in *Chain.
+	if !c.EntryNodeID.Valid || c.EntryNodeID.Int64 != g.ID || c.EntryListenPort != hop.ListenPort {
+		t.Fatalf("in-memory entry = (node %+v, port %d), want (node %d, port %d)", c.EntryNodeID, c.EntryListenPort, g.ID, hop.ListenPort)
+	}
+}
+
+func TestRegenerateAvoidForcesRealloc(t *testing.T) {
+	d := openMemDB(t)
+	g := chainTestNode(t, d, "gomami", "1.1.1.1")
+	h := chainTestNode(t, d, "nnc-hk", "2.2.2.2")
+	cid, _ := CreateChain(d, &Chain{Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+	regen(t, d, c, []HopInput{{NodeID: g.ID}, {NodeID: h.ID}})
+	before, _ := ListForwardsByChain(d, cid)
+	portByNode := map[int64]int{}
+	for _, f := range before {
+		portByNode[f.NodeID] = f.ListenPort
+	}
+
+	// Forcing g off its current port must reallocate g while h keeps its port.
+	c, _ = GetChain(d, cid)
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = RegenerateChain(tx, c, []HopInput{{NodeID: g.ID}, {NodeID: h.ID}}, map[int64]int{g.ID: portByNode[g.ID]})
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("RegenerateChain: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _ := ListForwardsByChain(d, cid)
+	portAfter := map[int64]int{}
+	for _, f := range after {
+		portAfter[f.NodeID] = f.ListenPort
+	}
+	if portAfter[g.ID] == portByNode[g.ID] {
+		t.Fatalf("avoid should have forced node %d off port %d, but it kept it", g.ID, portByNode[g.ID])
+	}
+	if portAfter[h.ID] != portByNode[h.ID] {
+		t.Fatalf("node %d port should be stable, changed %d -> %d", h.ID, portByNode[h.ID], portAfter[h.ID])
+	}
+}
