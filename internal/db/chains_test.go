@@ -129,3 +129,35 @@ func TestCreateForwardCarriesChainID(t *testing.T) {
 		t.Fatalf("chain forward chain_id = %+v, want valid %d", cf.ChainID, cid)
 	}
 }
+
+func TestChainCRUD(t *testing.T) {
+	d := openMemDB(t)
+	id, err := CreateChain(d, &Chain{Name: "vless", Proto: "tcp", ExitHost: "seednet", ExitPort: 8443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := GetChain(d, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "vless" || c.Proto != "tcp" || c.ExitHost != "seednet" || c.ExitPort != 8443 {
+		t.Fatalf("round-trip mismatch: %+v", c)
+	}
+	if c.TenantID.Valid || c.EntryListenPort != 0 {
+		t.Fatalf("fresh admin chain should have NULL tenant + entry 0: %+v", c)
+	}
+	admin, _ := ListAdminChains(d)
+	if len(admin) != 1 {
+		t.Fatalf("ListAdminChains = %d, want 1", len(admin))
+	}
+	nodes, err := DeleteChain(d, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("no forwards yet, affected nodes should be empty: %v", nodes)
+	}
+	if _, err := GetChain(d, id); err == nil {
+		t.Fatalf("chain should be gone after delete")
+	}
+}

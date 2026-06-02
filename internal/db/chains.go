@@ -94,3 +94,151 @@ func PickFreePort(start, end int, used map[int]bool) int {
 	}
 	return 0
 }
+
+type Chain struct {
+	ID              int64
+	TenantID        sql.NullInt64
+	Name            string
+	Proto           string
+	ExitHost        string
+	ExitPort        int
+	EntryNodeID     sql.NullInt64
+	EntryListenPort int
+	CreatedAt       int64
+}
+
+type ChainHop struct {
+	ChainID    int64
+	Position   int
+	NodeID     int64
+	TunnelID   sql.NullInt64
+	ListenPort int
+	Mode       string
+}
+
+const chainCols = `id,tenant_id,name,proto,exit_host,exit_port,entry_node_id,entry_listen_port,created_at`
+
+func scanChain(r rowScanner) (*Chain, error) {
+	c := &Chain{}
+	if err := r.Scan(&c.ID, &c.TenantID, &c.Name, &c.Proto, &c.ExitHost, &c.ExitPort,
+		&c.EntryNodeID, &c.EntryListenPort, &c.CreatedAt); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// CreateChain inserts the chain header; hops + forwards are written by
+// RegenerateChain. entry_* start at 0/NULL until the first regeneration.
+func CreateChain(d DBTX, c *Chain) (int64, error) {
+	res, err := d.Exec(`INSERT INTO chains(tenant_id,name,proto,exit_host,exit_port,created_at) VALUES (?,?,?,?,?,?)`,
+		c.TenantID, c.Name, c.Proto, c.ExitHost, c.ExitPort, now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func GetChain(d DBTX, id int64) (*Chain, error) {
+	return scanChain(d.QueryRow(`SELECT `+chainCols+` FROM chains WHERE id=?`, id))
+}
+
+// UpdateChainHeader persists editable header fields (name/proto/exit). entry_*
+// is owned by RegenerateChain and not touched here.
+func UpdateChainHeader(d DBTX, c *Chain) error {
+	_, err := d.Exec(`UPDATE chains SET name=?,proto=?,exit_host=?,exit_port=? WHERE id=?`,
+		c.Name, c.Proto, c.ExitHost, c.ExitPort, c.ID)
+	return err
+}
+
+func listChainsWhere(d *sql.DB, where string, args ...any) ([]*Chain, error) {
+	q := `SELECT ` + chainCols + ` FROM chains`
+	if where != "" {
+		q += " WHERE " + where
+	}
+	q += ` ORDER BY id`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Chain
+	for rows.Next() {
+		c, err := scanChain(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ListAdminChains returns chains with no owning tenant (admin-built, unmetered).
+func ListAdminChains(d *sql.DB) ([]*Chain, error) {
+	return listChainsWhere(d, "tenant_id IS NULL")
+}
+
+func ListChainsByTenant(d *sql.DB, tenantID int64) ([]*Chain, error) {
+	return listChainsWhere(d, "tenant_id=?", tenantID)
+}
+
+func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
+	rows, err := d.Query(`SELECT chain_id,position,node_id,tunnel_id,listen_port,mode FROM chain_hops WHERE chain_id=? ORDER BY position`, chainID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ChainHop
+	for rows.Next() {
+		h := &ChainHop{}
+		if err := rows.Scan(&h.ChainID, &h.Position, &h.NodeID, &h.TunnelID, &h.ListenPort, &h.Mode); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func ListForwardsByChain(d DBTX, chainID int64) ([]*Forward, error) {
+	rows, err := d.Query(`SELECT `+forwardCols+` FROM forwards WHERE chain_id=? ORDER BY node_id, listen_port`, chainID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Forward
+	for rows.Next() {
+		f, err := scanForward(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// DeleteChain removes a chain and returns the nodes whose kernel state must be
+// re-dispatched (i.e. the nodes its forwards lived on). The ON DELETE CASCADE on
+// chain_hops + forwards.chain_id clears the rows; we collect nodes first so the
+// caller can re-push them after the rules are gone.
+func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
+	rows, err := d.Query(`SELECT DISTINCT node_id FROM forwards WHERE chain_id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	var nodes []int64
+	for rows.Next() {
+		var n int64
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := d.Exec(`DELETE FROM chains WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
