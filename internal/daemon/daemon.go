@@ -178,7 +178,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// frames; payloads are constructed inside the dialer from
 			// its tuiCh, so this callback itself is a no-op.
 			OnTuiNotice: func(_ []wsproto.Forward) {},
-			CountersFn:  d.counterSamples,
+			// Non-nil marker so the dialer emits panel_segment_edit frames;
+			// payloads are built inside the dialer from its panelCh, so this
+			// callback itself is a no-op.
+			OnPanelNotice: func(_ []wsproto.Forward) {},
+			CountersFn:    d.counterSamples,
 		})
 		d.dialer.Store(dl)
 		// Forward local tui-segment writes into the dialer so the panel
@@ -190,6 +194,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.tuiHook = func(rules []nft.Rule) {
 			if dl := d.Dialer(); dl != nil {
 				dl.NotifyTuiChanged(rules)
+			}
+		}
+		d.panelHook = func(rules []nft.Rule) {
+			if dl := d.Dialer(); dl != nil {
+				dl.NotifyPanelEdited(rules)
 			}
 		}
 		d.mu.Unlock()

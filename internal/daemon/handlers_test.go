@@ -530,6 +530,51 @@ func TestPostRulesetPanelDoesNotInvokeDialerHook(t *testing.T) {
 	}
 }
 
+func TestPostRulesetPanelInvokesPanelHook(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Dataplane:  &fakeDataplane{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan []nft.Rule, 1)
+	d.panelHook = func(r []nft.Rule) { called <- r }
+	d.tuiHook = func(r []nft.Rule) { t.Fatalf("tuiHook fired on panel owner write") }
+
+	if err := d.setOwnerRuleset(context.Background(), "panel",
+		[]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-called:
+		if len(got) != 1 || got[0].SrcPort != 30000 {
+			t.Fatalf("unexpected panelHook rules: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("panelHook never called")
+	}
+}
+
+func TestPostRulesetTUIDoesNotInvokePanelHook(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(Config{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		StatePath:  filepath.Join(dir, "state.json"),
+		Dataplane:  &fakeDataplane{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.panelHook = func(r []nft.Rule) { t.Fatalf("panelHook fired on tui owner write") }
+	if err := d.setOwnerRuleset(context.Background(), "tui",
+		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDemoteToTuiMergesPanelIntoTuiWithPanelWinning(t *testing.T) {
 	dir := t.TempDir()
 	d, err := New(Config{

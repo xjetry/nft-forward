@@ -61,6 +61,12 @@ type Daemon struct {
 	// substitute a fake. Invoked outside d.mu so the callback (which may
 	// block on a channel send) cannot stall other writers.
 	tuiHook func(rules []nft.Rule)
+
+	// panelHook mirrors tuiHook for owner=="panel" writes. Production wires
+	// it to dialer.NotifyPanelEdited so a TUI edit to a server-managed
+	// forward is reported back to the panel for persistence. Invoked outside
+	// d.mu for the same reason as tuiHook.
+	panelHook func(rules []nft.Rule)
 }
 
 // applySerialized runs dp.Reconcile under reconcileMu so concurrent callers
@@ -236,12 +242,20 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 	d.owners = candidate
 	d.meta = meta
 	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	hook := d.tuiHook
+	tuiHook := d.tuiHook
+	panelHook := d.panelHook
 	hookRules := append([]nft.Rule(nil), candidate[owner]...)
 	d.mu.Unlock()
 
-	if owner == "tui" && hook != nil {
-		hook(hookRules)
+	switch owner {
+	case "tui":
+		if tuiHook != nil {
+			tuiHook(hookRules)
+		}
+	case "panel":
+		if panelHook != nil {
+			panelHook(hookRules)
+		}
 	}
 	return nil
 }
