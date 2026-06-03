@@ -205,7 +205,7 @@ usage() {
 nft-forward 一键安装/卸载/升级脚本
 
 用法:
-  $0 [tui|server|agent|update|uninstall] [选项]
+  $0 [tui|server|agent|update|uninstall|reset-password] [选项]
 
 模式:
   tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
@@ -213,6 +213,7 @@ nft-forward 一键安装/卸载/升级脚本
   agent            受控节点（daemon 主动 dial panel WebSocket 反向纳管）
   update           拉 latest 二进制原子替换 + restart + 失败回滚
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
+  reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
 
 选项 / 环境变量:
   --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
@@ -220,6 +221,7 @@ nft-forward 一键安装/卸载/升级脚本
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
   --purge                          uninstall 模式专用：按角色 scope 清残留数据
+  --password PW                    reset-password 模式：新密码（缺省则交互输入或随机生成）
   -h, --help                       显示此帮助
 
 示例:
@@ -229,6 +231,7 @@ nft-forward 一键安装/卸载/升级脚本
   sudo $0 update                         # 拉 latest 二进制升级
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
   sudo $0 uninstall daemon --purge       # 完整擦除 daemon 残留
+  sudo $0 reset-password                 # 交互重置面板 admin 密码
 USAGE
 }
 
@@ -328,15 +331,75 @@ do_update() {
   echo "建议查看启动日志: journalctl -u nft-forward-daemon.service --since '1 minute ago'"
 }
 
+gen_password() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 12
+  else
+    head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+do_reset_password() {
+  local db="/var/lib/nft-forward/panel.db"
+  [[ -x "$INSTALL_DIR/nft-forward" ]] \
+    || die "未安装：$INSTALL_DIR/nft-forward 不存在；reset-password 仅适用于装了 server 的机器"
+  [[ -f "$db" ]] \
+    || die "未找到面板数据库 $db；本机似乎未安装 server 角色"
+
+  # 取新密码：--password 优先；否则交互输入两次；直接回车或无 TTY 则随机生成。
+  local pw="${RESET_PW:-}" pw2="" generated=0
+  if [[ -z "$pw" && -t 0 ]]; then
+    read -rsp "输入新的 admin 密码（直接回车=随机生成）: " pw; echo
+    if [[ -n "$pw" ]]; then
+      read -rsp "再次输入确认: " pw2; echo
+      [[ "$pw" == "$pw2" ]] || die "两次输入不一致"
+    fi
+  fi
+  if [[ -z "$pw" ]]; then
+    pw="$(gen_password)"
+    generated=1
+  fi
+  [[ "${#pw}" -ge 6 ]] || die "密码至少 6 位"
+
+  # 停 server → 重置 → 重启；daemon 不动，转发不中断。
+  local had_server=0
+  if systemctl list-unit-files --no-legend | grep -q '^nft-forward-server\.service '; then
+    had_server=1
+    note "停止 nft-forward-server.service ..."
+    systemctl stop nft-forward-server.service 2>/dev/null || true
+  fi
+
+  note "重置 admin 密码 ..."
+  if ! "$INSTALL_DIR/nft-forward" server --reset-admin-password "$pw" --db "$db"; then
+    if [[ "$had_server" -eq 1 ]]; then
+      systemctl start nft-forward-server.service 2>/dev/null || true
+    fi
+    die "重置失败（admin 账号不存在？见上方错误）"
+  fi
+
+  if [[ "$had_server" -eq 1 ]]; then
+    note "重启 nft-forward-server.service ..."
+    systemctl start nft-forward-server.service
+  fi
+
+  ok "===== 已重置 admin 密码 ====="
+  echo "登录用户名: admin"
+  if [[ "$generated" -eq 1 ]]; then
+    echo "新密码（随机生成，请妥善保存）: $pw"
+  fi
+  echo "旧会话已全部失效，请用新密码重新登录。"
+}
+
 # 参数解析（--help 不需要 root）
 mode=""
 panel_url=""
 token=""
 addr=""
 purge=0
+RESET_PW=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    tui|server|agent|update|uninstall) mode="$1"; shift ;;
+    tui|server|agent|update|uninstall|reset-password) mode="$1"; shift ;;
     --panel-url) panel_url="${2:?--panel-url 需要值}"; shift 2 ;;
     --panel-url=*) panel_url="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
@@ -346,6 +409,8 @@ while [[ $# -gt 0 ]]; do
     --release) RELEASE="${2:?--release 需要值}"; RELEASE_EXPLICIT=1; shift 2 ;;
     --release=*) RELEASE="${1#*=}"; RELEASE_EXPLICIT=1; shift ;;
     --purge) purge=1; shift ;;
+    --password) RESET_PW="${2:?--password 需要值}"; shift 2 ;;
+    --password=*) RESET_PW="${1#*=}"; shift ;;
     server|agent|daemon)
       if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
       die "未知参数: $1" ;;
@@ -372,6 +437,7 @@ if [[ -z "$mode" ]]; then
   echo "  3) agent      远程节点（daemon 反向 dial panel WebSocket）"
   echo "  4) update     拉 latest 二进制原子升级（保留现有角色）"
   echo "  5) uninstall  卸载（再问要卸哪个角色）"
+  echo "  6) reset-password  重置面板 admin 密码"
   read -rp "输入数字或名称: " choice
   case "$choice" in
     1|tui)       mode=tui ;;
@@ -379,6 +445,7 @@ if [[ -z "$mode" ]]; then
     3|agent)     mode=agent ;;
     4|update)    mode=update ;;
     5|uninstall) mode=uninstall ;;
+    6|reset-password) mode=reset-password ;;
     *) die "未知选项: $choice" ;;
   esac
 fi
@@ -419,6 +486,13 @@ esac
 # Uninstall takes a separate code path (no download needed).
 if [[ "$mode" == "uninstall" ]]; then
   do_uninstall "$UNINSTALL_TARGET" "$purge"
+  exit 0
+fi
+
+# Reset-password is local-only: no download, just rewrite the admin password in
+# the existing panel DB via the installed binary, bouncing the server unit.
+if [[ "$mode" == "reset-password" ]]; then
+  do_reset_password
   exit 0
 fi
 
