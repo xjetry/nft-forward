@@ -34,6 +34,12 @@ type Rule struct {
 	// Mode selects the data plane for this forward: "" / "kernel" = nftables
 	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
 	Mode string `json:"mode,omitempty"`
+	// ChainID/ChainName are panel-side metadata: when a rule belongs to a relay
+	// chain, they identify it so the TUI can show the owning chain and gate
+	// which fields are locally editable. The data plane (DNAT / userspace /
+	// MergedRuleset / DNS) never reads them.
+	ChainID   int64  `json:"chain_id,omitempty"`
+	ChainName string `json:"chain_name,omitempty"`
 }
 
 // EffectiveMode normalizes the mode: an empty or unrecognized value means

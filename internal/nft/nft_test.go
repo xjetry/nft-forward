@@ -2,7 +2,9 @@ package nft
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"nft-forward/internal/resolver"
@@ -199,5 +201,22 @@ func TestValidateModeMatrix(t *testing.T) {
 		if err := Validate(r); err == nil {
 			t.Errorf("Validate(%s/%s) expected error, got nil", r.Proto, r.Mode)
 		}
+	}
+}
+
+func TestRuleChainMetaIsInert(t *testing.T) {
+	// Chain metadata is panel-side only; it must never change data-plane behavior.
+	r := Rule{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 200,
+		ChainID: 7, ChainName: "seednet-vless"}
+	if r.EffectiveMode() != ModeKernel {
+		t.Fatalf("chain meta must not affect EffectiveMode, got %q", r.EffectiveMode())
+	}
+	// A rule without chain metadata must not serialize the fields.
+	b, err := json.Marshal(Rule{Proto: "tcp", SrcPort: 100, DestPort: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "chain_id") || strings.Contains(string(b), "chain_name") {
+		t.Fatalf("empty chain meta must be omitted, got %s", b)
 	}
 }
