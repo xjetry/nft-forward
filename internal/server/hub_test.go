@@ -406,6 +406,73 @@ func TestEnforceTenantQuotaLeavesUnderQuotaTenantEnabled(t *testing.T) {
 	}
 }
 
+func TestHubPanelSegmentEditUpdatesNonChainForward(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	fid, err := db.CreateForward(hub.DB, &db.Forward{
+		NodeID: n.ID, Proto: "tcp", ListenPort: 30000, TargetIP: "10.0.0.1", TargetPort: 30000, Comment: "old", Mode: "kernel",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+
+	pse, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: []wsproto.Forward{
+		{Proto: "tcp", ListenPort: 30000, TargetIP: "10.9.9.9", TargetPort: 8443, Comment: "new", Mode: "userspace"},
+	}})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pse})
+	syncByPing(t, c)
+
+	got, err := db.GetForward(hub.DB, fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetIP != "10.9.9.9" || got.TargetPort != 8443 || got.Comment != "new" || got.Mode != "userspace" {
+		t.Fatalf("panel edit not persisted: %+v", got)
+	}
+}
+
+func TestHubPanelSegmentEditIgnoresChainForward(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	res, err := hub.DB.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid, _ := res.LastInsertId()
+	fid, err := db.CreateForward(hub.DB, &db.Forward{
+		NodeID: n.ID, Proto: "tcp", ListenPort: 20001, TargetIP: "5.6.7.8", TargetPort: 20002,
+		ChainID: sql.NullInt64{Int64: cid, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A chained hop reported with a tampered target must be rejected.
+	hub.applyPanelEdits(n.ID, []wsproto.Forward{
+		{Proto: "tcp", ListenPort: 20001, TargetIP: "1.1.1.1", TargetPort: 1, Comment: "hijack"},
+	})
+
+	got, err := db.GetForward(hub.DB, fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetIP != "5.6.7.8" || got.TargetPort != 20002 {
+		t.Fatalf("chain hop port/target must stay intact: %+v", got)
+	}
+	_ = srv
+}
+
+func TestHubPanelSegmentEditSkipsUnknownForward(t *testing.T) {
+	_, hub, n := newHubTestServer(t)
+	// No matching forward row exists; applyPanelEdits must not error/panic.
+	hub.applyPanelEdits(n.ID, []wsproto.Forward{
+		{Proto: "tcp", ListenPort: 65000, TargetIP: "10.0.0.1", TargetPort: 65000},
+	})
+}
+
 func TestHubCloseSendsGoingAway(t *testing.T) {
 	srv, hub, _ := newHubTestServer(t)
 	c := dialWS(t, srv)

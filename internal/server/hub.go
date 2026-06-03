@@ -240,6 +240,13 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 			if err := db.UpsertTuiSnapshot(h.DB, ac.nodeID, string(fjb)); err != nil {
 				log.Printf("hub: node %d upsert tui snapshot: %v", ac.nodeID, err)
 			}
+		case wsproto.TypePanelSegmentEdit:
+			var pse wsproto.PanelSegmentEdit
+			if err := json.Unmarshal(env.Payload, &pse); err != nil {
+				log.Printf("hub: node %d malformed panel_segment_edit: %v", ac.nodeID, err)
+				continue
+			}
+			h.applyPanelEdits(ac.nodeID, pse.Forwards)
 		case wsproto.TypeRegisterLocal:
 			var rl wsproto.RegisterLocal
 			if err := json.Unmarshal(env.Payload, &rl); err != nil {
@@ -451,6 +458,36 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	if h.OnTrafficUpdate != nil {
 		for tid := range touched {
 			h.OnTrafficUpdate(tid)
+		}
+	}
+}
+
+// applyPanelEdits folds a node's edits to its panel-segment forwards back
+// into the forwards table so the server becomes their authority. Each
+// forward is located by (node_id, proto, listen_port). Only non-chain rows
+// are updated: a chained hop's listen_port/target form a relay skeleton
+// owned by chain orchestration (RegenerateChain wires neighbor hops
+// together), so a node-side edit must never rewrite it — UpdateForward's
+// chain_id IS NULL guard is the second backstop behind this ChainID.Valid
+// skip.
+//
+// Per-edit failures (DB error, or a lookup miss meaning the forward was
+// deleted on the panel side between the node's snapshot and the frame's
+// arrival) are logged and the loop continues, mirroring applyCounters: one
+// bad row shouldn't abandon the rest of the batch.
+func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
+	for _, f := range forwards {
+		existing, err := db.GetForwardByNodeProtoPort(h.DB, nodeID, f.Proto, f.ListenPort)
+		if err != nil {
+			log.Printf("hub: node %d panel edit for %s/%d matched no forward row (rule may have been deleted)", nodeID, f.Proto, f.ListenPort)
+			continue
+		}
+		if existing.ChainID.Valid {
+			continue
+		}
+		if _, err := db.UpdateForward(h.DB, nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, f.Mode); err != nil {
+			log.Printf("hub: node %d panel edit update for %s/%d: %v", nodeID, f.Proto, f.ListenPort, err)
+			continue
 		}
 	}
 }
