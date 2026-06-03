@@ -48,7 +48,7 @@
 <table>
 <thead><tr><th>名称</th><th>节点</th><th>端口段</th></tr></thead>
 <tbody>
-{{range .Tunnels}}<tr><td>{{.Name}}</td><td>#{{.NodeID}}</td><td class="mono">{{.PortStart}}-{{.PortEnd}}</td></tr>{{end}}
+{{range .Tunnels}}<tr><td>{{.Name}}</td><td>{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td><td class="mono">{{.PortStart}}-{{.PortEnd}}</td></tr>{{end}}
 </tbody>
 </table>
 {{else}}<div class="empty">无</div>{{end}}
@@ -61,7 +61,7 @@
 <tbody>
 {{range .Forwards}}
 <tr>
-<td>#{{.NodeID}}</td>
+<td>{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
 <td>{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}admin{{end}}</td>
 <td>{{upper .Proto}}</td>
 <td>{{.ListenPort}}</td>

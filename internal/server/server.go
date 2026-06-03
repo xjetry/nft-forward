@@ -359,12 +359,17 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	forwards, _ := db.ListForwards(s.DB)
 	tenants, _ := db.ListTenants(s.DB)
 	tunnels, _ := db.ListTunnels(s.DB)
+	nodeByID := map[int64]*db.Node{}
+	for _, n := range nodes {
+		nodeByID[n.ID] = n
+	}
 	s.render(w, "dashboard.html", map[string]any{
 		"User":     u,
 		"Nodes":    nodes,
 		"Forwards": forwards,
 		"Tenants":  tenants,
 		"Tunnels":  tunnels,
+		"NodeByID": nodeByID,
 	})
 }
 
@@ -487,10 +492,15 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	forwards, _ := db.ListForwards(s.DB)
 	nodes, _ := db.ListNodes(s.DB)
+	nodeByID := map[int64]*db.Node{}
+	for _, n := range nodes {
+		nodeByID[n.ID] = n
+	}
 	s.render(w, "forwards.html", map[string]any{
 		"User":     u,
 		"Forwards": forwards,
 		"Nodes":    nodes,
+		"NodeByID": nodeByID,
 		"Flash":    flashFromCookie(w, r),
 	})
 }

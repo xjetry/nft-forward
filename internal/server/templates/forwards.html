@@ -10,7 +10,7 @@
 {{range .Forwards}}
 <tr>
 <td>{{.ID}}</td>
-<td>#{{.NodeID}}</td>
+<td>{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
 <td>{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}<span style="color:#86868b">admin</span>{{end}}</td>
 <td>{{if .TunnelID.Valid}}#{{.TunnelID.Int64}}{{else}}—{{end}}</td>
 <td>{{upper .Proto}}</td>
