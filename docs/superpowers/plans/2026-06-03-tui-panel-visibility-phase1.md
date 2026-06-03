@@ -87,7 +87,7 @@ git commit -m 'feat(nft): add inert chain metadata fields to Rule'
 ### Task 2: buildRules 填充 chain 元信息
 
 **Files:**
-- Modify: `internal/server/server.go:218-251`(`buildRules`)
+- Modify: `internal/server/server.go` — `buildRules`(:218-251) 填充元信息;`computeRev`(:257-262) 排除元信息(否则链路改名等会污染 rev 哈希,触发重连节点无谓的全量重应用)
 - Test: `internal/server/buildrules_test.go`(新建)
 
 - [ ] **Step 1: 写失败测试**
@@ -157,12 +157,23 @@ func TestBuildRulesStampsChainMeta(t *testing.T) {
 			standalone.ChainID, standalone.ChainName)
 	}
 }
+
+func TestComputeRevIgnoresChainMeta(t *testing.T) {
+	// Chain metadata must not change the revision hash: a chain rename must not
+	// trigger a redundant re-apply when the data plane is unchanged.
+	base := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001}}
+	withMeta := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001,
+		ChainID: 5, ChainName: "seednet-vless"}}
+	if computeRev(base) != computeRev(withMeta) {
+		t.Fatalf("chain metadata must not affect rev: %q vs %q", computeRev(base), computeRev(withMeta))
+	}
+}
 ```
 
 - [ ] **Step 2: 运行测试,确认失败**
 
-Run: `go test ./internal/server/ -run TestBuildRulesStampsChainMeta`
-Expected: FAIL — `chain forward should carry meta, got ChainID=0 ChainName=""`(buildRules 尚未填充)。
+Run: `go test ./internal/server/ -run 'TestBuildRulesStampsChainMeta|TestComputeRevIgnoresChainMeta'`
+Expected: FAIL — buildRules 未填充(ChainName 为空),且 computeRev 含元信息(两 rev 不相等)。
 
 - [ ] **Step 3: 在 buildRules 填充 chain 元信息**
 
@@ -188,6 +199,26 @@ Expected: FAIL — `chain forward should carry meta, got ChainID=0 ChainName=""`
 				rule.ChainName = c.Name
 			}
 		}
+```
+
+并修改 `computeRev`(`internal/server/server.go:257-262`),在 `json.Marshal` 前排除 chain 元信息,使 rev 只反映数据平面:
+
+```go
+func computeRev(rules []nft.Rule) string {
+	// Chain metadata is panel-side display info, not part of the data plane;
+	// exclude it so a chain rename does not force a redundant re-apply on
+	// reconnecting nodes.
+	bare := make([]nft.Rule, len(rules))
+	for i, r := range rules {
+		r.ChainID = 0
+		r.ChainName = ""
+		bare[i] = r
+	}
+	h := sha256.New()
+	b, _ := json.Marshal(bare)
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
 ```
 
 - [ ] **Step 4: 运行测试,确认通过**
