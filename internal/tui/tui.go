@@ -674,6 +674,30 @@ func (m model) viewList() string {
 		}
 	}
 
+	// Read-only view of server-pushed (panel) forwards: managed by the panel,
+	// not editable here. Chain hops show their owning chain; standalone panel
+	// forwards are tagged generically.
+	if len(m.panelRules) > 0 {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("server 托管转发（只读）") + "\n")
+		for _, r := range m.panelRules {
+			target := r.DestIP
+			if r.DestHost != "" {
+				target = r.DestHost
+			}
+			tag := "server 托管"
+			if r.ChainName != "" {
+				tag = "链路 " + r.ChainName
+			}
+			proto := strings.ToLower(r.Proto)
+			if r.EffectiveMode() == nft.ModeUserspace {
+				proto += " (U)"
+			}
+			line := fmt.Sprintf("  %s  %d → %s:%d  [%s]", proto, r.SrcPort, target, r.DestPort, tag)
+			b.WriteString(helpStyle.Render(line) + "\n")
+		}
+	}
+
 	b.WriteString("\n")
 	if m.err != "" {
 		b.WriteString(errStyle.Render("错误: "+m.err) + "\n")

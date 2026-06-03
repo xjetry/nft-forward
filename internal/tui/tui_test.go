@@ -437,6 +437,26 @@ func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 	}
 }
 
+func TestViewListRendersReadOnlyPanelSection(t *testing.T) {
+	m := model{
+		mode:  viewList,
+		width: 100,
+		rules: []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+		panelRules: []nft.Rule{
+			{Proto: "tcp", SrcPort: 44751, DestIP: "104.251.236.89", DestPort: 42421,
+				ChainName: "seednet-vless"},
+			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+		},
+	}
+	out := m.View()
+	if !strings.Contains(out, "seednet-vless") {
+		t.Fatalf("panel section should show the chain name, got:\n%s", out)
+	}
+	if !strings.Contains(out, "server 托管") {
+		t.Fatalf("panel section should label server-managed rules, got:\n%s", out)
+	}
+}
+
 func TestLoadInitialRulesSplitsTuiAndPanel(t *testing.T) {
 	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
 		"tui":   {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
