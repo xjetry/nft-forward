@@ -307,6 +307,34 @@ func TestRegenerateThreeHopWiring(t *testing.T) {
 	}
 }
 
+func TestChainsReferencingNode(t *testing.T) {
+	d := openMemDB(t)
+	a := chainTestNode(t, d, "node-a", "1.1.1.1")
+	b := chainTestNode(t, d, "node-b", "2.2.2.2")
+	other := chainTestNode(t, d, "node-c", "3.3.3.3") // not in the chain
+	cid, _ := CreateChain(d, &Chain{Name: "vless", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	c, _ := GetChain(d, cid)
+	regen(t, d, c, []HopInput{{NodeID: a.ID}, {NodeID: b.ID}})
+
+	for _, n := range []*Node{a, b} {
+		refs, err := ChainsReferencingNode(d, n.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(refs) != 1 || refs[0] != cid {
+			t.Fatalf("ChainsReferencingNode(%d) = %v, want [%d]", n.ID, refs, cid)
+		}
+	}
+
+	refs, err := ChainsReferencingNode(d, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("ChainsReferencingNode(unrelated) = %v, want empty", refs)
+	}
+}
+
 func TestRegenerateRejectsMissingRelayHost(t *testing.T) {
 	d := openMemDB(t)
 	g := chainTestNode(t, d, "gomami", "1.1.1.1")

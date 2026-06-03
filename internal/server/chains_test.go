@@ -220,3 +220,92 @@ func TestCreateChainRejectsNodeWithoutRelayHost(t *testing.T) {
 		t.Fatalf("chain must not persist when a hop node lacks relay_host; got %d", len(chains))
 	}
 }
+
+// forwardOnNode returns the chain's generated forward that lives on nodeID.
+func forwardOnNode(t *testing.T, d *sql.DB, chainID, nodeID int64) *db.Forward {
+	t.Helper()
+	fws, _ := db.ListForwardsByChain(d, chainID)
+	for _, f := range fws {
+		if f.NodeID == nodeID {
+			return f
+		}
+	}
+	t.Fatalf("no chain %d forward found on node %d", chainID, nodeID)
+	return nil
+}
+
+// postNode drives a node-scoped POST (relay-host / delete) and fails unless it
+// redirects.
+func postNode(t *testing.T, s *Server, admin *http.Cookie, path string, form url.Values) {
+	t.Helper()
+	var body *strings.Reader
+	if form == nil {
+		body = strings.NewReader("")
+	} else {
+		body = strings.NewReader(form.Encode())
+	}
+	req := httptest.NewRequest("POST", path, body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(admin)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST %s status = %d body=%s", path, rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetNodeRelayHostRewiresUpstream(t *testing.T) {
+	d := openDB(t)
+	a, _ := db.CreateNode(d, "node-a", "https://p", "t1")
+	b, _ := db.CreateNode(d, "node-b", "https://p", "t2")
+	_ = db.UpdateNodeRelayHost(d, a.ID, "1.1.1.1")
+	_ = db.UpdateNodeRelayHost(d, b.ID, "2.2.2.2")
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	c := postChain(t, s, d, admin, "vless", []int64{a.ID, b.ID})
+
+	// A's hop materializes B's relay_host as its DNAT target.
+	if got := forwardOnNode(t, d, c.ID, a.ID).TargetIP; got != "2.2.2.2" {
+		t.Fatalf("upstream hop target_ip = %q, want 2.2.2.2", got)
+	}
+
+	form := url.Values{}
+	form.Set("relay_host", "8.8.8.8")
+	postNode(t, s, admin, fmt.Sprintf("/nodes/%d/relay-host", b.ID), form)
+
+	// Changing B's relay_host must re-materialize A's forward onto the new address.
+	if got := forwardOnNode(t, d, c.ID, a.ID).TargetIP; got != "8.8.8.8" {
+		t.Fatalf("upstream hop target_ip after relay-host change = %q, want 8.8.8.8", got)
+	}
+}
+
+func TestDeleteMidNodeRewiresChain(t *testing.T) {
+	d := openDB(t)
+	a, _ := db.CreateNode(d, "node-a", "https://p", "t1")
+	b, _ := db.CreateNode(d, "node-b", "https://p", "t2")
+	cNode, _ := db.CreateNode(d, "node-c", "https://p", "t3")
+	_ = db.UpdateNodeRelayHost(d, a.ID, "1.1.1.1")
+	_ = db.UpdateNodeRelayHost(d, b.ID, "2.2.2.2")
+	_ = db.UpdateNodeRelayHost(d, cNode.ID, "3.3.3.3")
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	chain := postChain(t, s, d, admin, "vless", []int64{a.ID, b.ID, cNode.ID})
+
+	// Before deletion A hops to B (2.2.2.2).
+	if got := forwardOnNode(t, d, chain.ID, a.ID).TargetIP; got != "2.2.2.2" {
+		t.Fatalf("pre-delete upstream hop target_ip = %q, want 2.2.2.2", got)
+	}
+
+	postNode(t, s, admin, fmt.Sprintf("/nodes/%d/delete", b.ID), nil)
+
+	// The mid node's hop is gone; the chain re-materializes around the gap.
+	hops, _ := db.ListChainHops(d, chain.ID)
+	if len(hops) != 2 {
+		t.Fatalf("chain should have 2 hops after deleting mid node, got %d", len(hops))
+	}
+	if got := forwardOnNode(t, d, chain.ID, a.ID).TargetIP; got != "3.3.3.3" {
+		t.Fatalf("upstream hop must re-wire to surviving next hop 3.3.3.3, got %q", got)
+	}
+}

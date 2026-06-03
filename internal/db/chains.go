@@ -249,6 +249,27 @@ func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
 	return nodes, nil
 }
 
+// ChainsReferencingNode returns the distinct chain IDs that have a hop on the
+// given node. Chain forwards bake the next hop's relay_host into their target,
+// so when a node's relay_host changes or the node is removed, every chain it
+// participates in must be re-materialized.
+func ChainsReferencingNode(d DBTX, nodeID int64) ([]int64, error) {
+	rows, err := d.Query(`SELECT DISTINCT chain_id FROM chain_hops WHERE node_id=?`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // HopInput is one ordered hop the caller wants the chain to have. TunnelID is
 // set for tenant chains (the granted tunnel the hop draws its port/range from)
 // and invalid for admin chains. Mode is the requested data plane; udp chains

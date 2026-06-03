@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -311,6 +312,64 @@ func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
 }
 
+// regenerateChainByID re-materializes one chain from its CURRENT (surviving)
+// hops and returns the nodes whose kernel state must be re-dispatched. A chain
+// with no hops left (its only node was just deleted) is a no-op.
+func (s *Server) regenerateChainByID(chainID int64) ([]int64, error) {
+	c, err := db.GetChain(s.DB, chainID)
+	if err != nil {
+		return nil, err
+	}
+	hops, err := db.ListChainHops(s.DB, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if len(hops) == 0 {
+		return nil, nil
+	}
+	inputs := make([]db.HopInput, len(hops))
+	for i, h := range hops {
+		inputs[i] = db.HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	// NOTE: for tenant chains whose hop set shrank (a relay node was deleted),
+	// the exit's CIDR is NOT re-validated against the new last-hop tunnel here.
+	// That edge is a known, low-severity follow-up; do not add it in this change.
+	_, affected, err := db.RegenerateChain(tx, c, inputs, nil)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return affected, nil
+}
+
+// rewireChainsAfterNodeChange regenerates the given chains (their upstream hops
+// materialize a peer's relay_host, so a node address change or removal must
+// re-wire them) and re-dispatches the touched nodes. Best-effort per chain.
+func (s *Server) rewireChainsAfterNodeChange(w http.ResponseWriter, chainIDs []int64, action string) {
+	if len(chainIDs) == 0 {
+		return
+	}
+	var affected []int64
+	for _, cid := range chainIDs {
+		aff, err := s.regenerateChainByID(cid)
+		if err != nil {
+			log.Printf("rewire chain %d after %s: %v", cid, action, err)
+			continue
+		}
+		affected = append(affected, aff...)
+	}
+	if len(affected) > 0 {
+		s.dispatchAfterFanout(w, affected, action)
+	}
+}
+
 // setNodeRelayHost saves a node's data-plane address from the node detail page.
 func (s *Server) setNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
@@ -331,6 +390,8 @@ func (s *Server) setNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
+	chains, _ := db.ChainsReferencingNode(s.DB, id)
 	setFlash(w, "中继地址已更新")
+	s.rewireChainsAfterNodeChange(w, chains, "中继地址变更，链路重连")
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", id), http.StatusSeeOther)
 }

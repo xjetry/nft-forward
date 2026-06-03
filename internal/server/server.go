@@ -435,12 +435,17 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	// Capture chains routing through this node before the delete cascades their
+	// hop rows away; their upstream hops materialize this node's relay_host and
+	// must be re-wired (around the gap) afterward.
+	affectedChains, _ := db.ChainsReferencingNode(s.DB, id)
 	if err := db.DeleteNode(s.DB, id); err != nil {
 		setFlash(w, err.Error())
 		http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
+	s.rewireChainsAfterNodeChange(w, affectedChains, "节点删除，链路重连")
 	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 }
 
