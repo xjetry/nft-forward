@@ -244,6 +244,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) enterAddMode() {
 	m.mode = viewAdd
+	m.editingOwner = "tui" // new rules always belong to the tui segment
 	m.err = ""
 	m.status = ""
 	m.inputs = buildInputs()
@@ -265,6 +266,7 @@ func (m *model) enterEditMode() {
 	m.inputs = buildInputs()
 	m.focusedInput = fProto
 
+	// Unknown stored proto (legacy data) silently falls back to tcp (idx 0).
 	m.protoIdx = 0
 	for i, p := range protoOptions {
 		if p == r.Proto {
@@ -272,6 +274,7 @@ func (m *model) enterEditMode() {
 			break
 		}
 	}
+	// EffectiveMode maps an empty Mode (legacy kernel rules) to the kernel option at idx 0.
 	m.modeIdx = 0
 	for i, md := range modeOptions {
 		if md == r.EffectiveMode() {
@@ -348,6 +351,13 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitEdit()
 	}
+	// Panel-managed forwards key on (proto, listen_port) server-side; changing
+	// either here would make the edit silently fail to reconcile (the server
+	// can't find the row under the new key). Keep them read-only for panel
+	// edits — only target/comment/mode sync back.
+	if m.editingOwner == "panel" && (m.focusedInput == fProto || m.focusedInput == fSrcPort) {
+		return m, nil
+	}
 	// When a pill-selector field is focused, route left/right to that selector;
 	// all other keys are ignored (not forwarded to the placeholder textinput).
 	if m.focusedInput == fProto {
@@ -396,6 +406,15 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 	} else {
 		seg = m.rules
 		idx = m.cursor
+	}
+
+	// Panel rows key on (proto, listen_port) server-side; pin both to the
+	// original values so an edit can never re-key the row and silently lose
+	// the reconcile. The form layer also locks these inputs — this is a
+	// second guard in case that lock is bypassed.
+	if owner == "panel" {
+		proto = seg[idx].Proto
+		srcPort = seg[idx].SrcPort
 	}
 
 	r := nft.Rule{
@@ -813,6 +832,9 @@ func (m model) viewForm() string {
 			fieldView = m.renderModeSelector()
 		} else {
 			fieldView = ti.View()
+		}
+		if m.editingOwner == "panel" && (i == fProto || i == fSrcPort) {
+			fieldView += helpStyle.Render("  (server 固定)")
 		}
 		b.WriteString(fmt.Sprintf("%s%s  %s\n", marker, labels[i], fieldView))
 	}

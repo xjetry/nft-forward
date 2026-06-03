@@ -605,3 +605,48 @@ func TestRefreshClampsCursor(t *testing.T) {
 		t.Fatalf("refresh must clamp cursor to a valid row, got %d", m.cursor)
 	}
 }
+
+func TestSubmitEditPanelRowKeepsProtoAndListenPort(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	// Operator attempts to change proto + listen port; both must be ignored.
+	m.protoIdx = 1 // udp (would-be change)
+	m.inputs[fSrcPort].SetValue("40000")
+	m.inputs[fDestIP].SetValue("10.9.9.9")
+	m.inputs[fDestPort].SetValue("8443")
+	nm, _ := m.submitEdit()
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	got := mm.panelRules[0]
+	if got.Proto != "tcp" || got.SrcPort != 30000 {
+		t.Fatalf("panel proto/listen port must stay fixed, got proto=%q port=%d", got.Proto, got.SrcPort)
+	}
+	if got.DestIP != "10.9.9.9" || got.DestPort != 8443 {
+		t.Fatalf("target should still update, got %+v", got)
+	}
+}
+
+func TestUpdateEditLocksPanelProtoAndListenPort(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	m.focusedInput = fProto
+	before := m.protoIdx
+	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRight})
+	if nm.(model).protoIdx != before {
+		t.Fatalf("panel proto must be locked, idx moved %d→%d", before, nm.(model).protoIdx)
+	}
+	m.focusedInput = fSrcPort
+	nm, _ = m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
+	if nm.(model).inputs[fSrcPort].Value() != "30000" {
+		t.Fatalf("panel listen port must be locked, got %q", nm.(model).inputs[fSrcPort].Value())
+	}
+}
