@@ -419,6 +419,14 @@ func CountForwardsForTenantTunnel(d *sql.DB, tenantID, tunnelID int64) (int, err
 	return n, err
 }
 
+// CountForwardsByTunnel counts all forwards bound to a tunnel (any tenant, plus
+// chain-hop forwards). Used to refuse deleting a tunnel that still backs rules.
+func CountForwardsByTunnel(d *sql.DB, tunnelID int64) (int, error) {
+	var n int
+	err := d.QueryRow(`SELECT COUNT(*) FROM forwards WHERE tunnel_id=?`, tunnelID).Scan(&n)
+	return n, err
+}
+
 func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
 	rows, err := d.Query(`SELECT DISTINCT node_id FROM forwards WHERE tenant_id=?`, tenantID)
 	if err != nil {

@@ -327,6 +327,24 @@ func (s *Server) regenerateChainByID(chainID int64) ([]int64, error) {
 	if len(hops) == 0 {
 		return nil, nil
 	}
+	// Tenant chains: a shrunk hop set (a relay node was removed) can promote a
+	// different tunnel to the last hop, whose CIDR allowlist may not permit the
+	// tenant's chosen exit. Re-validate and tear the chain down rather than route
+	// to a now-disallowed destination. (relay_host edits don't change the hop set,
+	// and tunnel CIDRs are immutable, so this is a no-op outside the shrink case.)
+	if c.TenantID.Valid {
+		if lastTun, terr := db.GetTunnel(s.DB, hops[len(hops)-1].TunnelID.Int64); terr == nil {
+			if cerr := exitAllowedByTunnel(lastTun, c.ExitHost); cerr != nil {
+				nodes, derr := db.DeleteChain(s.DB, chainID)
+				if derr != nil {
+					return nil, derr
+				}
+				log.Printf("chain %d (tenant %d) removed after node change: exit %s no longer allowed by last-hop tunnel %d: %v",
+					chainID, c.TenantID.Int64, c.ExitHost, lastTun.ID, cerr)
+				return nodes, nil
+			}
+		}
+	}
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
 		inputs[i] = db.HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
@@ -335,9 +353,6 @@ func (s *Server) regenerateChainByID(chainID int64) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	// NOTE: for tenant chains whose hop set shrank (a relay node was deleted),
-	// the exit's CIDR is NOT re-validated against the new last-hop tunnel here.
-	// That edge is a known, low-severity follow-up; do not add it in this change.
 	_, affected, err := db.RegenerateChain(tx, c, inputs, nil)
 	if err != nil {
 		tx.Rollback()

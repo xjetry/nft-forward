@@ -130,6 +130,31 @@ func TestCreateForwardCarriesChainID(t *testing.T) {
 	}
 }
 
+func TestCountForwardsByTunnel(t *testing.T) {
+	d := openMemDB(t)
+	n, _ := CreateNode(d, "n1", "https://p", "t")
+	tunID, err := CreateTunnel(d, &Tunnel{Name: "a", NodeID: n.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := CountForwardsByTunnel(d, tunID); err != nil || got != 0 {
+		t.Fatalf("fresh tunnel should back 0 forwards, got %d (err %v)", got, err)
+	}
+	if _, err := CreateForward(d, &Forward{
+		NodeID:     n.ID,
+		TunnelID:   sql.NullInt64{Int64: tunID, Valid: true},
+		Proto:      "tcp",
+		ListenPort: 30000,
+		TargetIP:   "10.0.0.1",
+		TargetPort: 443,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := CountForwardsByTunnel(d, tunID); err != nil || got != 1 {
+		t.Fatalf("tunnel should back 1 forward after create, got %d (err %v)", got, err)
+	}
+}
+
 func TestChainCRUD(t *testing.T) {
 	d := openMemDB(t)
 	id, err := CreateChain(d, &Chain{Name: "vless", Proto: "tcp", ExitHost: "seednet", ExitPort: 8443})

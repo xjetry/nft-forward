@@ -74,8 +74,15 @@ func (s *Server) createTunnel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	// Pull affected nodes so we can re-push after deletion (cascades remove forwards).
 	t, _ := db.GetTunnel(s.DB, id)
+	// forwards.tunnel_id is ON DELETE NO ACTION, so a tunnel still backing any
+	// forward (a tenant forward or a chain hop) cannot be dropped; reject with a
+	// clear message instead of leaking the raw FK error.
+	if n, err := db.CountForwardsByTunnel(s.DB, id); err == nil && n > 0 {
+		setFlash(w, fmt.Sprintf("通道仍被 %d 条转发占用，请先删除这些转发", n))
+		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		return
+	}
 	if err := db.DeleteTunnel(s.DB, id); err != nil {
 		setFlash(w, err.Error())
 		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
