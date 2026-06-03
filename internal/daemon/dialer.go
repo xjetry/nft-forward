@@ -37,10 +37,11 @@ type DialerConfig struct {
 	Token        string
 	AgentVersion string
 
-	GetState    func() (OwnerRuleset, AgentMeta)
-	OnRegister  func(forwards []wsproto.Forward) // called when register_local_ack arrives
-	OnApply     func(ctx context.Context, rev string, rules []nft.Rule) error
-	OnTuiNotice func(forwards []wsproto.Forward) // optional; nil = skip notice
+	GetState      func() (OwnerRuleset, AgentMeta)
+	OnRegister    func(forwards []wsproto.Forward) // called when register_local_ack arrives
+	OnApply       func(ctx context.Context, rev string, rules []nft.Rule) error
+	OnTuiNotice   func(forwards []wsproto.Forward) // optional; nil = skip notice
+	OnPanelNotice func(forwards []wsproto.Forward) // optional; nil = skip notice
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
 	CountersFn func() []wsproto.CounterSample
@@ -52,6 +53,9 @@ type Dialer struct {
 	tuiCh      chan []nft.Rule
 	pendingTui atomic.Pointer[[]nft.Rule]
 
+	panelCh      chan []nft.Rule
+	pendingPanel atomic.Pointer[[]nft.Rule]
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{} // closed when Run() returns
@@ -59,10 +63,11 @@ type Dialer struct {
 
 func NewDialer(cfg DialerConfig) *Dialer {
 	return &Dialer{
-		cfg:   cfg,
-		tuiCh: make(chan []nft.Rule, 1),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+		cfg:     cfg,
+		tuiCh:   make(chan []nft.Rule, 1),
+		panelCh: make(chan []nft.Rule, 1),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 }
 
@@ -95,6 +100,26 @@ func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
 		if p := d.pendingTui.Swap(nil); p != nil {
 			select {
 			case d.tuiCh <- *p:
+			default:
+				// channel still full; a fresher snapshot will come through
+			}
+		}
+	}
+}
+
+// NotifyPanelEdited accepts a new panel-segment snapshot from the
+// unix-socket handler after a TUI edit to a server-managed forward.
+// Last-write-wins, mirroring NotifyTuiChanged: a queued snapshot is
+// superseded by a newer one so only the latest state reaches the panel.
+func (d *Dialer) NotifyPanelEdited(rules []nft.Rule) {
+	cp := append([]nft.Rule(nil), rules...)
+	select {
+	case d.panelCh <- cp:
+	default:
+		d.pendingPanel.Store(&cp)
+		if p := d.pendingPanel.Swap(nil); p != nil {
+			select {
+			case d.panelCh <- *p:
 			default:
 				// channel still full; a fresher snapshot will come through
 			}
@@ -277,6 +302,13 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			fwds := rulesToForwards(rules)
 			tp, _ := json.Marshal(wsproto.TuiSegmentChanged{Forwards: fwds})
 			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeTuiSegmentChanged, Payload: tp})
+		case rules := <-d.panelCh:
+			if d.cfg.OnPanelNotice == nil {
+				continue
+			}
+			fwds := rulesToForwards(rules)
+			pp, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
+			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp})
 		}
 	}
 }

@@ -165,6 +165,56 @@ func TestRulesToForwardsCarriesMode(t *testing.T) {
 	}
 }
 
+func TestDialerSendsPanelSegmentEditOnNotify(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	dl := NewDialer(DialerConfig{
+		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
+		Token:        "tok",
+		AgentVersion: "v1",
+		GetState: func() (OwnerRuleset, AgentMeta) {
+			return OwnerRuleset{}, AgentMeta{}
+		},
+		OnApply:       func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnPanelNotice: func(_ []wsproto.Forward) {},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _, _ = dl.runOnce(ctx) }()
+
+	dl.NotifyPanelEdited([]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}})
+
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("never received panel_segment_edit frame; frames=%+v", fh.Frames())
+		case <-tick.C:
+			for _, f := range fh.Frames() {
+				if f.Type != wsproto.TypePanelSegmentEdit {
+					continue
+				}
+				var pse wsproto.PanelSegmentEdit
+				if err := json.Unmarshal(f.Payload, &pse); err != nil {
+					t.Fatalf("unmarshal panel_segment_edit: %v", err)
+				}
+				if len(pse.Forwards) == 1 && pse.Forwards[0].ListenPort == 30000 && pse.Forwards[0].TargetIP == "10.0.0.9" {
+					return
+				}
+				t.Fatalf("unexpected panel_segment_edit payload: %+v", pse)
+			}
+		}
+	}
+}
+
 func TestDialerSkipsRegisterWhenMigratedAtIsNonzero(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
