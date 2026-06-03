@@ -459,7 +459,7 @@ func TestViewListRendersReadOnlyPanelSection(t *testing.T) {
 
 func TestLoadInitialRulesSplitsTuiAndPanel(t *testing.T) {
 	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
-		"tui":   {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+		"tui": {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
 		"panel": {{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200,
 			ChainID: 5, ChainName: "seednet-vless"}},
 	}}
