@@ -217,6 +217,7 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 // without a tunnel are unmetered admin-mode rules).
 func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 	tunnels := map[int64]*db.Tunnel{}
+	chains := map[int64]*db.Chain{}
 	rules := make([]nft.Rule, 0, len(forwards))
 	for _, f := range forwards {
 		bw := 0
@@ -240,6 +241,19 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 			BandwidthMbps: bw,
 			Mode:          f.Mode,
 		}
+		if f.ChainID.Valid {
+			rule.ChainID = f.ChainID.Int64
+			c, ok := chains[f.ChainID.Int64]
+			if !ok {
+				c, _ = db.GetChain(d, f.ChainID.Int64)
+				if c != nil {
+					chains[f.ChainID.Int64] = c
+				}
+			}
+			if c != nil {
+				rule.ChainName = c.Name
+			}
+		}
 		if resolver.IsHostname(f.TargetIP) {
 			rule.DestHost = f.TargetIP
 		} else {
@@ -254,9 +268,19 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 // agent whose last_applied_rev matches can be skipped. Determinism
 // hinges on ActiveForwardsForPush returning rows in a stable order
 // (it sorts by listen_port).
+//
+// Chain metadata is panel-side display info, not part of the data plane;
+// exclude it so a chain rename does not force a redundant re-apply on
+// reconnecting nodes.
 func computeRev(rules []nft.Rule) string {
+	bare := make([]nft.Rule, len(rules))
+	for i, r := range rules {
+		r.ChainID = 0
+		r.ChainName = ""
+		bare[i] = r
+	}
 	h := sha256.New()
-	b, _ := json.Marshal(rules)
+	b, _ := json.Marshal(bare)
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
