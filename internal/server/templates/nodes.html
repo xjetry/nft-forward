@@ -5,13 +5,12 @@
 <h2>已注册节点</h2>
 {{if .Nodes}}
 <table>
-<thead><tr><th>ID</th><th>名称</th><th>地址</th><th>最近同步</th><th>状态</th><th>操作</th></tr></thead>
+<thead><tr><th>ID</th><th>名称</th><th>最近同步</th><th>状态</th><th>操作</th></tr></thead>
 <tbody>
 {{range .Nodes}}
 <tr>
 <td>{{.ID}}</td>
 <td><a href="/nodes/{{.ID}}">{{.Name}}</a></td>
-<td class="mono">{{.Address}}</td>
 <td>{{unix .LastApplyAt}}</td>
 <td>
 {{if .Disabled}}<span class="pill warn">禁用</span>
@@ -35,7 +34,6 @@
 <form method="post" action="/nodes">
 <div class="grid">
 <label>名称</label><input name="name" required placeholder="例如 hk-1">
-<label>Agent 地址</label><input name="address" required placeholder="例如 http://192.0.2.10:7878 或 https://hk-1.example.com:7878">
 <label>Token（可选）</label><input name="secret" placeholder="留空则随机生成 64 位 hex">
 </div>
 <div style="margin-top:12px"><button type="submit">添加</button></div>

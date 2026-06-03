@@ -5,12 +5,11 @@
 <h2>节点（{{len .Nodes}}）</h2>
 {{if .Nodes}}
 <table>
-<thead><tr><th>名称</th><th>地址</th><th>状态</th></tr></thead>
+<thead><tr><th>名称</th><th>状态</th></tr></thead>
 <tbody>
 {{range .Nodes}}
 <tr>
 <td><a href="/nodes/{{.ID}}">{{.Name}}</a></td>
-<td class="mono">{{.Address}}</td>
 <td>
 {{if .Disabled}}<span class="pill warn">禁用</span>
 {{else if nullstr .LastError}}<span class="pill err">错误</span>

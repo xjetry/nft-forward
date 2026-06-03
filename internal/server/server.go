@@ -383,17 +383,15 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	name := strings.TrimSpace(r.FormValue("name"))
-	address := strings.TrimSpace(r.FormValue("address"))
 	secret := strings.TrimSpace(r.FormValue("secret"))
-	if name == "" || address == "" {
-		setFlash(w, "name 和 address 不能为空")
+	if name == "" {
+		setFlash(w, "name 不能为空")
 		http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 		return
 	}
-	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
-		address = "http://" + address
-	}
-	n, err := db.CreateNode(s.DB, name, address, secret)
+	// Remote nodes dial the panel in reverse (WebSocket, matched by token), so
+	// the panel never stores a control-plane address for them.
+	n, err := db.CreateNode(s.DB, name, "", secret)
 	if err != nil {
 		setFlash(w, "创建失败: "+err.Error())
 		http.Redirect(w, r, "/nodes", http.StatusSeeOther)

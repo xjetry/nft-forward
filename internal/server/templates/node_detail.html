@@ -4,8 +4,7 @@
 <div class="card">
 <h2>基本信息</h2>
 <table>
-<tr><th style="width:140px">地址（控制面）</th><td class="mono">{{.Node.Address}}</td></tr>
-<tr><th>中继地址（数据面）</th><td class="mono">{{if .Node.RelayHost}}{{.Node.RelayHost}}{{else}}<span style="color:#86868b">未设置（设置后才能进链路）</span>{{end}}</td></tr>
+<tr><th style="width:140px">中继地址（数据面）</th><td class="mono">{{if .Node.RelayHost}}{{.Node.RelayHost}}{{else}}<span style="color:#86868b">未设置（设置后才能进链路）</span>{{end}}</td></tr>
 <tr><th>Token</th><td class="mono">{{.Node.Secret}}</td></tr>
 <tr><th>最近同步</th><td>{{unix .Node.LastApplyAt}}</td></tr>
 <tr><th>最近心跳</th><td>{{unix .Node.LastSeen}} {{if eq .Node.Online 1}}<span class="pill ok">在线</span>{{else}}<span class="pill warn">离线</span>{{end}}</td></tr>
@@ -13,7 +12,7 @@
 {{if .Node.Disabled}}<span class="pill warn">禁用</span>
 {{else if nullstr .Node.LastError}}<span class="pill err">错误：{{nullstr .Node.LastError}}</span>
 {{else if .Node.LastApplyAt.Valid}}<span class="pill ok">已同步</span>
-{{else}}<span class="pill warn">待同步（agent 未连上或地址不通）</span>{{end}}
+{{else}}<span class="pill warn">待同步（agent 尚未连上）</span>{{end}}
 </td></tr>
 </table>
 <form method="post" action="/nodes/{{.Node.ID}}/relay-host" style="margin-top:12px;display:flex;gap:8px;align-items:center">
