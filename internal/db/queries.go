@@ -367,6 +367,22 @@ func DeleteForward(d *sql.DB, id int64) (int64, error) {
 	return nodeID, nil
 }
 
+// UpdateForward updates only the editable fields of a non-chain forward,
+// located by (node_id, proto, listen_port). chain_id IS NULL is a
+// server-side backstop: a chained hop's listen_port/target are a relay
+// skeleton owned by chain orchestration (RegenerateChain wires neighbor
+// hops together), so even a reported edit that names a chain row leaves it
+// untouched. Returns rows affected so the caller distinguishes a hit from a
+// miss (chained row, or an unknown port).
+func UpdateForward(d *sql.DB, nodeID int64, proto string, listenPort int, targetIP string, targetPort int, comment, mode string) (int64, error) {
+	res, err := d.Exec(`UPDATE forwards SET target_ip=?, target_port=?, comment=?, mode=? WHERE node_id=? AND proto=? AND listen_port=? AND chain_id IS NULL`,
+		targetIP, targetPort, comment, NormalizeForwardMode(mode), nodeID, proto, listenPort)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func listForwardsWhere(d *sql.DB, where string, args ...any) ([]*Forward, error) {
 	q := `SELECT ` + forwardCols + ` FROM forwards`
 	if where != "" {
