@@ -356,6 +356,7 @@ func (s *Server) rewireChainsAfterNodeChange(w http.ResponseWriter, chainIDs []i
 	if len(chainIDs) == 0 {
 		return
 	}
+	seen := map[int64]bool{}
 	var affected []int64
 	for _, cid := range chainIDs {
 		aff, err := s.regenerateChainByID(cid)
@@ -363,7 +364,12 @@ func (s *Server) rewireChainsAfterNodeChange(w http.ResponseWriter, chainIDs []i
 			log.Printf("rewire chain %d after %s: %v", cid, action, err)
 			continue
 		}
-		affected = append(affected, aff...)
+		for _, n := range aff {
+			if !seen[n] {
+				seen[n] = true
+				affected = append(affected, n)
+			}
+		}
 	}
 	if len(affected) > 0 {
 		s.dispatchAfterFanout(w, affected, action)
