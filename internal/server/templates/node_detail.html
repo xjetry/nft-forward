@@ -25,7 +25,7 @@
 <div class="card">
 <h2>节点安装命令</h2>
 <p>在目标节点（已安装 nftables，root 用户）执行下列命令。把 <code>https://YOUR-PANEL</code> 换成 agent 可达到的面板 URL（反代后的公网域名或内网地址）：</p>
-<pre>curl -fsSL https://github.com/xjetry/nft-forward/releases/latest/download/install.sh -o install.sh
+<pre>curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh
 sudo bash install.sh agent \
   --panel-url https://YOUR-PANEL \
   --token {{.Node.Secret}}</pre>
