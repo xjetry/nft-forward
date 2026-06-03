@@ -76,6 +76,9 @@ type model struct {
 	rules      []nft.Rule
 	panelRules []nft.Rule // server-pushed segment, shown read-only
 	cursor     int
+	// editingOwner records which segment the in-progress edit targets so
+	// submitEdit posts back to the right owner ("tui" or "panel").
+	editingOwner string
 
 	inputs       []textinput.Model
 	focusedInput int
@@ -130,6 +133,25 @@ func loadInitialRules(client daemonClient) (tui []nft.Rule, panel []nft.Rule, er
 		panel = []nft.Rule{}
 	}
 	return tui, panel, nil
+}
+
+// totalRows is the count of selectable rows across both segments: the
+// editable tui segment followed by the server-managed panel segment.
+func (m model) totalRows() int {
+	return len(m.rules) + len(m.panelRules)
+}
+
+// rowAt resolves a unified cursor index to its rule, owner, and whether it
+// is editable. Indices [0,len(rules)) map to the tui segment; the remainder
+// map to the panel segment. A panel rule is editable only when it is not a
+// chain hop (ChainID==0): chain hops carry a relay skeleton whose
+// port/target must not be edited from the TUI.
+func (m model) rowAt(i int) (r nft.Rule, owner string, editable bool) {
+	if i < len(m.rules) {
+		return m.rules[i], "tui", true
+	}
+	p := m.panelRules[i-len(m.rules)]
+	return p, "panel", p.ChainID == 0
 }
 
 func buildInputs() []textinput.Model {
@@ -189,23 +211,25 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < len(m.rules)-1 {
+		if m.cursor < m.totalRows()-1 {
 			m.cursor++
 		}
 	case "a", "n", "+":
 		m.enterAddMode()
 		return m, textinput.Blink
 	case "e":
-		if len(m.rules) == 0 {
+		if m.totalRows() == 0 {
 			m.status = "no rule to edit"
 			return m, nil
 		}
 		m.enterEditMode()
 		return m, textinput.Blink
 	case "d", "delete":
-		if len(m.rules) > 0 {
+		if m.cursor < len(m.rules) && len(m.rules) > 0 {
 			m.mode = viewConfirmDelete
 			m.err = ""
+		} else if m.totalRows() > 0 && m.cursor >= len(m.rules) {
+			m.status = "server 托管规则不能在此删除"
 		}
 	case "c":
 		if len(m.rules) > 0 {
@@ -229,26 +253,25 @@ func (m *model) enterAddMode() {
 }
 
 func (m *model) enterEditMode() {
+	r, owner, editable := m.rowAt(m.cursor)
+	if !editable {
+		m.status = "链式规则端口/目标只读，请在面板修改"
+		return
+	}
+	m.editingOwner = owner
 	m.mode = viewEdit
 	m.err = ""
 	m.status = ""
 	m.inputs = buildInputs()
 	m.focusedInput = fProto
 
-	r := m.rules[m.cursor]
-
-	// Resolve protoIdx from the stored protocol value.
-	m.protoIdx = 0 // default: tcp
+	m.protoIdx = 0
 	for i, p := range protoOptions {
 		if p == r.Proto {
 			m.protoIdx = i
 			break
 		}
 	}
-	// If the stored proto is unknown (legacy data), we silently fall back to tcp (idx 0).
-
-	// Resolve modeIdx from the stored mode value via EffectiveMode so that
-	// rules with an empty Mode field (legacy kernel rules) map to index 0.
 	m.modeIdx = 0
 	for i, md := range modeOptions {
 		if md == r.EffectiveMode() {
@@ -256,7 +279,6 @@ func (m *model) enterEditMode() {
 			break
 		}
 	}
-
 	m.inputs[fSrcPort].SetValue(strconv.Itoa(r.SrcPort))
 	destValue := r.DestIP
 	if r.DestHost != "" {
@@ -365,13 +387,26 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	owner := m.editingOwner
+	var seg []nft.Rule
+	var idx int
+	if owner == "panel" {
+		seg = m.panelRules
+		idx = m.cursor - len(m.rules)
+	} else {
+		seg = m.rules
+		idx = m.cursor
+	}
+
 	r := nft.Rule{
-		ID:       m.rules[m.cursor].ID,
-		Proto:    proto,
-		Mode:     modeOptions[m.modeIdx],
-		SrcPort:  srcPort,
-		DestPort: destPort,
-		Comment:  comment,
+		ID:        seg[idx].ID,
+		Proto:     proto,
+		Mode:      modeOptions[m.modeIdx],
+		SrcPort:   srcPort,
+		DestPort:  destPort,
+		Comment:   comment,
+		ChainID:   seg[idx].ChainID, // preserved; for editable rows this is 0
+		ChainName: seg[idx].ChainName,
 	}
 	if resolver.IsHostname(destInput) {
 		r.DestHost = destInput
@@ -382,21 +417,25 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 		m.err = err.Error()
 		return m, nil
 	}
-	for i, existing := range m.rules {
-		if i != m.cursor && existing.Proto == r.Proto && existing.SrcPort == r.SrcPort {
+	for i, existing := range seg {
+		if i != idx && existing.Proto == r.Proto && existing.SrcPort == r.SrcPort {
 			m.err = fmt.Sprintf("%s/%d 已被转发占用", r.Proto, r.SrcPort)
 			return m, nil
 		}
 	}
 
-	next := append([]nft.Rule{}, m.rules...)
-	next[m.cursor] = r
-	applied, err := commit(m.client, next)
+	next := append([]nft.Rule{}, seg...)
+	next[idx] = r
+	applied, err := commitOwner(m.client, owner, next)
 	if err != nil {
 		m.err = err.Error()
 		return m, nil
 	}
-	m.rules = applied
+	if owner == "panel" {
+		m.panelRules = applied
+	} else {
+		m.rules = applied
+	}
 	m.mode = viewList
 	statusTarget := r.DestIP
 	if r.DestHost != "" {
@@ -486,7 +525,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.rules = applied
-		if m.cursor >= len(m.rules) && m.cursor > 0 {
+		if m.cursor >= m.totalRows() && m.cursor > 0 {
 			m.cursor--
 		}
 		m.status = fmt.Sprintf("已删除 %s/%d", removed.Proto, removed.SrcPort)
@@ -536,17 +575,30 @@ func (m *model) refresh() {
 		panel = []nft.Rule{}
 	}
 	m.panelRules = panel
+	if m.cursor >= m.totalRows() {
+		m.cursor = m.totalRows() - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 	m.status = "已从 daemon 重新加载"
 }
 
-func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
+// commitOwner posts a full segment snapshot for owner to the daemon. Raw
+// rules go on the wire — the daemon resolves hostnames at apply time — so
+// DestHost/DestIP are sent as the user typed them.
+func commitOwner(client daemonClient, owner string, rules []nft.Rule) ([]nft.Rule, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
-	if err := client.PostRuleset("tui", rules); err != nil {
+	if err := client.PostRuleset(owner, rules); err != nil {
 		return nil, err
 	}
 	return rules, nil
+}
+
+func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
+	return commitOwner(client, "tui", rules)
 }
 
 func (m model) View() string {
@@ -573,6 +625,7 @@ func (m model) View() string {
 // Column widths in terminal cells (CJK double-width characters count as 2 cells).
 // These constants must match between the header and every data row.
 const (
+	colOwner   = 18 // "链路 seednet-vless" / "本地" / "server"
 	colProto   = 8  // "tcp+udp " (longest option 7 chars + 1 pad)
 	colSrcPort = 10 // " 65535    "
 	colDest    = 18 // "100.100.100.255   " (max IPv4 15 chars + 3 pad)
@@ -629,72 +682,51 @@ func (m model) viewList() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "\n\n")
 
-	if len(m.rules) == 0 {
+	if m.totalRows() == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
 	} else {
-		// Header row uses the same column model as data rows.
-		header := renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
+		header := cellStyle(colOwner).Render("来源") +
+			renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 		b.WriteString(headerStyle.Render(header) + "\n")
 
-		fixedWidth := colProto + colSrcPort + colDest + colDstPort
-		// innerWidth is the usable terminal width minus the two side margins.
+		fixedWidth := colOwner + colProto + colSrcPort + colDest + colDstPort
 		innerWidth := m.width - 2*colMargin
 		if innerWidth < fixedWidth+1 {
 			innerWidth = 80 - 2*colMargin
 		}
 		commentWidth := innerWidth - fixedWidth
 
-		for i, r := range m.rules {
-			// Prefer DestHost (what the user typed) over DestIP for the target cell.
+		for i := 0; i < m.totalRows(); i++ {
+			r, owner, _ := m.rowAt(i)
 			destHost := r.DestIP
 			if r.DestHost != "" {
 				destHost = r.DestHost
 			}
-			// Mark userspace forwards so the operator can distinguish them at a
-			// glance without opening the edit form. truncateCell handles overflow
-			// when proto+marker exceeds colProto.
 			protoCell := strings.ToLower(r.Proto)
 			if r.EffectiveMode() == nft.ModeUserspace {
 				protoCell += " (U)"
 			}
-			// Always render with a padded comment so selected highlight fills inner width.
-			paddedLine := renderTableRow(
-				protoCell,
-				strconv.Itoa(r.SrcPort),
-				destHost,
-				strconv.Itoa(r.DestPort),
-				cellStyle(commentWidth).Render(r.Comment),
-			)
+			ownerTag := "本地"
+			if owner == "panel" {
+				if r.ChainID != 0 {
+					ownerTag = "链路 " + r.ChainName
+				} else {
+					ownerTag = "server"
+				}
+			}
+			line := cellStyle(colOwner).Render(truncateCell(ownerTag, colOwner)) +
+				renderTableRow(
+					protoCell,
+					strconv.Itoa(r.SrcPort),
+					destHost,
+					strconv.Itoa(r.DestPort),
+					cellStyle(commentWidth).Render(r.Comment),
+				)
 			if i == m.cursor {
-				// Apply highlight only to the inner content; margins remain un-highlighted.
-				b.WriteString(selectedStyle.Render(paddedLine) + "\n")
+				b.WriteString(selectedStyle.Render(line) + "\n")
 			} else {
-				b.WriteString(paddedLine + "\n")
+				b.WriteString(line + "\n")
 			}
-		}
-	}
-
-	// Read-only view of server-pushed (panel) forwards: managed by the panel,
-	// not editable here. Chain hops show their owning chain; standalone panel
-	// forwards are tagged generically.
-	if len(m.panelRules) > 0 {
-		b.WriteString("\n")
-		b.WriteString(headerStyle.Render("server 托管转发（只读）") + "\n")
-		for _, r := range m.panelRules {
-			target := r.DestIP
-			if r.DestHost != "" {
-				target = r.DestHost
-			}
-			tag := "server 托管"
-			if r.ChainName != "" {
-				tag = "链路 " + r.ChainName
-			}
-			proto := strings.ToLower(r.Proto)
-			if r.EffectiveMode() == nft.ModeUserspace {
-				proto += " (U)"
-			}
-			line := fmt.Sprintf("  %s  %d → %s:%d  [%s]", proto, r.SrcPort, target, r.DestPort, tag)
-			b.WriteString(helpStyle.Render(line) + "\n")
 		}
 	}
 

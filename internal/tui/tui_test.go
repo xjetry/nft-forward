@@ -437,23 +437,30 @@ func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 	}
 }
 
-func TestViewListRendersReadOnlyPanelSection(t *testing.T) {
+func TestViewListRendersUnifiedSegments(t *testing.T) {
 	m := model{
 		mode:  viewList,
-		width: 100,
+		width: 120,
 		rules: []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
 		panelRules: []nft.Rule{
-			{Proto: "tcp", SrcPort: 44751, DestIP: "104.251.236.89", DestPort: 42421,
-				ChainName: "seednet-vless"},
+			{Proto: "tcp", SrcPort: 44751, DestIP: "104.251.236.89", DestPort: 42421, ChainID: 7, ChainName: "seednet-vless"},
 			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 		},
 	}
-	out := m.View()
-	if !strings.Contains(out, "seednet-vless") {
-		t.Fatalf("panel section should show the chain name, got:\n%s", out)
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "本地") {
+		t.Fatalf("expected tui row tagged 本地, got:\n%s", out)
 	}
-	if !strings.Contains(out, "server 托管") {
-		t.Fatalf("panel section should label server-managed rules, got:\n%s", out)
+	if !strings.Contains(out, "seednet-vless") {
+		t.Fatalf("expected chain row to show chain name, got:\n%s", out)
+	}
+	if !strings.Contains(out, "server") {
+		t.Fatalf("expected standalone panel row tagged server, got:\n%s", out)
+	}
+	for _, port := range []string{"100", "44751", "30000"} {
+		if !strings.Contains(out, port) {
+			t.Fatalf("expected listen port %s rendered, got:\n%s", port, out)
+		}
 	}
 }
 
@@ -472,5 +479,129 @@ func TestLoadInitialRulesSplitsTuiAndPanel(t *testing.T) {
 	}
 	if len(panelRules) != 1 || panelRules[0].ChainName != "seednet-vless" {
 		t.Fatalf("panel segment wrong: %+v", panelRules)
+	}
+}
+
+func TestRowAtResolvesOwnerAndEditable(t *testing.T) {
+	m := model{
+		rules: []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+		panelRules: []nft.Rule{
+			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},                                  // standalone (editable)
+			{Proto: "tcp", SrcPort: 44751, DestIP: "1.2.3.4", DestPort: 42421, ChainID: 7, ChainName: "vless"}, // chain hop (read-only)
+		},
+	}
+	if m.totalRows() != 3 {
+		t.Fatalf("totalRows = %d, want 3", m.totalRows())
+	}
+	if r, owner, editable := m.rowAt(0); owner != "tui" || !editable || r.SrcPort != 100 {
+		t.Fatalf("row 0 = (%+v, %q, %v)", r, owner, editable)
+	}
+	if r, owner, editable := m.rowAt(1); owner != "panel" || !editable || r.SrcPort != 30000 {
+		t.Fatalf("row 1 = (%+v, %q, %v)", r, owner, editable)
+	}
+	if _, owner, editable := m.rowAt(2); owner != "panel" || editable {
+		t.Fatalf("row 2 should be panel read-only, got owner=%q editable=%v", owner, editable)
+	}
+}
+
+func TestUpdateListNavigatesAcrossSegments(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
+	}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	// down from tui row 0 must reach panel row (cursor 1).
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyDown})
+	m = nm.(model)
+	if m.cursor != 1 {
+		t.Fatalf("cursor after down = %d, want 1 (panel segment)", m.cursor)
+	}
+	// down again must clamp at totalRows-1.
+	nm, _ = m.updateList(tea.KeyMsg{Type: tea.KeyDown})
+	if nm.(model).cursor != 1 {
+		t.Fatalf("cursor must clamp at last row, got %d", nm.(model).cursor)
+	}
+}
+
+func TestEnterEditModeRejectsChainRow(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 44751, DestIP: "1.2.3.4", DestPort: 42421, ChainID: 7, ChainName: "vless"},
+	})
+	m.cursor = 0 // panel chain hop (no tui rows)
+	m.enterEditMode()
+	if m.mode == viewEdit {
+		t.Fatal("chain hop must not enter edit mode")
+	}
+	if !strings.Contains(m.status, "只读") {
+		t.Fatalf("expected read-only status, got %q", m.status)
+	}
+}
+
+func TestSubmitEditPanelRowPostsPanelOwner(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, []nft.Rule{
+		{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
+	}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443, Comment: "old"},
+	})
+	m.cursor = 1 // panel standalone row
+	m.enterEditMode()
+	if m.mode != viewEdit || m.editingOwner != "panel" {
+		t.Fatalf("expected panel edit mode, got mode=%v owner=%q", m.mode, m.editingOwner)
+	}
+	m.inputs[fDestIP].SetValue("10.9.9.9")
+	m.inputs[fDestPort].SetValue("8443")
+	m.inputs[fComment].SetValue("new")
+	nm, _ := m.submitEdit()
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	if fc.postedOwner != "panel" {
+		t.Fatalf("expected post to panel owner, got %q", fc.postedOwner)
+	}
+	if len(mm.panelRules) != 1 || mm.panelRules[0].DestIP != "10.9.9.9" || mm.panelRules[0].DestPort != 8443 {
+		t.Fatalf("panel rule not updated locally: %+v", mm.panelRules)
+	}
+	if len(mm.rules) != 1 || mm.rules[0].SrcPort != 100 {
+		t.Fatalf("tui segment must be untouched: rules=%+v", mm.rules)
+	}
+}
+
+func TestCommitOwnerPostsGivenOwner(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	applied, err := commitOwner(fc, "panel", []nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.postedOwner != "panel" || len(applied) != 1 {
+		t.Fatalf("commitOwner posted owner=%q applied=%+v", fc.postedOwner, applied)
+	}
+}
+
+func TestUpdateListDeleteRejectsPanelRow(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	m.cursor = 0 // panel row (no tui rows)
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	mm := nm.(model)
+	if mm.mode == viewConfirmDelete {
+		t.Fatal("delete must not target a panel-segment row")
+	}
+	if !strings.Contains(mm.status, "托管") {
+		t.Fatalf("expected server-managed delete rejection, got %q", mm.status)
+	}
+}
+
+func TestRefreshClampsCursor(t *testing.T) {
+	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
+		"tui": {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+	}}
+	m := initialModel(fc, nil, nil)
+	m.cursor = 5 // stale cursor beyond any row
+	m.refresh()
+	if m.cursor != 0 {
+		t.Fatalf("refresh must clamp cursor to a valid row, got %d", m.cursor)
 	}
 }
