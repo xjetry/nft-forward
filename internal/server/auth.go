@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -112,7 +113,10 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func setFlash(w http.ResponseWriter, msg string) {
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: msg, Path: "/", MaxAge: 30})
+	// Cookie values must be ASCII-safe (RFC 6265); net/http silently drops
+	// non-ASCII bytes, which would blank out non-ASCII (e.g. Chinese) flash
+	// messages entirely. Percent-encode so UTF-8 survives the round trip.
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: url.QueryEscape(msg), Path: "/", MaxAge: 30})
 }
 
 func flashFromCookie(w http.ResponseWriter, r *http.Request) string {
@@ -121,7 +125,11 @@ func flashFromCookie(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: "/", MaxAge: -1})
-	return c.Value
+	msg, err := url.QueryUnescape(c.Value)
+	if err != nil {
+		return ""
+	}
+	return msg
 }
 
 func HashPassword(p string) (string, error) {
