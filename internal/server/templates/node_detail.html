@@ -24,12 +24,13 @@
 
 <div class="card">
 <h2>节点安装命令</h2>
-<p>在目标节点（已安装 nftables，root 用户）执行下列命令。把 <code>https://YOUR-PANEL</code> 换成 agent 可达到的面板 URL（反代后的公网域名或内网地址）：</p>
+<p>在目标节点（已安装 nftables，root 用户）执行下列命令即可。面板地址取自<a href="/nodes">节点页</a>的「面板地址」设置：</p>
+{{if not .PanelURLConfigured}}<p class="flash">⚠ 尚未设置面板地址，下面用你当前访问的域名 <code>{{.PanelURL}}</code> 推断。如 agent 走不同地址，请到<a href="/nodes">节点页</a>设置后再复制。</p>{{end}}
 <pre>curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh
 sudo bash install.sh agent \
-  --panel-url https://YOUR-PANEL \
+  --panel-url {{.PanelURL}} \
   --token {{.Node.Secret}}</pre>
-<p style="color:#86868b;font-size:13px">install.sh 会装好 daemon、把 token 写入 <code>/etc/nft-forward/panel.token</code>、并把 daemon unit 配成 <code>--connect wss://YOUR-PANEL/v1/agents</code>。无需在节点本机开放任何端口。</p>
+<p style="color:#86868b;font-size:13px">install.sh 会装好 daemon、把 token 写入 <code>/etc/nft-forward/panel.token</code>、并把 daemon unit 配成 <code>--connect</code> 到该面板的 <code>/v1/agents</code>。无需在节点本机开放任何端口。</p>
 </div>
 
 <div class="card">

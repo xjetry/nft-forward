@@ -208,6 +208,28 @@ func DeleteSession(d *sql.DB, token string) error {
 	return err
 }
 
+// Settings
+
+// GetSetting returns the value for a global setting key, or "" if unset (an
+// empty string is a valid "not configured" state, not an error).
+func GetSetting(d *sql.DB, key string) (string, error) {
+	var v string
+	err := d.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting upserts a global setting key.
+func SetSetting(d *sql.DB, key, value string) error {
+	_, err := d.Exec(
+		`INSERT INTO settings(key, value) VALUES(?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		key, value)
+	return err
+}
+
 // Nodes
 
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {

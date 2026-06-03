@@ -288,6 +288,8 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/nodes/{id}/relay-host", s.setNodeRelayHost)
 
+		r.Post("/settings", s.saveSettings)
+
 		r.Get("/chains", s.listChains)
 		r.Get("/chains/new", s.newChain)
 		r.Post("/chains", s.createChain)
@@ -373,10 +375,12 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	s.render(w, "nodes.html", map[string]any{
-		"User":  u,
-		"Nodes": nodes,
-		"Flash": flashFromCookie(w, r),
+		"User":     u,
+		"Nodes":    nodes,
+		"PanelURL": panelURL,
+		"Flash":    flashFromCookie(w, r),
 	})
 }
 
@@ -402,6 +406,19 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", n.ID), http.StatusSeeOther)
 }
 
+func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	panelURL := strings.TrimSpace(r.FormValue("panel_url"))
+	if err := db.SetSetting(s.DB, "panel_url", panelURL); err != nil {
+		setFlash(w, "保存失败: "+err.Error())
+		http.Redirect(w, r, "/nodes", http.StatusSeeOther)
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "settings.panel_url", panelURL, "")
+	setFlash(w, "面板地址已保存")
+	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
+}
+
 func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
@@ -420,13 +437,22 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 	if ts != nil {
 		age = humanize.Time(time.Unix(*ts, 0))
 	}
+	panelURL, _ := db.GetSetting(s.DB, "panel_url")
+	panelConfigured := panelURL != ""
+	if !panelConfigured {
+		// Fall back to the host the admin is browsing on, so the install command
+		// is copy-pasteable even before panel_url is set.
+		panelURL = "https://" + r.Host
+	}
 	s.render(w, "node_detail.html", map[string]any{
-		"User":           u,
-		"Node":           n,
-		"Forwards":       forwards,
-		"TuiSnapshot":    tuiSnap,
-		"TuiSnapshotAge": age,
-		"Flash":          flashFromCookie(w, r),
+		"User":               u,
+		"Node":               n,
+		"Forwards":           forwards,
+		"TuiSnapshot":        tuiSnap,
+		"TuiSnapshotAge":     age,
+		"PanelURL":           panelURL,
+		"PanelURLConfigured": panelConfigured,
+		"Flash":              flashFromCookie(w, r),
 	})
 }
 
