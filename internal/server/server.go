@@ -286,6 +286,16 @@ func (s *Server) Router() http.Handler {
 		r.Post("/nodes/{id}/resync", s.resyncNode)
 		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)
 
+		r.Post("/nodes/{id}/relay-host", s.setNodeRelayHost)
+
+		r.Get("/chains", s.listChains)
+		r.Get("/chains/new", s.newChain)
+		r.Post("/chains", s.createChain)
+		r.Get("/chains/{id}", s.showChain)
+		r.Post("/chains/{id}", s.saveChain)
+		r.Post("/chains/{id}/delete", s.deleteChain)
+		r.Post("/chains/{id}/hops/{pos}/reallocate", s.reallocateHop)
+
 		r.Get("/forwards", s.listForwards)
 		r.Post("/forwards", s.createForward)
 		r.Post("/forwards/{id}/delete", s.deleteForward)
@@ -317,6 +327,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/my/forwards", s.tenantListForwards)
 		r.Post("/my/forwards", s.tenantCreateForward)
 		r.Post("/my/forwards/{id}/delete", s.tenantDeleteForward)
+
+		r.Get("/my/chains", s.tenantListChains)
+		r.Get("/my/chains/new", s.tenantNewChain)
+		r.Post("/my/chains", s.tenantCreateChain)
+		r.Post("/my/chains/{id}/delete", s.tenantDeleteChain)
 	})
 
 	return r
@@ -420,12 +435,17 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	// Capture chains routing through this node before the delete cascades their
+	// hop rows away; their upstream hops materialize this node's relay_host and
+	// must be re-wired (around the gap) afterward.
+	affectedChains, _ := db.ChainsReferencingNode(s.DB, id)
 	if err := db.DeleteNode(s.DB, id); err != nil {
 		setFlash(w, err.Error())
 		http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
+	s.rewireChainsAfterNodeChange(w, affectedChains, "节点删除，链路重连")
 	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 }
 
@@ -483,6 +503,17 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := nft.Validate(testRule); err != nil {
 		setFlash(w, err.Error())
+		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
+		return
+	}
+	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
+	if err != nil {
+		setFlash(w, "端口检查失败: "+err.Error())
+		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
+		return
+	}
+	if occupied[listenPort] {
+		setFlash(w, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort))
 		http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 		return
 	}

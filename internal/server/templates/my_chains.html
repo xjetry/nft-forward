@@ -1,0 +1,21 @@
+{{template "header" (mkmap "Title" "我的链路" "User" .User "Flash" .Flash)}}
+<h1>我的中继链路</h1>
+<div class="card">
+<h2>链路列表</h2>
+{{if .Chains}}
+<table>
+<thead><tr><th>ID</th><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Chains}}
+<tr>
+<td>{{.Chain.ID}}</td><td>{{.Chain.Name}}</td><td>{{upper .Chain.Proto}}</td>
+<td class="mono">{{.Path}}</td><td class="mono">{{.Entry}}</td>
+<td><form method="post" action="/my/chains/{{.Chain.ID}}/delete" class="inline" onsubmit="return confirm('删除该链路？');"><button class="danger" type="submit">删除</button></form></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<div class="empty">尚无链路。</div>{{end}}
+<p style="margin-top:12px"><a href="/my/chains/new"><button type="button">+ 新建链路</button></a></p>
+</div>
+{{template "footer" .}}

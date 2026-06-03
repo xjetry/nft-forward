@@ -1,0 +1,76 @@
+{{template "header" (mkmap "Title" "链路详情" "User" .User "Flash" .Flash)}}
+<h1>链路 {{.Chain.Name}} <span style="opacity:0.5;font-size:14px">#{{.Chain.ID}}</span></h1>
+
+<div class="card">
+<h2>入口（复制给客户端）</h2>
+<pre>{{.View.Entry}}</pre>
+<table>
+<tr><th style="width:120px">协议</th><td>{{upper .Chain.Proto}}</td></tr>
+<tr><th>路径</th><td class="mono">{{.View.Path}}</td></tr>
+<tr><th>出口</th><td class="mono">{{.Chain.ExitHost}}:{{.Chain.ExitPort}}</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>各跳状态</h2>
+<table>
+<thead><tr><th>#</th><th>节点</th><th>模式</th><th>监听</th><th>目标</th><th>状态</th><th>操作</th></tr></thead>
+<tbody>
+{{$fw := .FwByNode}}{{$nb := .NodeByID}}
+{{range .Hops}}
+{{$n := index $nb .NodeID}}{{$f := index $fw .NodeID}}
+<tr>
+<td>{{add .Position 1}}</td>
+<td>{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
+<td>{{.Mode}}</td>
+<td>{{.ListenPort}}</td>
+<td class="mono">{{if $f}}{{$f.TargetIP}}:{{$f.TargetPort}}{{end}}</td>
+<td>{{if $n}}{{if nullstr $n.LastError}}<span class="pill err">{{nullstr $n.LastError}}</span>{{else if eq $n.Online 1}}<span class="pill ok">在线</span>{{else}}<span class="pill warn">离线/待同步</span>{{end}}{{end}}</td>
+<td><form method="post" action="/chains/{{$.Chain.ID}}/hops/{{.Position}}/reallocate" class="inline"><button class="ghost" type="submit">换端口</button></form></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h2>编辑链路</h2>
+<form method="post" action="/chains/{{.Chain.ID}}">
+<div class="grid">
+<label>名称</label><input name="name" value="{{.Chain.Name}}" required>
+<label>协议</label><select name="proto" id="proto" onchange="syncModes()"><option value="tcp"{{if eq .Chain.Proto "tcp"}} selected{{end}}>TCP</option><option value="udp"{{if eq .Chain.Proto "udp"}} selected{{end}}>UDP</option></select>
+<label>出口</label><input name="exit" value="{{.Chain.ExitHost}}:{{.Chain.ExitPort}}" required>
+</div>
+<h2>中继节点（按顺序）</h2>
+<table id="hops"><tbody></tbody></table>
+<p><button type="button" onclick="addHop()">+ 添加一跳</button></p>
+<div style="margin-top:12px"><button type="submit">保存并重下发</button></div>
+</form>
+
+<template id="hopRow">
+<tr>
+<td><button type="button" onclick="moveHop(this,-1)" class="ghost">↑</button><button type="button" onclick="moveHop(this,1)" class="ghost">↓</button></td>
+<td><select name="hop_node" required><option value="">— 选择节点 —</option>{{range .Nodes}}<option value="{{.ID}}"{{if eq .RelayHost ""}} disabled{{end}}>{{.Name}}{{if eq .RelayHost ""}}（未设中继地址）{{else}} ({{.RelayHost}}){{end}}</option>{{end}}</select></td>
+<td><select name="hop_mode" class="modeSel"><option value="userspace">用户态(split-TCP)</option><option value="kernel">内核态(零拷贝)</option></select></td>
+<td><button type="button" onclick="this.closest('tr').remove()" class="danger">删除</button></td>
+</tr>
+</template>
+
+<script>
+var INIT_HOPS=[{{range .Hops}}{node:"{{.NodeID}}",mode:"{{.Mode}}"},{{end}}];
+function addHop(node,mode){
+  const t=document.getElementById('hopRow');
+  const frag=t.content.cloneNode(true);
+  if(node){frag.querySelector('select[name=hop_node]').value=node;}
+  if(mode){frag.querySelector('select[name=hop_mode]').value=mode;}
+  document.querySelector('#hops tbody').appendChild(frag);
+  syncModes();
+}
+function moveHop(btn,dir){const tr=btn.closest('tr'),tb=tr.parentNode;if(dir<0&&tr.previousElementSibling)tb.insertBefore(tr,tr.previousElementSibling);if(dir>0&&tr.nextElementSibling)tb.insertBefore(tr.nextElementSibling,tr);}
+function syncModes(){const udp=document.getElementById('proto').value==='udp';document.querySelectorAll('.modeSel').forEach(s=>{const us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
+INIT_HOPS.forEach(h=>addHop(h.node,h.mode));
+</script>
+</div>
+
+<div><a href="/chains">← 返回链路列表</a></div>
+{{template "footer" .}}
