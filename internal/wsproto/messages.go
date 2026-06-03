@@ -22,6 +22,7 @@ const (
 	TypeApplyAck          = "apply_ack"
 	TypeCounters          = "counters"
 	TypeTuiSegmentChanged = "tui_segment_changed"
+	TypePanelSegmentEdit  = "panel_segment_edit"
 	TypePing              = "ping"
 	TypePong              = "pong"
 	TypeError             = "error"
@@ -125,6 +126,16 @@ type Counters struct {
 }
 
 type TuiSegmentChanged struct {
+	Forwards []Forward `json:"forwards"`
+}
+
+// PanelSegmentEdit carries a node's edits to its panel-segment forwards
+// back to the server. It mirrors TuiSegmentChanged: a full snapshot of the
+// segment, not a delta. The server locates each forward by
+// (node_id, proto, listen_port), reads chain_id from the DB to decide
+// whether the row is editable, and persists non-chain edits into the
+// forwards table — so chain_id never needs to ride on the wire.
+type PanelSegmentEdit struct {
 	Forwards []Forward `json:"forwards"`
 }
 

@@ -70,3 +70,26 @@ func TestPingPongCarriesTS(t *testing.T) {
 		t.Fatalf("ts mismatch: %d != %d", got.TS, ts)
 	}
 }
+
+func TestPanelSegmentEditRoundtrip(t *testing.T) {
+	p := PanelSegmentEdit{Forwards: []Forward{
+		{Proto: "tcp", ListenPort: 30000, TargetIP: "10.0.0.9", TargetPort: 443, Comment: "edge", Mode: nft.ModeKernel},
+	}}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got PanelSegmentEdit
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Forwards) != 1 || got.Forwards[0].ListenPort != 30000 || got.Forwards[0].TargetIP != "10.0.0.9" {
+		t.Fatalf("panel_segment_edit roundtrip mismatch: %+v", got)
+	}
+}
+
+func TestPanelSegmentEditTypeConstant(t *testing.T) {
+	if TypePanelSegmentEdit != "panel_segment_edit" {
+		t.Fatalf("unexpected type constant %q", TypePanelSegmentEdit)
+	}
+}
