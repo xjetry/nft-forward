@@ -279,12 +279,9 @@ do_update() {
   file "$_update_tmp/nft-forward" | grep -q 'ELF 64-bit LSB.*x86-64' \
     || die "下载到的二进制不是 ELF 64-bit x86-64（content: $(file "$_update_tmp/nft-forward"))"
 
-  # ---- exec 自检 ----
-  local exec_rc=0
-  "$_update_tmp/nft-forward" --version >/dev/null 2>&1 || exec_rc=$?
-  if [[ $exec_rc -gt 125 ]]; then
-    die "新二进制无法执行（exec format / 缺权限，退出码 $exec_rc）"
-  fi
+  # 不在此处试跑 tmp 里的二进制:临时文件无执行位、或 /tmp 以 noexec 挂载都会
+  # 误判为"无法执行"。架构已由上面的 file 检查保证;真正能否运行由 install 后的
+  # health-check 验证(daemon 起不来即自动回滚)。
 
   # ---- 备份旧二进制 ----
   note "[3/5] 备份旧二进制到 $INSTALL_DIR/nft-forward.bak ..."
