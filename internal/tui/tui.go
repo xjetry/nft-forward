@@ -72,9 +72,10 @@ var protoOptions = []string{"tcp", "udp", "tcp+udp"}
 var modeOptions = []string{nft.ModeKernel, nft.ModeUserspace}
 
 type model struct {
-	mode   viewMode
-	rules  []nft.Rule
-	cursor int
+	mode       viewMode
+	rules      []nft.Rule
+	panelRules []nft.Rule // server-pushed segment, shown read-only
+	cursor     int
 
 	inputs       []textinput.Model
 	focusedInput int
@@ -93,37 +94,42 @@ type model struct {
 // Run starts the TUI bound to the given daemon client. Caller (cmd) is
 // responsible for verifying the daemon is reachable before invoking Run.
 func Run(client daemonClient) error {
-	rules, err := loadInitialRules(client)
+	rules, panelRules, err := loadInitialRules(client)
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(initialModel(client, rules), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(client, rules, panelRules), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func initialModel(client daemonClient, rules []nft.Rule) model {
+func initialModel(client daemonClient, rules, panelRules []nft.Rule) model {
 	return model{
-		mode:   viewList,
-		rules:  rules,
-		inputs: buildInputs(),
-		client: client,
+		mode:       viewList,
+		rules:      rules,
+		panelRules: panelRules,
+		inputs:     buildInputs(),
+		client:     client,
 	}
 }
 
-// loadInitialRules fetches the tui owner segment from the daemon. A nil
-// segment (daemon has no tui rules yet) becomes an empty slice so the
-// rest of the TUI does not have to nil-check.
-func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
+// loadInitialRules fetches the local (tui) and server-pushed (panel) segments
+// from the daemon. nil segments become empty slices so the rest of the TUI
+// does not have to nil-check.
+func loadInitialRules(client daemonClient) (tui []nft.Rule, panel []nft.Rule, err error) {
 	owners, err := client.GetRuleset()
 	if err != nil {
-		return nil, fmt.Errorf("加载规则失败: %w", err)
+		return nil, nil, fmt.Errorf("加载规则失败: %w", err)
 	}
-	rules := owners["tui"]
-	if rules == nil {
-		rules = []nft.Rule{}
+	tui = owners["tui"]
+	if tui == nil {
+		tui = []nft.Rule{}
 	}
-	return rules, nil
+	panel = owners["panel"]
+	if panel == nil {
+		panel = []nft.Rule{}
+	}
+	return tui, panel, nil
 }
 
 func buildInputs() []textinput.Model {
@@ -520,11 +526,16 @@ func (m *model) refresh() {
 		m.err = err.Error()
 		return
 	}
-	rules := owners["tui"]
-	if rules == nil {
-		rules = []nft.Rule{}
+	tui := owners["tui"]
+	if tui == nil {
+		tui = []nft.Rule{}
 	}
-	m.rules = rules
+	m.rules = tui
+	panel := owners["panel"]
+	if panel == nil {
+		panel = []nft.Rule{}
+	}
+	m.panelRules = panel
 	m.status = "已从 daemon 重新加载"
 }
 

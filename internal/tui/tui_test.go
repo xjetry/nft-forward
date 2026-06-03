@@ -175,7 +175,7 @@ func TestTruncateCell(t *testing.T) {
 
 // TestProtoSelectorCycles verifies that left/right key presses cycle through protoOptions.
 func TestProtoSelectorCycles(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, nil)
+	m := initialModel(&fakeDaemonClient{}, nil, nil)
 	m.enterAddMode()
 
 	// Initial state: idx=0 (tcp)
@@ -220,7 +220,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 		{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.1", DestPort: 443},
 	}
 	for _, r := range rules {
-		m := initialModel(&fakeDaemonClient{}, rules)
+		m := initialModel(&fakeDaemonClient{}, rules, nil)
 		// find cursor index
 		for i, rule := range rules {
 			if rule.Proto == r.Proto && rule.SrcPort == r.SrcPort {
@@ -243,7 +243,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 
 // TestProtoSelectorRenderContainsOptions verifies the selector renders all three options.
 func TestProtoSelectorRenderContainsOptions(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, nil)
+	m := initialModel(&fakeDaemonClient{}, nil, nil)
 	m.enterAddMode()
 
 	view := m.renderProtoSelector()
@@ -403,7 +403,7 @@ func TestCommitPostsRawRules(t *testing.T) {
 // in the form produces a rule with Mode=ModeUserspace after submit.
 func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, nil)
+	m := initialModel(fc, nil, nil)
 	m.enterAddMode()
 	m.protoIdx = 0 // tcp
 	m.modeIdx = 1  // userspace
@@ -424,7 +424,7 @@ func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
 // rejection of udp+userspace surfaces as a form error rather than a crash.
 func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, nil)
+	m := initialModel(fc, nil, nil)
 	m.enterAddMode()
 	m.protoIdx = 1 // udp
 	m.modeIdx = 1  // userspace
@@ -434,5 +434,23 @@ func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 	nm, _ := m.submitAdd()
 	if nm.(model).err == "" {
 		t.Fatal("expected validation error for udp+userspace")
+	}
+}
+
+func TestLoadInitialRulesSplitsTuiAndPanel(t *testing.T) {
+	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
+		"tui":   {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+		"panel": {{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200,
+			ChainID: 5, ChainName: "seednet-vless"}},
+	}}
+	tuiRules, panelRules, err := loadInitialRules(fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tuiRules) != 1 || tuiRules[0].SrcPort != 100 {
+		t.Fatalf("tui segment wrong: %+v", tuiRules)
+	}
+	if len(panelRules) != 1 || panelRules[0].ChainName != "seednet-vless" {
+		t.Fatalf("panel segment wrong: %+v", panelRules)
 	}
 }
