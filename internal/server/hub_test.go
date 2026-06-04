@@ -473,6 +473,120 @@ func TestHubPanelSegmentEditSkipsUnknownForward(t *testing.T) {
 	})
 }
 
+func seedTwoHopChainDB(t *testing.T, d *sql.DB) (*db.Chain, int64, int64) {
+	t.Helper()
+	n0, _ := db.CreateNode(d, "chain-edge-0", "https://p0", "tok-chain-0")
+	n1, _ := db.CreateNode(d, "chain-edge-1", "https://p1", "tok-chain-1")
+	d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.10", n0.ID)
+	d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.11", n1.ID)
+	c := &db.Chain{Name: "wire", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
+	id, err := db.CreateChain(d, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ID = id
+	tx, _ := d.Begin()
+	if _, _, err := db.RegenerateChain(tx, c, []db.HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+	return c, n0.ID, n1.ID
+}
+
+func TestHubApplyChainHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
+	_, hub, _ := newHubTestServer(t)
+	c, n0, n1 := seedTwoHopChainDB(t, hub.DB)
+	var got []int64
+	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
+
+	entry, err := hub.applyChainHopEdit(n1, c.ID, 21222, "kernel", "renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == "" {
+		t.Fatal("expected entry endpoint returned")
+	}
+	fwds, _ := db.ListForwardsByChain(hub.DB, c.ID)
+	byNode := map[int64]*db.Forward{}
+	for _, f := range fwds {
+		byNode[f.NodeID] = f
+	}
+	if byNode[n1].ListenPort != 21222 {
+		t.Fatalf("hop n1 listen_port = %d, want 21222", byNode[n1].ListenPort)
+	}
+	if byNode[n0].TargetPort != 21222 {
+		t.Fatalf("upstream n0 target_port = %d, want 21222", byNode[n0].TargetPort)
+	}
+	if len(got) == 0 {
+		t.Fatal("Redispatch was not called")
+	}
+}
+
+func TestHubApplyChainHopEditRejectsForeignNode(t *testing.T) {
+	_, hub, _ := newHubTestServer(t)
+	c, _, _ := seedTwoHopChainDB(t, hub.DB)
+	other, _ := db.CreateNode(hub.DB, "outsider", "https://x", "tokx")
+	if _, err := hub.applyChainHopEdit(other.ID, c.ID, 21000, "kernel", ""); err == nil {
+		t.Fatal("node not on chain must be rejected")
+	}
+}
+
+func TestHubApplyChainDeleteRemovesChainAndRedispatches(t *testing.T) {
+	_, hub, _ := newHubTestServer(t)
+	c, n0, n1 := seedTwoHopChainDB(t, hub.DB)
+	var got []int64
+	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
+
+	if err := hub.applyChainDelete(n0, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetChain(hub.DB, c.ID); err == nil {
+		t.Fatal("chain row should be gone")
+	}
+	fwds, _ := db.ListForwardsByChain(hub.DB, c.ID)
+	if len(fwds) != 0 {
+		t.Fatalf("chain forwards should be gone, got %d", len(fwds))
+	}
+	// Redispatch must receive the full set of nodes whose forwards were
+	// removed — both the node that asked and the other hop — so every node
+	// drops the deleted rules from its kernel.
+	gotSet := map[int64]bool{}
+	for _, id := range got {
+		gotSet[id] = true
+	}
+	if !gotSet[n0] || !gotSet[n1] {
+		t.Fatalf("Redispatch nodes = %v, want both n0=%d and n1=%d", got, n0, n1)
+	}
+}
+
+func TestHubChainHopEditMalformedPayloadAcksError(t *testing.T) {
+	srv, _, _ := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c) // hello_ack
+
+	// A JSON string is a valid envelope payload but can't decode into the
+	// ChainHopEdit object, so it drives the malformed-payload branch.
+	const reqID = "edit-bad"
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeChainHopEdit, ID: reqID, Payload: json.RawMessage(`"not-an-object"`)})
+	env := recvEnvelope(t, c)
+	if env.Type != wsproto.TypeChainCmdAck {
+		t.Fatalf("expected chain_cmd_ack, got %s", env.Type)
+	}
+	if env.ID != reqID {
+		t.Fatalf("ack envelope ID = %q, want %q (must pair with request)", env.ID, reqID)
+	}
+	var ack wsproto.ChainCmdAck
+	if err := json.Unmarshal(env.Payload, &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.OK || ack.Error == "" {
+		t.Fatalf("expected failed ack with error message, got %+v", ack)
+	}
+}
+
 func TestHubCloseSendsGoingAway(t *testing.T) {
 	srv, hub, _ := newHubTestServer(t)
 	c := dialWS(t, srv)

@@ -36,6 +36,13 @@ type Hub struct {
 	// path is never imported here.
 	OnTrafficUpdate func(tenantID int64)
 
+	// Redispatch re-pushes kernel state to a set of nodes after the hub
+	// mutates chain state on their behalf. Like OnTrafficUpdate it keeps the
+	// hub transport-only: the hub knows which nodes a chain edit touched but
+	// delegates the actual dispatch to the owner that wires this, so the
+	// dispatch path is never imported here.
+	Redispatch func(nodeIDs []int64)
+
 	mu    sync.RWMutex
 	conns map[int64]*agentConn
 }
@@ -247,6 +254,32 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 				continue
 			}
 			h.applyPanelEdits(ac.nodeID, pse.Forwards)
+		case wsproto.TypeChainHopEdit:
+			var e wsproto.ChainHopEdit
+			if err := json.Unmarshal(env.Payload, &e); err != nil {
+				sendChainAckErr(ac, env.ID, "malformed payload")
+				continue
+			}
+			entry, cerr := h.applyChainHopEdit(ac.nodeID, e.ChainID, e.ListenPort, e.Mode, e.Comment)
+			ack := wsproto.ChainCmdAck{OK: cerr == nil, Entry: entry}
+			if cerr != nil {
+				ack.Error = cerr.Error()
+			}
+			ackP, _ := json.Marshal(ack)
+			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
+		case wsproto.TypeChainDelete:
+			var dl wsproto.ChainDelete
+			if err := json.Unmarshal(env.Payload, &dl); err != nil {
+				sendChainAckErr(ac, env.ID, "malformed payload")
+				continue
+			}
+			cerr := h.applyChainDelete(ac.nodeID, dl.ChainID)
+			ack := wsproto.ChainCmdAck{OK: cerr == nil}
+			if cerr != nil {
+				ack.Error = cerr.Error()
+			}
+			ackP, _ := json.Marshal(ack)
+			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
 		case wsproto.TypeRegisterLocal:
 			var rl wsproto.RegisterLocal
 			if err := json.Unmarshal(env.Payload, &rl); err != nil {
@@ -490,6 +523,91 @@ func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
 			continue
 		}
 	}
+}
+
+// applyChainHopEdit folds a node-reported edit to its hop in chainID back
+// into the chain skeleton and re-dispatches every node the regeneration
+// touched, returning the chain's copyable entry endpoint. The hop is located
+// by (chainID, nodeID): a chain can't repeat a node, so that pair is unique.
+// Only listen_port/mode/comment are editable — target/proto stay owned by
+// chain orchestration, which is why RegenerateChain recomputes targets and
+// uses chain.proto. A node may only edit a chain it actually participates in.
+func (h *Hub) applyChainHopEdit(nodeID, chainID int64, listenPort int, mode, comment string) (string, error) {
+	c, err := db.GetChain(h.DB, chainID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("链路不存在")
+	}
+	if err != nil {
+		return "", err
+	}
+	hops, err := db.ListChainHops(h.DB, chainID)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	inputs := make([]db.HopInput, len(hops))
+	for i, hp := range hops {
+		in := db.HopInput{NodeID: hp.NodeID, TunnelID: hp.TunnelID, Mode: hp.Mode}
+		if hp.NodeID == nodeID {
+			found = true
+			in.DesiredPort = listenPort
+			in.Mode = db.NormalizeForwardMode(mode)
+			in.Comment = comment
+		}
+		inputs[i] = in
+	}
+	if !found {
+		return "", fmt.Errorf("节点不在该链路上")
+	}
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	entry, affected, err := db.RegenerateChain(tx, c, inputs, nil)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	if h.Redispatch != nil {
+		h.Redispatch(affected)
+	}
+	return entry, nil
+}
+
+// applyChainDelete removes the whole chain (all hops on all nodes) on behalf
+// of a node that participates in it, then re-dispatches every node that ran
+// its forwards so the deleted rules leave the kernel.
+func (h *Hub) applyChainDelete(nodeID, chainID int64) error {
+	hops, err := db.ListChainHops(h.DB, chainID)
+	if err != nil {
+		return err
+	}
+	onChain := false
+	for _, hp := range hops {
+		if hp.NodeID == nodeID {
+			onChain = true
+			break
+		}
+	}
+	if !onChain {
+		return fmt.Errorf("节点不在该链路上")
+	}
+	nodes, err := db.DeleteChain(h.DB, chainID)
+	if err != nil {
+		return err
+	}
+	if h.Redispatch != nil {
+		h.Redispatch(nodes)
+	}
+	return nil
+}
+
+func sendChainAckErr(ac *agentConn, id, msg string) {
+	ackP, _ := json.Marshal(wsproto.ChainCmdAck{OK: false, Error: msg})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: id, Payload: ackP})
 }
 
 // sendAckErr writes a {error: msg} payload on a typed ack envelope so the

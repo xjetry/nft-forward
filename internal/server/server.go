@@ -102,6 +102,7 @@ func New(d *sql.DB) (*Server, error) {
 	// what a quota breach means and drives the re-dispatch, keeping the Hub a
 	// pure transport that never imports the dispatch path.
 	hub.OnTrafficUpdate = s.enforceTenantQuota
+	hub.Redispatch = s.redispatchNodes
 	return s, nil
 }
 
@@ -209,6 +210,22 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 		sort.Strings(failed) // deterministic flash ordering
 		setFlash(w, fmt.Sprintf("%s 已保存，但下发到 %d 个节点失败（%s）",
 			action, len(failed), strings.Join(failed, "；")))
+	}
+}
+
+// redispatchNodes re-pushes kernel state to every node a background (WS-driven)
+// chain mutation touched. Dispatches run off the caller's goroutine: this is
+// invoked from the hub read loop, and dispatchToNode blocks up to the apply-ack
+// timeout per node — blocking the read loop would stall the originating agent's
+// connection (even pings). The chain mutation is already committed; dispatch is
+// best-effort and per-node failures land in last_error.
+func (s *Server) redispatchNodes(nodeIDs []int64) {
+	for _, n := range nodeIDs {
+		go func(n int64) {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("dispatch node %d (链式变更): %v", n, err)
+			}
+		}(n)
 	}
 }
 
