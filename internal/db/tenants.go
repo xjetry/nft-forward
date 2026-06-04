@@ -122,6 +122,33 @@ func DeleteTunnel(d *sql.DB, id int64) error {
 	return err
 }
 
+// TunnelsByID returns all tunnels keyed by ID in a single query, replacing
+// per-forward GetTunnel lookups in the dispatch hot path.
+func TunnelsByID(d *sql.DB) (map[int64]*Tunnel, error) {
+	all, err := ListTunnels(d)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int64]*Tunnel, len(all))
+	for _, t := range all {
+		m[t.ID] = t
+	}
+	return m, nil
+}
+
+// TenantsByID returns all tenants keyed by ID in a single query.
+func TenantsByID(d *sql.DB) (map[int64]*Tenant, error) {
+	all, err := ListTenants(d)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int64]*Tenant, len(all))
+	for _, t := range all {
+		m[t.ID] = t
+	}
+	return m, nil
+}
+
 // Tenant <-> Tunnel grants
 
 func GrantTunnel(d *sql.DB, tenantID, tunnelID int64, maxForwards int) error {

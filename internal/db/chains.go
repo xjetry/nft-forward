@@ -171,6 +171,19 @@ func ListAdminChains(d *sql.DB) ([]*Chain, error) {
 	return listChainsWhere(d, "tenant_id IS NULL")
 }
 
+// ChainsByID returns all chains keyed by ID in a single query.
+func ChainsByID(d *sql.DB) (map[int64]*Chain, error) {
+	all, err := listChainsWhere(d, "")
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int64]*Chain, len(all))
+	for _, c := range all {
+		m[c.ID] = c
+	}
+	return m, nil
+}
+
 func ListChainsByTenant(d *sql.DB, tenantID int64) ([]*Chain, error) {
 	return listChainsWhere(d, "tenant_id=?", tenantID)
 }

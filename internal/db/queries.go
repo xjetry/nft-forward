@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -315,6 +316,20 @@ func GetForwardByNodeProtoPort(d *sql.DB, nodeID int64, proto string, port int) 
 	row := d.QueryRow(`SELECT `+forwardCols+` FROM forwards WHERE node_id=? AND proto=? AND listen_port=?`,
 		nodeID, proto, port)
 	return scanForward(row)
+}
+
+// ForwardMapByNode loads all forwards for a node in one query, keyed by
+// "proto/listen_port" so callers can match counter samples without N+1 lookups.
+func ForwardMapByNode(d *sql.DB, nodeID int64) (map[string]*Forward, error) {
+	fwds, err := listForwardsWhere(d, "node_id=?", nodeID)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]*Forward, len(fwds))
+	for _, f := range fwds {
+		m[f.Proto+"/"+fmt.Sprintf("%d", f.ListenPort)] = f
+	}
+	return m, nil
 }
 
 func DeleteForward(d *sql.DB, id int64) (int64, error) {

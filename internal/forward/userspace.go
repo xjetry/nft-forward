@@ -12,6 +12,9 @@ import (
 	"nft-forward/internal/nft"
 )
 
+// Bound per-port goroutine fan-out so a connection flood cannot exhaust memory.
+const maxConnsPerPort = 1024
+
 // listener is one userspace TCP forward: a net.Listener plus the hot-updatable
 // dial target and rate limiter shared by all of its connections.
 type listener struct {
@@ -21,7 +24,8 @@ type listener struct {
 	lim   atomic.Pointer[rate.Limiter]
 	bytes atomic.Int64
 
-	conns  sync.Map // net.Conn -> struct{}; only so close() can tear them down
+	sem    chan struct{} // counting semaphore; cap == maxConnsPerPort
+	conns  sync.Map     // net.Conn -> struct{}; only so close() can tear them down
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -33,7 +37,7 @@ func openListener(r nft.Rule) (*listener, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &listener{port: r.SrcPort, ln: ln, ctx: ctx, cancel: cancel}
+	l := &listener{port: r.SrcPort, ln: ln, ctx: ctx, cancel: cancel, sem: make(chan struct{}, maxConnsPerPort)}
 	l.tgt.Store(&target{addr: targetAddr(r)})
 	l.lim.Store(makeLimiter(r.BandwidthMbps))
 	l.wg.Add(1)
@@ -48,8 +52,17 @@ func (l *listener) acceptLoop() {
 		if err != nil {
 			return // listener closed (or fatal): stop accepting
 		}
+		// Back-pressure: wait for a free slot so we never exceed
+		// maxConnsPerPort concurrent handler goroutines.
+		select {
+		case l.sem <- struct{}{}:
+		case <-l.ctx.Done():
+			conn.Close()
+			return
+		}
 		l.wg.Add(1)
 		go func() {
+			defer func() { <-l.sem }()
 			defer l.wg.Done()
 			l.handle(conn)
 		}()

@@ -468,10 +468,16 @@ func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]w
 // the next frame, but abandoning the rest of the batch on the first hiccup
 // would lose observability for unrelated rules.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
+	fwdMap, err := db.ForwardMapByNode(h.DB, nodeID)
+	if err != nil {
+		log.Printf("hub: node %d load forward map for counters: %v", nodeID, err)
+		return
+	}
 	touched := map[int64]bool{}
 	for _, s := range samples {
-		f, err := db.GetForwardByNodeProtoPort(h.DB, nodeID, s.Proto, s.ListenPort)
-		if err != nil {
+		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
+		f, ok := fwdMap[key]
+		if !ok {
 			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 			continue
 		}
@@ -509,9 +515,15 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 // arrival) are logged and the loop continues, mirroring applyCounters: one
 // bad row shouldn't abandon the rest of the batch.
 func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
+	fwdMap, err := db.ForwardMapByNode(h.DB, nodeID)
+	if err != nil {
+		log.Printf("hub: node %d load forward map for panel edits: %v", nodeID, err)
+		return
+	}
 	for _, f := range forwards {
-		existing, err := db.GetForwardByNodeProtoPort(h.DB, nodeID, f.Proto, f.ListenPort)
-		if err != nil {
+		key := fmt.Sprintf("%s/%d", f.Proto, f.ListenPort)
+		existing, ok := fwdMap[key]
+		if !ok {
 			log.Printf("hub: node %d panel edit for %s/%d matched no forward row (rule may have been deleted)", nodeID, f.Proto, f.ListenPort)
 			continue
 		}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"embed"
@@ -14,15 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
-	"nft-forward/internal/wsproto"
 )
 
 //go:embed templates/*.html
@@ -231,23 +229,26 @@ func (s *Server) redispatchNodes(nodeIDs []int64) {
 
 // buildRules converts panel-side Forward rows into kernel-side nft.Rule
 // values, stamping per-rule bandwidth from the owning tunnel (forwards
-// without a tunnel are unmetered admin-mode rules).
+// without a tunnel are unmetered admin-mode rules). Lookup tables are
+// preloaded in bulk so the conversion is O(forwards) with no per-row queries.
 func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
-	tunnels := map[int64]*db.Tunnel{}
-	chains := map[int64]*db.Chain{}
-	tenants := map[int64]*db.Tenant{}
+	tunnels, _ := db.TunnelsByID(d)
+	if tunnels == nil {
+		tunnels = map[int64]*db.Tunnel{}
+	}
+	chains, _ := db.ChainsByID(d)
+	if chains == nil {
+		chains = map[int64]*db.Chain{}
+	}
+	tenants, _ := db.TenantsByID(d)
+	if tenants == nil {
+		tenants = map[int64]*db.Tenant{}
+	}
 	rules := make([]nft.Rule, 0, len(forwards))
 	for _, f := range forwards {
 		bw := 0
 		if f.TunnelID.Valid {
-			t, ok := tunnels[f.TunnelID.Int64]
-			if !ok {
-				t, _ = db.GetTunnel(d, f.TunnelID.Int64)
-				if t != nil {
-					tunnels[f.TunnelID.Int64] = t
-				}
-			}
-			if t != nil {
+			if t := tunnels[f.TunnelID.Int64]; t != nil {
 				bw = t.BandwidthMbps
 			}
 		}
@@ -261,26 +262,12 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 		}
 		if f.ChainID.Valid {
 			rule.ChainID = f.ChainID.Int64
-			c, ok := chains[f.ChainID.Int64]
-			if !ok {
-				c, _ = db.GetChain(d, f.ChainID.Int64)
-				if c != nil {
-					chains[f.ChainID.Int64] = c
-				}
-			}
-			if c != nil {
+			if c := chains[f.ChainID.Int64]; c != nil {
 				rule.ChainName = c.Name
 			}
 		}
 		if f.TenantID.Valid {
-			tn, ok := tenants[f.TenantID.Int64]
-			if !ok {
-				tn, _ = db.GetTenant(d, f.TenantID.Int64)
-				if tn != nil {
-					tenants[f.TenantID.Int64] = tn
-				}
-			}
-			if tn != nil {
+			if tn := tenants[f.TenantID.Int64]; tn != nil {
 				rule.TenantName = tn.Name
 			}
 		}
@@ -321,7 +308,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(logRequests)
 	r.Get("/login", s.getLogin)
 	r.Post("/login", s.postLogin)
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	r.Get("/healthz", s.healthz)
 	r.HandleFunc("/v1/agents", s.Hub.ServeWS)
 
 	r.Group(func(r chi.Router) {
@@ -394,14 +381,26 @@ func (s *Server) Router() http.Handler {
 	return r
 }
 
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.DB.PingContext(r.Context()); err != nil {
+		http.Error(w, "db: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintln(w, `{"ok":true}`)
+}
+
 func (s *Server) render(w http.ResponseWriter, name string, data map[string]any) {
 	if data == nil {
 		data = map[string]any{}
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		http.Error(w, "template: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -435,249 +434,6 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"Tunnels":  tunnels,
 		"NodeByID": nodeByID,
 	})
-}
-
-func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	panelURL, err := db.GetSetting(s.DB, "panel_url")
-	if err != nil {
-		log.Printf("list nodes: get panel_url: %v", err)
-	}
-	s.render(w, "nodes.html", map[string]any{
-		"User":     u,
-		"Nodes":    nodes,
-		"PanelURL": panelURL,
-		"Flash":    flashFromCookie(w, r),
-	})
-}
-
-func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	name := strings.TrimSpace(r.FormValue("name"))
-	secret := strings.TrimSpace(r.FormValue("secret"))
-	if name == "" {
-		s.flashRedirect(w, r, "name 不能为空", "/nodes")
-		return
-	}
-	// Remote nodes dial the panel in reverse (WebSocket, matched by token), so
-	// the panel never stores a control-plane address for them.
-	n, err := db.CreateNode(s.DB, name, "", secret)
-	if err != nil {
-		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/nodes")
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), name)
-	s.dispatchAfterMutation(w, n.ID, "节点创建")
-	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", n.ID), http.StatusSeeOther)
-}
-
-func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	panelURL := strings.TrimSpace(r.FormValue("panel_url"))
-	if err := db.SetSetting(s.DB, "panel_url", panelURL); err != nil {
-		s.flashRedirect(w, r, "保存失败: "+err.Error(), "/nodes")
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "settings.panel_url", panelURL, "")
-	s.flashRedirect(w, r, "面板地址已保存", "/nodes")
-}
-
-func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	n, err := db.GetNode(s.DB, id)
-	if err != nil {
-		http.Error(w, "节点不存在", http.StatusNotFound)
-		return
-	}
-	forwards, err := db.ListForwardsByNode(s.DB, n.ID)
-	if err != nil {
-		log.Printf("show node %d: list forwards: %v", n.ID, err)
-	}
-	tuiSnapJSON, ts, err := db.GetTuiSnapshot(s.DB, n.ID)
-	if err != nil {
-		log.Printf("show node %d: get tui snapshot: %v", n.ID, err)
-	}
-	var tuiSnap []wsproto.Forward
-	if tuiSnapJSON != "" {
-		_ = json.Unmarshal([]byte(tuiSnapJSON), &tuiSnap)
-	}
-	age := ""
-	if ts != nil {
-		age = humanize.Time(time.Unix(*ts, 0))
-	}
-	panelURL, err := db.GetSetting(s.DB, "panel_url")
-	if err != nil {
-		log.Printf("show node %d: get panel_url: %v", n.ID, err)
-	}
-	panelConfigured := panelURL != ""
-	if !panelConfigured {
-		// Fall back to the host the admin is browsing on, so the install command
-		// is copy-pasteable even before panel_url is set.
-		panelURL = "https://" + r.Host
-	}
-	s.render(w, "node_detail.html", map[string]any{
-		"User":               u,
-		"Node":               n,
-		"Forwards":           forwards,
-		"TuiSnapshot":        tuiSnap,
-		"TuiSnapshotAge":     age,
-		"PanelURL":           panelURL,
-		"PanelURLConfigured": panelConfigured,
-		"Flash":              flashFromCookie(w, r),
-	})
-}
-
-func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	// Capture chains routing through this node before the delete cascades their
-	// hop rows away; their upstream hops materialize this node's relay_host and
-	// must be re-wired (around the gap) afterward.
-	affectedChains, err := db.ChainsReferencingNode(s.DB, id)
-	if err != nil {
-		log.Printf("delete node %d: list affected chains: %v", id, err)
-	}
-	if err := db.DeleteNode(s.DB, id); err != nil {
-		s.flashRedirect(w, r, err.Error(), "/nodes")
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
-	s.rewireChainsAfterNodeChange(w, affectedChains, "节点删除，链路重连")
-	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
-}
-
-func (s *Server) resyncNode(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	if err := s.dispatchToNode(id); err != nil {
-		s.flashRedirect(w, r, "重新同步失败: "+err.Error(), fmt.Sprintf("/nodes/%d", id))
-		return
-	}
-	s.flashRedirect(w, r, "已触发重新同步", fmt.Sprintf("/nodes/%d", id))
-}
-
-func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	forwards, err := db.ListForwards(s.DB)
-	if err != nil {
-		log.Printf("list forwards: %v", err)
-	}
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		log.Printf("list forwards: list nodes: %v", err)
-	}
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	s.render(w, "forwards.html", map[string]any{
-		"User":     u,
-		"Forwards": forwards,
-		"Nodes":    nodes,
-		"NodeByID": nodeByID,
-		"Flash":    flashFromCookie(w, r),
-	})
-}
-
-func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	nodeID, err := parseFormInt64(r, "node_id")
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	listenPort, err := parseFormInt(r, "listen_port")
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	targetPort, err := parseFormInt(r, "target_port")
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
-	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
-	comment := strings.TrimSpace(r.FormValue("comment"))
-	mode := strings.TrimSpace(r.FormValue("mode"))
-	if !validMode(mode) {
-		s.flashRedirect(w, r, "无效的转发模式", "/forwards")
-		return
-	}
-
-	f := &db.Forward{
-		NodeID:     nodeID,
-		Proto:      proto,
-		ListenPort: listenPort,
-		TargetIP:   targetIP,
-		TargetPort: targetPort,
-		Comment:    comment,
-		Mode:       mode,
-	}
-	testRule := nft.Rule{
-		Proto:    proto,
-		SrcPort:  listenPort,
-		DestPort: targetPort,
-		Mode:     mode,
-	}
-	if resolver.IsHostname(targetIP) {
-		testRule.DestHost = targetIP
-	} else {
-		testRule.DestIP = targetIP
-	}
-	if err := nft.Validate(testRule); err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
-	if err != nil {
-		s.flashRedirect(w, r, "端口检查失败: "+err.Error(), "/forwards")
-		return
-	}
-	if occupied[listenPort] {
-		s.flashRedirect(w, r, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort), "/forwards")
-		return
-	}
-	id, err := db.CreateForward(s.DB, f)
-	if err != nil {
-		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/forwards")
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.create", strconv.FormatInt(id, 10),
-		fmt.Sprintf("node=%d %s/%d→%s:%d", nodeID, proto, listenPort, targetIP, targetPort))
-	s.dispatchAfterMutation(w, nodeID, "转发新增")
-	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
-}
-
-func (s *Server) deleteForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	nodeID, err := db.DeleteForward(s.DB, id)
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.delete", strconv.FormatInt(id, 10), "")
-	s.dispatchAfterMutation(w, nodeID, "转发删除")
-	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 
 func logRequests(next http.Handler) http.Handler {

@@ -57,24 +57,30 @@ func migrate(d *sql.DB) error {
 		} else if err != sql.ErrNoRows {
 			return err
 		}
-		body, err := migrations.ReadFile("migrations/" + name)
-		if err != nil {
-			return err
-		}
-		tx, err := d.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(string(body)); err != nil {
-			return fmt.Errorf("migration %s: %w", name, err)
-		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (?, strftime('%s','now'))`, name); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+		if err := applyMigration(d, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyMigration runs a single migration file inside a transaction.
+// Extracted so defer tx.Rollback() scopes to one migration, not the outer loop.
+func applyMigration(d *sql.DB, name string) error {
+	body, err := migrations.ReadFile("migrations/" + name)
+	if err != nil {
+		return err
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(string(body)); err != nil {
+		return fmt.Errorf("migration %s: %w", name, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (?, strftime('%s','now'))`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
