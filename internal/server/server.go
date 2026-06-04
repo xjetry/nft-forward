@@ -218,6 +218,7 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 	tunnels := map[int64]*db.Tunnel{}
 	chains := map[int64]*db.Chain{}
+	tenants := map[int64]*db.Tenant{}
 	rules := make([]nft.Rule, 0, len(forwards))
 	for _, f := range forwards {
 		bw := 0
@@ -254,6 +255,18 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 				rule.ChainName = c.Name
 			}
 		}
+		if f.TenantID.Valid {
+			tn, ok := tenants[f.TenantID.Int64]
+			if !ok {
+				tn, _ = db.GetTenant(d, f.TenantID.Int64)
+				if tn != nil {
+					tenants[f.TenantID.Int64] = tn
+				}
+			}
+			if tn != nil {
+				rule.TenantName = tn.Name
+			}
+		}
 		if resolver.IsHostname(f.TargetIP) {
 			rule.DestHost = f.TargetIP
 		} else {
@@ -277,6 +290,7 @@ func computeRev(rules []nft.Rule) string {
 	for i, r := range rules {
 		r.ChainID = 0
 		r.ChainName = ""
+		r.TenantName = ""
 		bare[i] = r
 	}
 	h := sha256.New()

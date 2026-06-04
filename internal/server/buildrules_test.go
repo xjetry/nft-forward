@@ -71,3 +71,36 @@ func TestComputeRevIgnoresChainMeta(t *testing.T) {
 		t.Fatalf("chain metadata must not affect rev: %q vs %q", computeRev(base), computeRev(withMeta))
 	}
 }
+
+func TestBuildRules_FillsTenantName(t *testing.T) {
+	d := openDB(t)
+	n, err := db.CreateNode(d, "edge-1", "https://p", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid, err := db.CreateTenant(d, &db.Tenant{Name: "qqpw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withTenant := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 17171, TargetIP: "72.234.229.145", TargetPort: 17171, TenantID: sql.NullInt64{Int64: tid, Valid: true}}
+	noTenant := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 18000, TargetIP: "10.0.0.1", TargetPort: 18000}
+
+	rules := buildRules(d, []*db.Forward{withTenant, noTenant})
+	if len(rules) != 2 {
+		t.Fatalf("want 2 rules, got %d", len(rules))
+	}
+	if rules[0].TenantName != "qqpw" {
+		t.Fatalf("tenant forward should carry tenant name, got %q", rules[0].TenantName)
+	}
+	if rules[1].TenantName != "" {
+		t.Fatalf("tenant-less forward should leave TenantName empty, got %q", rules[1].TenantName)
+	}
+}
+
+func TestComputeRev_ExcludesTenantName(t *testing.T) {
+	base := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "alpha"}}
+	renamed := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "beta"}}
+	if computeRev(base) != computeRev(renamed) {
+		t.Fatal("tenant rename must not change rev (display-only metadata)")
+	}
+}
