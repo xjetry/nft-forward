@@ -56,7 +56,7 @@ remove_legacy_units() {
   # daemon-first layout above. Disable and remove any we find so systemctl
   # status reflects the new world.
   for unit in nft-forward.service nft-server.service nft-agent.service; do
-    if systemctl list-unit-files --no-legend | grep -q "^$unit "; then
+    if [[ -f "$SYSTEMD_DIR/$unit" ]]; then
       systemctl disable --now "$unit" 2>/dev/null || true
       rm -f "$SYSTEMD_DIR/$unit"
     fi
@@ -76,8 +76,7 @@ remove_legacy_units() {
 # each role echoed.
 detect_existing_roles() {
   local roles=()
-  if systemctl list-unit-files --no-legend \
-     | grep -q '^nft-forward-server\.service '; then
+  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
     roles+=(server)
   fi
   if [[ -f "$SYSTEMD_DIR/nft-forward-daemon.service" ]] \
@@ -173,8 +172,7 @@ do_uninstall() {
       ;;
     daemon)
       if systemctl is-active --quiet nft-forward-server.service \
-         || systemctl list-unit-files --no-legend \
-            | grep -qE '^nft-forward-server\.service '; then
+         || [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
         die "请先卸载 server 角色：sudo $0 uninstall server"
       fi
       systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
@@ -245,8 +243,7 @@ rollback_update() {
     mv -f "$INSTALL_DIR/nft-forward.bak" "$INSTALL_DIR/nft-forward"
   fi
   systemctl restart nft-forward-daemon.service 2>/dev/null || true
-  if systemctl list-unit-files --no-legend \
-     | grep -q '^nft-forward-server\.service '; then
+  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
     systemctl restart nft-forward-server.service 2>/dev/null || true
   fi
   exit 1
@@ -363,7 +360,7 @@ do_reset_password() {
 
   # 停 server → 重置 → 重启；daemon 不动，转发不中断。
   local had_server=0
-  if systemctl list-unit-files --no-legend | grep -q '^nft-forward-server\.service '; then
+  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
     had_server=1
     note "停止 nft-forward-server.service ..."
     systemctl stop nft-forward-server.service 2>/dev/null || true
