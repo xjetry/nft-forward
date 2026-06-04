@@ -8,7 +8,7 @@
 
 ```bash
 # 交互式（依次可选 tui / server / agent / update / uninstall）
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o /tmp/nft-forward-install.sh && sudo bash /tmp/nft-forward-install.sh
 
 # 或直接指定角色（可管道，无需 TTY）—— tui 单机 / server 面板 / agent 受控节点
 curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash -s -- tui
