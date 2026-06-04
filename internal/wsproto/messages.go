@@ -23,6 +23,9 @@ const (
 	TypeCounters          = "counters"
 	TypeTuiSegmentChanged = "tui_segment_changed"
 	TypePanelSegmentEdit  = "panel_segment_edit"
+	TypeChainHopEdit      = "chain_hop_edit"
+	TypeChainDelete       = "chain_delete"
+	TypeChainCmdAck       = "chain_cmd_ack"
 	TypePing              = "ping"
 	TypePong              = "pong"
 	TypeError             = "error"
@@ -137,6 +140,36 @@ type TuiSegmentChanged struct {
 // forwards table — so chain_id never needs to ride on the wire.
 type PanelSegmentEdit struct {
 	Forwards []Forward `json:"forwards"`
+}
+
+// ChainHopEdit carries a node's edit to its single hop in a relay chain.
+// The hop is located server-side by (chain_id, connection node) — a chain
+// can't repeat a node — so neither position nor target rides on the wire.
+// Only listen_port/mode/comment are editable; the server recomputes targets
+// and uses chain.proto, so the relay skeleton can't be rewritten from a node.
+type ChainHopEdit struct {
+	ChainID    int64  `json:"chain_id"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode,omitempty"`
+	Comment    string `json:"comment,omitempty"`
+}
+
+// ChainDelete asks the server to delete an entire chain (all hops on all
+// nodes), identified by ChainID. The requesting node must participate in it.
+type ChainDelete struct {
+	ChainID int64 `json:"chain_id"`
+}
+
+// ChainCmdAck is the server's reply to ChainHopEdit/ChainDelete, matched to
+// the request via Envelope.ID. OK==true requires Error=="". Entry is only
+// meaningful on a successful ChainHopEdit, where it carries the chain's
+// copyable entry endpoint; a ChainDelete ack leaves it empty because the
+// deleted chain has no endpoint left to surface. Mirrors ApplyAck's OK+Error
+// contract: OK is the load-bearing signal, Error is human context.
+type ChainCmdAck struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	Entry string `json:"entry,omitempty"`
 }
 
 type Ping struct {

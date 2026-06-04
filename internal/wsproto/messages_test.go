@@ -93,3 +93,63 @@ func TestPanelSegmentEditTypeConstant(t *testing.T) {
 		t.Fatalf("unexpected type constant %q", TypePanelSegmentEdit)
 	}
 }
+
+func TestChainCommandFramesRoundtrip(t *testing.T) {
+	e := ChainHopEdit{ChainID: 7, ListenPort: 21000, Mode: nft.ModeUserspace, Comment: "edge hop"}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ge ChainHopEdit
+	if err := json.Unmarshal(b, &ge); err != nil {
+		t.Fatal(err)
+	}
+	if ge.ChainID != 7 || ge.ListenPort != 21000 || ge.Mode != nft.ModeUserspace || ge.Comment != "edge hop" {
+		t.Fatalf("chain_hop_edit roundtrip mismatch: %+v", ge)
+	}
+
+	d := ChainDelete{ChainID: 9}
+	b, err = json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gd ChainDelete
+	if err := json.Unmarshal(b, &gd); err != nil {
+		t.Fatal(err)
+	}
+	if gd.ChainID != 9 {
+		t.Fatalf("chain_delete roundtrip mismatch: %+v", gd)
+	}
+
+	a := ChainCmdAck{OK: false, Error: "端口被占用", Entry: ""}
+	b, err = json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ga ChainCmdAck
+	if err := json.Unmarshal(b, &ga); err != nil {
+		t.Fatal(err)
+	}
+	if ga.OK || ga.Error != "端口被占用" {
+		t.Fatalf("chain_cmd_ack roundtrip mismatch: %+v", ga)
+	}
+
+	ok := ChainCmdAck{OK: true, Entry: "1.2.3.4:21000"}
+	b, err = json.Marshal(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gok ChainCmdAck
+	if err := json.Unmarshal(b, &gok); err != nil {
+		t.Fatal(err)
+	}
+	if !gok.OK || gok.Entry != "1.2.3.4:21000" {
+		t.Fatalf("chain_cmd_ack success roundtrip mismatch: %+v", gok)
+	}
+}
+
+func TestChainCommandTypeConstants(t *testing.T) {
+	if TypeChainHopEdit != "chain_hop_edit" || TypeChainDelete != "chain_delete" || TypeChainCmdAck != "chain_cmd_ack" {
+		t.Fatalf("unexpected chain type constants: %q %q %q", TypeChainHopEdit, TypeChainDelete, TypeChainCmdAck)
+	}
+}
