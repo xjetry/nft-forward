@@ -592,7 +592,11 @@ EOF
     install -m 0600 /dev/stdin /etc/nft-forward/panel.token <<<"$token"
     write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token"
     systemctl daemon-reload
-    systemctl enable --now nft-forward-daemon.service
+    # enable --now 对已运行的 daemon 是 no-op，不会重启；装 agent 时 daemon 往往
+    # 已在运行（纯 daemon 段或先前角色），必须 restart 才能让新写入的 --connect
+    # 参数真正生效，否则旧进程继续以无 --connect 的纯 daemon 模式运行、永不上线。
+    systemctl enable nft-forward-daemon.service
+    systemctl restart nft-forward-daemon.service
     cat <<EOF
 
 $(ok "===== Agent 安装完成 =====")
