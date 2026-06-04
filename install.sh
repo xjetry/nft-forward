@@ -9,6 +9,8 @@ REPO="xjetry/nft-forward"
 RELEASE="${NFTF_RELEASE:-latest}"
 INSTALL_DIR="/usr/local/sbin"
 SYSTEMD_DIR="/etc/systemd/system"
+SCRIPT_PATH="$INSTALL_DIR/nft-forward-upgrade"
+SCRIPT_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 _update_tmp=""
 
 write_daemon_unit() {
@@ -203,13 +205,14 @@ usage() {
 nft-forward 一键安装/卸载/升级脚本
 
 用法:
-  $0 [tui|server|agent|update|uninstall|reset-password] [选项]
+  $0 [tui|server|agent|update|update-script|uninstall|reset-password] [选项]
 
 模式:
   tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
   server           控制面板（依赖 daemon；自动叠加安装）
   agent            受控节点（daemon 主动 dial panel WebSocket 反向纳管）
   update           拉 latest 二进制原子替换 + restart + 失败回滚
+  update-script    从 GitHub main 分支拉取最新 install.sh 覆盖本地升级脚本
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
   reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
 
@@ -227,15 +230,35 @@ nft-forward 一键安装/卸载/升级脚本
   sudo $0 server --addr :9000            # 自定义面板端口
   sudo $0 agent --panel-url https://panel.example.com --token abc...  # 远程节点
   sudo $0 update                         # 拉 latest 二进制升级
+  sudo $0 update-script                  # 更新本地升级脚本（不动二进制）
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
   sudo $0 uninstall daemon --purge       # 完整擦除 daemon 残留
   sudo $0 reset-password                 # 交互重置面板 admin 密码
+  sudo nft-forward-upgrade               # 等效于 sudo $0 update（安装后可用）
 USAGE
 }
 
 die() { echo "错误: $*" >&2; exit 1; }
 note() { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
+
+persist_script() {
+  if curl -fsSL "$SCRIPT_URL" -o "$tmp/upgrade.sh" 2>/dev/null; then
+    install -m 0755 "$tmp/upgrade.sh" "$SCRIPT_PATH"
+    note "升级脚本已保存到 $SCRIPT_PATH（后续升级: sudo nft-forward-upgrade）"
+  fi
+}
+
+do_update_script() {
+  local stmp
+  stmp="$(mktemp -d)"
+  trap 'rm -rf "$stmp"' EXIT
+  note "下载最新 install.sh ..."
+  curl -fsSL "$SCRIPT_URL" -o "$stmp/upgrade.sh" \
+    || die "下载失败: $SCRIPT_URL"
+  install -m 0755 "$stmp/upgrade.sh" "$SCRIPT_PATH"
+  ok "升级脚本已更新: $SCRIPT_PATH"
+}
 
 rollback_update() {
   echo "update 失败，回滚到旧二进制" >&2
@@ -388,6 +411,11 @@ do_reset_password() {
   echo "旧会话已全部失效，请用新密码重新登录。"
 }
 
+# 当以 nft-forward-upgrade 调用时，默认 update 模式
+if [[ "$(basename "$0")" == "nft-forward-upgrade" && $# -eq 0 ]]; then
+  set -- update
+fi
+
 # 参数解析（--help 不需要 root）
 mode=""
 panel_url=""
@@ -397,7 +425,7 @@ purge=0
 RESET_PW=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    tui|server|agent|update|uninstall|reset-password) mode="$1"; shift ;;
+    tui|server|agent|update|update-script|uninstall|reset-password) mode="$1"; shift ;;
     --panel-url) panel_url="${2:?--panel-url 需要值}"; shift 2 ;;
     --panel-url=*) panel_url="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
@@ -430,20 +458,22 @@ esac
 if [[ -z "$mode" ]]; then
   [[ -t 0 ]] || die "未指定模式且无 TTY；--help 查看用法"
   echo "请选择安装模式:"
-  echo "  1) tui        单机 TUI（自动装 daemon）"
-  echo "  2) server     控制面板（叠加 daemon）"
-  echo "  3) agent      远程节点（daemon 反向 dial panel WebSocket）"
-  echo "  4) update     拉 latest 二进制原子升级（保留现有角色）"
-  echo "  5) uninstall  卸载（再问要卸哪个角色）"
-  echo "  6) reset-password  重置面板 admin 密码"
+  echo "  1) tui             单机 TUI（自动装 daemon）"
+  echo "  2) server          控制面板（叠加 daemon）"
+  echo "  3) agent           远程节点（daemon 反向 dial panel WebSocket）"
+  echo "  4) update          拉 latest 二进制原子升级（保留现有角色）"
+  echo "  5) update-script   更新本地升级脚本（不动二进制）"
+  echo "  6) uninstall       卸载（再问要卸哪个角色）"
+  echo "  7) reset-password  重置面板 admin 密码"
   read -rp "输入数字或名称: " choice
   case "$choice" in
     1|tui)       mode=tui ;;
     2|server)    mode=server ;;
     3|agent)     mode=agent ;;
     4|update)    mode=update ;;
-    5|uninstall) mode=uninstall ;;
-    6|reset-password) mode=reset-password ;;
+    5|update-script) mode=update-script ;;
+    6|uninstall) mode=uninstall ;;
+    7|reset-password) mode=reset-password ;;
     *) die "未知选项: $choice" ;;
   esac
 fi
@@ -494,6 +524,12 @@ if [[ "$mode" == "reset-password" ]]; then
   exit 0
 fi
 
+# update-script: refresh the local upgrade script only, no binary change.
+if [[ "$mode" == "update-script" ]]; then
+  do_update_script
+  exit 0
+fi
+
 # Update is its own code path: no role unit changes, only binary swap.
 if [[ "$mode" == "update" ]]; then
   if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
@@ -533,6 +569,7 @@ fi
 
 note "[3/3] 安装到 $INSTALL_DIR/nft-forward ..."
 install -m 0755 "$tmp/nft-forward" "$INSTALL_DIR/nft-forward"
+persist_script
 
 primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 primary_ip="${primary_ip:-<本机IP>}"
