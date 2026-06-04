@@ -276,13 +276,14 @@ do_update() {
     die "未取到 SHA256SUMS：update 必须强校验，拒绝裸跑（检查网络或稍后重试）"
   fi
 
-  # ---- 架构防护（产物侧）----
-  file "$_update_tmp/nft-forward" | grep -q 'ELF 64-bit LSB.*x86-64' \
-    || die "下载到的二进制不是 ELF 64-bit x86-64（content: $(file "$_update_tmp/nft-forward"))"
-
-  # 不在此处试跑 tmp 里的二进制:临时文件无执行位、或 /tmp 以 noexec 挂载都会
-  # 误判为"无法执行"。架构已由上面的 file 检查保证;真正能否运行由 install 后的
-  # health-check 验证(daemon 起不来即自动回滚)。
+  # No product-side arch probe here. The host arch is already gated by the
+  # uname -m check before any mode runs, and the sha256 above pins this
+  # download to the published amd64 asset byte-for-byte — together those
+  # already guarantee the binary's architecture. Shelling out to `file` only
+  # added a dependency that minimal systems routinely lack, where its absence
+  # was misread as a corrupt binary. Whether the binary can actually run is
+  # proven by the post-install health-check (a daemon that fails to start
+  # rolls the swap back automatically).
 
   # ---- 备份旧二进制 ----
   note "[3/5] 备份旧二进制到 $INSTALL_DIR/nft-forward.bak ..."
