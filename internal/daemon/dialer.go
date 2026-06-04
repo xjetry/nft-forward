@@ -56,6 +56,12 @@ type Dialer struct {
 	panelCh      chan []nft.Rule
 	pendingPanel atomic.Pointer[[]nft.Rule]
 
+	cmdCh     chan wsproto.Envelope
+	pendMu    sync.Mutex
+	pending   map[string]chan wsproto.ChainCmdAck
+	idSeq     atomic.Uint64
+	connected atomic.Bool
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{} // closed when Run() returns
@@ -66,6 +72,8 @@ func NewDialer(cfg DialerConfig) *Dialer {
 		cfg:     cfg,
 		tuiCh:   make(chan []nft.Rule, 1),
 		panelCh: make(chan []nft.Rule, 1),
+		cmdCh:   make(chan wsproto.Envelope),
+		pending: make(map[string]chan wsproto.ChainCmdAck),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -124,6 +132,68 @@ func (d *Dialer) NotifyPanelEdited(rules []nft.Rule) {
 				// channel still full; a fresher snapshot will come through
 			}
 		}
+	}
+}
+
+// EditChainHop sends a chain_hop_edit to the server and blocks for the ack.
+// The chain hop's port/mode/comment edit is authoritative server-side; this
+// returns the server's verdict (ack.OK / ack.Error) so the TUI can show a
+// precise success or failure (e.g. "端口被占用") instead of failing silently.
+func (d *Dialer) EditChainHop(ctx context.Context, e wsproto.ChainHopEdit) (wsproto.ChainCmdAck, error) {
+	p, err := json.Marshal(e)
+	if err != nil {
+		return wsproto.ChainCmdAck{}, err
+	}
+	return d.sendCommand(ctx, wsproto.TypeChainHopEdit, p)
+}
+
+// DeleteChain sends a chain_delete to the server and blocks for the ack.
+func (d *Dialer) DeleteChain(ctx context.Context, chainID int64) (wsproto.ChainCmdAck, error) {
+	p, err := json.Marshal(wsproto.ChainDelete{ChainID: chainID})
+	if err != nil {
+		return wsproto.ChainCmdAck{}, err
+	}
+	return d.sendCommand(ctx, wsproto.TypeChainDelete, p)
+}
+
+// sendCommand writes a command frame tagged with a fresh request ID and waits
+// for the matching ChainCmdAck (correlated by Envelope.ID) or ctx expiry. It
+// fails fast when no session is up: with no serve loop draining cmdCh the send
+// would otherwise block until the caller's timeout. This fast-fail also rejects
+// commands during a reconnect-backoff gap (connected=false between sessions);
+// the command is not queued for the next session, so retries belong to the
+// caller (in this project the TUI user re-presses to retry). A disconnect
+// mid-wait is surfaced by runOnce, which drains pending with a connection-lost
+// ack.
+func (d *Dialer) sendCommand(ctx context.Context, frameType string, payload json.RawMessage) (wsproto.ChainCmdAck, error) {
+	if !d.connected.Load() {
+		return wsproto.ChainCmdAck{}, errors.New("daemon 未连接面板")
+	}
+	id := "cmd-" + strconv.FormatUint(d.idSeq.Add(1), 36)
+	resCh := make(chan wsproto.ChainCmdAck, 1)
+	d.pendMu.Lock()
+	d.pending[id] = resCh
+	d.pendMu.Unlock()
+	defer func() {
+		d.pendMu.Lock()
+		delete(d.pending, id)
+		d.pendMu.Unlock()
+	}()
+
+	select {
+	case d.cmdCh <- wsproto.Envelope{Type: frameType, ID: id, Payload: payload}:
+	case <-ctx.Done():
+		return wsproto.ChainCmdAck{}, ctx.Err()
+	case <-d.stop:
+		return wsproto.ChainCmdAck{}, errors.New("daemon 停止中")
+	}
+	select {
+	case ack := <-resCh:
+		return ack, nil
+	case <-ctx.Done():
+		return wsproto.ChainCmdAck{}, ctx.Err()
+	case <-d.stop:
+		return wsproto.ChainCmdAck{}, errors.New("daemon 停止中")
 	}
 }
 
@@ -231,6 +301,23 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		}
 	}
 
+	d.connected.Store(true)
+	defer func() {
+		d.connected.Store(false)
+		// Wake any in-flight command waiters so they don't hang until their
+		// own ctx times out; a fresher session can't deliver an ack tagged
+		// with an ID minted on this dead connection.
+		d.pendMu.Lock()
+		for id, ch := range d.pending {
+			select {
+			case ch <- wsproto.ChainCmdAck{Error: "与面板的连接已断开"}:
+			default:
+			}
+			delete(d.pending, id)
+		}
+		d.pendMu.Unlock()
+	}()
+
 	// Reader runs in its own goroutine because ws.Read blocks; the serve
 	// loop pulls frames via readCh + errors via errCh. errCh is buffered
 	// (1) so the reader can always push its terminal error and exit even
@@ -279,6 +366,17 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
 				log.Printf("dialer: server error frame: %s", string(env.Payload))
+			case wsproto.TypeChainCmdAck:
+				var ack wsproto.ChainCmdAck
+				_ = json.Unmarshal(env.Payload, &ack)
+				d.pendMu.Lock()
+				if ch, ok := d.pending[env.ID]; ok {
+					select {
+					case ch <- ack:
+					default:
+					}
+				}
+				d.pendMu.Unlock()
 			}
 		case <-pingT.C:
 			pp, _ := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
@@ -309,6 +407,10 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			fwds := rulesToForwards(rules)
 			pp, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
 			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp})
+		case env := <-d.cmdCh:
+			if err := writeOne(ctx, ws, env); err != nil {
+				return helloAcked, err
+			}
 		}
 	}
 }
