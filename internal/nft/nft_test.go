@@ -220,3 +220,27 @@ func TestRuleChainMetaIsInert(t *testing.T) {
 		t.Fatalf("empty chain meta must be omitted, got %s", b)
 	}
 }
+
+func TestRule_TenantNameRoundTripAndOmitempty(t *testing.T) {
+	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "qqpw"}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"tenant_name":"qqpw"`) {
+		t.Fatalf("tenant_name not marshaled: %s", b)
+	}
+	var got Rule
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TenantName != "qqpw" {
+		t.Fatalf("tenant_name round-trip mismatch: %q", got.TenantName)
+	}
+
+	// Empty tenant must be omitted from the wire (display-only metadata).
+	bare, _ := json.Marshal(Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80})
+	if strings.Contains(string(bare), "tenant_name") {
+		t.Fatalf("empty tenant_name should be omitted, got: %s", bare)
+	}
+}
