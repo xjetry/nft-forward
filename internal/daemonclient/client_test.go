@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,5 +275,54 @@ func TestClient_UnixTransport_StillWorks(t *testing.T) {
 	}
 	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
+	}
+}
+
+func TestChainEditPostsAndSurfacesServerError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chain/edit", func(w http.ResponseWriter, r *http.Request) {
+		var got struct {
+			ChainID    int64  `json:"chain_id"`
+			ListenPort int    `json:"listen_port"`
+			Mode       string `json:"mode"`
+			Comment    string `json:"comment"`
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		if got.ChainID != 5 || got.ListenPort != 21000 || got.Mode != "kernel" || got.Comment != "x" {
+			http.Error(w, "bad request body", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "端口被占用", http.StatusBadRequest)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, _ := New(srv.URL)
+
+	err := c.ChainEdit(5, 21000, "kernel", "x")
+	if err == nil || !strings.Contains(err.Error(), "端口被占用") {
+		t.Fatalf("expected server error surfaced verbatim, got %v", err)
+	}
+}
+
+func TestChainDeletePostsChainID(t *testing.T) {
+	var gotID int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chain/delete", func(w http.ResponseWriter, r *http.Request) {
+		var got struct {
+			ChainID int64 `json:"chain_id"`
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		gotID = got.ChainID
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, _ := New(srv.URL)
+
+	if err := c.ChainDelete(9); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != 9 {
+		t.Fatalf("server got chain_id %d, want 9", gotID)
 	}
 }

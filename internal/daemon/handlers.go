@@ -13,6 +13,7 @@ import (
 
 	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/wsproto"
 )
 
 // Daemon holds the in-memory owner-segmented ruleset and data-plane wiring
@@ -112,6 +113,8 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
 	mux.HandleFunc("/v1/admin/demote-to-tui", d.handleDemoteToTui)
+	mux.HandleFunc("/v1/chain/edit", d.handleChainEdit)
+	mux.HandleFunc("/v1/chain/delete", d.handleChainDelete)
 	return mux
 }
 
@@ -359,6 +362,79 @@ func (d *Daemon) handleDemoteToTui(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleChainEdit relays a TUI edit of a chain hop to the server through the
+// dialer and blocks for the server's verdict. Chain edits are authoritative
+// server-side (the relay skeleton spans nodes), so unlike owner-segment
+// writes nothing is applied locally; the result returns synchronously so the
+// TUI can show success or the server's rejection reason.
+func (d *Daemon) handleChainEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ChainID    int64  `json:"chain_id"`
+		ListenPort int    `json:"listen_port"`
+		Mode       string `json:"mode"`
+		Comment    string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dl := d.Dialer()
+	if dl == nil {
+		http.Error(w, "daemon 未连接面板，无法编辑链路", http.StatusServiceUnavailable)
+		return
+	}
+	ack, err := dl.EditChainHop(r.Context(), wsproto.ChainHopEdit{
+		ChainID: req.ChainID, ListenPort: req.ListenPort, Mode: req.Mode, Comment: req.Comment,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ack.OK {
+		http.Error(w, ack.Error, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"entry": ack.Entry})
+}
+
+// handleChainDelete relays a TUI delete of an entire chain to the server
+// through the dialer and blocks for the server's verdict. Deleting a chain is
+// authoritative server-side (the relay skeleton spans multiple nodes), so
+// nothing is torn down locally here; the result returns synchronously so the
+// TUI can show success or the server's rejection reason.
+func (d *Daemon) handleChainDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ChainID int64 `json:"chain_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dl := d.Dialer()
+	if dl == nil {
+		http.Error(w, "daemon 未连接面板，无法删除链路", http.StatusServiceUnavailable)
+		return
+	}
+	ack, err := dl.DeleteChain(r.Context(), req.ChainID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ack.OK {
+		http.Error(w, ack.Error, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // cloneOwners returns a deep-enough copy that the caller can mutate the

@@ -183,3 +183,62 @@ func (c *Client) PostRuleset(owner string, rules []nft.Rule) error {
 	}
 	return nil
 }
+
+// ChainEdit asks the daemon to apply an edit (listen_port/mode/comment) to
+// this node's hop in a chain. The daemon relays it to the server and blocks
+// for the verdict; a non-2xx body is the server's rejection reason (e.g.
+// "端口被占用") surfaced verbatim so the TUI can show it.
+func (c *Client) ChainEdit(chainID int64, listenPort int, mode, comment string) error {
+	body, err := json.Marshal(struct {
+		ChainID    int64  `json:"chain_id"`
+		ListenPort int    `json:"listen_port"`
+		Mode       string `json:"mode"`
+		Comment    string `json:"comment"`
+	}{chainID, listenPort, mode, comment})
+	if err != nil {
+		return err
+	}
+	buf, code, err := c.do(http.MethodPost, "/v1/chain/edit", body)
+	if err != nil {
+		return err
+	}
+	if code/100 != 2 {
+		// The body is the server's user-facing rejection reason (e.g.
+		// "端口被占用"); surface it verbatim with no technical prefix so the
+		// TUI can show it as the primary message. Fall back to the status
+		// code only when the body is empty and carries no reason.
+		msg := strings.TrimSpace(string(buf))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", code)
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// ChainDelete asks the daemon to delete the entire chain this node
+// participates in. The daemon relays it to the server and blocks for the
+// verdict.
+func (c *Client) ChainDelete(chainID int64) error {
+	body, err := json.Marshal(struct {
+		ChainID int64 `json:"chain_id"`
+	}{chainID})
+	if err != nil {
+		return err
+	}
+	buf, code, err := c.do(http.MethodPost, "/v1/chain/delete", body)
+	if err != nil {
+		return err
+	}
+	if code/100 != 2 {
+		// The body is the server's user-facing rejection reason; surface it
+		// verbatim with no technical prefix so the TUI shows it as the
+		// primary message. Fall back to the status code only on an empty body.
+		msg := strings.TrimSpace(string(buf))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", code)
+		}
+		return errors.New(msg)
+	}
+	return nil
+}

@@ -776,3 +776,28 @@ func TestCounterSamples_DeltasAndReset(t *testing.T) {
 		t.Fatalf("after reset want delta 30, got %+v", s3)
 	}
 }
+
+// Without a dialer the node is not panel-connected, so chain edit/delete have
+// no server to relay to and must report unavailable rather than silently
+// no-op or panic on the nil dialer.
+func TestHandleChainEdit_NoDialerReturns503(t *testing.T) {
+	d := newTestDaemon(t)
+	body, _ := json.Marshal(map[string]any{"chain_id": 5, "listen_port": 21000, "mode": "kernel", "comment": "x"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chain/edit", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	d.handleChainEdit(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandleChainDelete_NoDialerReturns503(t *testing.T) {
+	d := newTestDaemon(t)
+	body, _ := json.Marshal(map[string]any{"chain_id": 9})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chain/delete", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	d.handleChainDelete(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	}
+}
