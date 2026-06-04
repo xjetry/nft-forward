@@ -225,6 +225,24 @@ form.inline{display:inline}
 .inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
 .inp.mono{font-family:var(--mono);font-size:13px}
 select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b94a3' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
+/* custom select */
+.cs{position:relative}
+.cs > select{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
+.cs-btn{display:flex;align-items:center;width:100%;height:38px;border:1px solid var(--line);border-radius:var(--r-sm);padding:0 12px;font-size:13.5px;font-family:var(--sans);color:var(--ink);background:#fff;cursor:pointer;text-align:left;transition:.12s;gap:8px}
+.cs-btn .cs-val{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-btn .cs-chev{width:14px;height:14px;flex:none;color:var(--ink-3);transition:transform .16s}
+.cs-btn:hover{border-color:#cfd6df}
+.cs.mono .cs-btn{font-family:var(--mono);font-size:13px}
+.cs.open .cs-btn{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
+.cs.open .cs-chev{transform:rotate(180deg)}
+.cs-pop{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:0 12px 28px -8px rgba(16,24,40,.22),0 2px 6px rgba(16,24,40,.06);padding:5px;max-height:264px;overflow-y:auto;display:none}
+.cs.open .cs-pop{display:block}
+.cs-opt{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;font-size:13.5px;color:var(--ink);cursor:pointer;line-height:1.3}
+.cs.mono .cs-opt{font-family:var(--mono);font-size:13px}
+.cs-opt .ck{width:15px;height:15px;flex:none;color:var(--accent);opacity:0}
+.cs-opt:hover{background:#f4f7fb}
+.cs-opt.sel{color:var(--accent-d);font-weight:600;background:var(--accent-soft)}
+.cs-opt.sel .ck{opacity:1}
 .field-row{display:flex;gap:12px;align-items:center}
 .field-row .inp{flex:1}
 .form-foot{display:flex;align-items:center;gap:12px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line-soft);max-width:720px}
@@ -387,6 +405,43 @@ pre code{background:transparent;padding:0}
 <script>
 var toastTimer;
 function toast(msg){var t=document.getElementById('toast');document.getElementById('toastMsg').textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove('show')},1800);}
+var CK='<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+var CHEV='<svg class="cs-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+function buildSelect(sel){
+  var wrap=document.createElement('div');
+  wrap.className='cs'+(sel.classList.contains('mono')?' mono':'');
+  if(sel.style.cssText)wrap.style.cssText=sel.style.cssText;
+  sel.style.cssText='';
+  sel.parentNode.insertBefore(wrap,sel);
+  wrap.appendChild(sel);
+  var btn=document.createElement('button');
+  btn.type='button';btn.className='cs-btn';
+  btn.innerHTML='<span class="cs-val"></span>'+CHEV;
+  wrap.appendChild(btn);
+  var pop=document.createElement('div');
+  pop.className='cs-pop';wrap.appendChild(pop);
+  var valEl=btn.querySelector('.cs-val');
+  [].slice.call(sel.options).forEach(function(o,i){
+    var opt=document.createElement('div');
+    opt.className='cs-opt'+(o.selected?' sel':'');
+    opt.innerHTML=CK+'<span>'+o.textContent+'</span>';
+    opt.addEventListener('click',function(){
+      sel.selectedIndex=i;
+      valEl.textContent=o.textContent;
+      pop.querySelectorAll('.cs-opt').forEach(function(e){e.classList.remove('sel')});
+      opt.classList.add('sel');
+      wrap.classList.remove('open');
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+    });
+    pop.appendChild(opt);
+  });
+  valEl.textContent=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].textContent:'';
+  btn.addEventListener('click',function(e){e.stopPropagation();wrap.classList.contains('open')?wrap.classList.remove('open'):(closeAllCS(),wrap.classList.add('open'));});
+  wrap._close=function(){wrap.classList.remove('open')};
+}
+function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
+document.addEventListener('click',closeAllCS);
+document.querySelectorAll('select.inp').forEach(buildSelect);
 </script>
 {{else}}
 </div><!-- /login-page -->

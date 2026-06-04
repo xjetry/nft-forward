@@ -1,0 +1,39 @@
+{{template "header" (mkmap "Title" (printf "编辑转发 #%d" .Forward.ID) "Nav" "forwards" "Crumb" (printf "转发 / 转发规则 / #%d" .Forward.ID) "User" .User "Flash" .Flash)}}
+
+<div class="card">
+  <div class="card-head"><h3>编辑转发 #{{.Forward.ID}}</h3></div>
+  <div class="card-body">
+    <form method="post" action="/forwards/{{.Forward.ID}}">
+    <div class="form-grid">
+      <label class="fl">节点</label>
+      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}"{{if eq .ID $.Forward.NodeID}} selected{{end}}>{{.Name}} (#{{.ID}})</option>{{end}}</select>
+      <label class="fl">协议</label>
+      <div class="seg" style="max-width:380px">
+        <label><input type="radio" name="proto" value="tcp"{{if eq .Forward.Proto "tcp"}} checked{{end}}><span>TCP</span></label>
+        <label><input type="radio" name="proto" value="udp"{{if eq .Forward.Proto "udp"}} checked{{end}}><span>UDP</span></label>
+      </div>
+      <label class="fl">模式</label>
+      <div class="seg" style="max-width:340px">
+        <label><input type="radio" name="mode" value="kernel"{{if eq .Forward.Mode "kernel"}} checked{{end}}><span>内核态 (零拷贝)</span></label>
+        <label><input type="radio" name="mode" value="userspace"{{if eq .Forward.Mode "userspace"}} checked{{end}}><span>用户态 (split-TCP)</span></label>
+      </div>
+      <label class="fl">监听端口</label>
+      <input class="inp mono" name="listen_port" type="number" min="1" max="65535" required value="{{.Forward.ListenPort}}" style="max-width:200px">
+      <label class="fl">目标</label>
+      <div class="field-row" style="max-width:480px">
+        <input class="inp mono" name="target_ip" required value="{{.Forward.TargetIP}}" style="flex:2"><span style="color:var(--ink-3)">:</span><input class="inp mono" name="target_port" type="number" min="1" max="65535" required value="{{.Forward.TargetPort}}" style="flex:1">
+      </div>
+      <label class="fl">备注 <span class="opt">（可选）</span></label>
+      <input class="inp" name="comment" value="{{.Forward.Comment}}">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit">保存</button>
+      <a href="/forwards" class="btn btn-ghost">取消</a>
+    </div>
+    </form>
+  </div>
+</div>
+
+<a class="back-link" href="/forwards"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回转发列表</a>
+
+{{template "footer" (mkmap "User" .User)}}

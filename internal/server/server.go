@@ -401,6 +401,8 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/forwards", s.listForwards)
 		r.Post("/forwards", s.createForward)
+		r.Get("/forwards/{id}/edit", s.editForward)
+		r.Post("/forwards/{id}", s.saveForward)
 		r.Post("/forwards/{id}/delete", s.deleteForward)
 
 		r.Get("/tunnels", s.listTunnels)

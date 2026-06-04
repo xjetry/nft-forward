@@ -359,6 +359,19 @@ func UpdateForward(d *sql.DB, nodeID int64, proto string, listenPort int, target
 	return res.RowsAffected()
 }
 
+// UpdateForwardByID updates all mutable fields of a standalone forward by
+// its primary key. Chain-owned forwards are rejected (chain_id IS NULL guard).
+// Returns the node IDs that need re-dispatch: if the node changed, both the
+// old and new node must be re-pushed.
+func UpdateForwardByID(d *sql.DB, id int64, nodeID int64, proto string, listenPort int, targetIP string, targetPort int, comment, mode string) (oldNodeID int64, err error) {
+	if err := d.QueryRow(`SELECT node_id FROM forwards WHERE id=? AND chain_id IS NULL`, id).Scan(&oldNodeID); err != nil {
+		return 0, fmt.Errorf("转发不存在或属于链路: %w", err)
+	}
+	_, err = d.Exec(`UPDATE forwards SET node_id=?, proto=?, listen_port=?, target_ip=?, target_port=?, comment=?, mode=? WHERE id=? AND chain_id IS NULL`,
+		nodeID, proto, listenPort, targetIP, targetPort, comment, NormalizeForwardMode(mode), id)
+	return oldNodeID, err
+}
+
 func listForwardsWhere(d *sql.DB, where string, args ...any) ([]*Forward, error) {
 	q := `SELECT ` + forwardCols + ` FROM forwards`
 	if where != "" {

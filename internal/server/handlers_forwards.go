@@ -102,6 +102,93 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/forwards", http.StatusSeeOther)
 }
 
+func (s *Server) editForward(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	f, err := db.GetForward(s.DB, id)
+	if err != nil {
+		http.Error(w, "转发不存在", http.StatusNotFound)
+		return
+	}
+	if f.ChainID.Valid {
+		s.flashRedirect(w, r, "链路跳的转发请在链路详情页编辑", "/forwards")
+		return
+	}
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("edit forward %d: list nodes: %v", id, err)
+	}
+	s.render(w, "forward_edit.html", map[string]any{
+		"User":    u,
+		"Forward": f,
+		"Nodes":   nodes,
+		"Flash":   flashFromCookie(w, r),
+	})
+}
+
+func (s *Server) saveForward(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	redirect := fmt.Sprintf("/forwards/%d/edit", id)
+
+	nodeID, err := parseFormInt64(r, "node_id")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
+	listenPort, err := parseFormInt(r, "listen_port")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
+	targetPort, err := parseFormInt(r, "target_port")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
+	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
+	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
+	comment := strings.TrimSpace(r.FormValue("comment"))
+	mode := strings.TrimSpace(r.FormValue("mode"))
+	if !validMode(mode) {
+		s.flashRedirect(w, r, "无效的转发模式", redirect)
+		return
+	}
+
+	testRule := nft.Rule{Proto: proto, SrcPort: listenPort, DestPort: targetPort, Mode: mode}
+	if resolver.IsHostname(targetIP) {
+		testRule.DestHost = targetIP
+	} else {
+		testRule.DestIP = targetIP
+	}
+	if err := nft.Validate(testRule); err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
+
+	oldNodeID, err := db.UpdateForwardByID(s.DB, id, nodeID, proto, listenPort, targetIP, targetPort, comment, mode)
+	if err != nil {
+		s.flashRedirect(w, r, "保存失败: "+err.Error(), redirect)
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "forward.edit", strconv.FormatInt(id, 10),
+		fmt.Sprintf("node=%d %s/%d→%s:%d", nodeID, proto, listenPort, targetIP, targetPort))
+
+	s.dispatchAfterMutation(w, nodeID, "转发编辑")
+	if oldNodeID != nodeID {
+		s.dispatchAfterMutation(w, oldNodeID, "转发迁出")
+	}
+	s.flashRedirect(w, r, "转发已保存", "/forwards")
+}
+
 func (s *Server) deleteForward(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
