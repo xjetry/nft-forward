@@ -1,49 +1,62 @@
-{{template "header" (mkmap "Title" "通道" "User" .User "Flash" .Flash)}}
-<h1>通道</h1>
+{{template "header" (mkmap "Title" "通道" "Nav" "channels" "Crumb" "资源 / 通道" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-<h2>所有通道</h2>
-{{if .Tunnels}}
-<table>
-<thead><tr><th>ID</th><th>名称</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>带宽(Mbps)</th><th>操作</th></tr></thead>
-<tbody>
-{{range .Tunnels}}
-<tr>
-<td>{{.ID}}</td>
-<td>{{.Name}}</td>
-<td>#{{.NodeID}}</td>
-<td>{{.ProtoMask}}</td>
-<td class="mono">{{.PortStart}}-{{.PortEnd}}</td>
-<td class="mono">{{.TargetCIDRAllow}}</td>
-<td>{{if eq .BandwidthMbps 0}}—{{else}}{{.BandwidthMbps}}{{end}}</td>
-<td>
-<form method="post" action="/tunnels/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该通道？会同时删除其下所有转发。');"><button class="danger" type="submit">删除</button></form>
-</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<div class="empty">尚无通道。</div>{{end}}
+  <div class="card-head"><h3>所有通道</h3><span class="desc">{{len .Tunnels}} 条</span></div>
+  {{if .Tunnels}}
+  <table class="tbl">
+    <thead><tr><th style="width:50px">ID</th><th>名称</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>带宽</th><th class="actions">操作</th></tr></thead>
+    <tbody>
+    {{range .Tunnels}}
+    <tr>
+      <td class="id-cell">{{.ID}}</td>
+      <td style="font-weight:600">{{.Name}}</td>
+      <td class="mono" style="color:var(--ink-2)">#{{.NodeID}}</td>
+      <td>{{if or (eq .ProtoMask "tcp+udp") (eq .ProtoMask "tcp")}}<span class="tag tcp">TCP</span>{{end}} {{if or (eq .ProtoMask "tcp+udp") (eq .ProtoMask "udp")}}<span class="tag udp">UDP</span>{{end}}</td>
+      <td class="mono">{{.PortStart}}–{{.PortEnd}}</td>
+      <td class="mono" style="color:var(--ink-2)">{{.TargetCIDRAllow}}</td>
+      <td class="mono" style="color:var(--ink-3)">{{if eq .BandwidthMbps 0}}不限速{{else}}{{.BandwidthMbps}} Mbps{{end}}</td>
+      <td class="actions">
+        <form method="post" action="/tunnels/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该通道？会同时删除其下所有转发。');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty"><h4>尚无通道</h4></div>{{end}}
 </div>
 
 <div class="card">
-<h2>新建通道</h2>
-{{if .Nodes}}
-<form method="post" action="/tunnels">
-<div class="grid">
-<label>名称</label><input name="name" required placeholder="例如 hk-default">
-<label>节点</label>
-<select name="node_id" required>{{range .Nodes}}<option value="{{.ID}}">{{.Name}} (#{{.ID}})</option>{{end}}</select>
-<label>协议</label>
-<select name="proto_mask"><option value="tcp+udp">tcp+udp</option><option value="tcp">tcp</option><option value="udp">udp</option></select>
-<label>端口段起</label><input type="number" name="port_start" min="1" max="65535" required>
-<label>端口段止</label><input type="number" name="port_end" min="1" max="65535" required>
-<label>允许目标 CIDR</label><input name="target_cidr_allow" placeholder="逗号分隔，留空 = 0.0.0.0/0" value="0.0.0.0/0">
-<label>带宽限速(Mbps)</label><input type="number" name="bandwidth_mbps" min="0" value="0">
+  <div class="card-head"><h3>新建通道</h3></div>
+  <div class="card-body">
+    {{if .Nodes}}
+    <form method="post" action="/tunnels">
+    <div class="form-grid">
+      <label class="fl">名称</label>
+      <input class="inp" name="name" required placeholder="例如 hk-default">
+      <label class="fl">节点</label>
+      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}">{{.Name}} (#{{.ID}})</option>{{end}}</select>
+      <label class="fl">协议</label>
+      <div class="seg" style="max-width:340px">
+        <label><input type="radio" name="proto_mask" value="tcp+udp" checked><span>TCP + UDP</span></label>
+        <label><input type="radio" name="proto_mask" value="tcp"><span>TCP</span></label>
+        <label><input type="radio" name="proto_mask" value="udp"><span>UDP</span></label>
+      </div>
+      <label class="fl">端口段</label>
+      <div class="field-row" style="max-width:340px">
+        <input class="inp mono" name="port_start" type="number" min="1" max="65535" required placeholder="起始端口"><span style="color:var(--ink-3)">—</span><input class="inp mono" name="port_end" type="number" min="1" max="65535" required placeholder="结束端口">
+      </div>
+      <label class="fl">允许目标 CIDR</label>
+      <input class="inp mono" name="target_cidr_allow" value="0.0.0.0/0" style="max-width:340px">
+      <label class="fl">带宽限速 <span class="opt">(Mbps)</span></label>
+      <input class="inp mono" name="bandwidth_mbps" type="number" min="0" value="0" style="max-width:160px">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit">创建通道</button>
+      <span class="hint">CIDR 限制用户可指向的目标地址；带宽 0 = 不限速。</span>
+    </div>
+    </form>
+    {{else}}<div class="empty"><h4>请先<a class="strong-link" href="/nodes">添加节点</a></h4></div>{{end}}
+  </div>
 </div>
-<div style="margin-top:12px"><button type="submit">创建</button></div>
-<p style="color:#86868b;font-size:13px;margin-top:8px">CIDR 用于限制用户可指向的目标地址；带宽 0 = 不限速（限速依赖 tc HTB，下一轮实现）。</p>
-</form>
-{{else}}<div class="empty">请先<a href="/nodes">添加节点</a>。</div>{{end}}
-</div>
-{{template "footer" .}}
+
+{{template "footer" (mkmap "User" .User)}}

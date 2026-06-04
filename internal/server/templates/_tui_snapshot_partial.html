@@ -1,25 +1,26 @@
 {{define "_tui_snapshot_partial.html"}}
 {{if .TuiSnapshot}}
 <div class="card">
-<h2>本地 TUI 规则 ({{len .TuiSnapshot}} 条)</h2>
-<p style="color:#86868b;font-size:13px">最后上报：{{.TuiSnapshotAge}}</p>
-<table>
-<thead><tr><th>协议</th><th>监听端口</th><th>目标</th><th>备注</th></tr></thead>
-<tbody>
-{{range .TuiSnapshot}}
-<tr>
-<td>{{upper .Proto}}</td>
-<td>{{.ListenPort}}</td>
-<td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
-<td>{{.Comment}}</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-<form method="post" action="/nodes/{{.Node.ID}}/import-tui" class="inline" style="margin-top:12px">
-<button type="submit">一键导入到 panel</button>
-</form>
-<p style="color:#86868b;font-size:12px;margin-top:8px">导入后将作为 panel 段规则下发；TUI 段在节点本地仍然存在，下次操作员重新运行 TUI 时由 daemon 清理。</p>
+  <div class="card-head"><h3>本地 TUI 规则</h3><span class="desc">{{len .TuiSnapshot}} 条 · 最后上报：{{.TuiSnapshotAge}}</span></div>
+  <table class="tbl">
+    <thead><tr><th>协议</th><th>监听端口</th><th>目标</th><th>备注</th></tr></thead>
+    <tbody>
+    {{range .TuiSnapshot}}
+    <tr>
+      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Proto}}</span></td>
+      <td class="mono">{{.ListenPort}}</td>
+      <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+      <td><span class="note-text">{{.Comment}}</span></td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <div class="card-body" style="border-top:1px solid var(--line-soft)">
+    <form method="post" action="/nodes/{{.Node.ID}}/import-tui" class="inline">
+      <button class="btn btn-primary btn-sm" type="submit">一键导入到 panel</button>
+    </form>
+    <p style="color:var(--ink-3);font-size:12px;margin-top:8px">导入后将作为 panel 段规则下发；TUI 段在节点本地仍然存在，下次操作员重新运行 TUI 时由 daemon 清理。</p>
+  </div>
 </div>
 {{end}}
 {{end}}

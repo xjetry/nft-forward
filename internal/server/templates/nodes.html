@@ -1,54 +1,71 @@
-{{template "header" (mkmap "Title" "节点" "User" .User "Flash" .Flash)}}
-<h1>节点</h1>
+{{template "header" (mkmap "Title" "节点" "Nav" "nodes" "Crumb" "资源 / 节点" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-<h2>面板地址</h2>
-<p style="color:#86868b;font-size:13px;margin-bottom:10px">agent 反向连接面板用的公网地址，会写进下方各节点的安装命令。留空则安装命令回退用你当前访问的域名。</p>
-<form method="post" action="/settings">
-<div class="grid">
-<label>Panel 地址</label><input name="panel_url" value="{{.PanelURL}}" placeholder="例如 https://panel.example.com">
-</div>
-<div style="margin-top:12px"><button type="submit">保存</button></div>
-</form>
-</div>
-
-<div class="card">
-<h2>已注册节点</h2>
-{{if .Nodes}}
-<table>
-<thead><tr><th>ID</th><th>名称</th><th>最近同步</th><th>状态</th><th>操作</th></tr></thead>
-<tbody>
-{{range .Nodes}}
-<tr>
-<td>{{.ID}}</td>
-<td><a href="/nodes/{{.ID}}">{{.Name}}</a></td>
-<td>{{unix .LastApplyAt}}</td>
-<td>
-{{if .Disabled}}<span class="pill warn">禁用</span>
-{{else if nullstr .LastError}}<span class="pill err" title="{{nullstr .LastError}}">错误</span>
-{{else if .LastApplyAt.Valid}}<span class="pill ok">已同步</span>
-{{else}}<span class="pill warn">待同步</span>{{end}}
-</td>
-<td>
-<form method="post" action="/nodes/{{.ID}}/resync" class="inline"><button class="ghost" type="submit">重新同步</button></form>
-<form method="post" action="/nodes/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除节点 {{.Name}}？此操作会清空节点上的转发。');"><button class="danger" type="submit">删除</button></form>
-</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<div class="empty">尚未注册任何节点。</div>{{end}}
+  <div class="card-head">
+    <h3>面板地址</h3>
+    <span class="desc">agent 反向连接面板用的公网地址，会写进各节点的安装命令</span>
+  </div>
+  <div class="card-body">
+    <form method="post" action="/settings">
+    <div class="form-grid">
+      <label class="fl">Panel 地址</label>
+      <input class="inp mono" name="panel_url" value="{{.PanelURL}}" placeholder="例如 https://panel.example.com">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit">保存</button>
+      <span class="hint">留空则安装命令回退使用你当前访问的域名。</span>
+    </div>
+    </form>
+  </div>
 </div>
 
 <div class="card">
-<h2>添加节点</h2>
-<form method="post" action="/nodes">
-<div class="grid">
-<label>名称</label><input name="name" required placeholder="例如 hk-1">
-<label>Token（可选）</label><input name="secret" placeholder="留空则随机生成 64 位 hex">
+  <div class="card-head">
+    <h3>已注册节点</h3>
+    <span class="desc">{{len .Nodes}} 个节点</span>
+  </div>
+  {{if .Nodes}}
+  <table class="tbl">
+    <thead><tr><th style="width:60px">ID</th><th>名称</th><th>最近同步</th><th>状态</th><th class="actions">操作</th></tr></thead>
+    <tbody>
+    {{range .Nodes}}
+    <tr>
+      <td class="id-cell">#{{.ID}}</td>
+      <td><span class="name-dot"><span class="dot {{if and (not .Disabled) (eq .Online 1)}}on{{else}}off{{end}}"></span><a class="strong-link" href="/nodes/{{.ID}}">{{.Name}}</a></span></td>
+      <td class="mono" style="color:var(--ink-2)">{{unix .LastApplyAt}} <span style="color:var(--ink-3)">· {{timeAgo .LastApplyAt}}</span></td>
+      <td>
+        {{if .Disabled}}<span class="pill pill-amber">禁用</span>
+        {{else if nullstr .LastError}}<span class="pill pill-red" title="{{nullstr .LastError}}">错误</span>
+        {{else if .LastApplyAt.Valid}}<span class="pill pill-green">已同步</span>
+        {{else}}<span class="pill pill-amber">待同步</span>{{end}}
+      </td>
+      <td class="actions">
+        <form method="post" action="/nodes/{{.ID}}/resync" class="inline"><button class="btn btn-ghost btn-sm" type="submit">重新同步</button></form>
+        <form method="post" action="/nodes/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除节点 {{.Name}}？此操作会清空节点上的转发。');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty"><h4>尚未注册任何节点</h4></div>{{end}}
 </div>
-<div style="margin-top:12px"><button type="submit">添加</button></div>
-</form>
-<p style="color:#86868b;font-size:13px;margin-top:12px">添加后会生成 token 与一行安装命令，将命令在目标节点执行即可。</p>
+
+<div class="card">
+  <div class="card-head"><h3>添加节点</h3></div>
+  <div class="card-body">
+    <form method="post" action="/nodes">
+    <div class="form-grid">
+      <label class="fl">名称</label>
+      <input class="inp" name="name" required placeholder="例如 hk-1">
+      <label class="fl">Token <span class="opt">（可选）</span></label>
+      <input class="inp mono" name="secret" placeholder="留空则随机生成 64 位 hex">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加节点</button>
+      <span class="hint">添加后会生成 token 与一行安装命令，在目标节点执行即可。</span>
+    </div>
+    </form>
+  </div>
 </div>
-{{template "footer" .}}
+
+{{template "footer" (mkmap "User" .User)}}

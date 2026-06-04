@@ -1,21 +1,29 @@
-{{template "header" (mkmap "Title" "我的链路" "User" .User "Flash" .Flash)}}
-<h1>我的中继链路</h1>
+{{template "header" (mkmap "Title" "我的链路" "Nav" "my-chains" "Crumb" "我的链路" "User" .User "Flash" .Flash)}}
+
 <div class="card">
-<h2>链路列表</h2>
-{{if .Chains}}
-<table>
-<thead><tr><th>ID</th><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th>操作</th></tr></thead>
-<tbody>
-{{range .Chains}}
-<tr>
-<td>{{.Chain.ID}}</td><td>{{.Chain.Name}}</td><td>{{upper .Chain.Proto}}</td>
-<td class="mono">{{.Path}}</td><td class="mono">{{.Entry}}</td>
-<td><form method="post" action="/my/chains/{{.Chain.ID}}/delete" class="inline" onsubmit="return confirm('删除该链路？');"><button class="danger" type="submit">删除</button></form></td>
-</tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<div class="empty">尚无链路。</div>{{end}}
-<p style="margin-top:12px"><a href="/my/chains/new"><button type="button">+ 新建链路</button></a></p>
+  <div class="card-head">
+    <h3>链路列表</h3>
+    <div class="right"><a class="btn btn-primary btn-sm" href="/my/chains/new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</a></div>
+  </div>
+  {{if .Chains}}
+  <table class="tbl">
+    <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th class="actions">操作</th></tr></thead>
+    <tbody>
+    {{range .Chains}}
+    <tr>
+      <td class="id-cell">{{.Chain.ID}}</td>
+      <td style="font-weight:600">{{.Chain.Name}}</td>
+      <td><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Chain.Proto}}</span></td>
+      <td class="mono" style="color:var(--ink-2)">{{.Path}}</td>
+      <td class="mono" style="font-weight:600">{{.Entry}}</td>
+      <td class="actions">
+        <form method="post" action="/my/chains/{{.Chain.ID}}/delete" class="inline" onsubmit="return confirm('删除该链路？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty"><h4>尚无链路</h4><p>点击上方「新建链路」创建。</p></div>{{end}}
 </div>
-{{template "footer" .}}
+
+{{template "footer" (mkmap "User" .User)}}

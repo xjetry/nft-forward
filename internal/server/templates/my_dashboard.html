@@ -1,39 +1,42 @@
-{{template "header" (mkmap "Title" "我的面板" "User" .User "Flash" .Flash)}}
-<h1>欢迎，{{.User.Username}}</h1>
-<p><a href="/my/chains">→ 我的链路</a></p>
+{{template "header" (mkmap "Title" "概览" "Nav" "my-overview" "User" .User "Flash" .Flash)}}
 
 {{if .Tenant.Disabled}}
-<div class="flash" style="background:#fde2e2;color:#8a1a1a">您的账号已被禁用：{{nullstr .Tenant.DisableReason}}。请联系管理员。</div>
+<div class="flash" style="background:var(--red-bg);color:var(--red);border-color:#f1cccc">您的账号已被禁用：{{nullstr .Tenant.DisableReason}}。请联系管理员。</div>
 {{end}}
 
 <div class="card">
-<h2>我的配额</h2>
-<table>
-<tr><th style="width:160px">最大转发数</th><td>{{.Tenant.MaxForwards}}</td></tr>
-<tr><th>流量配额</th><td>{{if eq .Tenant.TrafficQuotaBytes 0}}∞（不限）{{else}}{{div .Tenant.TrafficQuotaBytes 1048576}} MB{{end}}</td></tr>
-<tr><th>已用流量</th><td>{{div .Tenant.TrafficUsedBytes 1048576}} MB {{if gt .Tenant.TrafficQuotaBytes 0}}<span class="mono">（{{pct .Tenant.TrafficUsedBytes .Tenant.TrafficQuotaBytes}}%）</span>{{end}}</td></tr>
-</table>
+  <div class="card-head"><h3>我的配额</h3></div>
+  <div class="card-body">
+    <div class="form-grid" style="grid-template-columns:140px 1fr">
+      <label class="fl">最大转发数</label><div class="mono">{{.Tenant.MaxForwards}}</div>
+      <label class="fl">流量配额</label><div class="mono">{{if eq .Tenant.TrafficQuotaBytes 0}}∞（不限）{{else}}{{div .Tenant.TrafficQuotaBytes 1048576}} MB{{end}}</div>
+      <label class="fl">已用流量</label><div class="mono">{{div .Tenant.TrafficUsedBytes 1048576}} MB {{if gt .Tenant.TrafficQuotaBytes 0}}<span>({{pct .Tenant.TrafficUsedBytes .Tenant.TrafficQuotaBytes}}%)</span>{{end}}</div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
-<h2>可用通道</h2>
-{{if .Tunnels}}
-<table>
-<thead><tr><th>通道</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>本通道上限</th></tr></thead>
-<tbody>
-{{range $i, $t := .Tunnels}}{{ $g := index $.Grants $i }}{{ $n := index $.NodeByID $t.NodeID }}
-<tr>
-<td>{{$t.Name}}</td>
-<td>{{if $n}}{{$n.Name}}{{else}}#{{$t.NodeID}}{{end}}</td>
-<td>{{$t.ProtoMask}}</td>
-<td class="mono">{{$t.PortStart}}-{{$t.PortEnd}}</td>
-<td class="mono">{{$t.TargetCIDRAllow}}</td>
-<td>{{$g.MaxForwards}}</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-<p style="margin-top:12px"><a href="/my/forwards"><button type="button">前往「我的转发」</button></a></p>
-{{else}}<div class="empty">管理员尚未为您授权任何通道。请联系管理员。</div>{{end}}
+  <div class="card-head">
+    <h3>可用通道</h3>
+    <div class="right"><a class="btn btn-ghost btn-sm" href="/my/forwards">前往「我的转发」</a></div>
+  </div>
+  {{if .Tunnels}}
+  <table class="tbl">
+    <thead><tr><th>通道</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>本通道上限</th></tr></thead>
+    <tbody>
+    {{range $i, $t := .Tunnels}}{{$g := index $.Grants $i}}{{$n := index $.NodeByID $t.NodeID}}
+    <tr>
+      <td style="font-weight:600">{{$t.Name}}</td>
+      <td class="mono" style="color:var(--ink-2)">{{if $n}}{{$n.Name}}{{else}}#{{$t.NodeID}}{{end}}</td>
+      <td>{{$t.ProtoMask}}</td>
+      <td class="mono">{{$t.PortStart}}-{{$t.PortEnd}}</td>
+      <td class="mono" style="color:var(--ink-2)">{{$t.TargetCIDRAllow}}</td>
+      <td class="mono">{{$g.MaxForwards}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty"><h4>管理员尚未为您授权任何通道</h4><p>请联系管理员。</p></div>{{end}}
 </div>
-{{template "footer" .}}
+
+{{template "footer" (mkmap "User" .User)}}

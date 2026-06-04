@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -90,6 +91,64 @@ func New(d *sql.DB) (*Server, error) {
 				m[k] = pairs[i+1]
 			}
 			return m
+		},
+		"fmtBytes": func(b int64) string {
+			switch {
+			case b < 1024:
+				return fmt.Sprintf("%d B", b)
+			case b < 1024*1024:
+				return fmt.Sprintf("%.1f KB", float64(b)/1024)
+			case b < 1024*1024*1024:
+				return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
+			default:
+				return fmt.Sprintf("%.1f GB", float64(b)/(1024*1024*1024))
+			}
+		},
+		"timeAgo": func(v any) string {
+			var ts int64
+			switch t := v.(type) {
+			case sql.NullInt64:
+				if !t.Valid {
+					return "—"
+				}
+				ts = t.Int64
+			case *int64:
+				if t == nil {
+					return "—"
+				}
+				ts = *t
+			default:
+				return "—"
+			}
+			d := time.Since(time.Unix(ts, 0))
+			switch {
+			case d < time.Minute:
+				return "刚刚"
+			case d < time.Hour:
+				return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%d 小时前", int(d.Hours()))
+			default:
+				return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+			}
+		},
+		"firstChar": func(s string) string {
+			if s == "" {
+				return "?"
+			}
+			return strings.ToUpper(s[:1])
+		},
+		"sidebarCounts": func() map[string]int {
+			var nodes, tunnels, tenants, forwards, chains int
+			d.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes)
+			d.QueryRow("SELECT COUNT(*) FROM tunnels").Scan(&tunnels)
+			d.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenants)
+			d.QueryRow("SELECT COUNT(*) FROM forwards WHERE chain_id IS NULL").Scan(&forwards)
+			d.QueryRow("SELECT COUNT(*) FROM chains WHERE tenant_id IS NULL").Scan(&chains)
+			return map[string]int{
+				"nodes": nodes, "tunnels": tunnels, "tenants": tenants,
+				"forwards": forwards, "chains": chains,
+			}
 		},
 	}).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {

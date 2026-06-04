@@ -1,16 +1,28 @@
 {{template "header" (mkmap "Title" "登录" "Flash" .Flash)}}
-<div class="card" style="max-width:360px;margin:60px auto;">
-<h1>登录 nft-forward 面板</h1>
-<form method="post" action="/login">
-<div class="grid">
-<label for="username">用户名</label>
-<input name="username" id="username" required autofocus>
-<label for="password">密码</label>
-<input name="password" id="password" type="password" required>
+<div class="login-card">
+  <div class="login-brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h11M4 7l3-3M4 7l3 3"/><path d="M20 17H9M20 17l-3-3M20 17l-3 3"/></svg>
+    </div>
+    <div>
+      <div class="brand-name" style="color:var(--ink)">nft-forward</div>
+      <div style="font-size:11px;color:var(--ink-3);font-family:var(--mono);margin-top:1px">转发管理面板</div>
+    </div>
+  </div>
+  <form method="post" action="/login">
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div>
+        <label class="fl" style="display:block;margin-bottom:6px">用户名</label>
+        <input class="inp" name="username" required autofocus>
+      </div>
+      <div>
+        <label class="fl" style="display:block;margin-bottom:6px">密码</label>
+        <input class="inp" name="password" type="password" required>
+      </div>
+    </div>
+    <div style="margin-top:20px">
+      <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;height:40px">登录</button>
+    </div>
+  </form>
 </div>
-<div style="margin-top:16px;text-align:right;">
-<button type="submit">登录</button>
-</div>
-</form>
-</div>
-{{template "footer" .}}
+{{template "footer" (mkmap)}}
