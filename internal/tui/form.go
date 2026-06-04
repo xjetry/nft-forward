@@ -263,15 +263,6 @@ func (m model) commitEdit(proto string, srcPort int, destInput string, destPort 
 		idx = m.cursor
 	}
 
-	// Panel rows key on (proto, listen_port) server-side; pin both to the
-	// original values so an edit can never re-key the row and silently lose
-	// the reconcile. The form layer also locks these inputs — this is a
-	// second guard in case that lock is bypassed.
-	if owner == "panel" {
-		proto = seg[idx].Proto
-		srcPort = seg[idx].SrcPort
-	}
-
 	r := nft.Rule{
 		ID:        seg[idx].ID,
 		Proto:     proto,

@@ -644,15 +644,14 @@ func TestRefreshClampsCursor(t *testing.T) {
 	}
 }
 
-func TestSubmitEditPanelRowKeepsProtoAndListenPort(t *testing.T) {
+func TestSubmitEditPanelRowAllFieldsEditable(t *testing.T) {
 	fc := &fakeDaemonClient{}
 	m := initialModel(fc, nil, []nft.Rule{
 		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 	})
 	m.cursor = 0
 	m.enterEditMode()
-	// Operator attempts to change proto + listen port; both must be ignored.
-	m.protoIdx = 1 // udp (would-be change)
+	m.protoIdx = 1 // udp
 	m.inputs[fSrcPort].SetValue("40000")
 	m.inputs[fDestIP].SetValue("10.9.9.9")
 	m.inputs[fDestPort].SetValue("8443")
@@ -662,30 +661,26 @@ func TestSubmitEditPanelRowKeepsProtoAndListenPort(t *testing.T) {
 		t.Fatalf("unexpected err: %s", mm.err)
 	}
 	got := mm.panelRules[0]
-	if got.Proto != "tcp" || got.SrcPort != 30000 {
-		t.Fatalf("panel proto/listen port must stay fixed, got proto=%q port=%d", got.Proto, got.SrcPort)
+	if got.Proto != "udp" || got.SrcPort != 40000 {
+		t.Fatalf("panel proto/listen port must be editable, got proto=%q port=%d", got.Proto, got.SrcPort)
 	}
 	if got.DestIP != "10.9.9.9" || got.DestPort != 8443 {
-		t.Fatalf("target should still update, got %+v", got)
+		t.Fatalf("target should update, got %+v", got)
 	}
 }
 
-func TestUpdateEditLocksPanelProtoAndListenPort(t *testing.T) {
+func TestUpdateEditPanelNonChainFieldsEditable(t *testing.T) {
 	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
 		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 	})
 	m.cursor = 0
 	m.enterEditMode()
-	m.focusedInput = fProto
-	before := m.protoIdx
-	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRight})
-	if nm.(model).protoIdx != before {
-		t.Fatalf("panel proto must be locked, idx moved %d→%d", before, nm.(model).protoIdx)
-	}
+
 	m.focusedInput = fSrcPort
-	nm, _ = m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
-	if nm.(model).inputs[fSrcPort].Value() != "30000" {
-		t.Fatalf("panel listen port must be locked, got %q", nm.(model).inputs[fSrcPort].Value())
+	m.inputs[fSrcPort].Focus()
+	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
+	if nm.(model).inputs[fSrcPort].Value() == "30000" {
+		t.Fatal("panel non-chain listen port must be editable")
 	}
 }
 
@@ -710,12 +705,11 @@ func TestLockedFieldsByRowType(t *testing.T) {
 		t.Fatalf("tui edit should lock nothing, got %v", m.lockedFields())
 	}
 	m = model{editingOwner: "panel", editingChainID: 0}
-	lf := m.lockedFields()
-	if !lf[fProto] || !lf[fSrcPort] || lf[fDestIP] {
-		t.Fatalf("panel non-chain locks wrong fields: %v", lf)
+	if len(m.lockedFields()) != 0 {
+		t.Fatalf("panel non-chain should lock nothing, got %v", m.lockedFields())
 	}
 	m = model{editingOwner: "panel", editingChainID: 7}
-	lf = m.lockedFields()
+	lf := m.lockedFields()
 	if !lf[fProto] || !lf[fDestIP] || !lf[fDestPort] || lf[fSrcPort] {
 		t.Fatalf("panel chain locks wrong fields: %v", lf)
 	}

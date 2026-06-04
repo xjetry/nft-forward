@@ -137,24 +137,14 @@ func (m model) rowAt(i int) (r nft.Rule, owner string, editable bool) {
 }
 
 // lockedFields returns the form field indices that stay read-only for the
-// row being edited. tui rows lock nothing. panel non-chain rows lock
-// proto+listen_port (their server-side reconcile key). panel chain rows lock
-// proto+target (the relay skeleton owned by the server) but free
-// listen_port/mode/comment.
-//
-// Invariant: tui-segment rules always have ChainID==0 (they are user-managed
-// local rules, never relay hops; chain hops only ever appear in the panel
-// segment). So "tui rows lock nothing" and submitEdit's chain branch keying on
-// owner=="panel"&&editingChainID!=0 are both safe — a tui row can never carry a
-// ChainID that would misroute it onto the chain-command path.
+// row being edited. Standalone rows (both tui and panel non-chain) lock
+// nothing — all fields are editable. Panel chain rows lock proto+target
+// (the relay skeleton owned by the server) but free listen_port/mode/comment.
 func (m model) lockedFields() map[int]bool {
-	if m.editingOwner != "panel" {
-		return nil
-	}
-	if m.editingChainID != 0 {
+	if m.editingOwner == "panel" && m.editingChainID != 0 {
 		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
 	}
-	return map[int]bool{fProto: true, fSrcPort: true}
+	return nil
 }
 
 func buildInputs() []textinput.Model {
