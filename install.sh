@@ -256,7 +256,11 @@ do_update() {
   # ---- 前置探测 ----
   [[ -x "$INSTALL_DIR/nft-forward" ]] \
     || die "未安装：$INSTALL_DIR/nft-forward 不存在；请先 install.sh tui/server/agent"
-  systemctl list-unit-files --no-legend | grep -q '^nft-forward-daemon\.service ' \
+  # Probe the unit file write_daemon_unit actually writes, not
+  # `systemctl list-unit-files`: its column layout varies across systemd
+  # versions and can fail to match an installed unit, falsely reporting a
+  # working install as missing.
+  [[ -f "$SYSTEMD_DIR/nft-forward-daemon.service" ]] \
     || die "未安装：nft-forward-daemon.service 不存在；请先 install.sh tui/server/agent"
 
   # ---- 下载到 tmp ----
@@ -295,8 +299,7 @@ do_update() {
   note "[4/5] 重启 daemon (+ server, if present) ..."
   systemctl daemon-reload
   systemctl restart nft-forward-daemon.service
-  if systemctl list-unit-files --no-legend \
-     | grep -q '^nft-forward-server\.service '; then
+  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
     systemctl restart nft-forward-server.service
   fi
 
