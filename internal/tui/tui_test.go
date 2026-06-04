@@ -28,6 +28,15 @@ type fakeDaemonClient struct {
 	postedOwner string
 	postedRules []nft.Rule
 	postErr     error
+
+	chainEdits []struct {
+		ChainID    int64
+		ListenPort int
+		Mode       string
+		Comment    string
+	}
+	chainDeletes []int64
+	chainErr     error
 }
 
 func (f *fakeDaemonClient) GetRuleset() (daemonclient.OwnerRuleset, error) {
@@ -44,6 +53,21 @@ func (f *fakeDaemonClient) PostRuleset(owner string, rules []nft.Rule) error {
 	f.postedOwner = owner
 	f.postedRules = append([]nft.Rule(nil), rules...)
 	return nil
+}
+
+func (f *fakeDaemonClient) ChainEdit(chainID int64, listenPort int, mode, comment string) error {
+	f.chainEdits = append(f.chainEdits, struct {
+		ChainID    int64
+		ListenPort int
+		Mode       string
+		Comment    string
+	}{chainID, listenPort, mode, comment})
+	return f.chainErr
+}
+
+func (f *fakeDaemonClient) ChainDelete(chainID int64) error {
+	f.chainDeletes = append(f.chainDeletes, chainID)
+	return f.chainErr
 }
 
 // fixedPortion returns the byte-prefix of s whose lipgloss display width equals
@@ -497,8 +521,8 @@ func TestRowAtResolvesOwnerAndEditable(t *testing.T) {
 	m := model{
 		rules: []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
 		panelRules: []nft.Rule{
-			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},                                  // standalone (editable)
-			{Proto: "tcp", SrcPort: 44751, DestIP: "1.2.3.4", DestPort: 42421, ChainID: 7, ChainName: "vless"}, // chain hop (read-only)
+			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},                                  // standalone
+			{Proto: "tcp", SrcPort: 44751, DestIP: "1.2.3.4", DestPort: 42421, ChainID: 7, ChainName: "vless"}, // chain hop (editable with field locks)
 		},
 	}
 	if m.totalRows() != 3 {
@@ -510,8 +534,8 @@ func TestRowAtResolvesOwnerAndEditable(t *testing.T) {
 	if r, owner, editable := m.rowAt(1); owner != "panel" || !editable || r.SrcPort != 30000 {
 		t.Fatalf("row 1 = (%+v, %q, %v)", r, owner, editable)
 	}
-	if _, owner, editable := m.rowAt(2); owner != "panel" || editable {
-		t.Fatalf("row 2 should be panel read-only, got owner=%q editable=%v", owner, editable)
+	if r, owner, editable := m.rowAt(2); owner != "panel" || !editable || r.ChainID != 7 {
+		t.Fatalf("row 2 should be panel editable with chainID=7, got owner=%q editable=%v chainID=%d", owner, editable, r.ChainID)
 	}
 }
 
@@ -534,17 +558,20 @@ func TestUpdateListNavigatesAcrossSegments(t *testing.T) {
 	}
 }
 
-func TestEnterEditModeRejectsChainRow(t *testing.T) {
+func TestEnterEditModeChainRowEntersWithChainID(t *testing.T) {
 	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
-		{Proto: "tcp", SrcPort: 44751, DestIP: "1.2.3.4", DestPort: 42421, ChainID: 7, ChainName: "vless"},
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
 	})
-	m.cursor = 0 // panel chain hop (no tui rows)
+	m.cursor = 0
 	m.enterEditMode()
-	if m.mode == viewEdit {
-		t.Fatal("chain hop must not enter edit mode")
+	if m.mode != viewEdit {
+		t.Fatal("chain hop should now be editable (enter edit mode)")
 	}
-	if !strings.Contains(m.status, "只读") {
-		t.Fatalf("expected read-only status, got %q", m.status)
+	if m.editingOwner != "panel" || m.editingChainID != 7 {
+		t.Fatalf("editingOwner=%q editingChainID=%d, want panel/7", m.editingOwner, m.editingChainID)
+	}
+	if m.inputs[fSrcPort].Value() != "21000" {
+		t.Fatalf("listen port not prefilled: %q", m.inputs[fSrcPort].Value())
 	}
 }
 
@@ -674,5 +701,127 @@ func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
 	after := line[idx+len(longDest):]
 	if !strings.HasPrefix(after, strings.Repeat(" ", colGap)) {
 		t.Fatalf("dest must be followed by >=%d spaces, got %q", colGap, after)
+	}
+}
+
+func TestLockedFieldsByRowType(t *testing.T) {
+	m := model{editingOwner: "tui"}
+	if len(m.lockedFields()) != 0 {
+		t.Fatalf("tui edit should lock nothing, got %v", m.lockedFields())
+	}
+	m = model{editingOwner: "panel", editingChainID: 0}
+	lf := m.lockedFields()
+	if !lf[fProto] || !lf[fSrcPort] || lf[fDestIP] {
+		t.Fatalf("panel non-chain locks wrong fields: %v", lf)
+	}
+	m = model{editingOwner: "panel", editingChainID: 7}
+	lf = m.lockedFields()
+	if !lf[fProto] || !lf[fDestIP] || !lf[fDestPort] || lf[fSrcPort] {
+		t.Fatalf("panel chain locks wrong fields: %v", lf)
+	}
+}
+
+func TestUpdateEditChainRowLocksTargetNotListenPort(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+
+	// fDestIP is locked for chain rows — input must be swallowed.
+	m.focusedInput = fDestIP
+	before := m.inputs[fDestIP].Value()
+	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
+	if nm.(model).inputs[fDestIP].Value() != before {
+		t.Fatal("target IP must be read-only for chain rows")
+	}
+
+	// fSrcPort is NOT locked for chain rows — updateEdit must forward the key
+	// to the textinput. Focus the input so textinput.Update accepts the rune.
+	m.focusedInput = fSrcPort
+	m.inputs[fSrcPort].Focus()
+	nm, _ = m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
+	if nm.(model).inputs[fSrcPort].Value() == "21000" {
+		t.Fatal("listen port must be editable for chain rows")
+	}
+}
+
+func TestSubmitEditChainRowSendsChainEdit(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless", Comment: "old"},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	m.inputs[fSrcPort].SetValue("21555")
+	m.inputs[fComment].SetValue("new note")
+	m.modeIdx = 1 // userspace
+	nm, _ := m.submitEdit()
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	if len(fc.chainEdits) != 1 {
+		t.Fatalf("expected one ChainEdit call, got %d", len(fc.chainEdits))
+	}
+	e := fc.chainEdits[0]
+	if e.ChainID != 7 || e.ListenPort != 21555 || e.Mode != nft.ModeUserspace || e.Comment != "new note" {
+		t.Fatalf("ChainEdit args wrong: %+v", e)
+	}
+	if mm.panelRules[0].SrcPort != 21000 {
+		t.Fatalf("chain row must not be mutated locally, got SrcPort=%d", mm.panelRules[0].SrcPort)
+	}
+	if mm.mode != viewList {
+		t.Fatal("should return to list view after submit")
+	}
+}
+
+func TestSubmitEditChainRowSurfacesServerError(t *testing.T) {
+	fc := &fakeDaemonClient{chainErr: fmt.Errorf("端口被占用")}
+	m := initialModel(fc, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	m.inputs[fSrcPort].SetValue("80")
+	nm, _ := m.submitEdit()
+	if !strings.Contains(nm.(model).err, "端口被占用") {
+		t.Fatalf("server error not surfaced: %q", nm.(model).err)
+	}
+}
+
+func TestDeleteChainRowConfirmsThenSendsChainDelete(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := initialModel(fc, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+	})
+	m.cursor = 0
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = nm.(model)
+	if m.mode != viewConfirmDelete {
+		t.Fatal("d on a chain row should enter confirm-delete")
+	}
+	nm, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	mm := nm.(model)
+	if len(fc.chainDeletes) != 1 || fc.chainDeletes[0] != 7 {
+		t.Fatalf("expected ChainDelete(7), got %v", fc.chainDeletes)
+	}
+	if mm.mode != viewList {
+		t.Fatal("should return to list after delete")
+	}
+}
+
+func TestDeleteNonChainServerRowStillRejected(t *testing.T) {
+	m := initialModel(&fakeDaemonClient{}, nil, []nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	m.cursor = 0
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	mm := nm.(model)
+	if mm.mode == viewConfirmDelete {
+		t.Fatal("non-chain server row must not be deletable here")
+	}
+	if !strings.Contains(mm.status, "托管") {
+		t.Fatalf("expected rejection status, got %q", mm.status)
 	}
 }

@@ -23,6 +23,8 @@ import (
 type daemonClient interface {
 	GetRuleset() (daemonclient.OwnerRuleset, error)
 	PostRuleset(owner string, rules []nft.Rule) error
+	ChainEdit(chainID int64, listenPort int, mode, comment string) error
+	ChainDelete(chainID int64) error
 }
 
 type viewMode int
@@ -79,6 +81,10 @@ type model struct {
 	// editingOwner records which segment the in-progress edit targets so
 	// submitEdit posts back to the right owner ("tui" or "panel").
 	editingOwner string
+	// editingChainID is the chain a panel chain-hop edit targets (0 = the
+	// row is not a chain hop). It routes submitEdit to the chain command path
+	// and selects the field-lock set.
+	editingChainID int64
 
 	inputs       []textinput.Model
 	focusedInput int
@@ -141,17 +147,37 @@ func (m model) totalRows() int {
 	return len(m.rules) + len(m.panelRules)
 }
 
-// rowAt resolves a unified cursor index to its rule, owner, and whether it
-// is editable. Indices [0,len(rules)) map to the tui segment; the remainder
-// map to the panel segment. A panel rule is editable only when it is not a
-// chain hop (ChainID==0): chain hops carry a relay skeleton whose
-// port/target must not be edited from the TUI.
+// rowAt resolves a unified cursor index to its rule and owner. Indices
+// [0,len(rules)) map to the tui segment; the remainder map to the panel
+// segment. editable is always true: chain hops are editable for their safe
+// fields (listen_port/mode/comment) — which fields are locked is decided per
+// row by lockedFields, not here.
 func (m model) rowAt(i int) (r nft.Rule, owner string, editable bool) {
 	if i < len(m.rules) {
 		return m.rules[i], "tui", true
 	}
-	p := m.panelRules[i-len(m.rules)]
-	return p, "panel", p.ChainID == 0
+	return m.panelRules[i-len(m.rules)], "panel", true
+}
+
+// lockedFields returns the form field indices that stay read-only for the
+// row being edited. tui rows lock nothing. panel non-chain rows lock
+// proto+listen_port (their server-side reconcile key). panel chain rows lock
+// proto+target (the relay skeleton owned by the server) but free
+// listen_port/mode/comment.
+//
+// Invariant: tui-segment rules always have ChainID==0 (they are user-managed
+// local rules, never relay hops; chain hops only ever appear in the panel
+// segment). So "tui rows lock nothing" and submitEdit's chain branch keying on
+// owner=="panel"&&editingChainID!=0 are both safe — a tui row can never carry a
+// ChainID that would misroute it onto the chain-command path.
+func (m model) lockedFields() map[int]bool {
+	if m.editingOwner != "panel" {
+		return nil
+	}
+	if m.editingChainID != 0 {
+		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
+	}
+	return map[int]bool{fProto: true, fSrcPort: true}
 }
 
 func buildInputs() []textinput.Model {
@@ -225,10 +251,16 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterEditMode()
 		return m, textinput.Blink
 	case "d", "delete":
-		if m.cursor < len(m.rules) && len(m.rules) > 0 {
+		if m.totalRows() == 0 {
+			return m, nil
+		}
+		r, owner, _ := m.rowAt(m.cursor)
+		if owner == "tui" || r.ChainID != 0 {
+			// tui rows delete locally; chain rows delete the whole chain via
+			// the server. Non-chain server rows aren't deletable from here.
 			m.mode = viewConfirmDelete
 			m.err = ""
-		} else if m.totalRows() > 0 && m.cursor >= len(m.rules) {
+		} else {
 			m.status = "server 托管规则不能在此删除"
 		}
 	case "c":
@@ -245,6 +277,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) enterAddMode() {
 	m.mode = viewAdd
 	m.editingOwner = "tui" // new rules always belong to the tui segment
+	m.editingChainID = 0
 	m.err = ""
 	m.status = ""
 	m.inputs = buildInputs()
@@ -254,12 +287,9 @@ func (m *model) enterAddMode() {
 }
 
 func (m *model) enterEditMode() {
-	r, owner, editable := m.rowAt(m.cursor)
-	if !editable {
-		m.status = "链式规则端口/目标只读，请在面板修改"
-		return
-	}
+	r, owner, _ := m.rowAt(m.cursor)
 	m.editingOwner = owner
+	m.editingChainID = r.ChainID
 	m.mode = viewEdit
 	m.err = ""
 	m.status = ""
@@ -351,11 +381,10 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitEdit()
 	}
-	// Panel-managed forwards key on (proto, listen_port) server-side; changing
-	// either here would make the edit silently fail to reconcile (the server
-	// can't find the row under the new key). Keep them read-only for panel
-	// edits — only target/comment/mode sync back.
-	if m.editingOwner == "panel" && (m.focusedInput == fProto || m.focusedInput == fSrcPort) {
+	// Locked fields swallow input. The lock set differs by row type: panel
+	// non-chain pins proto+listen_port (its reconcile key); panel chain pins
+	// proto+target (the relay skeleton).
+	if m.lockedFields()[m.focusedInput] {
 		return m, nil
 	}
 	// When a pill-selector field is focused, route left/right to that selector;
@@ -390,14 +419,38 @@ func (m model) submitEdit() (tea.Model, tea.Cmd) {
 	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
 	comment := strings.TrimSpace(m.inputs[fComment].Value())
 
-	srcPort, err1 := strconv.Atoi(srcPortStr)
-	destPort, err2 := strconv.Atoi(destPortStr)
-	if err1 != nil || err2 != nil {
+	srcPort, err := strconv.Atoi(srcPortStr)
+	if err != nil {
 		m.err = "端口必须为数字"
 		return m, nil
 	}
 
 	owner := m.editingOwner
+
+	// Chain hops are server-authoritative: only listen_port/mode/comment are
+	// editable (proto/target are the locked relay skeleton). Send a command
+	// and let the server re-dispatch — don't optimistically mutate the local
+	// row, since the real result (including upstream changes on other nodes)
+	// arrives via the next push. The locked target port is never sent, so it is
+	// deliberately not parsed/validated before this branch — a chain edit must
+	// not be blockable by a field the operator cannot reach.
+	if owner == "panel" && m.editingChainID != 0 {
+		if err := m.client.ChainEdit(m.editingChainID, srcPort, modeOptions[m.modeIdx], comment); err != nil {
+			m.err = err.Error()
+			return m, nil
+		}
+		m.mode = viewList
+		m.status = fmt.Sprintf("已提交链路端口/模式变更（监听 %d），按 r 刷新查看", srcPort)
+		m.err = ""
+		return m, nil
+	}
+
+	destPort, err := strconv.Atoi(destPortStr)
+	if err != nil {
+		m.err = "端口必须为数字"
+		return m, nil
+	}
+
 	var seg []nft.Rule
 	var idx int
 	if owner == "panel" {
@@ -530,7 +583,18 @@ func (m model) submitAdd() (tea.Model, tea.Cmd) {
 func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		if m.cursor >= len(m.rules) {
+		r, owner, _ := m.rowAt(m.cursor)
+		if owner == "panel" && r.ChainID != 0 {
+			if err := m.client.ChainDelete(r.ChainID); err != nil {
+				m.err = err.Error()
+				m.mode = viewList
+				return m, nil
+			}
+			m.status = fmt.Sprintf("已提交删除链路「%s」，按 r 刷新查看", r.ChainName)
+			m.mode = viewList
+			return m, nil
+		}
+		if owner != "tui" {
 			m.mode = viewList
 			return m, nil
 		}
@@ -626,8 +690,13 @@ func (m model) View() string {
 	case viewAdd, viewEdit:
 		inner = m.viewForm()
 	case viewConfirmDelete:
-		inner = m.viewConfirm(
-			fmt.Sprintf("确认删除该规则？\n\n  %s\n", m.rules[m.cursor].Display()))
+		if r, owner, _ := m.rowAt(m.cursor); owner == "panel" && r.ChainID != 0 {
+			inner = m.viewConfirm(fmt.Sprintf(
+				"确认删除整条链路「%s」？\n\n  这会删除该链路在所有节点上的全部转发，不可恢复。\n", r.ChainName))
+		} else {
+			inner = m.viewConfirm(
+				fmt.Sprintf("确认删除该规则？\n\n  %s\n", r.Display()))
+		}
 	case viewConfirmClear:
 		inner = m.viewConfirm(
 			fmt.Sprintf("确认清空全部 %d 条转发规则？", len(m.rules)))
@@ -853,8 +922,8 @@ func (m model) viewForm() string {
 		} else {
 			fieldView = ti.View()
 		}
-		if m.editingOwner == "panel" && (i == fProto || i == fSrcPort) {
-			fieldView += helpStyle.Render("  (server 固定)")
+		if m.lockedFields()[i] {
+			fieldView += helpStyle.Render("  (固定)")
 		}
 		b.WriteString(fmt.Sprintf("%s%s  %s\n", marker, labels[i], fieldView))
 	}
