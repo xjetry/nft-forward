@@ -642,15 +642,18 @@ func (m model) View() string {
 }
 
 // Column widths in terminal cells (CJK double-width characters count as 2 cells).
-// These constants must match between the header and every data row.
+// These constants must match between the header and every data row. Each fixed
+// column reserves colGap trailing cells (content is truncated to width-colGap)
+// so adjacent columns never visually merge, even when content fills the width.
 const (
-	colOwner   = 18 // "链路 seednet-vless" / "本地" / "server"
-	colProto   = 8  // "tcp+udp " (longest option 7 chars + 1 pad)
-	colSrcPort = 10 // " 65535    "
-	colDest    = 18 // "100.100.100.255   " (max IPv4 15 chars + 3 pad)
-	colDstPort = 10 // " 65535    "
-	// colComment is flexible — it consumes the remainder of the line
-	// Total fixed width: colProto + colSrcPort + colDest + colDstPort = 46 cells
+	colGap     = 2
+	colOwner   = 16 // 本地 / server / 链路 X（链路名过长则截断）
+	colTenant  = 12 // 租户名 / —
+	colProto   = 10 // tcp+udp / tcp (U)
+	colSrcPort = 12 // 65535
+	colDest    = 24 // IPv4(15) 或常见域名 + gap
+	colDstPort = 12 // 65535
+	// colComment is flexible — it consumes the remainder of the line.
 
 	// colMargin is the horizontal margin (in cells) on each side of the viewport.
 	colMargin = 2
@@ -685,15 +688,22 @@ func truncateCell(s string, maxCells int) string {
 	return string(out) + "…"
 }
 
-// renderTableRow assembles a fixed-width table row from five cell strings.
-// Columns: proto (colProto cells), srcPort (colSrcPort cells),
-// dest (colDest cells), dstPort (colDstPort cells), comment (flexible).
-// The assembled line contains no styling — callers apply styles after.
+// padCol renders s into a fixed colW-cell column, truncating content to
+// colW-colGap so at least colGap trailing cells separate it from the next
+// column.
+func padCol(s string, colW int) string {
+	return cellStyle(colW).Render(truncateCell(s, colW-colGap))
+}
+
+// renderTableRow assembles a fixed-width table row from five cell strings:
+// proto, srcPort, dest, dstPort (each a gap-padded fixed column) and comment
+// (flexible, already styled by the caller). The assembled line carries no
+// styling of its own — callers apply row styles after.
 func renderTableRow(proto, srcPort, dest, dstPort, comment string) string {
-	return cellStyle(colProto).Render(truncateCell(proto, colProto)) +
-		cellStyle(colSrcPort).Render(truncateCell(srcPort, colSrcPort)) +
-		cellStyle(colDest).Render(truncateCell(dest, colDest)) +
-		cellStyle(colDstPort).Render(truncateCell(dstPort, colDstPort)) +
+	return padCol(proto, colProto) +
+		padCol(srcPort, colSrcPort) +
+		padCol(dest, colDest) +
+		padCol(dstPort, colDstPort) +
 		comment
 }
 
@@ -704,14 +714,19 @@ func (m model) viewList() string {
 	if m.totalRows() == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
 	} else {
-		header := cellStyle(colOwner).Render("来源") +
+		header := padCol("来源", colOwner) +
+			padCol("用户", colTenant) +
 			renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 		b.WriteString(headerStyle.Render(header) + "\n")
 
-		fixedWidth := colOwner + colProto + colSrcPort + colDest + colDstPort
+		fixedWidth := colOwner + colTenant + colProto + colSrcPort + colDest + colDstPort
+		const minComment = 10
 		innerWidth := m.width - 2*colMargin
-		if innerWidth < fixedWidth+1 {
-			innerWidth = 80 - 2*colMargin
+		if innerWidth < fixedWidth+minComment {
+			// Narrow terminal: keep a minimum comment column so commentWidth
+			// never goes negative; the row may exceed the viewport and the
+			// terminal soft-wraps, which is preferable to a broken render.
+			innerWidth = fixedWidth + minComment
 		}
 		commentWidth := innerWidth - fixedWidth
 
@@ -733,7 +748,12 @@ func (m model) viewList() string {
 					ownerTag = "server"
 				}
 			}
-			line := cellStyle(colOwner).Render(truncateCell(ownerTag, colOwner)) +
+			tenantTag := "—"
+			if r.TenantName != "" {
+				tenantTag = r.TenantName
+			}
+			line := padCol(ownerTag, colOwner) +
+				padCol(tenantTag, colTenant) +
 				renderTableRow(
 					protoCell,
 					strconv.Itoa(r.SrcPort),

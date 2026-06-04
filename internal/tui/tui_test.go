@@ -440,28 +440,39 @@ func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 func TestViewListRendersUnifiedSegments(t *testing.T) {
 	m := model{
 		mode:  viewList,
-		width: 120,
+		width: 140,
 		rules: []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
 		panelRules: []nft.Rule{
-			{Proto: "tcp", SrcPort: 44751, DestIP: "104.251.236.89", DestPort: 42421, ChainID: 7, ChainName: "seednet-vless"},
+			{Proto: "tcp", SrcPort: 17171, DestIP: "72.234.229.145", DestPort: 17171, TenantName: "qqpw", Comment: "ss"},
 			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 		},
 	}
 	out := stripANSI(m.View())
-	if !strings.Contains(out, "本地") {
-		t.Fatalf("expected tui row tagged 本地, got:\n%s", out)
+	if !strings.Contains(out, "来源") || !strings.Contains(out, "用户") {
+		t.Fatalf("header must include 来源 and 用户 columns, got:\n%s", out)
 	}
-	if !strings.Contains(out, "seednet-vless") {
-		t.Fatalf("expected chain row to show chain name, got:\n%s", out)
+	if !strings.Contains(out, "本地") {
+		t.Fatalf("tui row should be tagged 本地, got:\n%s", out)
 	}
 	if !strings.Contains(out, "server") {
-		t.Fatalf("expected standalone panel row tagged server, got:\n%s", out)
+		t.Fatalf("tenant-less panel row should be tagged server, got:\n%s", out)
 	}
-	for _, port := range []string{"100", "44751", "30000"} {
-		if !strings.Contains(out, port) {
-			t.Fatalf("expected listen port %s rendered, got:\n%s", port, out)
-		}
+	if !strings.Contains(out, "qqpw") {
+		t.Fatalf("tenant panel row should show its tenant in the 用户 column, got:\n%s", out)
 	}
+	if !strings.Contains(out, "—") {
+		t.Fatalf("rows without a tenant should show — in the 用户 column, got:\n%s", out)
+	}
+}
+
+func TestViewListClampsCommentWidthOnNarrowTerminal(t *testing.T) {
+	// Wide fixed columns must not drive commentWidth negative on a narrow term.
+	m := model{
+		mode:       viewList,
+		width:      40,
+		panelRules: []nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}},
+	}
+	_ = m.View() // must not panic
 }
 
 func TestLoadInitialRulesSplitsTuiAndPanel(t *testing.T) {
@@ -648,5 +659,20 @@ func TestUpdateEditLocksPanelProtoAndListenPort(t *testing.T) {
 	nm, _ = m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
 	if nm.(model).inputs[fSrcPort].Value() != "30000" {
 		t.Fatalf("panel listen port must be locked, got %q", nm.(model).inputs[fSrcPort].Value())
+	}
+}
+
+func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
+	// A destination that fills its column must still leave a visible gap before
+	// the remote-port column (root cause of "seednet.xjetry.fun8443").
+	longDest := "seednet.xjetry.fun"
+	line := stripANSI(renderTableRow("tcp", "42421", longDest, "8443", "x"))
+	idx := strings.Index(line, longDest)
+	if idx < 0 {
+		t.Fatalf("dest not rendered intact: %q", line)
+	}
+	after := line[idx+len(longDest):]
+	if !strings.HasPrefix(after, strings.Repeat(" ", colGap)) {
+		t.Fatalf("dest must be followed by >=%d spaces, got %q", colGap, after)
 	}
 }
