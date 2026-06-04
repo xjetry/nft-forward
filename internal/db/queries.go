@@ -71,7 +71,9 @@ type Forward struct {
 
 func RandToken(n int) string {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -97,23 +99,20 @@ func CreateTenantUser(d *sql.DB, tenantID int64, username, pwHash string) (int64
 	return res.LastInsertId()
 }
 
-func ListUsers(d *sql.DB) ([]*User, error) {
-	rows, err := d.Query(`SELECT id, username, pw_hash, role, tenant_id, disabled FROM users ORDER BY id`)
-	if err != nil {
+func scanUser(r rowScanner) (*User, error) {
+	u := &User{}
+	var disabled int
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*User
-	for rows.Next() {
-		u := &User{}
-		var disabled int
-		if err := rows.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
-			return nil, err
-		}
-		u.Disabled = disabled == 1
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	u.Disabled = disabled == 1
+	return u, nil
+}
+
+const userCols = `id, username, pw_hash, role, tenant_id, disabled`
+
+func ListUsers(d *sql.DB) ([]*User, error) {
+	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
 }
 
 func SetUserDisabled(d *sql.DB, id int64, disabled bool) error {
@@ -131,9 +130,7 @@ func DeleteUser(d *sql.DB, id int64) error {
 }
 
 func CountUsersByTenant(d *sql.DB, tenantID int64) (int, error) {
-	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM users WHERE tenant_id=?`, tenantID).Scan(&n)
-	return n, err
+	return count(d, `SELECT COUNT(*) FROM users WHERE tenant_id=?`, tenantID)
 }
 
 // DeleteForwardsForTenant removes all forwards owned by a tenant and returns
@@ -150,31 +147,15 @@ func DeleteForwardsForTenant(d *sql.DB, tenantID int64) ([]int64, error) {
 }
 
 func GetUserByUsername(d *sql.DB, username string) (*User, error) {
-	row := d.QueryRow(`SELECT id, username, pw_hash, role, tenant_id, disabled FROM users WHERE username = ?`, username)
-	u := &User{}
-	var disabled int
-	if err := row.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
-		return nil, err
-	}
-	u.Disabled = disabled == 1
-	return u, nil
+	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE username = ?`, username))
 }
 
 func GetUserByID(d *sql.DB, id int64) (*User, error) {
-	row := d.QueryRow(`SELECT id, username, pw_hash, role, tenant_id, disabled FROM users WHERE id = ?`, id)
-	u := &User{}
-	var disabled int
-	if err := row.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
-		return nil, err
-	}
-	u.Disabled = disabled == 1
-	return u, nil
+	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
 }
 
 func CountUsers(d *sql.DB) (int, error) {
-	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
-	return n, err
+	return count(d, `SELECT COUNT(*) FROM users`)
 }
 
 // Sessions
@@ -190,17 +171,10 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 }
 
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
-	row := d.QueryRow(`
-		SELECT u.id, u.username, u.pw_hash, u.role, u.tenant_id, u.disabled
+	return scanUser(d.QueryRow(`
+		SELECT `+userCols+`
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, token)
-	u := &User{}
-	var disabled int
-	if err := row.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
-		return nil, err
-	}
-	u.Disabled = disabled == 1
-	return u, nil
+		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, token))
 }
 
 func DeleteSession(d *sql.DB, token string) error {
@@ -284,20 +258,7 @@ func scanNode(r rowScanner) (*Node, error) {
 }
 
 func ListNodes(d *sql.DB) ([]*Node, error) {
-	rows, err := d.Query(`SELECT ` + nodeCols + ` FROM nodes ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Node
-	for rows.Next() {
-		n, err := scanNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY id`, scanNode)
 }
 
 func DeleteNode(d *sql.DB, id int64) error {
@@ -389,20 +350,7 @@ func listForwardsWhere(d *sql.DB, where string, args ...any) ([]*Forward, error)
 		q += " WHERE " + where
 	}
 	q += ` ORDER BY node_id, listen_port`
-	rows, err := d.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Forward
-	for rows.Next() {
-		f, err := scanForward(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return queryAll(d, q, scanForward, args...)
 }
 
 func ListForwards(d *sql.DB) ([]*Forward, error) {
@@ -425,20 +373,7 @@ func ActiveForwardsForPush(d *sql.DB, nodeID int64) ([]*Forward, error) {
 		  AND (t.disabled = 1 OR (t.expires_at IS NOT NULL AND t.expires_at > 0 AND t.expires_at < strftime('%s','now')))
 		)
 		ORDER BY listen_port`
-	rows, err := d.Query(q, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Forward
-	for rows.Next() {
-		f, err := scanForward(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return queryAll(d, q, scanForward, nodeID)
 }
 
 func ListForwardsForTenant(d *sql.DB, tenantID int64) ([]*Forward, error) {
@@ -446,40 +381,21 @@ func ListForwardsForTenant(d *sql.DB, tenantID int64) ([]*Forward, error) {
 }
 
 func CountForwardsForTenant(d *sql.DB, tenantID int64) (int, error) {
-	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM forwards WHERE tenant_id=?`, tenantID).Scan(&n)
-	return n, err
+	return count(d, `SELECT COUNT(*) FROM forwards WHERE tenant_id=?`, tenantID)
 }
 
 func CountForwardsForTenantTunnel(d *sql.DB, tenantID, tunnelID int64) (int, error) {
-	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM forwards WHERE tenant_id=? AND tunnel_id=?`, tenantID, tunnelID).Scan(&n)
-	return n, err
+	return count(d, `SELECT COUNT(*) FROM forwards WHERE tenant_id=? AND tunnel_id=?`, tenantID, tunnelID)
 }
 
 // CountForwardsByTunnel counts all forwards bound to a tunnel (any tenant, plus
 // chain-hop forwards). Used to refuse deleting a tunnel that still backs rules.
 func CountForwardsByTunnel(d *sql.DB, tunnelID int64) (int, error) {
-	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM forwards WHERE tunnel_id=?`, tunnelID).Scan(&n)
-	return n, err
+	return count(d, `SELECT COUNT(*) FROM forwards WHERE tunnel_id=?`, tunnelID)
 }
 
 func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
-	rows, err := d.Query(`SELECT DISTINCT node_id FROM forwards WHERE tenant_id=?`, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return queryInt64s(d, `SELECT DISTINCT node_id FROM forwards WHERE tenant_id=?`, tenantID)
 }
 
 // Audit

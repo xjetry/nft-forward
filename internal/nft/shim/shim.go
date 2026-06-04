@@ -64,6 +64,25 @@ type nftRunner func(args ...string) (string, error)
 // use defaultNftScriptRunner; tests substitute a fake.
 type nftScriptRunner func(script string) error
 
+// cleanupChain lists one chain, finds all owner-tagged rules, and emits a
+// delete-only script to remove them. Returns nil when the chain is absent
+// or already clean. Shared by every shim's Cleanup method.
+func cleanupChain(runNft nftRunner, runScript nftScriptRunner, family, table, chain string) error {
+	out, err := runNft("-a", "list", "chain", family, table, chain)
+	if err != nil {
+		return nil // chain absent; nothing to clean
+	}
+	stale := parseShimHandles(out)
+	if len(stale) == 0 {
+		return nil
+	}
+	var script string
+	for _, h := range stale {
+		script += formatDelete(family, table, chain, h)
+	}
+	return runScript(script)
+}
+
 func defaultNftRunner(args ...string) (string, error) {
 	cmd := exec.Command("nft", args...)
 	var stdout, stderr bytes.Buffer

@@ -36,38 +36,15 @@ func requireResolvedHosts(rules []nft.Rule) error {
 	return nil
 }
 
-// refreshOnce performs a single DNS refresh pass: snapshot owners under the
-// lock, merge, resolve, and re-apply only when at least one IP changed. The
-// last-applied set is held in d.lastResolved so subsequent passes can detect
-// "nothing moved" without an extra system call.
+// refreshOnce performs a single DNS refresh pass: re-resolve and re-apply
+// only when at least one IP changed. The last-applied set is held in
+// d.lastResolved so subsequent passes can detect "nothing moved" without
+// an extra system call.
 func (d *Daemon) refreshOnce(ctx context.Context) error {
-	d.mu.Lock()
-	snapshot := cloneOwners(d.owners)
-	prev := append([]nft.Rule(nil), d.lastResolved...)
-	d.mu.Unlock()
-
-	merged, err := MergedRuleset(snapshot)
+	_, _, err := d.reconcileOwners(ctx, nil, nil, false)
 	if err != nil {
-		return err
+		return fmt.Errorf("dns refresh: %w", err)
 	}
-	resolved, _, err := d.resolveFn(ctx, merged)
-	if err != nil {
-		return err
-	}
-	if err := requireResolvedHosts(resolved); err != nil {
-		// Don't push a partially-resolved set; just log and try again on the
-		// next tick. The caller (the loop) is responsible for log shaping.
-		return err
-	}
-	if !rulesDiffer(prev, resolved) {
-		return nil
-	}
-	if err := d.applySerialized(ctx, resolved); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	d.mu.Unlock()
 	return nil
 }
 

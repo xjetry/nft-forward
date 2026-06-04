@@ -50,11 +50,8 @@ type DialerConfig struct {
 type Dialer struct {
 	cfg DialerConfig
 
-	tuiCh      chan []nft.Rule
-	pendingTui atomic.Pointer[[]nft.Rule]
-
-	panelCh      chan []nft.Rule
-	pendingPanel atomic.Pointer[[]nft.Rule]
+	tuiCh   chan []nft.Rule
+	panelCh chan []nft.Rule
 
 	cmdCh     chan wsproto.Envelope
 	pendMu    sync.Mutex
@@ -93,44 +90,41 @@ func (d *Dialer) Done() <-chan struct{} {
 
 // NotifyTuiChanged accepts a new tui-segment snapshot from the
 // unix-socket handler. Last-write-wins: if a previous snapshot is still
-// queued, the new one supersedes it (we only care about reporting the
-// latest state to the panel).
+// queued, drain it and push the newer one so only the latest state
+// reaches the panel.
 func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
 	cp := append([]nft.Rule(nil), rules...)
 	select {
 	case d.tuiCh <- cp:
 	default:
-		d.pendingTui.Store(&cp)
-		// Pull whichever snapshot is now pending (might be ours, might be a
-		// later concurrent caller's). The Swap returns nil if another caller
-		// already drained between our Store and Swap — that's fine, they got
-		// the more recent snapshot through.
-		if p := d.pendingTui.Swap(nil); p != nil {
-			select {
-			case d.tuiCh <- *p:
-			default:
-				// channel still full; a fresher snapshot will come through
-			}
+		// Channel full — drain the stale snapshot and replace it.
+		select {
+		case <-d.tuiCh:
+		default:
+		}
+		select {
+		case d.tuiCh <- cp:
+		default:
 		}
 	}
 }
 
 // NotifyPanelEdited accepts a new panel-segment snapshot from the
 // unix-socket handler after a TUI edit to a server-managed forward.
-// Last-write-wins, mirroring NotifyTuiChanged: a queued snapshot is
-// superseded by a newer one so only the latest state reaches the panel.
+// Last-write-wins, mirroring NotifyTuiChanged: drain the stale snapshot
+// and push the newer one so only the latest state reaches the panel.
 func (d *Dialer) NotifyPanelEdited(rules []nft.Rule) {
 	cp := append([]nft.Rule(nil), rules...)
 	select {
 	case d.panelCh <- cp:
 	default:
-		d.pendingPanel.Store(&cp)
-		if p := d.pendingPanel.Swap(nil); p != nil {
-			select {
-			case d.panelCh <- *p:
-			default:
-				// channel still full; a fresher snapshot will come through
-			}
+		select {
+		case <-d.panelCh:
+		default:
+		}
+		select {
+		case d.panelCh <- cp:
+		default:
 		}
 	}
 }
@@ -255,13 +249,16 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	_, currentMeta := d.cfg.GetState()
-	helloPayload, _ := json.Marshal(wsproto.Hello{
+	helloPayload, err := json.Marshal(wsproto.Hello{
 		NodeToken:      d.cfg.Token,
 		AgentVersion:   d.cfg.AgentVersion,
 		OS:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
 		LastAppliedRev: currentMeta.LastAppliedRev,
 	})
+	if err != nil {
+		return false, fmt.Errorf("marshal hello: %w", err)
+	}
 	if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHello, ID: "hello-1", Payload: helloPayload}); err != nil {
 		return false, fmt.Errorf("write hello: %w", err)
 	}
@@ -274,7 +271,9 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		return false, fmt.Errorf("unexpected first reply %q", helloAck.Type)
 	}
 	var ha wsproto.HelloAck
-	_ = json.Unmarshal(helloAck.Payload, &ha)
+	if err := json.Unmarshal(helloAck.Payload, &ha); err != nil {
+		log.Printf("dialer: unmarshal %s: %v", helloAck.Type, err)
+	}
 	if ha.Error != "" {
 		return false, fmt.Errorf("hello rejected: %s", ha.Error)
 	}
@@ -284,7 +283,10 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	owners, meta := d.cfg.GetState()
 	if meta.MigratedAt.IsZero() && len(owners["tui"]) > 0 {
 		fwds := rulesToForwards(owners["tui"])
-		rlp, _ := json.Marshal(wsproto.RegisterLocal{Forwards: fwds})
+		rlp, err := json.Marshal(wsproto.RegisterLocal{Forwards: fwds})
+		if err != nil {
+			return helloAcked, fmt.Errorf("marshal register_local: %w", err)
+		}
 		if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeRegisterLocal, ID: "reg-1", Payload: rlp}); err != nil {
 			return helloAcked, fmt.Errorf("write register_local: %w", err)
 		}
@@ -294,7 +296,9 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		}
 		if rlAck.Type == wsproto.TypeRegisterLocalAck {
 			var ack wsproto.RegisterLocalAck
-			_ = json.Unmarshal(rlAck.Payload, &ack)
+			if err := json.Unmarshal(rlAck.Payload, &ack); err != nil {
+				log.Printf("dialer: unmarshal %s: %v", rlAck.Type, err)
+			}
 			if ack.Error == "" && d.cfg.OnRegister != nil {
 				d.cfg.OnRegister(fwds)
 			}
@@ -351,7 +355,10 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			switch env.Type {
 			case wsproto.TypeApplyRuleset:
 				var ar wsproto.ApplyRuleset
-				_ = json.Unmarshal(env.Payload, &ar)
+				if err := json.Unmarshal(env.Payload, &ar); err != nil {
+					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
+					continue
+				}
 				ok := true
 				errMsg := ""
 				if d.cfg.OnApply != nil {
@@ -360,15 +367,24 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 						errMsg = err.Error()
 					}
 				}
-				ap, _ := json.Marshal(wsproto.ApplyAck{Rev: ar.Rev, OK: ok, Error: errMsg})
-				_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeApplyAck, ID: env.ID, Payload: ap})
+				ap, err := json.Marshal(wsproto.ApplyAck{Rev: ar.Rev, OK: ok, Error: errMsg})
+				if err != nil {
+					log.Printf("dialer: marshal %s: %v", wsproto.TypeApplyAck, err)
+					continue
+				}
+				if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeApplyAck, ID: env.ID, Payload: ap}); err != nil {
+					return helloAcked, err
+				}
 			case wsproto.TypePong:
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
 				log.Printf("dialer: server error frame: %s", string(env.Payload))
 			case wsproto.TypeChainCmdAck:
 				var ack wsproto.ChainCmdAck
-				_ = json.Unmarshal(env.Payload, &ack)
+				if err := json.Unmarshal(env.Payload, &ack); err != nil {
+					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
+					continue
+				}
 				d.pendMu.Lock()
 				if ch, ok := d.pending[env.ID]; ok {
 					select {
@@ -379,7 +395,11 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				d.pendMu.Unlock()
 			}
 		case <-pingT.C:
-			pp, _ := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
+			pp, err := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
+			if err != nil {
+				log.Printf("dialer: marshal %s: %v", wsproto.TypePing, err)
+				continue
+			}
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePing, ID: "ping-" + strconv.FormatInt(time.Now().UnixMilli(), 36), Payload: pp}); err != nil {
 				return helloAcked, err
 			}
@@ -391,22 +411,40 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			if len(samples) == 0 {
 				continue
 			}
-			cp, _ := json.Marshal(wsproto.Counters{Samples: samples})
-			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cp})
+			cp, err := json.Marshal(wsproto.Counters{Samples: samples})
+			if err != nil {
+				log.Printf("dialer: marshal %s: %v", wsproto.TypeCounters, err)
+				continue
+			}
+			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cp}); err != nil {
+				log.Printf("dialer: write %s: %v", wsproto.TypeCounters, err)
+			}
 		case rules := <-d.tuiCh:
 			if d.cfg.OnTuiNotice == nil {
 				continue
 			}
 			fwds := rulesToForwards(rules)
-			tp, _ := json.Marshal(wsproto.TuiSegmentChanged{Forwards: fwds})
-			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeTuiSegmentChanged, Payload: tp})
+			tp, err := json.Marshal(wsproto.TuiSegmentChanged{Forwards: fwds})
+			if err != nil {
+				log.Printf("dialer: marshal %s: %v", wsproto.TypeTuiSegmentChanged, err)
+				continue
+			}
+			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeTuiSegmentChanged, Payload: tp}); err != nil {
+				log.Printf("dialer: write %s: %v", wsproto.TypeTuiSegmentChanged, err)
+			}
 		case rules := <-d.panelCh:
 			if d.cfg.OnPanelNotice == nil {
 				continue
 			}
 			fwds := rulesToForwards(rules)
-			pp, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
-			_ = writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp})
+			pp, err := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
+			if err != nil {
+				log.Printf("dialer: marshal %s: %v", wsproto.TypePanelSegmentEdit, err)
+				continue
+			}
+			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp}); err != nil {
+				log.Printf("dialer: write %s: %v", wsproto.TypePanelSegmentEdit, err)
+			}
 		case env := <-d.cmdCh:
 			if err := writeOne(ctx, ws, env); err != nil {
 				return helloAcked, err

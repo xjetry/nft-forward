@@ -181,9 +181,6 @@ func runTUI() int {
 	return 0
 }
 
-// runResetAdmin opens the DB without starting the panel and rewrites the
-// password of a single admin account. All live sessions for that user are
-// invalidated so any leaked cookie immediately stops working.
 func runResetAdmin(dbPath, username, newPw string) int {
 	d, err := db.Open(dbPath)
 	if err != nil {
@@ -192,27 +189,12 @@ func runResetAdmin(dbPath, username, newPw string) int {
 	}
 	defer d.Close()
 
-	u, err := db.GetUserByUsername(d, username)
+	msg, err := server.ResetAdminPassword(d, username, newPw)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "找不到用户 %q: %v\n", username, err)
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if u.Role != "admin" {
-		fmt.Fprintf(os.Stderr, "用户 %q 角色为 %s，不是 admin；本命令只重置 admin 账号\n", username, u.Role)
-		return 1
-	}
-	hash, err := server.HashPassword(newPw)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "哈希失败:", err)
-		return 1
-	}
-	if _, err := d.Exec(`UPDATE users SET pw_hash=?, disabled=0 WHERE id=?`, hash, u.ID); err != nil {
-		fmt.Fprintln(os.Stderr, "写入失败:", err)
-		return 1
-	}
-	_, _ = d.Exec(`DELETE FROM sessions WHERE user_id=?`, u.ID)
-	db.WriteAudit(d, u.ID, "admin.reset_password_cli", username, "")
-	fmt.Printf("已重置 %s 的密码（同时清空其所有活跃会话、解除禁用状态）\n", username)
+	fmt.Println(msg)
 	return 0
 }
 

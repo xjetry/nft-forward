@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"nft-forward/internal/db"
 	"nft-forward/internal/wsproto"
 )
@@ -19,8 +17,14 @@ import (
 
 func (s *Server) listTunnels(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tunnels, _ := db.ListTunnels(s.DB)
-	nodes, _ := db.ListNodes(s.DB)
+	tunnels, err := db.ListTunnels(s.DB)
+	if err != nil {
+		log.Printf("list tunnels: %v", err)
+	}
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("list tunnels: list nodes: %v", err)
+	}
 	s.render(w, "tunnels.html", map[string]any{
 		"User":    u,
 		"Tunnels": tunnels,
@@ -31,30 +35,39 @@ func (s *Server) listTunnels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	nodeID, _ := strconv.ParseInt(r.FormValue("node_id"), 10, 64)
+	nodeID, err := parseFormInt64(r, "node_id")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), "/tunnels")
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.TrimSpace(r.FormValue("proto_mask"))
-	portStart, _ := strconv.Atoi(r.FormValue("port_start"))
-	portEnd, _ := strconv.Atoi(r.FormValue("port_end"))
+	portStart, err := parseFormInt(r, "port_start")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), "/tunnels")
+		return
+	}
+	portEnd, err := parseFormInt(r, "port_end")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), "/tunnels")
+		return
+	}
 	cidr := strings.TrimSpace(r.FormValue("target_cidr_allow"))
 	bw, _ := strconv.Atoi(r.FormValue("bandwidth_mbps"))
 
 	if name == "" || nodeID == 0 || portStart < 1 || portEnd < portStart || portEnd > 65535 {
-		setFlash(w, "字段不完整或端口段无效")
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, "字段不完整或端口段无效", "/tunnels")
 		return
 	}
 	if proto != "tcp" && proto != "udp" && proto != "tcp+udp" {
-		setFlash(w, "协议必须为 tcp、udp 或 tcp+udp")
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, "协议必须为 tcp、udp 或 tcp+udp", "/tunnels")
 		return
 	}
 	if cidr == "" {
 		cidr = "0.0.0.0/0"
 	}
 	if err := validateCIDRList(cidr); err != nil {
-		setFlash(w, "CIDR 无效: "+err.Error())
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, "CIDR 无效: "+err.Error(), "/tunnels")
 		return
 	}
 	id, err := db.CreateTunnel(s.DB, &db.Tunnel{
@@ -63,8 +76,7 @@ func (s *Server) createTunnel(w http.ResponseWriter, r *http.Request) {
 		TargetCIDRAllow: cidr, BandwidthMbps: bw,
 	})
 	if err != nil {
-		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/tunnels")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tunnel.create", strconv.FormatInt(id, 10), name)
@@ -73,19 +85,24 @@ func (s *Server) createTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	t, _ := db.GetTunnel(s.DB, id)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	t, err := db.GetTunnel(s.DB, id)
+	if err != nil {
+		log.Printf("delete tunnel %d: get tunnel: %v", id, err)
+	}
 	// forwards.tunnel_id is ON DELETE NO ACTION, so a tunnel still backing any
 	// forward (a tenant forward or a chain hop) cannot be dropped; reject with a
 	// clear message instead of leaking the raw FK error.
 	if n, err := db.CountForwardsByTunnel(s.DB, id); err == nil && n > 0 {
-		setFlash(w, fmt.Sprintf("通道仍被 %d 条转发占用，请先删除这些转发", n))
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, fmt.Sprintf("通道仍被 %d 条转发占用，请先删除这些转发", n), "/tunnels")
 		return
 	}
 	if err := db.DeleteTunnel(s.DB, id); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/tunnels", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/tunnels")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tunnel.delete", strconv.FormatInt(id, 10), "")
@@ -99,7 +116,10 @@ func (s *Server) deleteTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tenants, _ := db.ListTenants(s.DB)
+	tenants, err := db.ListTenants(s.DB)
+	if err != nil {
+		log.Printf("list tenants: %v", err)
+	}
 	s.render(w, "tenants.html", map[string]any{
 		"User":    u,
 		"Tenants": tenants,
@@ -113,8 +133,7 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	maxForwards, _ := strconv.Atoi(r.FormValue("max_forwards"))
 	quotaMB, _ := strconv.ParseInt(r.FormValue("traffic_quota_mb"), 10, 64)
 	if name == "" {
-		setFlash(w, "名称不能为空")
-		http.Redirect(w, r, "/tenants", http.StatusSeeOther)
+		s.flashRedirect(w, r, "名称不能为空", "/tenants")
 		return
 	}
 	if maxForwards <= 0 {
@@ -127,8 +146,7 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := db.CreateTenant(s.DB, t)
 	if err != nil {
-		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, "/tenants", http.StatusSeeOther)
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/tenants")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.create", strconv.FormatInt(id, 10), name)
@@ -137,17 +155,36 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	t, err := db.GetTenant(s.DB, id)
 	if err != nil {
 		http.Error(w, "用户不存在", http.StatusNotFound)
 		return
 	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, id)
-	allTunnels, _ := db.ListTunnels(s.DB)
-	allNodes, _ := db.ListNodes(s.DB)
-	forwards, _ := db.ListForwardsForTenant(s.DB, id)
-	users, _ := db.ListUsers(s.DB)
+	tunnels, grants, err := db.ListTunnelsForTenant(s.DB, id)
+	if err != nil {
+		log.Printf("show tenant %d: list tunnels: %v", id, err)
+	}
+	allTunnels, err := db.ListTunnels(s.DB)
+	if err != nil {
+		log.Printf("show tenant %d: list all tunnels: %v", id, err)
+	}
+	allNodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("show tenant %d: list nodes: %v", id, err)
+	}
+	forwards, err := db.ListForwardsForTenant(s.DB, id)
+	if err != nil {
+		log.Printf("show tenant %d: list forwards: %v", id, err)
+	}
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("show tenant %d: list users: %v", id, err)
+	}
 	var tenantUsers []*db.User
 	for _, usr := range users {
 		if usr.TenantID.Valid && usr.TenantID.Int64 == id {
@@ -169,11 +206,17 @@ func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteAdminTenant(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	nodes, err := db.DistinctTenantNodes(s.DB, id)
+	if err != nil {
+		log.Printf("delete tenant %d: list nodes: %v", id, err)
+	}
 	if err := db.DeleteTenant(s.DB, id); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/tenants", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/tenants")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.delete", strconv.FormatInt(id, 10), "")
@@ -183,7 +226,11 @@ func (s *Server) deleteAdminTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) toggleTenant(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	t, err := db.GetTenant(s.DB, id)
 	if err != nil {
 		http.Error(w, "用户不存在", http.StatusNotFound)
@@ -195,45 +242,54 @@ func (s *Server) toggleTenant(w http.ResponseWriter, r *http.Request) {
 		reason = "管理员手动禁用"
 	}
 	if err := db.SetTenantDisabled(s.DB, id, target, reason); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", id))
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.toggle", strconv.FormatInt(id, 10), fmt.Sprintf("disabled=%v", target))
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
+	nodes, err := db.DistinctTenantNodes(s.DB, id)
+	if err != nil {
+		log.Printf("toggle tenant %d: list nodes: %v", id, err)
+	}
 	s.dispatchAfterFanout(w, nodes, "租户启停切换")
 	http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
 }
 
 func (s *Server) setTenantQuotaBytes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	bytes, err := strconv.ParseInt(r.FormValue("traffic_quota_bytes"), 10, 64)
 	if err != nil || bytes < 0 {
-		setFlash(w, "字节数无效")
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, "字节数无效", fmt.Sprintf("/tenants/%d", id))
 		return
 	}
 	if _, err := s.DB.Exec(`UPDATE tenants SET traffic_quota_bytes=? WHERE id=?`, bytes, id); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", id))
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(bytes, 10))
-	setFlash(w, fmt.Sprintf("配额已更新为 %d 字节", bytes))
-	http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
+	s.flashRedirect(w, r, fmt.Sprintf("配额已更新为 %d 字节", bytes), fmt.Sprintf("/tenants/%d", id))
 }
 
 func (s *Server) resetTenantTraffic(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	if err := db.ResetTenantTraffic(s.DB, id); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", id))
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.reset_traffic", strconv.FormatInt(id, 10), "")
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
+	nodes, err := db.DistinctTenantNodes(s.DB, id)
+	if err != nil {
+		log.Printf("reset tenant traffic %d: list nodes: %v", id, err)
+	}
 	// Default to the success message; dispatchAfterFanout overwrites the
 	// flash cookie when any node fails so the failure note wins.
 	setFlash(w, "已重置流量计数并重新启用用户")
@@ -243,15 +299,22 @@ func (s *Server) resetTenantTraffic(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) grantTenantTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tenantID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	tunnelID, _ := strconv.ParseInt(r.FormValue("tunnel_id"), 10, 64)
+	tenantID, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	tunnelID, err := parseFormInt64(r, "tunnel_id")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", tenantID))
+		return
+	}
 	maxForwards, _ := strconv.Atoi(r.FormValue("max_forwards"))
 	if maxForwards <= 0 {
 		maxForwards = 10
 	}
 	if err := db.GrantTunnel(s.DB, tenantID, tunnelID, maxForwards); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", tenantID), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", tenantID))
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.grant", strconv.FormatInt(tenantID, 10), strconv.FormatInt(tunnelID, 10))
@@ -260,8 +323,16 @@ func (s *Server) grantTenantTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revokeTenantTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tenantID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	tunnelID, _ := strconv.ParseInt(chi.URLParam(r, "tunnelID"), 10, 64)
+	tenantID, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	tunnelID, err := urlParamInt64(r, "tunnelID")
+	if err != nil {
+		http.Error(w, "bad tunnel id", http.StatusBadRequest)
+		return
+	}
 	if err := db.RevokeTunnel(s.DB, tenantID, tunnelID); err != nil {
 		setFlash(w, err.Error())
 	}
@@ -271,41 +342,45 @@ func (s *Server) revokeTenantTunnel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTenantUser(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tenantID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	tenantID, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
+	redirect := fmt.Sprintf("/tenants/%d", tenantID)
 	if username == "" || password == "" {
-		setFlash(w, "用户名和密码不能为空")
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", tenantID), http.StatusSeeOther)
+		s.flashRedirect(w, r, "用户名和密码不能为空", redirect)
 		return
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
-		setFlash(w, "哈希失败: "+err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", tenantID), http.StatusSeeOther)
+		s.flashRedirect(w, r, "哈希失败: "+err.Error(), redirect)
 		return
 	}
 	id, err := db.CreateTenantUser(s.DB, tenantID, username, hash)
 	if err != nil {
-		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/tenants/%d", tenantID), http.StatusSeeOther)
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), redirect)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.create", strconv.FormatInt(id, 10), username)
-	setFlash(w, fmt.Sprintf("已创建用户 %s", username))
-	http.Redirect(w, r, fmt.Sprintf("/tenants/%d", tenantID), http.StatusSeeOther)
+	s.flashRedirect(w, r, fmt.Sprintf("已创建用户 %s", username), redirect)
 }
 
 // --- Users ---
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	users, _ := db.ListUsers(s.DB)
-	tenants, _ := db.ListTenants(s.DB)
-	tenantByID := map[int64]*db.Tenant{}
-	for _, t := range tenants {
-		tenantByID[t.ID] = t
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("list users: %v", err)
 	}
+	tenants, err := db.ListTenants(s.DB)
+	if err != nil {
+		log.Printf("list users: list tenants: %v", err)
+	}
+	tenantByID := buildMap(tenants, func(t *db.Tenant) int64 { return t.ID })
 	s.render(w, "users.html", map[string]any{
 		"User":       u,
 		"Users":      users,
@@ -316,21 +391,23 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
 		http.Error(w, "用户不存在", http.StatusNotFound)
 		return
 	}
 	if target.ID == u.ID {
-		setFlash(w, "不能禁用自己")
-		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		s.flashRedirect(w, r, "不能禁用自己", "/users")
 		return
 	}
 	willDisable := !target.Disabled
 	if err := db.SetUserDisabled(s.DB, id, willDisable); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/users")
 		return
 	}
 	// Tenant accounts: keep the tenant entity in lockstep so the user's
@@ -351,7 +428,11 @@ func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
 		http.Error(w, "用户不存在", http.StatusNotFound)
@@ -360,29 +441,29 @@ func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
 	newPw := db.RandToken(8) // 16 hex chars
 	hash, err := HashPassword(newPw)
 	if err != nil {
-		setFlash(w, "哈希失败: "+err.Error())
-		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		s.flashRedirect(w, r, "哈希失败: "+err.Error(), "/users")
 		return
 	}
 	if _, err := s.DB.Exec(`UPDATE users SET pw_hash=? WHERE id=?`, hash, id); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/users")
 		return
 	}
 	// Invalidate all live sessions for this user so the old password's
 	// existing logins cannot continue.
 	_, _ = s.DB.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
 	db.WriteAudit(s.DB, u.ID, "user.reset_password", strconv.FormatInt(id, 10), "")
-	setFlash(w, fmt.Sprintf("已重置 %s 的密码为：%s （请尽快告知用户，本页刷新后不再显示）", target.Username, newPw))
-	http.Redirect(w, r, "/users", http.StatusSeeOther)
+	s.flashRedirect(w, r, fmt.Sprintf("已重置 %s 的密码为：%s （请尽快告知用户，本页刷新后不再显示）", target.Username, newPw), "/users")
 }
 
 func (s *Server) deleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	if id == u.ID {
-		setFlash(w, "不能删除自己")
-		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		s.flashRedirect(w, r, "不能删除自己", "/users")
 		return
 	}
 	target, err := db.GetUserByID(s.DB, id)
@@ -399,8 +480,7 @@ func (s *Server) deleteUserHandler(w http.ResponseWriter, r *http.Request) {
 		if others <= 1 {
 			nodes, err := db.DeleteForwardsForTenant(s.DB, target.TenantID.Int64)
 			if err != nil {
-				setFlash(w, err.Error())
-				http.Redirect(w, r, "/users", http.StatusSeeOther)
+				s.flashRedirect(w, r, err.Error(), "/users")
 				return
 			}
 			affected = nodes
@@ -438,7 +518,7 @@ func validateCIDRList(s string) error {
 // try to clear it (that's a separate flow).
 func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	nodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	nodeID, err := urlParamInt64(r, "id")
 	if err != nil {
 		http.Error(w, "bad node id", http.StatusBadRequest)
 		return
@@ -449,8 +529,7 @@ func (s *Server) handleImportTuiSnapshot(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if snap == "" {
-		setFlash(w, "暂无 TUI 快照可导入")
-		http.Redirect(w, r, fmt.Sprintf("/nodes/%d", nodeID), http.StatusSeeOther)
+		s.flashRedirect(w, r, "暂无 TUI 快照可导入", fmt.Sprintf("/nodes/%d", nodeID))
 		return
 	}
 	var forwards []wsproto.Forward

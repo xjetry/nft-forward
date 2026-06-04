@@ -65,12 +65,11 @@ func migrate(d *sql.DB) error {
 		if err != nil {
 			return err
 		}
+		defer tx.Rollback()
 		if _, err := tx.Exec(string(body)); err != nil {
-			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (?, strftime('%s','now'))`, name); err != nil {
-			tx.Rollback()
 			return err
 		}
 		if err := tx.Commit(); err != nil {

@@ -62,20 +62,7 @@ func scanTenant(r rowScanner) (*Tenant, error) {
 }
 
 func ListTenants(d *sql.DB) ([]*Tenant, error) {
-	rows, err := d.Query(`SELECT id,name,max_forwards,traffic_quota_bytes,traffic_used_bytes,expires_at,disabled,disable_reason,created_at FROM tenants ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Tenant
-	for rows.Next() {
-		t, err := scanTenant(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return queryAll(d, `SELECT id,name,max_forwards,traffic_quota_bytes,traffic_used_bytes,expires_at,disabled,disable_reason,created_at FROM tenants ORDER BY id`, scanTenant)
 }
 
 func DeleteTenant(d *sql.DB, id int64) error {
@@ -127,20 +114,7 @@ func scanTunnel(r rowScanner) (*Tunnel, error) {
 }
 
 func ListTunnels(d *sql.DB) ([]*Tunnel, error) {
-	rows, err := d.Query(`SELECT id,name,node_id,proto_mask,port_start,port_end,target_cidr_allow,bandwidth_mbps,created_at FROM tunnels ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Tunnel
-	for rows.Next() {
-		t, err := scanTunnel(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return queryAll(d, `SELECT id,name,node_id,proto_mask,port_start,port_end,target_cidr_allow,bandwidth_mbps,created_at FROM tunnels ORDER BY id`, scanTunnel)
 }
 
 func DeleteTunnel(d *sql.DB, id int64) error {
@@ -162,21 +136,16 @@ func RevokeTunnel(d *sql.DB, tenantID, tunnelID int64) error {
 	return err
 }
 
-func ListGrants(d *sql.DB) ([]*TenantTunnel, error) {
-	rows, err := d.Query(`SELECT tenant_id, tunnel_id, max_forwards, granted_at FROM tenant_tunnels`)
-	if err != nil {
+func scanGrant(r rowScanner) (*TenantTunnel, error) {
+	g := &TenantTunnel{}
+	if err := r.Scan(&g.TenantID, &g.TunnelID, &g.MaxForwards, &g.GrantedAt); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*TenantTunnel
-	for rows.Next() {
-		g := &TenantTunnel{}
-		if err := rows.Scan(&g.TenantID, &g.TunnelID, &g.MaxForwards, &g.GrantedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, g)
-	}
-	return out, rows.Err()
+	return g, nil
+}
+
+func ListGrants(d *sql.DB) ([]*TenantTunnel, error) {
+	return queryAll(d, `SELECT tenant_id, tunnel_id, max_forwards, granted_at FROM tenant_tunnels`, scanGrant)
 }
 
 func ListTunnelsForTenant(d *sql.DB, tenantID int64) ([]*Tunnel, []*TenantTunnel, error) {

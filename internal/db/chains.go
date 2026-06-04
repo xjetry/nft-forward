@@ -163,20 +163,7 @@ func listChainsWhere(d *sql.DB, where string, args ...any) ([]*Chain, error) {
 		q += " WHERE " + where
 	}
 	q += ` ORDER BY id`
-	rows, err := d.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Chain
-	for rows.Next() {
-		c, err := scanChain(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return queryAll(d, q, scanChain, args...)
 }
 
 // ListAdminChains returns chains with no owning tenant (admin-built, unmetered).
@@ -188,38 +175,20 @@ func ListChainsByTenant(d *sql.DB, tenantID int64) ([]*Chain, error) {
 	return listChainsWhere(d, "tenant_id=?", tenantID)
 }
 
-func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
-	rows, err := d.Query(`SELECT chain_id,position,node_id,tunnel_id,listen_port,mode,comment FROM chain_hops WHERE chain_id=? ORDER BY position`, chainID)
-	if err != nil {
+func scanChainHop(r rowScanner) (*ChainHop, error) {
+	h := &ChainHop{}
+	if err := r.Scan(&h.ChainID, &h.Position, &h.NodeID, &h.TunnelID, &h.ListenPort, &h.Mode, &h.Comment); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*ChainHop
-	for rows.Next() {
-		h := &ChainHop{}
-		if err := rows.Scan(&h.ChainID, &h.Position, &h.NodeID, &h.TunnelID, &h.ListenPort, &h.Mode, &h.Comment); err != nil {
-			return nil, err
-		}
-		out = append(out, h)
-	}
-	return out, rows.Err()
+	return h, nil
+}
+
+func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
+	return queryAll(d, `SELECT chain_id,position,node_id,tunnel_id,listen_port,mode,comment FROM chain_hops WHERE chain_id=? ORDER BY position`, scanChainHop, chainID)
 }
 
 func ListForwardsByChain(d DBTX, chainID int64) ([]*Forward, error) {
-	rows, err := d.Query(`SELECT `+forwardCols+` FROM forwards WHERE chain_id=? ORDER BY node_id, listen_port`, chainID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Forward
-	for rows.Next() {
-		f, err := scanForward(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return queryAll(d, `SELECT `+forwardCols+` FROM forwards WHERE chain_id=? ORDER BY node_id, listen_port`, scanForward, chainID)
 }
 
 // DeleteChain removes a chain and returns the nodes whose kernel state must be
@@ -227,21 +196,8 @@ func ListForwardsByChain(d DBTX, chainID int64) ([]*Forward, error) {
 // chain_hops + forwards.chain_id clears the rows; we collect nodes first so the
 // caller can re-push them after the rules are gone.
 func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
-	rows, err := d.Query(`SELECT DISTINCT node_id FROM forwards WHERE chain_id=?`, id)
+	nodes, err := queryInt64s(d, `SELECT DISTINCT node_id FROM forwards WHERE chain_id=?`, id)
 	if err != nil {
-		return nil, err
-	}
-	var nodes []int64
-	for rows.Next() {
-		var n int64
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		nodes = append(nodes, n)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	if _, err := d.Exec(`DELETE FROM chains WHERE id=?`, id); err != nil {
@@ -255,20 +211,7 @@ func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
 // so when a node's relay_host changes or the node is removed, every chain it
 // participates in must be re-materialized.
 func ChainsReferencingNode(d DBTX, nodeID int64) ([]int64, error) {
-	rows, err := d.Query(`SELECT DISTINCT chain_id FROM chain_hops WHERE node_id=?`, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return queryInt64s(d, `SELECT DISTINCT chain_id FROM chain_hops WHERE node_id=?`, nodeID)
 }
 
 // HopInput is one ordered hop the caller wants the chain to have. TunnelID is

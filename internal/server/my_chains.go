@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -21,7 +22,10 @@ func (s *Server) tenantListChains(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	chains, _ := db.ListChainsByTenant(s.DB, t.ID)
+	chains, err := db.ListChainsByTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant list chains %d: %v", t.ID, err)
+	}
 	views := make([]chainView, 0, len(chains))
 	for _, c := range chains {
 		views = append(views, s.buildChainView(c))
@@ -36,12 +40,15 @@ func (s *Server) tenantNewChain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	tunnels, _, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := map[int64]*db.Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
+	tunnels, _, err := db.ListTunnelsForTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant new chain %d: list tunnels: %v", t.ID, err)
 	}
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("tenant new chain %d: list nodes: %v", t.ID, err)
+	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	s.render(w, "my_chain_form.html", map[string]any{
 		"User": u, "Tunnels": tunnels, "NodeByID": nodeByID, "Flash": flashFromCookie(w, r),
 	})

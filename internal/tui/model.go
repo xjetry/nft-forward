@@ -1,0 +1,248 @@
+package tui
+
+import (
+	"fmt"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"nft-forward/internal/daemonclient"
+	"nft-forward/internal/nft"
+)
+
+// daemonClient is the subset of daemonclient.Client the TUI relies on.
+// Declared locally so the TUI test suite can substitute a fake; the
+// return type uses daemonclient.OwnerRuleset because Go's interface
+// matching is strict on named-vs-unnamed map types — *daemonclient.Client
+// declares OwnerRuleset, so the TUI's interface must use the same name
+// for the structural match to hold.
+type daemonClient interface {
+	GetRuleset() (daemonclient.OwnerRuleset, error)
+	PostRuleset(owner string, rules []nft.Rule) error
+	ChainEdit(chainID int64, listenPort int, mode, comment string) error
+	ChainDelete(chainID int64) error
+}
+
+type viewMode int
+
+const (
+	viewList viewMode = iota
+	viewAdd
+	viewEdit
+	viewConfirmDelete
+	viewConfirmClear
+)
+
+const (
+	fProto    = 0
+	fSrcPort  = 1
+	fDestIP   = 2
+	fDestPort = 3
+	fComment  = 4
+	fMode     = 5
+)
+
+// protoOptions is the ordered list of protocol choices for the selector.
+var protoOptions = []string{"tcp", "udp", "tcp+udp"}
+
+// modeOptions is the ordered list of data-plane mode choices for the selector.
+// The zero index (kernel) is the default so that existing rules without an
+// explicit Mode field behave identically to before.
+var modeOptions = []string{nft.ModeKernel, nft.ModeUserspace}
+
+type model struct {
+	mode       viewMode
+	rules      []nft.Rule
+	panelRules []nft.Rule // server-pushed segment, shown read-only
+	cursor     int
+	// editingOwner records which segment the in-progress edit targets so
+	// submitEdit posts back to the right owner ("tui" or "panel").
+	editingOwner string
+	// editingChainID is the chain a panel chain-hop edit targets (0 = the
+	// row is not a chain hop). It routes submitEdit to the chain command path
+	// and selects the field-lock set.
+	editingChainID int64
+
+	inputs       []textinput.Model
+	focusedInput int
+	protoIdx     int // index into protoOptions; owned separately from inputs[fProto]
+	modeIdx      int // index into modeOptions; owned separately from inputs[fMode]
+
+	status string
+	err    string
+
+	width  int
+	height int
+
+	client daemonClient
+}
+
+// Run starts the TUI bound to the given daemon client. Caller (cmd) is
+// responsible for verifying the daemon is reachable before invoking Run.
+func Run(client daemonClient) error {
+	rules, panelRules, err := loadInitialRules(client)
+	if err != nil {
+		return err
+	}
+	p := tea.NewProgram(initialModel(client, rules, panelRules), tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
+
+func initialModel(client daemonClient, rules, panelRules []nft.Rule) model {
+	return model{
+		mode:       viewList,
+		rules:      rules,
+		panelRules: panelRules,
+		inputs:     buildInputs(),
+		client:     client,
+	}
+}
+
+// loadInitialRules fetches the local (tui) and server-pushed (panel) segments
+// from the daemon. nil segments become empty slices so the rest of the TUI
+// does not have to nil-check.
+func loadInitialRules(client daemonClient) (tui []nft.Rule, panel []nft.Rule, err error) {
+	owners, err := client.GetRuleset()
+	if err != nil {
+		return nil, nil, fmt.Errorf("加载规则失败: %w", err)
+	}
+	tui = owners["tui"]
+	if tui == nil {
+		tui = []nft.Rule{}
+	}
+	panel = owners["panel"]
+	if panel == nil {
+		panel = []nft.Rule{}
+	}
+	return tui, panel, nil
+}
+
+// totalRows is the count of selectable rows across both segments: the
+// editable tui segment followed by the server-managed panel segment.
+func (m model) totalRows() int {
+	return len(m.rules) + len(m.panelRules)
+}
+
+// rowAt resolves a unified cursor index to its rule and owner. Indices
+// [0,len(rules)) map to the tui segment; the remainder map to the panel
+// segment. editable is always true: chain hops are editable for their safe
+// fields (listen_port/mode/comment) — which fields are locked is decided per
+// row by lockedFields, not here.
+func (m model) rowAt(i int) (r nft.Rule, owner string, editable bool) {
+	if i < len(m.rules) {
+		return m.rules[i], "tui", true
+	}
+	return m.panelRules[i-len(m.rules)], "panel", true
+}
+
+// lockedFields returns the form field indices that stay read-only for the
+// row being edited. tui rows lock nothing. panel non-chain rows lock
+// proto+listen_port (their server-side reconcile key). panel chain rows lock
+// proto+target (the relay skeleton owned by the server) but free
+// listen_port/mode/comment.
+//
+// Invariant: tui-segment rules always have ChainID==0 (they are user-managed
+// local rules, never relay hops; chain hops only ever appear in the panel
+// segment). So "tui rows lock nothing" and submitEdit's chain branch keying on
+// owner=="panel"&&editingChainID!=0 are both safe — a tui row can never carry a
+// ChainID that would misroute it onto the chain-command path.
+func (m model) lockedFields() map[int]bool {
+	if m.editingOwner != "panel" {
+		return nil
+	}
+	if m.editingChainID != 0 {
+		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
+	}
+	return map[int]bool{fProto: true, fSrcPort: true}
+}
+
+func buildInputs() []textinput.Model {
+	mk := func(placeholder string, width int) textinput.Model {
+		ti := textinput.New()
+		ti.Placeholder = placeholder
+		ti.CharLimit = 64
+		ti.Width = width
+		return ti
+	}
+	// Slot 0 (fProto) and slot 5 (fMode) are placeholders so that the
+	// focusedInput index constants (fProto=0 … fMode=5) remain valid and
+	// cycleFocus arithmetic is unchanged. The slots are never rendered or
+	// updated — their respective pill selectors are rendered from protoIdx /
+	// modeIdx instead.
+	return []textinput.Model{
+		mk("", 0), // fProto placeholder
+		mk("监听端口 1-65535", 12),
+		mk("目标 IPv4 或域名", 32),
+		mk("目标端口", 12),
+		mk("可选备注", 40),
+		mk("", 0), // fMode placeholder
+	}
+}
+
+func (m model) Init() tea.Cmd { return textinput.Blink }
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+	case tea.KeyMsg:
+		switch m.mode {
+		case viewList:
+			return m.updateList(msg)
+		case viewAdd:
+			return m.updateAdd(msg)
+		case viewEdit:
+			return m.updateEdit(msg)
+		case viewConfirmDelete:
+			return m.updateConfirmDelete(msg)
+		case viewConfirmClear:
+			return m.updateConfirmClear(msg)
+		}
+	}
+	return m, nil
+}
+
+func (m *model) refresh() {
+	owners, err := m.client.GetRuleset()
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	tui := owners["tui"]
+	if tui == nil {
+		tui = []nft.Rule{}
+	}
+	m.rules = tui
+	panel := owners["panel"]
+	if panel == nil {
+		panel = []nft.Rule{}
+	}
+	m.panelRules = panel
+	if m.cursor >= m.totalRows() {
+		m.cursor = m.totalRows() - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.status = "已从 daemon 重新加载"
+}
+
+// commitOwner posts a full segment snapshot for owner to the daemon. Raw
+// rules go on the wire — the daemon resolves hostnames at apply time — so
+// DestHost/DestIP are sent as the user typed them.
+func commitOwner(client daemonClient, owner string, rules []nft.Rule) ([]nft.Rule, error) {
+	if rules == nil {
+		rules = []nft.Rule{}
+	}
+	if err := client.PostRuleset(owner, rules); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
+	return commitOwner(client, "tui", rules)
+}

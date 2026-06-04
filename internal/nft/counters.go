@@ -34,76 +34,83 @@ func Counters() ([]Counter, error) {
 	return parseCounters(stdout.Bytes())
 }
 
+// nft JSON schema types — typed structs that mirror the subset of nft's
+// JSON output we parse, replacing fragile map[string]any walks with
+// json.Unmarshal into concrete fields.
+
+// nftDoc is the top-level wrapper: {"nftables": [...]}.
+type nftDoc struct {
+	Nftables []nftItem `json:"nftables"`
+}
+
+// nftItem is one element of the top-level array. Only the "rule" key is
+// relevant; metainfo, chain, table entries are ignored via omitempty.
+type nftItem struct {
+	Rule *nftRule `json:"rule,omitempty"`
+}
+
+type nftRule struct {
+	Chain string            `json:"chain"`
+	Expr  []json.RawMessage `json:"expr"`
+}
+
+// nftExpr is the union envelope for a single expression object. At most
+// one field is non-nil per element.
+type nftExpr struct {
+	Match   *nftMatch   `json:"match,omitempty"`
+	Counter *nftCounter `json:"counter,omitempty"`
+}
+
+type nftMatch struct {
+	Left  nftMatchSide `json:"left"`
+	Right json.RawMessage `json:"right"`
+}
+
+// nftMatchSide holds the "left" operand which can be a meta reference or
+// a payload reference (or something we don't care about).
+type nftMatchSide struct {
+	Meta    *nftMeta    `json:"meta,omitempty"`
+	Payload *nftPayload `json:"payload,omitempty"`
+}
+
+type nftMeta struct {
+	Key string `json:"key"`
+}
+
+type nftPayload struct {
+	Protocol string `json:"protocol"`
+	Field    string `json:"field"`
+}
+
+type nftCounter struct {
+	Bytes   int64 `json:"bytes"`
+	Packets int64 `json:"packets"`
+}
+
 func parseCounters(data []byte) ([]Counter, error) {
-	var doc struct {
-		Nftables []map[string]any `json:"nftables"`
-	}
+	var doc nftDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse nft json: %w", err)
 	}
 	var out []Counter
 	for _, item := range doc.Nftables {
-		ruleAny, ok := item["rule"]
-		if !ok {
+		if item.Rule == nil || item.Rule.Chain != "prerouting" {
 			continue
 		}
-		rule, ok := ruleAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		if chain, _ := rule["chain"].(string); chain != "prerouting" {
-			continue
-		}
-		exprs, _ := rule["expr"].([]any)
 		var c Counter
 		hasCounter := false
-		for _, e := range exprs {
-			m, ok := e.(map[string]any)
-			if !ok {
+		for _, raw := range item.Rule.Expr {
+			var expr nftExpr
+			if err := json.Unmarshal(raw, &expr); err != nil {
 				continue
 			}
-			if mt, ok := m["match"].(map[string]any); ok {
-				// proto match: left.meta.key=l4proto, right=tcp|udp
-				if left, ok := mt["left"].(map[string]any); ok {
-					if meta, ok := left["meta"].(map[string]any); ok {
-						if key, _ := meta["key"].(string); key == "l4proto" {
-							if right, ok := mt["right"].(string); ok {
-								c.Proto = right
-							}
-						}
-					}
-					if pl, ok := left["payload"].(map[string]any); ok {
-						if field, _ := pl["field"].(string); field == "dport" {
-							switch v := mt["right"].(type) {
-							case float64:
-								c.ListenPort = int(v)
-							case int:
-								c.ListenPort = v
-							}
-							if proto, _ := pl["protocol"].(string); proto != "" && c.Proto == "" {
-								// The tcp+udp set form matches on a generic
-								// transport header (`th dport`), which nft reports
-								// as protocol "th". Map it back to the rule's
-								// representation so the counter's proto stays
-								// consistent with how the rule is named elsewhere.
-								if proto == "th" {
-									c.Proto = "tcp+udp"
-								} else {
-									c.Proto = proto
-								}
-							}
-						}
-					}
-				}
+			if expr.Match != nil {
+				extractMatch(expr.Match, &c)
 			}
-			if ctr, ok := m["counter"].(map[string]any); ok {
+			if expr.Counter != nil {
 				hasCounter = true
-				if b, ok := ctr["bytes"].(float64); ok {
-					c.Bytes = int64(b)
-				}
-				if p, ok := ctr["packets"].(float64); ok {
-					c.Packets = int64(p)
-				}
+				c.Bytes = expr.Counter.Bytes
+				c.Packets = expr.Counter.Packets
 			}
 		}
 		if hasCounter && c.Proto != "" && c.ListenPort != 0 {
@@ -111,4 +118,35 @@ func parseCounters(data []byte) ([]Counter, error) {
 		}
 	}
 	return out, nil
+}
+
+// extractMatch pulls proto and listen-port info from one match expression.
+func extractMatch(m *nftMatch, c *Counter) {
+	// meta match: left.meta.key == "l4proto", right is a string like "tcp"
+	if m.Left.Meta != nil && m.Left.Meta.Key == "l4proto" {
+		var proto string
+		if json.Unmarshal(m.Right, &proto) == nil {
+			c.Proto = proto
+		}
+		return
+	}
+	// payload match: left.payload.field == "dport"
+	if m.Left.Payload != nil && m.Left.Payload.Field == "dport" {
+		// right is a numeric port
+		var port float64
+		if json.Unmarshal(m.Right, &port) == nil {
+			c.ListenPort = int(port)
+		}
+		// The protocol on the payload tells us the transport layer.
+		// The tcp+udp set form uses a generic transport header ("th dport")
+		// which nft reports as protocol "th". Map it to "tcp+udp" so it
+		// stays consistent with how the rule is represented elsewhere.
+		if proto := m.Left.Payload.Protocol; proto != "" && c.Proto == "" {
+			if proto == "th" {
+				c.Proto = "tcp+udp"
+			} else {
+				c.Proto = proto
+			}
+		}
+	}
 }

@@ -54,19 +54,7 @@ func (s *UfwShim) syncChain(chain string, build func(stale []int) string) error 
 
 func (s *UfwShim) Cleanup() error {
 	for _, chain := range []string{ufwChain, ufwInputChain} {
-		out, err := s.runNft("-a", "list", "chain", ufwFamily, ufwTable, chain)
-		if err != nil {
-			continue
-		}
-		stale := parseShimHandles(out)
-		if len(stale) == 0 {
-			continue
-		}
-		var script string
-		for _, h := range stale {
-			script += formatDelete(ufwFamily, ufwTable, chain, h)
-		}
-		if err := s.runNftScript(script); err != nil {
+		if err := cleanupChain(s.runNft, s.runNftScript, ufwFamily, ufwTable, chain); err != nil {
 			return err
 		}
 	}

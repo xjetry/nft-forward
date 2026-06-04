@@ -138,7 +138,7 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 				ol.close()
 				delete(b.listeners, ol.port)
 			}
-			return fmt.Errorf("监听 tcp/%d 失败: %w", port, err)
+			return fmt.Errorf("listen tcp/%d: %w", port, err)
 		}
 		b.listeners[port] = l
 		opened = append(opened, l)

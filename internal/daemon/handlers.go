@@ -81,6 +81,82 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 	return d.dp.Reconcile(ctx, resolved)
 }
 
+// reconcileOwners is the shared merge→resolve→apply pipeline used by
+// every path that writes the owner-segmented ruleset.
+//
+// The caller must NOT hold d.mu — reconcileOwners acquires it to snapshot
+// owners, then releases it before the heavy work (DNS, kernel apply), and
+// re-acquires it for the final commit. mutate receives a deep clone of
+// d.owners; it may modify the map freely. A nil mutate means re-resolve
+// with the current owners unchanged (used by the DNS refresh loop).
+//
+// On success the returned slice is the freshly-resolved rules that were
+// applied, and *committed* reports whether d.owners/d.lastResolved were
+// actually updated (false when resolved rules are identical to the
+// previous set — the DNS-refresh no-op case).
+//
+// metaFn, if non-nil, is called under d.mu right before commit to let the
+// caller adjust AgentMeta (e.g. record a panel rev or clear MigratedAt).
+//
+// saveToDisk controls whether SaveState is called as part of the commit.
+// The DNS refresh path skips persistence because the resolver output is
+// ephemeral (re-derived on restart).
+func (d *Daemon) reconcileOwners(
+	ctx context.Context,
+	mutate func(OwnerRuleset),
+	metaFn func(*AgentMeta),
+	saveToDisk bool,
+) (resolved []nft.Rule, committed bool, err error) {
+	d.mu.Lock()
+	candidate := cloneOwners(d.owners)
+	prev := append([]nft.Rule(nil), d.lastResolved...)
+	d.mu.Unlock()
+
+	if mutate != nil {
+		mutate(candidate)
+	}
+
+	merged, err := MergedRuleset(candidate)
+	if err != nil {
+		return nil, false, err
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	resolved, _, err = d.resolveFn(rctx, merged)
+	cancel()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := requireResolvedHosts(resolved); err != nil {
+		return nil, false, err
+	}
+
+	// DNS-refresh callers skip apply+commit when nothing moved.
+	if !saveToDisk && !rulesDiffer(prev, resolved) {
+		return resolved, false, nil
+	}
+
+	if err := d.applySerialized(ctx, resolved); err != nil {
+		return nil, false, fmt.Errorf("apply: %w", err)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	meta := d.meta
+	if metaFn != nil {
+		metaFn(&meta)
+	}
+	if saveToDisk {
+		if err := SaveState(d.statePath, candidate, meta); err != nil {
+			return nil, false, fmt.Errorf("save state: %w", err)
+		}
+	}
+	d.owners = candidate
+	d.meta = meta
+	d.lastResolved = append([]nft.Rule(nil), resolved...)
+	return resolved, true, nil
+}
+
 // closeSerialized runs dp.Close under the same reconcileMu as applySerialized
 // so a shutdown-time close (firewall-shim DELETEs, relay teardown) can't
 // overlap an in-flight refresh-loop reconcile (shim INSERTs) and leave the
@@ -185,69 +261,43 @@ func (e *ownerWriteError) Error() string { return e.err.Error() }
 func (e *ownerWriteError) Unwrap() error { return e.err }
 
 // setOwnerRuleset is the unified write path for owner-segmented rules.
-// Snapshots d.owners, replaces the named segment, merges, resolves DNS,
-// applies to the kernel, persists, and finally — for owner=="tui" only —
-// invokes tuiHook outside the lock so the dialer can push the change to
-// the panel. The mutate / apply / save sequence runs under d.mu to keep
-// concurrent writers serialized; the hook fires after the lock is
-// released so a slow callback cannot stall other writes.
+// Replaces the named segment, merges, resolves DNS, applies to the
+// kernel, persists, and finally — for owner=="tui" / "panel" — invokes
+// the corresponding hook outside the lock so the dialer can push the
+// change to the panel. The hook fires after the lock is released so a
+// slow callback cannot stall other writes.
 //
 // When owner=="panel" and rev is non-empty, the panel-segment revision
-// identifier is recorded in agent_meta.LastAppliedRev under the same
-// d.mu so a single SaveState persists both the new ruleset and the
-// rev together, letting the dialer short-circuit a redundant
+// identifier is recorded in agent_meta.LastAppliedRev in the same
+// SaveState transaction, letting the dialer short-circuit a redundant
 // apply_ruleset push on the next reconnect. rev is ignored for other
 // owners.
 func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.Rule, rev string) error {
+	_, _, err := d.reconcileOwners(ctx,
+		func(candidate OwnerRuleset) {
+			if len(rules) == 0 {
+				delete(candidate, owner)
+			} else {
+				candidate[owner] = append([]nft.Rule(nil), rules...)
+			}
+		},
+		func(meta *AgentMeta) {
+			if owner == "panel" && rev != "" {
+				meta.LastAppliedRev = rev
+			}
+		},
+		true, // persist to disk
+	)
+	if err != nil {
+		return d.classifyWriteError(err)
+	}
+
+	// Hooks fire outside d.mu so a slow callback can't stall other writers.
+	// Snapshot the hook and segment under the lock, then invoke.
 	d.mu.Lock()
-	candidate := cloneOwners(d.owners)
-	if len(rules) == 0 {
-		delete(candidate, owner)
-	} else {
-		candidate[owner] = append([]nft.Rule(nil), rules...)
-	}
-
-	merged, err := MergedRuleset(candidate)
-	if err != nil {
-		d.mu.Unlock()
-		return &ownerWriteError{status: http.StatusConflict, err: err}
-	}
-
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resolved, _, err := d.resolveFn(rctx, merged)
-	cancel()
-	if err != nil {
-		d.mu.Unlock()
-		return &ownerWriteError{status: http.StatusInternalServerError, err: err}
-	}
-	if err := requireResolvedHosts(resolved); err != nil {
-		d.mu.Unlock()
-		return &ownerWriteError{status: http.StatusBadRequest, err: err}
-	}
-	if err := d.applySerialized(ctx, resolved); err != nil {
-		d.mu.Unlock()
-		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("apply: %w", err)}
-	}
-	meta := d.meta
-	if owner == "panel" && rev != "" {
-		meta.LastAppliedRev = rev
-	}
-	if err := SaveState(d.statePath, candidate, meta); err != nil {
-		// Kernel ruleset is already updated by the Apply above; the disk
-		// state lags behind. A daemon restart would reload the old state
-		// and Apply that, rolling the kernel back. We accept this rare
-		// window because SaveState failure is extremely unlikely outside
-		// of a disk full / read-only fs situation, and reporting 500 lets
-		// the client retry or escalate.
-		d.mu.Unlock()
-		return &ownerWriteError{status: http.StatusInternalServerError, err: fmt.Errorf("save state: %w", err)}
-	}
-	d.owners = candidate
-	d.meta = meta
-	d.lastResolved = append([]nft.Rule(nil), resolved...)
 	tuiHook := d.tuiHook
 	panelHook := d.panelHook
-	hookRules := append([]nft.Rule(nil), candidate[owner]...)
+	hookRules := append([]nft.Rule(nil), d.owners[owner]...)
 	d.mu.Unlock()
 
 	switch owner {
@@ -263,6 +313,21 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 	return nil
 }
 
+// classifyWriteError wraps a reconcileOwners error into an ownerWriteError
+// with the appropriate HTTP status so the handler can surface a precise
+// status code to the client.
+func (d *Daemon) classifyWriteError(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "already claimed"):
+		return &ownerWriteError{status: http.StatusConflict, err: err}
+	case strings.Contains(msg, "无法解析目标域名"):
+		return &ownerWriteError{status: http.StatusBadRequest, err: err}
+	default:
+		return &ownerWriteError{status: http.StatusInternalServerError, err: err}
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -276,74 +341,53 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // --purge) so panel-pushed forwards survive as locally-managed rules
 // instead of disappearing the moment the dialer goes away.
 func (d *Daemon) demoteToTui(ctx context.Context) error {
-	d.mu.Lock()
-	candidate := cloneOwners(d.owners)
-	tui := append([]nft.Rule(nil), candidate["tui"]...)
-	panel := candidate["panel"]
+	_, _, err := d.reconcileOwners(ctx,
+		func(candidate OwnerRuleset) {
+			tui := append([]nft.Rule(nil), candidate["tui"]...)
+			panel := candidate["panel"]
 
-	type key struct {
-		Proto string
-		Port  int
-	}
-	idx := make(map[key]int, len(tui))
-	for i, r := range tui {
-		idx[key{r.Proto, r.SrcPort}] = i
-	}
-	for _, p := range panel {
-		k := key{p.Proto, p.SrcPort}
-		if i, ok := idx[k]; ok {
-			tui[i] = p
-		} else {
-			tui = append(tui, p)
-			idx[k] = len(tui) - 1
-		}
-	}
-	if len(tui) == 0 {
-		delete(candidate, "tui")
-	} else {
-		candidate["tui"] = tui
-	}
-	delete(candidate, "panel")
-
-	newMeta := d.meta
-	newMeta.MigratedAt = time.Time{}
-	newMeta.LastAppliedRev = ""
-	newMeta.PanelURL = ""
-
-	merged, err := MergedRuleset(candidate)
+			type key struct {
+				Proto string
+				Port  int
+			}
+			idx := make(map[key]int, len(tui))
+			for i, r := range tui {
+				idx[key{r.Proto, r.SrcPort}] = i
+			}
+			for _, p := range panel {
+				k := key{p.Proto, p.SrcPort}
+				if i, ok := idx[k]; ok {
+					tui[i] = p
+				} else {
+					tui = append(tui, p)
+					idx[k] = len(tui) - 1
+				}
+			}
+			if len(tui) == 0 {
+				delete(candidate, "tui")
+			} else {
+				candidate["tui"] = tui
+			}
+			delete(candidate, "panel")
+		},
+		func(meta *AgentMeta) {
+			meta.MigratedAt = time.Time{}
+			meta.LastAppliedRev = ""
+			meta.PanelURL = ""
+		},
+		true, // persist to disk
+	)
 	if err != nil {
-		d.mu.Unlock()
 		return err
 	}
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resolved, _, err := d.resolveFn(rctx, merged)
-	cancel()
-	if err != nil {
-		d.mu.Unlock()
-		return err
-	}
-	if err := requireResolvedHosts(resolved); err != nil {
-		d.mu.Unlock()
-		return err
-	}
-	if err := d.applySerialized(ctx, resolved); err != nil {
-		d.mu.Unlock()
-		return fmt.Errorf("apply: %w", err)
-	}
-	if err := SaveState(d.statePath, candidate, newMeta); err != nil {
-		d.mu.Unlock()
-		return fmt.Errorf("save state: %w", err)
-	}
-	d.owners = candidate
-	d.meta = newMeta
-	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	hook := d.tuiHook
-	hookRules := append([]nft.Rule(nil), candidate["tui"]...)
-	d.mu.Unlock()
 
 	// Notify the dialer (if any is still around between disengagement and
 	// process exit) so the panel sees the merged tui snapshot before the
 	// session tears down.
+	d.mu.Lock()
+	hook := d.tuiHook
+	hookRules := append([]nft.Rule(nil), d.owners["tui"]...)
+	d.mu.Unlock()
 	if hook != nil {
 		hook(hookRules)
 	}

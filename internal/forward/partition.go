@@ -26,7 +26,7 @@ func Partition(rules []nft.Rule) (kernel, userspace []nft.Rule, err error) {
 		for _, p := range protos {
 			key := fmt.Sprintf("%s/%d", p, port)
 			if prev, dup := claimed[key]; dup {
-				return fmt.Errorf("端口 %s 同时被 %s 与 %s 占用", key, prev, who)
+				return fmt.Errorf("port %s claimed by both %s and %s", key, prev, who)
 			}
 			claimed[key] = who
 		}
@@ -34,7 +34,7 @@ func Partition(rules []nft.Rule) (kernel, userspace []nft.Rule, err error) {
 	}
 
 	for _, r := range rules {
-		who := fmt.Sprintf("规则 %s (%s/%d, %s)", r.ID, r.Proto, r.SrcPort, r.EffectiveMode())
+		who := fmt.Sprintf("rule %s (%s/%d, %s)", r.ID, r.Proto, r.SrcPort, r.EffectiveMode())
 		if r.EffectiveMode() == nft.ModeKernel {
 			if cerr := claim(r.Proto, r.SrcPort, who); cerr != nil {
 				return nil, nil, cerr
@@ -61,7 +61,7 @@ func Partition(rules []nft.Rule) (kernel, userspace []nft.Rule, err error) {
 			tcp.Mode = nft.ModeUserspace
 			userspace = append(userspace, tcp)
 		default:
-			return nil, nil, fmt.Errorf("规则 %s: 协议 %s 不能用用户态", r.ID, r.Proto)
+			return nil, nil, fmt.Errorf("rule %s: proto %s is not supported in userspace mode", r.ID, r.Proto)
 		}
 	}
 	return kernel, userspace, nil

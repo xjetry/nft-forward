@@ -45,7 +45,10 @@ func (s *Server) buildChainView(c *db.Chain) chainView {
 
 func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	chains, _ := db.ListAdminChains(s.DB)
+	chains, err := db.ListAdminChains(s.DB)
+	if err != nil {
+		log.Printf("list chains: %v", err)
+	}
 	views := make([]chainView, 0, len(chains))
 	for _, c := range chains {
 		views = append(views, s.buildChainView(c))
@@ -55,7 +58,10 @@ func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) newChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	nodes, _ := db.ListNodes(s.DB)
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("new chain form: list nodes: %v", err)
+	}
 	s.render(w, "chain_form.html", map[string]any{
 		"User": u, "Nodes": nodes, "Chain": nil, "Hops": nil, "Flash": flashFromCookie(w, r),
 	})
@@ -107,55 +113,46 @@ func adminHopInputs(r *http.Request) ([]db.HopInput, error) {
 func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	if err := r.ParseForm(); err != nil {
-		setFlash(w, "表单解析失败")
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, "表单解析失败", "/chains/new")
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	if name == "" || (proto != "tcp" && proto != "udp") {
-		setFlash(w, "名称必填，协议须为 tcp 或 udp")
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, "名称必填，协议须为 tcp 或 udp", "/chains/new")
 		return
 	}
 	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
 	hops, err := adminHopInputs(r)
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
 
 	tx, err := s.DB.Begin()
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
+	defer tx.Rollback()
 	c := &db.Chain{Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
 	id, err := db.CreateChain(tx, c)
 	if err != nil {
-		tx.Rollback()
-		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/chains/new")
 		return
 	}
 	c.ID = id
 	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
 	if err != nil {
-		tx.Rollback()
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains/new", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "chain.create", strconv.FormatInt(id, 10), name)
@@ -166,23 +163,30 @@ func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) showChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	c, err := db.GetChain(s.DB, id)
 	if err != nil {
 		http.Error(w, "链路不存在", http.StatusNotFound)
 		return
 	}
-	hops, _ := db.ListChainHops(s.DB, id)
-	forwards, _ := db.ListForwardsByChain(s.DB, id)
-	fwByNode := map[int64]*db.Forward{}
-	for _, f := range forwards {
-		fwByNode[f.NodeID] = f
+	hops, err := db.ListChainHops(s.DB, id)
+	if err != nil {
+		log.Printf("show chain %d: list hops: %v", id, err)
 	}
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := map[int64]*db.Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
+	forwards, err := db.ListForwardsByChain(s.DB, id)
+	if err != nil {
+		log.Printf("show chain %d: list forwards: %v", id, err)
 	}
+	fwByNode := buildMap(forwards, func(f *db.Forward) int64 { return f.NodeID })
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("show chain %d: list nodes: %v", id, err)
+	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	s.render(w, "chain_detail.html", map[string]any{
 		"User": u, "View": s.buildChainView(c), "Chain": c,
 		"Hops": hops, "FwByNode": fwByNode, "NodeByID": nodeByID,
@@ -192,60 +196,56 @@ func (s *Server) showChain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	c, err := db.GetChain(s.DB, id)
 	if err != nil {
 		http.Error(w, "链路不存在", http.StatusNotFound)
 		return
 	}
+	redirect := fmt.Sprintf("/chains/%d", id)
 	if err := r.ParseForm(); err != nil {
-		setFlash(w, "表单解析失败")
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, "表单解析失败", redirect)
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	if name == "" || (proto != "tcp" && proto != "udp") {
-		setFlash(w, "名称必填，协议须为 tcp 或 udp")
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, "名称必填，协议须为 tcp 或 udp", redirect)
 		return
 	}
 	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	hops, err := adminHopInputs(r)
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	c.Name, c.Proto, c.ExitHost, c.ExitPort = name, proto, exitHost, exitPort
 
 	tx, err := s.DB.Begin()
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
+	defer tx.Rollback()
 	if err := db.UpdateChainHeader(tx, c); err != nil {
-		tx.Rollback()
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
 	if err != nil {
-		tx.Rollback()
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "chain.save", strconv.FormatInt(id, 10), name)
@@ -256,11 +256,14 @@ func (s *Server) saveChain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	nodes, err := db.DeleteChain(s.DB, id)
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/chains", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "chain.delete", strconv.FormatInt(id, 10), "")
@@ -273,17 +276,25 @@ func (s *Server) deleteChain(w http.ResponseWriter, r *http.Request) {
 // re-dispatches.
 func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	pos, _ := strconv.Atoi(chi.URLParam(r, "pos"))
 	c, err := db.GetChain(s.DB, id)
 	if err != nil {
 		http.Error(w, "链路不存在", http.StatusNotFound)
 		return
 	}
-	hops, _ := db.ListChainHops(s.DB, id)
+	redirect := fmt.Sprintf("/chains/%d", id)
+	hops, err := db.ListChainHops(s.DB, id)
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
 	if pos < 0 || pos >= len(hops) {
-		setFlash(w, "跳序号非法")
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, "跳序号非法", redirect)
 		return
 	}
 	inputs := make([]db.HopInput, len(hops))
@@ -294,18 +305,19 @@ func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := s.DB.Begin()
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
+	defer tx.Rollback()
 	_, affected, err := db.RegenerateChain(tx, c, inputs, avoid)
 	if err != nil {
-		tx.Rollback()
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/chains/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.flashRedirect(w, r, err.Error(), redirect)
+		return
+	}
 	db.WriteAudit(s.DB, u.ID, "chain.reallocate", strconv.FormatInt(id, 10), strconv.Itoa(pos))
 	setFlash(w, "已为该跳重新分配端口")
 	s.dispatchAfterFanout(w, affected, "链路端口重分配")
@@ -353,9 +365,9 @@ func (s *Server) regenerateChainByID(chainID int64) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer tx.Rollback()
 	_, affected, err := db.RegenerateChain(tx, c, inputs, nil)
 	if err != nil {
-		tx.Rollback()
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -394,24 +406,30 @@ func (s *Server) rewireChainsAfterNodeChange(w http.ResponseWriter, chainIDs []i
 // setNodeRelayHost saves a node's data-plane address from the node detail page.
 func (s *Server) setNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
 		http.Error(w, "节点不存在", http.StatusNotFound)
 		return
 	}
+	redirect := fmt.Sprintf("/nodes/%d", id)
 	host := strings.TrimSpace(r.FormValue("relay_host"))
 	if host != "" && net.ParseIP(host) == nil && !resolver.IsHostname(host) {
-		setFlash(w, "中继地址须为 IPv4 或域名")
-		http.Redirect(w, r, fmt.Sprintf("/nodes/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, "中继地址须为 IPv4 或域名", redirect)
 		return
 	}
 	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, fmt.Sprintf("/nodes/%d", id), http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
-	chains, _ := db.ChainsReferencingNode(s.DB, id)
+	chains, err := db.ChainsReferencingNode(s.DB, id)
+	if err != nil {
+		log.Printf("set relay host %d: list affected chains: %v", id, err)
+	}
 	setFlash(w, "中继地址已更新")
 	s.rewireChainsAfterNodeChange(w, chains, "中继地址变更，链路重连")
 	http.Redirect(w, r, fmt.Sprintf("/nodes/%d", id), http.StatusSeeOther)

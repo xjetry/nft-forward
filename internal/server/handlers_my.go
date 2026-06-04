@@ -3,13 +3,12 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/resolver"
@@ -22,17 +21,20 @@ func (s *Server) tenantDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	forwards, _ := db.ListForwardsForTenant(s.DB, t.ID)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := map[int64]*db.Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
+	tunnels, grants, err := db.ListTunnelsForTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant dashboard %d: list tunnels: %v", t.ID, err)
 	}
-	tunnelByID := map[int64]*db.Tunnel{}
-	for _, tn := range tunnels {
-		tunnelByID[tn.ID] = tn
+	forwards, err := db.ListForwardsForTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant dashboard %d: list forwards: %v", t.ID, err)
 	}
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("tenant dashboard %d: list nodes: %v", t.ID, err)
+	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	tunnelByID := buildMap(tunnels, func(tn *db.Tunnel) int64 { return tn.ID })
 	s.render(w, "my_dashboard.html", map[string]any{
 		"User":       u,
 		"Tenant":     t,
@@ -52,17 +54,20 @@ func (s *Server) tenantListForwards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	forwards, _ := db.ListForwardsForTenant(s.DB, t.ID)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := map[int64]*db.Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
+	tunnels, grants, err := db.ListTunnelsForTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant list forwards %d: list tunnels: %v", t.ID, err)
 	}
-	tunnelByID := map[int64]*db.Tunnel{}
-	for _, tn := range tunnels {
-		tunnelByID[tn.ID] = tn
+	forwards, err := db.ListForwardsForTenant(s.DB, t.ID)
+	if err != nil {
+		log.Printf("tenant list forwards %d: list forwards: %v", t.ID, err)
 	}
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		log.Printf("tenant list forwards %d: list nodes: %v", t.ID, err)
+	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	tunnelByID := buildMap(tunnels, func(tn *db.Tunnel) int64 { return tn.ID })
 	s.render(w, "my_forwards.html", map[string]any{
 		"User":       u,
 		"Tenant":     t,
@@ -83,17 +88,19 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Disabled {
-		setFlash(w, "用户已被禁用："+nullStr(t.DisableReason.String))
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "用户已被禁用："+nullStr(t.DisableReason.String), "/my/forwards")
 		return
 	}
 	if t.ExpiresAt.Valid && t.ExpiresAt.Int64 > 0 && t.ExpiresAt.Int64 < time.Now().Unix() {
-		setFlash(w, "用户已过期")
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "用户已过期", "/my/forwards")
 		return
 	}
 
-	tunnelID, _ := strconv.ParseInt(r.FormValue("tunnel_id"), 10, 64)
+	tunnelID, err := parseFormInt64(r, "tunnel_id")
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), "/my/forwards")
+		return
+	}
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	listenPortStr := strings.TrimSpace(r.FormValue("listen_port"))
 	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
@@ -101,61 +108,56 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 	comment := strings.TrimSpace(r.FormValue("comment"))
 	mode := strings.TrimSpace(r.FormValue("mode"))
 
+	if !validMode(mode) {
+		s.flashRedirect(w, r, "无效的转发模式", "/my/forwards")
+		return
+	}
 	if mode == "userspace" && proto == "udp" {
-		setFlash(w, "UDP 不支持用户态转发")
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "UDP 不支持用户态转发", "/my/forwards")
 		return
 	}
 
 	grant, err := db.GetGrant(s.DB, t.ID, tunnelID)
 	if err != nil {
-		setFlash(w, "无权使用该通道")
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "无权使用该通道", "/my/forwards")
 		return
 	}
 	tunnel, err := db.GetTunnel(s.DB, tunnelID)
 	if err != nil {
-		setFlash(w, "通道不存在")
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "通道不存在", "/my/forwards")
 		return
 	}
 	occupied, err := db.OccupiedPortsOnNode(s.DB, tunnel.NodeID, proto, 0)
 	if err != nil {
-		setFlash(w, "端口检查失败: "+err.Error())
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "端口检查失败: "+err.Error(), "/my/forwards")
 		return
 	}
 	var listenPort int
 	if listenPortStr == "" {
 		listenPort = db.PickFreePort(tunnel.PortStart, tunnel.PortEnd, occupied)
 		if listenPort == 0 {
-			setFlash(w, fmt.Sprintf("通道 %d-%d 内已无可用端口", tunnel.PortStart, tunnel.PortEnd))
-			http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+			s.flashRedirect(w, r, fmt.Sprintf("通道 %d-%d 内已无可用端口", tunnel.PortStart, tunnel.PortEnd), "/my/forwards")
 			return
 		}
 	} else {
 		listenPort, _ = strconv.Atoi(listenPortStr)
 		if occupied[listenPort] {
-			setFlash(w, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort))
-			http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+			s.flashRedirect(w, r, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort), "/my/forwards")
 			return
 		}
 	}
 	if err := validateAgainstTunnel(tunnel, proto, listenPort, targetIP, targetPort); err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/my/forwards")
 		return
 	}
 	totalCount, _ := db.CountForwardsForTenant(s.DB, t.ID)
 	if totalCount >= t.MaxForwards {
-		setFlash(w, fmt.Sprintf("已达用户最大转发数（%d）", t.MaxForwards))
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, fmt.Sprintf("已达用户最大转发数（%d）", t.MaxForwards), "/my/forwards")
 		return
 	}
 	tunCount, _ := db.CountForwardsForTenantTunnel(s.DB, t.ID, tunnelID)
 	if tunCount >= grant.MaxForwards {
-		setFlash(w, fmt.Sprintf("已达该通道最大转发数（%d）", grant.MaxForwards))
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, fmt.Sprintf("已达该通道最大转发数（%d）", grant.MaxForwards), "/my/forwards")
 		return
 	}
 
@@ -174,8 +176,7 @@ func (s *Server) tenantCreateForward(w http.ResponseWriter, r *http.Request) {
 	f.TunnelID.Valid = true
 	id, err := db.CreateForward(s.DB, f)
 	if err != nil {
-		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/my/forwards")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.tenant_create", strconv.FormatInt(id, 10),
@@ -191,7 +192,11 @@ func (s *Server) tenantDeleteForward(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
 	f, err := db.GetForward(s.DB, id)
 	if err != nil {
 		http.Error(w, "转发不存在", http.StatusNotFound)
@@ -203,8 +208,7 @@ func (s *Server) tenantDeleteForward(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeID, err := db.DeleteForward(s.DB, id)
 	if err != nil {
-		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/forwards", http.StatusSeeOther)
+		s.flashRedirect(w, r, err.Error(), "/my/forwards")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "forward.tenant_delete", strconv.FormatInt(id, 10), "")

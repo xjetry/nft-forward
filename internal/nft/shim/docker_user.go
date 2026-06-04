@@ -46,22 +46,7 @@ func (s *DockerUserShim) Sync(state FirewallState) error {
 }
 
 func (s *DockerUserShim) Cleanup() error {
-	out, err := s.runNft("-a", "list", "chain", dockerUserFamily, dockerUserTable, dockerUserChain)
-	if err != nil {
-		return nil
-	}
-	stale := parseShimHandles(out)
-	if len(stale) == 0 {
-		return nil
-	}
-	// Cleanup emits only deletes, no adds. Build a delete-only script
-	// inline to avoid re-emitting the ct state add line that
-	// renderShimScript always includes.
-	var script string
-	for _, h := range stale {
-		script += formatDelete(dockerUserFamily, dockerUserTable, dockerUserChain, h)
-	}
-	return s.runNftScript(script)
+	return cleanupChain(s.runNft, s.runNftScript, dockerUserFamily, dockerUserTable, dockerUserChain)
 }
 
 // formatDelete produces a single `delete rule family table chain handle N`
