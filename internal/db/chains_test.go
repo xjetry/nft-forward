@@ -501,3 +501,163 @@ func TestRegenerateAvoidForcesRealloc(t *testing.T) {
 		t.Fatalf("node %d port should be stable, changed %d -> %d", h.ID, portByNode[h.ID], portAfter[h.ID])
 	}
 }
+
+// seedTwoHopChain creates an admin chain with hops on two fresh nodes and
+// returns the chain plus both node IDs. Hop 0 targets hop 1; hop 1 targets
+// the chain exit.
+func seedTwoHopChain(t *testing.T, d *sql.DB) (*Chain, int64, int64) {
+	t.Helper()
+	n0, _ := CreateNode(d, "edge-0", "https://p0", "tok0")
+	n1, _ := CreateNode(d, "edge-1", "https://p1", "tok1")
+	// relay_host must be set or RegenerateChain rejects the hop.
+	if _, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.10", n0.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.11", n1.ID); err != nil {
+		t.Fatal(err)
+	}
+	c := &Chain{Name: "wire", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
+	id, err := CreateChain(d, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ID = id
+	tx, _ := d.Begin()
+	if _, _, err := RegenerateChain(tx, c, []HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+	return c, n0.ID, n1.ID
+}
+
+func TestRegenerateChainHonorsDesiredPortAndSyncsUpstream(t *testing.T) {
+	d := openMemDB(t)
+	c, n0, n1 := seedTwoHopChain(t, d)
+
+	hops, _ := ListChainHops(d, c.ID)
+	inputs := make([]HopInput, len(hops))
+	for i, h := range hops {
+		inputs[i] = HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+		if h.NodeID == n1 {
+			inputs[i].DesiredPort = 21111
+		}
+	}
+	tx, _ := d.Begin()
+	if _, _, err := RegenerateChain(tx, c, inputs, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	fwds, _ := ListForwardsByChain(d, c.ID)
+	byNode := map[int64]*Forward{}
+	for _, f := range fwds {
+		byNode[f.NodeID] = f
+	}
+	if byNode[n1].ListenPort != 21111 {
+		t.Fatalf("hop 1 listen_port = %d, want 21111", byNode[n1].ListenPort)
+	}
+	if byNode[n0].TargetPort != 21111 {
+		t.Fatalf("upstream hop 0 target_port = %d, want 21111 (must follow downstream)", byNode[n0].TargetPort)
+	}
+}
+
+func TestRegenerateChainRejectsOutOfRangeDesiredPort(t *testing.T) {
+	d := openMemDB(t)
+	c, _, n1 := seedTwoHopChain(t, d)
+	hops, _ := ListChainHops(d, c.ID)
+	inputs := make([]HopInput, len(hops))
+	for i, h := range hops {
+		inputs[i] = HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+		if h.NodeID == n1 {
+			inputs[i].DesiredPort = 80 // below ChainPortMin
+		}
+	}
+	tx, _ := d.Begin()
+	_, _, err := RegenerateChain(tx, c, inputs, nil)
+	tx.Rollback()
+	if err == nil {
+		t.Fatal("expected out-of-range desired port to be rejected")
+	}
+}
+
+func TestRegenerateChainRejectsOccupiedDesiredPort(t *testing.T) {
+	d := openMemDB(t)
+	c, _, n1 := seedTwoHopChain(t, d)
+	// A non-chain forward already holds an in-range port on n1; pinning the hop
+	// to it must surface a conflict rather than silently reallocate.
+	const occupied = 21500
+	if _, err := CreateForward(d, &Forward{NodeID: n1, Proto: c.Proto, ListenPort: occupied, TargetIP: "1.2.3.4", TargetPort: 9}); err != nil {
+		t.Fatal(err)
+	}
+	hops, _ := ListChainHops(d, c.ID)
+	inputs := make([]HopInput, len(hops))
+	for i, h := range hops {
+		inputs[i] = HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+		if h.NodeID == n1 {
+			inputs[i].DesiredPort = occupied
+		}
+	}
+	tx, _ := d.Begin()
+	_, _, err := RegenerateChain(tx, c, inputs, nil)
+	tx.Rollback()
+	if err == nil {
+		t.Fatal("expected occupied desired port to be rejected")
+	}
+}
+
+func TestRegenerateChainKeepsCustomCommentAcrossRegen(t *testing.T) {
+	d := openMemDB(t)
+	c, n0, n1 := seedTwoHopChain(t, d)
+
+	hops, _ := ListChainHops(d, c.ID)
+	mk := func(custom map[int64]string) []HopInput {
+		in := make([]HopInput, len(hops))
+		for i, h := range hops {
+			in[i] = HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+			if cm, ok := custom[h.NodeID]; ok {
+				in[i].Comment = cm
+			}
+		}
+		return in
+	}
+	tx, _ := d.Begin()
+	if _, _, err := RegenerateChain(tx, c, mk(map[int64]string{n1: "my custom"}), nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	tx, _ = d.Begin()
+	if _, _, err := RegenerateChain(tx, c, mk(nil), nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	hops, _ = ListChainHops(d, c.ID)
+	byNode := map[int64]*ChainHop{}
+	for _, h := range hops {
+		byNode[h.NodeID] = h
+	}
+	if byNode[n1].Comment != "my custom" {
+		t.Fatalf("custom comment not preserved: %q", byNode[n1].Comment)
+	}
+	if byNode[n0].Comment != "" {
+		t.Fatalf("non-custom hop should have empty chain_hops.comment, got %q", byNode[n0].Comment)
+	}
+	fwds, _ := ListForwardsByChain(d, c.ID)
+	fwdByNode := map[int64]*Forward{}
+	for _, f := range fwds {
+		fwdByNode[f.NodeID] = f
+	}
+	// The preserved custom value must propagate to forwards.comment, not just
+	// linger on chain_hops.
+	if fwdByNode[n1].Comment != "my custom" {
+		t.Fatalf("custom comment did not reach forwards.comment: %q", fwdByNode[n1].Comment)
+	}
+	if fwdByNode[n0].Comment == "" {
+		t.Fatalf("forwards.comment for default hop should be generated, got empty")
+	}
+}

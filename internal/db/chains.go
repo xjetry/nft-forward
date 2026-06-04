@@ -120,6 +120,7 @@ type ChainHop struct {
 	TunnelID   sql.NullInt64
 	ListenPort int
 	Mode       string
+	Comment    string
 }
 
 const chainCols = `id,tenant_id,name,proto,exit_host,exit_port,entry_node_id,entry_listen_port,created_at`
@@ -188,7 +189,7 @@ func ListChainsByTenant(d *sql.DB, tenantID int64) ([]*Chain, error) {
 }
 
 func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
-	rows, err := d.Query(`SELECT chain_id,position,node_id,tunnel_id,listen_port,mode FROM chain_hops WHERE chain_id=? ORDER BY position`, chainID)
+	rows, err := d.Query(`SELECT chain_id,position,node_id,tunnel_id,listen_port,mode,comment FROM chain_hops WHERE chain_id=? ORDER BY position`, chainID)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
 	var out []*ChainHop
 	for rows.Next() {
 		h := &ChainHop{}
-		if err := rows.Scan(&h.ChainID, &h.Position, &h.NodeID, &h.TunnelID, &h.ListenPort, &h.Mode); err != nil {
+		if err := rows.Scan(&h.ChainID, &h.Position, &h.NodeID, &h.TunnelID, &h.ListenPort, &h.Mode, &h.Comment); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -271,13 +272,25 @@ func ChainsReferencingNode(d DBTX, nodeID int64) ([]int64, error) {
 }
 
 // HopInput is one ordered hop the caller wants the chain to have. TunnelID is
-// set for tenant chains (the granted tunnel the hop draws its port/range from)
-// and invalid for admin chains. Mode is the requested data plane; udp chains
-// coerce every hop to kernel.
+// set for tenant chains and invalid for admin chains. Mode is the requested
+// data plane (udp coerces every hop to kernel). DesiredPort, when >0, pins
+// this hop's listen_port to an explicit value (a node-side edit) instead of
+// the keep-or-reallocate default; it must be in range and free or
+// RegenerateChain fails. Comment, when non-empty, is a user override stored on
+// the hop and preserved across future regenerations; empty keeps whatever the
+// hop already had, falling back to a generated label.
+//
+// There is deliberately no way to clear a custom comment back to the default
+// through HopInput: an empty Comment means "keep existing", not "reset". This
+// keeps a webui chain re-save (which carries no per-hop comment) from wiping a
+// label the operator set on a hop. Reverting a hop to the generated label
+// requires rebuilding the chain through the webui.
 type HopInput struct {
-	NodeID   int64
-	TunnelID sql.NullInt64
-	Mode     string
+	NodeID      int64
+	TunnelID    sql.NullInt64
+	Mode        string
+	DesiredPort int
+	Comment     string
 }
 
 // RegenerateChain rewrites chain c's hops + generated forwards for the given
@@ -295,12 +308,14 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 	}
 
 	type resolved struct {
-		nodeID    int64
-		relayHost string
-		tunnelID  sql.NullInt64
-		mode      string
-		rangeLo   int
-		rangeHi   int
+		nodeID      int64
+		relayHost   string
+		tunnelID    sql.NullInt64
+		mode        string
+		rangeLo     int
+		rangeHi     int
+		desiredPort int
+		comment     string
 	}
 	rs := make([]resolved, len(hops))
 	seen := map[int64]bool{}
@@ -338,7 +353,7 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 			}
 			lo, hi = ps, pe
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, tunnelID: tunnelID, mode: mode, rangeLo: lo, rangeHi: hi}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, tunnelID: tunnelID, mode: mode, rangeLo: lo, rangeHi: hi, desiredPort: hop.DesiredPort, comment: hop.Comment}
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
@@ -352,6 +367,17 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 	for _, f := range prev {
 		prevPort[f.NodeID] = f.ListenPort
 		affected[f.NodeID] = true
+	}
+
+	// Read existing hop comments before deleting so custom labels survive regen
+	// when the caller passes an empty Comment in HopInput (the zero-value case).
+	prevHopComment := map[int64]string{}
+	prevHops, err := ListChainHops(tx, c.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, h := range prevHops {
+		prevHopComment[h.NodeID] = h.Comment
 	}
 
 	if _, err := tx.Exec(`DELETE FROM forwards WHERE chain_id=?`, c.ID); err != nil {
@@ -373,15 +399,31 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 		if av, ok := avoid[h.nodeID]; ok {
 			occ[av] = true // force this node off its current port
 		}
-		p := prevPort[h.nodeID]
-		if p >= h.rangeLo && p <= h.rangeHi && !occ[p] {
-			// keep
+		var p int
+		if h.desiredPort > 0 {
+			// Explicit port from a node-side edit: honor it, but a conflict
+			// or out-of-range value is a user error to surface, not something
+			// to silently reallocate around. Resolve the node name up front so
+			// both rejections name the offending node (a multi-hop chain can't
+			// tell which hop conflicted otherwise).
+			var name string
+			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
+			if h.desiredPort < h.rangeLo || h.desiredPort > h.rangeHi {
+				return "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围(%d-%d)", h.desiredPort, name, h.rangeLo, h.rangeHi)
+			}
+			if occ[h.desiredPort] {
+				return "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, name)
+			}
+			p = h.desiredPort
 		} else {
-			p = PickFreePort(h.rangeLo, h.rangeHi, occ)
-			if p == 0 {
-				var name string
-				_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
-				return "", nil, fmt.Errorf("节点 %s 端口段(%d-%d)无可用端口", name, h.rangeLo, h.rangeHi)
+			p = prevPort[h.nodeID]
+			if !(p >= h.rangeLo && p <= h.rangeHi && !occ[p]) {
+				p = PickFreePort(h.rangeLo, h.rangeHi, occ)
+				if p == 0 {
+					var name string
+					_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
+					return "", nil, fmt.Errorf("节点 %s 端口段(%d-%d)无可用端口", name, h.rangeLo, h.rangeHi)
+				}
 			}
 		}
 		ports[i] = p
@@ -397,13 +439,24 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 			targetIP = c.ExitHost
 			targetPort = c.ExitPort
 		}
-		if _, err := tx.Exec(`INSERT INTO chain_hops(chain_id,position,node_id,tunnel_id,listen_port,mode) VALUES (?,?,?,?,?,?)`,
-			c.ID, i, h.nodeID, h.tunnelID, ports[i], h.mode); err != nil {
+		// Custom comment precedence: explicit edit > preserved from the prior
+		// hop row > none. chain_hops.comment stores only the custom value
+		// (empty = none); forwards.comment shows the custom value or a
+		// generated label carrying the live position.
+		hopComment := h.comment
+		if hopComment == "" {
+			hopComment = prevHopComment[h.nodeID]
+		}
+		fwdComment := hopComment
+		if fwdComment == "" {
+			fwdComment = fmt.Sprintf("链路 %s · 第%d跳", c.Name, i+1)
+		}
+		if _, err := tx.Exec(`INSERT INTO chain_hops(chain_id,position,node_id,tunnel_id,listen_port,mode,comment) VALUES (?,?,?,?,?,?,?)`,
+			c.ID, i, h.nodeID, h.tunnelID, ports[i], h.mode, hopComment); err != nil {
 			return "", nil, err
 		}
-		comment := fmt.Sprintf("链路 %s · 第%d跳", c.Name, i+1)
 		if _, err := tx.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			h.nodeID, c.TenantID, h.tunnelID, c.Proto, ports[i], targetIP, targetPort, comment, now(), h.mode, c.ID); err != nil {
+			h.nodeID, c.TenantID, h.tunnelID, c.Proto, ports[i], targetIP, targetPort, fwdComment, now(), h.mode, c.ID); err != nil {
 			return "", nil, err
 		}
 		affected[h.nodeID] = true
