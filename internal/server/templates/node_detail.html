@@ -12,6 +12,8 @@
       <div class="mono">{{unix .Node.LastApplyAt}} <span style="color:var(--ink-3)">· {{timeAgo .Node.LastApplyAt}}</span></div>
       <label class="fl">最近心跳</label>
       <div class="mono">{{timeAgo .Node.LastSeen}} {{if eq .Node.Online 1}}<span class="pill pill-green">在线</span>{{else}}<span class="pill pill-amber">离线</span>{{end}}</div>
+      <label class="fl">Agent 版本</label>
+      <div class="mono">{{if .Node.AgentVersion}}{{.Node.AgentVersion}}{{if ne .Node.AgentVersion .ServerVersion}} <span class="pill pill-amber">非最新</span>{{else}} <span class="pill pill-green">最新</span>{{end}}{{else}}<span style="color:var(--ink-3)">未知</span>{{end}}</div>
       <label class="fl">状态</label>
       <div>
         {{if .Node.Disabled}}<span class="pill pill-amber">禁用</span>
@@ -91,7 +93,8 @@ sudo bash install.sh agent \
 
 <div style="display:flex;align-items:center;gap:10px;margin-top:20px">
   <form method="post" action="/nodes/{{.Node.ID}}/resync" class="inline"><button class="btn btn-ghost" type="submit">重新同步</button></form>
-  <a class="back-link" href="/nodes" style="margin-top:0;white-space:nowrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回节点列表</a>
+  {{if and .Node.AgentVersion (ne .Node.AgentVersion .ServerVersion)}}<form method="post" action="/nodes/{{.Node.ID}}/upgrade" class="inline" onsubmit="return confirm('推送 server 二进制到此节点并重启？');"><button class="btn btn-primary" type="submit">推送升级到 {{.ServerVersion}}</button></form>{{end}}
+  <a class="back-link" href="/nodes" style="margin-top:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回节点列表</a>
 </div>
 
 {{template "footer" (mkmap "User" .User)}}

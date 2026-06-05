@@ -27,10 +27,11 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list nodes: get panel_url: %v", err)
 	}
 	s.render(w, "nodes.html", map[string]any{
-		"User":     u,
-		"Nodes":    nodes,
-		"PanelURL": panelURL,
-		"Flash":    flashFromCookie(w, r),
+		"User":          u,
+		"Nodes":         nodes,
+		"PanelURL":      panelURL,
+		"ServerVersion": serverVersion(),
+		"Flash":         flashFromCookie(w, r),
 	})
 }
 
@@ -111,6 +112,7 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 		"TuiSnapshotAge":     age,
 		"PanelURL":           panelURL,
 		"PanelURLConfigured": panelConfigured,
+		"ServerVersion":      serverVersion(),
 		"Flash":              flashFromCookie(w, r),
 	})
 }

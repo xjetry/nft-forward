@@ -22,16 +22,18 @@
 <div class="card">
   <div class="card-head">
     <h3>已注册节点</h3>
-    <span class="desc">{{len .Nodes}} 个节点</span>
+    <span class="desc">{{len .Nodes}} 个节点 · server {{.ServerVersion}}</span>
+    <div class="right"><form method="post" action="/nodes/upgrade-all" class="inline" onsubmit="return confirm('向所有版本不一致的节点推送升级？');"><button class="btn btn-ghost btn-sm" type="submit">一键升级全部</button></form></div>
   </div>
   {{if .Nodes}}
   <table class="tbl">
-    <thead><tr><th style="width:60px">ID</th><th>名称</th><th>最近同步</th><th>状态</th><th class="actions">操作</th></tr></thead>
+    <thead><tr><th style="width:60px">ID</th><th>名称</th><th>版本</th><th>最近同步</th><th>状态</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Nodes}}
     <tr>
       <td class="id-cell">#{{.ID}}</td>
       <td><span class="name-dot"><span class="dot {{if and (not .Disabled) (eq .Online 1)}}on{{else}}off{{end}}"></span><a class="strong-link" href="/nodes/{{.ID}}">{{.Name}}</a></span></td>
+      <td class="mono" style="font-size:12px">{{if .AgentVersion}}<span{{if ne .AgentVersion $.ServerVersion}} style="color:var(--red)"{{end}}>{{.AgentVersion}}</span>{{else}}<span style="color:var(--ink-3)">—</span>{{end}}</td>
       <td class="mono" style="color:var(--ink-2)">{{unix .LastApplyAt}} <span style="color:var(--ink-3)">· {{timeAgo .LastApplyAt}}</span></td>
       <td>
         {{if .Disabled}}<span class="pill pill-amber">禁用</span>

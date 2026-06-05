@@ -293,7 +293,7 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 			}
 			ackP, _ := json.Marshal(wsproto.RegisterLocalAck{Imported: imported})
 			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRegisterLocalAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeRegisterLocalAck:
+		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeRegisterLocalAck, wsproto.TypeUpgradeAck:
 			ac.dispatchAck(env)
 		default:
 			log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)

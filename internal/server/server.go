@@ -377,6 +377,7 @@ func (s *Server) Router() http.Handler {
 	r.Post("/login", s.postLogin)
 	r.Get("/healthz", s.healthz)
 	r.HandleFunc("/v1/agents", s.Hub.ServeWS)
+	r.Get("/v1/binary", s.serveBinary)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
@@ -394,6 +395,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/nodes/{id}/rename", s.renameNode)
 		r.Post("/nodes/{id}/delete", s.deleteNode)
 		r.Post("/nodes/{id}/resync", s.resyncNode)
+		r.Post("/nodes/{id}/upgrade", s.upgradeNode)
+		r.Post("/nodes/upgrade-all", s.upgradeAllNodes)
 		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)
 
 		r.Post("/nodes/{id}/relay-host", s.setNodeRelayHost)

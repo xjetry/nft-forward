@@ -26,9 +26,11 @@ const (
 	TypeChainHopEdit      = "chain_hop_edit"
 	TypeChainDelete       = "chain_delete"
 	TypeChainCmdAck       = "chain_cmd_ack"
-	TypePing              = "ping"
-	TypePong              = "pong"
-	TypeError             = "error"
+	TypeUpgrade    = "upgrade"
+	TypeUpgradeAck = "upgrade_ack"
+	TypePing       = "ping"
+	TypePong       = "pong"
+	TypeError      = "error"
 )
 
 // Envelope wraps every frame. ID is required for req/resp pairs
@@ -170,6 +172,18 @@ type ChainCmdAck struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	Entry string `json:"entry,omitempty"`
+}
+
+type Upgrade struct {
+	Version    string `json:"version"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+	DownloadAt string `json:"download_at"`
+}
+
+type UpgradeAck struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
 type Ping struct {
