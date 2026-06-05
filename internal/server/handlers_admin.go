@@ -25,11 +25,13 @@ func (s *Server) listTunnels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("list tunnels: list nodes: %v", err)
 	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	s.render(w, "tunnels.html", map[string]any{
-		"User":    u,
-		"Tunnels": tunnels,
-		"Nodes":   nodes,
-		"Flash":   flashFromCookie(w, r),
+		"User":     u,
+		"Tunnels":  tunnels,
+		"Nodes":    nodes,
+		"NodeByID": nodeByID,
+		"Flash":    flashFromCookie(w, r),
 	})
 }
 

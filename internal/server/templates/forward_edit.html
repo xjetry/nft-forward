@@ -6,7 +6,7 @@
     <form method="post" action="/forwards/{{.Forward.ID}}">
     <div class="form-grid">
       <label class="fl">节点</label>
-      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}"{{if eq .ID $.Forward.NodeID}} selected{{end}}>{{.Name}} (#{{.ID}})</option>{{end}}</select>
+      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}"{{if eq .ID $.Forward.NodeID}} selected{{end}}>{{.Name}}</option>{{end}}</select>
       <label class="fl">协议</label>
       <div class="seg" style="max-width:380px">
         <label><input type="radio" name="proto" value="tcp"{{if eq .Forward.Proto "tcp"}} checked{{end}}><span>TCP</span></label>

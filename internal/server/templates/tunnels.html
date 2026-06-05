@@ -10,7 +10,7 @@
     <tr>
       <td class="id-cell">{{.ID}}</td>
       <td style="font-weight:600">{{.Name}}</td>
-      <td class="mono" style="color:var(--ink-2)">#{{.NodeID}}</td>
+      <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td>{{if or (eq .ProtoMask "tcp+udp") (eq .ProtoMask "tcp")}}<span class="tag tcp">TCP</span>{{end}} {{if or (eq .ProtoMask "tcp+udp") (eq .ProtoMask "udp")}}<span class="tag udp">UDP</span>{{end}}</td>
       <td class="mono">{{.PortStart}}–{{.PortEnd}}</td>
       <td class="mono" style="color:var(--ink-2)">{{.TargetCIDRAllow}}</td>
@@ -34,7 +34,7 @@
       <label class="fl">名称</label>
       <input class="inp" name="name" required placeholder="例如 hk-default">
       <label class="fl">节点</label>
-      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}">{{.Name}} (#{{.ID}})</option>{{end}}</select>
+      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
       <label class="fl">协议</label>
       <div class="seg" style="max-width:340px">
         <label><input type="radio" name="proto_mask" value="tcp+udp" checked><span>TCP + UDP</span></label>
