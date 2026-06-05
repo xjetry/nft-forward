@@ -22,10 +22,6 @@ type OwnerRuleset map[string][]nft.Rule
 
 // stateFile is the on-disk JSON layout for the current schema version.
 // New fields go here; reading older versions converts into this shape.
-// AgentMeta is written unconditionally — encoding/json's omitempty does
-// not apply to struct values, and forcing the canonical layout avoids a
-// confusing "field appears later" shift on disk after the dialer first
-// populates it.
 type stateFile struct {
 	Version   int          `json:"version"`
 	Owners    OwnerRuleset `json:"owners"`
@@ -66,9 +62,7 @@ type legacyV3File struct {
 // in practice v1 only ever contained rules submitted through the bare
 // /v1/ruleset endpoint, which was used by manual smoke tests; assigning
 // them to "tui" preserves the data without forcing users to re-submit.
-// v2 files are read transparently with a zero AgentMeta — the dialer
-// treats zero MigratedAt as "handoff has never happened" and retries on
-// the next successful connect.
+// v2 files are read transparently with a zero AgentMeta.
 func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

@@ -484,52 +484,6 @@ func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 	}
 }
 
-func TestPostRulesetTUIInvokesDialerHook(t *testing.T) {
-	dir := t.TempDir()
-	d, err := New(Config{
-		SocketPath: filepath.Join(dir, "s.sock"),
-		StatePath:  filepath.Join(dir, "state.json"),
-		Dataplane:  &fakeDataplane{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	called := make(chan []nft.Rule, 1)
-	d.tuiHook = func(r []nft.Rule) { called <- r }
-
-	if err := d.setOwnerRuleset(context.Background(), "tui",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-called:
-		if len(got) != 1 {
-			t.Fatalf("expected 1 rule, got %d", len(got))
-		}
-	case <-time.After(time.Second):
-		t.Fatal("tuiHook never called")
-	}
-}
-
-func TestPostRulesetPanelDoesNotInvokeDialerHook(t *testing.T) {
-	dir := t.TempDir()
-	d, err := New(Config{
-		SocketPath: filepath.Join(dir, "s.sock"),
-		StatePath:  filepath.Join(dir, "state.json"),
-		Dataplane:  &fakeDataplane{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.tuiHook = func(r []nft.Rule) {
-		t.Fatalf("tuiHook fired on panel owner write")
-	}
-	if err := d.setOwnerRuleset(context.Background(), "panel",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestPostRulesetPanelInvokesPanelHook(t *testing.T) {
 	dir := t.TempDir()
 	d, err := New(Config{
@@ -542,7 +496,6 @@ func TestPostRulesetPanelInvokesPanelHook(t *testing.T) {
 	}
 	called := make(chan []nft.Rule, 1)
 	d.panelHook = func(r []nft.Rule) { called <- r }
-	d.tuiHook = func(r []nft.Rule) { t.Fatalf("tuiHook fired on panel owner write") }
 
 	if err := d.setOwnerRuleset(context.Background(), "panel",
 		[]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}}, ""); err != nil {
@@ -572,46 +525,6 @@ func TestPostRulesetTUIDoesNotInvokePanelHook(t *testing.T) {
 	if err := d.setOwnerRuleset(context.Background(), "tui",
 		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestDemoteToTuiMergesPanelIntoTuiWithPanelWinning(t *testing.T) {
-	dir := t.TempDir()
-	d, err := New(Config{
-		SocketPath: filepath.Join(dir, "s.sock"),
-		StatePath:  filepath.Join(dir, "state.json"),
-		Dataplane:  &fakeDataplane{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.owners = OwnerRuleset{
-		"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}},
-		"panel": {
-			{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.99", DestPort: 80}, // collides on tcp/80 — panel wins
-			{Proto: "udp", SrcPort: 53, DestIP: "10.0.0.2", DestPort: 53},
-		},
-	}
-	d.meta.MigratedAt = time.Now()
-	d.meta.LastAppliedRev = "rev1"
-	d.meta.PanelURL = "wss://panel/v1/agents"
-	if err := d.demoteToTui(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := d.owners["panel"]; ok {
-		t.Fatal("panel segment should be gone")
-	}
-	tui := d.owners["tui"]
-	if len(tui) != 2 {
-		t.Fatalf("expected 2 merged tui rules, got %d", len(tui))
-	}
-	for _, r := range tui {
-		if r.Proto == "tcp" && r.SrcPort == 80 && r.DestIP != "10.0.0.99" {
-			t.Fatalf("panel collision should win, got DestIP=%s", r.DestIP)
-		}
-	}
-	if !d.meta.MigratedAt.IsZero() || d.meta.LastAppliedRev != "" || d.meta.PanelURL != "" {
-		t.Fatalf("meta not reset: %+v", d.meta)
 	}
 }
 

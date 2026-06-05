@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -507,29 +506,3 @@ func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
 	return n == 1, nil
 }
 
-// UpsertTuiSnapshot stores the daemon-side TUI view of forwards for a node so
-// the panel UI can render it on demand without an extra round-trip to the agent.
-func UpsertTuiSnapshot(d *sql.DB, nodeID int64, forwardsJSON string) error {
-	_, err := d.Exec(`
-		INSERT INTO node_tui_snapshot (node_id, forwards_json, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(node_id) DO UPDATE
-		  SET forwards_json=excluded.forwards_json, updated_at=excluded.updated_at`,
-		nodeID, forwardsJSON, now())
-	return err
-}
-
-// GetTuiSnapshot returns the last TUI snapshot for a node, or ("", nil, nil)
-// if none has been recorded yet.
-func GetTuiSnapshot(d *sql.DB, nodeID int64) (string, *int64, error) {
-	var fj string
-	var ts int64
-	err := d.QueryRow(`SELECT forwards_json, updated_at FROM node_tui_snapshot WHERE node_id=?`, nodeID).Scan(&fj, &ts)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil, nil
-	}
-	if err != nil {
-		return "", nil, err
-	}
-	return fj, &ts, nil
-}

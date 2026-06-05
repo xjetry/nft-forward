@@ -89,8 +89,6 @@ sudo bash install.sh agent \
   {{else}}<div class="empty"><h4>该节点尚无转发规则</h4><p><a class="strong-link" href="/forwards">去添加</a></p></div>{{end}}
 </div>
 
-{{template "_tui_snapshot_partial.html" .}}
-
 <div style="display:flex;align-items:center;gap:10px;margin-top:20px">
   <form method="post" action="/nodes/{{.Node.ID}}/resync" class="inline"><button class="btn btn-ghost" type="submit">重新同步</button></form>
   {{if and .Node.AgentVersion (ne .Node.AgentVersion .ServerVersion)}}<form method="post" action="/nodes/{{.Node.ID}}/upgrade" class="inline" onsubmit="return confirm('推送 server 二进制到此节点并重启？');"><button class="btn btn-primary" type="submit">推送升级到 {{.ServerVersion}}</button></form>{{end}}

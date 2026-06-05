@@ -147,54 +147,6 @@ func TestForward_ModeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTuiSnapshotRoundTrip(t *testing.T) {
-	d := openMemDB(t)
-	n, err := CreateNode(d, "edge-1", "https://p", "tok")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// No snapshot yet: returns ("", nil, nil).
-	got, ts, err := GetTuiSnapshot(d, n.ID)
-	if err != nil {
-		t.Fatalf("GetTuiSnapshot before any upsert: %v", err)
-	}
-	if got != "" || ts != nil {
-		t.Fatalf("expected empty snapshot before upsert, got %q ts=%v", got, ts)
-	}
-
-	// First upsert: insert.
-	payload1 := `[{"proto":"tcp","listen_port":80,"target_ip":"10.0.0.1","target_port":80}]`
-	if err := UpsertTuiSnapshot(d, n.ID, payload1); err != nil {
-		t.Fatal(err)
-	}
-	got, ts, err = GetTuiSnapshot(d, n.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != payload1 || ts == nil {
-		t.Fatalf("first read: got=%q ts=%v", got, ts)
-	}
-
-	// Second upsert with different payload: overwrite, not duplicate.
-	payload2 := `[{"proto":"udp","listen_port":53,"target_ip":"10.0.0.2","target_port":53}]`
-	if err := UpsertTuiSnapshot(d, n.ID, payload2); err != nil {
-		t.Fatal(err)
-	}
-	got, _, _ = GetTuiSnapshot(d, n.ID)
-	if got != payload2 {
-		t.Fatalf("second read should reflect overwrite, got=%q", got)
-	}
-
-	// Verify exactly one row exists (no duplicate path).
-	var cnt int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM node_tui_snapshot WHERE node_id=?`, n.ID).Scan(&cnt); err != nil {
-		t.Fatal(err)
-	}
-	if cnt != 1 {
-		t.Fatalf("expected exactly 1 snapshot row after overwrite, got %d", cnt)
-	}
-}
 
 func TestUpdateForward_NonChainRowUpdatesEditableFields(t *testing.T) {
 	d := openMemDB(t)

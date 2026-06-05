@@ -1,18 +1,13 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/dustin/go-humanize"
 
 	"nft-forward/internal/db"
-	"nft-forward/internal/wsproto"
 )
 
 func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
@@ -85,18 +80,6 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("show node %d: list forwards: %v", n.ID, err)
 	}
-	tuiSnapJSON, ts, err := db.GetTuiSnapshot(s.DB, n.ID)
-	if err != nil {
-		log.Printf("show node %d: get tui snapshot: %v", n.ID, err)
-	}
-	var tuiSnap []wsproto.Forward
-	if tuiSnapJSON != "" {
-		_ = json.Unmarshal([]byte(tuiSnapJSON), &tuiSnap)
-	}
-	age := ""
-	if ts != nil {
-		age = humanize.Time(time.Unix(*ts, 0))
-	}
 	panelURL, err := db.GetSetting(s.DB, "panel_url")
 	if err != nil {
 		log.Printf("show node %d: get panel_url: %v", n.ID, err)
@@ -111,8 +94,6 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 		"User":               u,
 		"Node":               n,
 		"Forwards":           forwards,
-		"TuiSnapshot":        tuiSnap,
-		"TuiSnapshotAge":     age,
 		"PanelURL":           panelURL,
 		"PanelURLConfigured": panelConfigured,
 		"ServerVersion":      serverVersion(),

@@ -397,8 +397,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/nodes/{id}/resync", s.resyncNode)
 		r.Post("/nodes/{id}/upgrade", s.upgradeNode)
 		r.Post("/nodes/upgrade-all", s.upgradeAllNodes)
-		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)
-
 		r.Post("/nodes/{id}/relay-host", s.setNodeRelayHost)
 
 		r.Post("/settings", s.saveSettings)

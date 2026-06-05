@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"nft-forward/internal/nft"
 )
@@ -121,9 +120,6 @@ func TestLoadStateV2UpgradesToV3WithZeroAgentMeta(t *testing.T) {
 	if len(owners["tui"]) != 1 {
 		t.Fatalf("expected 1 tui rule, got %d", len(owners["tui"]))
 	}
-	if !meta.MigratedAt.IsZero() {
-		t.Fatalf("expected zero MigratedAt, got %v", meta.MigratedAt)
-	}
 	if meta.LastAppliedRev != "" {
 		t.Fatalf("expected empty LastAppliedRev, got %q", meta.LastAppliedRev)
 	}
@@ -134,7 +130,6 @@ func TestSaveLoadStateV3Roundtrip(t *testing.T) {
 	p := filepath.Join(dir, "state.json")
 	owners := OwnerRuleset{"panel": {{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.2", DestPort: 443}}}
 	meta := AgentMeta{
-		MigratedAt:     time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC),
 		LastAppliedRev: "abc123",
 		PanelURL:       "wss://panel/v1/agents",
 	}
@@ -148,17 +143,14 @@ func TestSaveLoadStateV3Roundtrip(t *testing.T) {
 	if len(got["panel"]) != 1 {
 		t.Fatalf("expected 1 panel rule, got %d", len(got["panel"]))
 	}
-	if !gotMeta.MigratedAt.Equal(meta.MigratedAt) || gotMeta.LastAppliedRev != "abc123" || gotMeta.PanelURL != "wss://panel/v1/agents" {
+	if gotMeta.LastAppliedRev != "abc123" || gotMeta.PanelURL != "wss://panel/v1/agents" {
 		t.Fatalf("meta roundtrip mismatch: %+v", gotMeta)
 	}
 }
 
 func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
 	// Operators reading state.json by hand must see a canonical layout:
-	// the agent_meta block (and its migrated_at field) is always present,
-	// even when zero. Guards against accidentally re-adding omitempty on
-	// the struct-valued / time.Time fields where it would be silently
-	// ignored by encoding/json anyway.
+	// the agent_meta block is always present, even when empty.
 	p := filepath.Join(t.TempDir(), "state.json")
 	if err := SaveState(p, OwnerRuleset{}, AgentMeta{}); err != nil {
 		t.Fatal(err)
@@ -170,9 +162,6 @@ func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
 	body := string(b)
 	if !strings.Contains(body, `"agent_meta"`) {
 		t.Fatalf("agent_meta key missing from on-disk state: %s", body)
-	}
-	if !strings.Contains(body, `"migrated_at"`) {
-		t.Fatalf("migrated_at key missing from on-disk state: %s", body)
 	}
 }
 

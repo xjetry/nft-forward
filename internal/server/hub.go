@@ -237,16 +237,6 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 				continue
 			}
 			h.applyCounters(ac.nodeID, co.Samples)
-		case wsproto.TypeTuiSegmentChanged:
-			var tsc wsproto.TuiSegmentChanged
-			if err := json.Unmarshal(env.Payload, &tsc); err != nil {
-				log.Printf("hub: node %d malformed tui_segment_changed: %v", ac.nodeID, err)
-				continue
-			}
-			fjb, _ := json.Marshal(tsc.Forwards)
-			if err := db.UpsertTuiSnapshot(h.DB, ac.nodeID, string(fjb)); err != nil {
-				log.Printf("hub: node %d upsert tui snapshot: %v", ac.nodeID, err)
-			}
 		case wsproto.TypePanelSegmentEdit:
 			var pse wsproto.PanelSegmentEdit
 			if err := json.Unmarshal(env.Payload, &pse); err != nil {
@@ -280,20 +270,7 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 			}
 			ackP, _ := json.Marshal(ack)
 			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeRegisterLocal:
-			var rl wsproto.RegisterLocal
-			if err := json.Unmarshal(env.Payload, &rl); err != nil {
-				sendAckErr(ac, env.ID, wsproto.TypeRegisterLocalAck, "malformed payload")
-				continue
-			}
-			imported, err := h.handleRegisterLocal(ac.nodeID, rl.Forwards)
-			if err != nil {
-				sendAckErr(ac, env.ID, wsproto.TypeRegisterLocalAck, err.Error())
-				continue
-			}
-			ackP, _ := json.Marshal(wsproto.RegisterLocalAck{Imported: imported})
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRegisterLocalAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeRegisterLocalAck, wsproto.TypeUpgradeAck:
+		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck:
 			ac.dispatchAck(env)
 		default:
 			log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
@@ -406,48 +383,6 @@ func writeEnvelope(ctx context.Context, ws *websocket.Conn, env wsproto.Envelope
 func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 	p, _ := json.Marshal(wsproto.Error{Code: code, Message: msg})
 	_ = writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeError, Payload: p})
-}
-
-// handleRegisterLocal persists the agent's tui-segment forwards into the
-// panel's forwards table on first call; subsequent calls (e.g. the ack was
-// lost on the wire and the agent retries) return an empty Imported slice
-// so the agent still clears its local tui segment. The
-// nodes.local_migrated_at stamp is the idempotency anchor: without it a
-// retry would duplicate-INSERT and trip the (node_id, proto, listen_port)
-// UNIQUE constraint. Forwards imported this way are admin-owned (no
-// tenant/tunnel) — they're whatever the operator was running directly on
-// the daemon before the panel took over.
-func (h *Hub) handleRegisterLocal(nodeID int64, forwards []wsproto.Forward) ([]wsproto.ImportedForward, error) {
-	n, err := db.GetNode(h.DB, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	if n.LocalMigratedAt != nil {
-		return []wsproto.ImportedForward{}, nil
-	}
-	tx, err := h.DB.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	out := make([]wsproto.ImportedForward, 0, len(forwards))
-	for _, f := range forwards {
-		res, err := tx.Exec(
-			`INSERT INTO forwards(node_id, tenant_id, tunnel_id, proto, listen_port, target_ip, target_port, comment, created_at, mode) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`,
-			nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, time.Now().Unix(), db.NormalizeForwardMode(f.Mode))
-		if err != nil {
-			return nil, err
-		}
-		id, _ := res.LastInsertId()
-		out = append(out, wsproto.ImportedForward{ListenPort: f.ListenPort, Proto: f.Proto, RuleID: id})
-	}
-	if _, err := tx.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, time.Now().Unix(), nodeID); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // applyCounters folds per-rule bytes_delta into the forwards table and the
@@ -646,10 +581,3 @@ func sendChainAckErr(ac *agentConn, id, msg string) {
 	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: id, Payload: ackP})
 }
 
-// sendAckErr writes a {error: msg} payload on a typed ack envelope so the
-// agent can decode it as the appropriate RegisterLocalAck shape (its
-// Error string `json:"error,omitempty"` field captures the message).
-func sendAckErr(ac *agentConn, id, ackType, msg string) {
-	p, _ := json.Marshal(map[string]string{"error": msg})
-	ac.enqueueWrite(wsproto.Envelope{Type: ackType, ID: id, Payload: p})
-}

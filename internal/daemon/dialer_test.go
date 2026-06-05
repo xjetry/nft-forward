@@ -122,8 +122,7 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 		GetState: func() (OwnerRuleset, AgentMeta) {
 			return OwnerRuleset{}, AgentMeta{}
 		},
-		OnRegister: func(forwards []wsproto.Forward) {},
-		OnApply:    func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -134,46 +133,6 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 	frames := fh.Frames()
 	if len(frames) == 0 || frames[0].Type != wsproto.TypeHello {
 		t.Fatalf("expected first frame to be hello, got %+v", frames)
-	}
-}
-
-func TestDialerSendsRegisterLocalWhenTuiPresentAndNotMigrated(t *testing.T) {
-	fh := newFakeHub()
-	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
-		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
-		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
-	})
-	fh.onAck(wsproto.TypeRegisterLocal, func(env wsproto.Envelope) wsproto.Envelope {
-		ack, _ := json.Marshal(wsproto.RegisterLocalAck{Imported: []wsproto.ImportedForward{{ListenPort: 80, Proto: "tcp", RuleID: 1}}})
-		return wsproto.Envelope{Type: wsproto.TypeRegisterLocalAck, ID: env.ID, Payload: ack}
-	})
-	srv := httptest.NewServer(fh.handler(t))
-	defer srv.Close()
-
-	registered := make(chan []wsproto.Forward, 1)
-	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
-		AgentVersion: "v1",
-		GetState: func() (OwnerRuleset, AgentMeta) {
-			return OwnerRuleset{"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}}, AgentMeta{}
-		},
-		OnRegister: func(forwards []wsproto.Forward) {
-			registered <- forwards
-		},
-		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go func() { _, _ = dl.runOnce(ctx) }()
-
-	select {
-	case got := <-registered:
-		if len(got) != 1 || got[0].ListenPort != 80 {
-			t.Fatalf("unexpected registered forwards: %+v", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("OnRegister never called")
 	}
 }
 
@@ -361,36 +320,3 @@ sendWait:
 	}
 }
 
-func TestDialerSkipsRegisterWhenMigratedAtIsNonzero(t *testing.T) {
-	fh := newFakeHub()
-	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
-		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
-		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
-	})
-	srv := httptest.NewServer(fh.handler(t))
-	defer srv.Close()
-
-	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
-		AgentVersion: "v1",
-		GetState: func() (OwnerRuleset, AgentMeta) {
-			return OwnerRuleset{"tui": {{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}},
-				AgentMeta{MigratedAt: time.Now().UTC()}
-		},
-		OnRegister: func(forwards []wsproto.Forward) {
-			t.Errorf("OnRegister called despite MigratedAt set")
-		},
-		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	_, _ = dl.runOnce(ctx)
-
-	frames := fh.Frames()
-	for _, f := range frames {
-		if f.Type == wsproto.TypeRegisterLocal {
-			t.Fatalf("dialer sent register_local despite MigratedAt set")
-		}
-	}
-}

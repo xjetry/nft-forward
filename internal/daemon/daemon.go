@@ -172,12 +172,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			Token:        d.connectTok,
 			AgentVersion: agentVersion(),
 			GetState:     d.SnapshotForDialer,
-			OnRegister:   func(_ []wsproto.Forward) { _ = d.OnLocalMigrated() },
 			OnApply:      d.SetPanelRuleset,
-			// Non-nil marker so the dialer emits tui_segment_changed
-			// frames; payloads are constructed inside the dialer from
-			// its tuiCh, so this callback itself is a no-op.
-			OnTuiNotice: func(_ []wsproto.Forward) {},
 			// Non-nil marker so the dialer emits panel_segment_edit frames;
 			// payloads are built inside the dialer from its panelCh, so this
 			// callback itself is a no-op.
@@ -185,17 +180,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 			CountersFn:    d.counterSamples,
 		})
 		d.dialer.Store(dl)
-		// Forward local tui-segment writes into the dialer so the panel
+		// Forward local panel-segment writes into the dialer so the server
 		// learns about edits performed via the unix socket without
 		// having to poll. Read dialer through the atomic accessor so
 		// the closure stays correct even if Run is restructured later
 		// (defensive — Run only ever stores once today).
 		d.mu.Lock()
-		d.tuiHook = func(rules []nft.Rule) {
-			if dl := d.Dialer(); dl != nil {
-				dl.NotifyTuiChanged(rules)
-			}
-		}
 		d.panelHook = func(rules []nft.Rule) {
 			if dl := d.Dialer(); dl != nil {
 				dl.NotifyPanelEdited(rules)
@@ -296,22 +286,6 @@ func (d *Daemon) RunWithSignals() error {
 	defer stop()
 	log.Printf("nft-forward daemon: listening on %s", d.socketPath)
 	return d.Run(ctx)
-}
-
-// OnLocalMigrated is invoked by the dialer after the panel ACKs a
-// register_local. Clears the tui segment, stamps meta.MigratedAt the
-// first time, and persists. Honors the "ACK before clear" invariant:
-// once MigratedAt is non-zero we never re-emit register_local for the
-// same agent lifetime, so a subsequent invocation only ever reconciles
-// the cleared segment back to disk.
-func (d *Daemon) OnLocalMigrated() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.owners, "tui")
-	if d.meta.MigratedAt.IsZero() {
-		d.meta.MigratedAt = time.Now().UTC()
-	}
-	return SaveState(d.statePath, d.owners, d.meta)
 }
 
 // SetPanelRuleset is invoked by the dialer when an apply_ruleset frame

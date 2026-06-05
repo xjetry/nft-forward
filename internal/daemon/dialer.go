@@ -29,7 +29,7 @@ const (
 )
 
 // DialerConfig wires the dialer to its host daemon without import cycles.
-// GetState/OnRegister/OnApply give the dialer read-and-write access to the
+// GetState/OnApply give the dialer read-and-write access to the
 // owner-segmented state through plain function values so the test in
 // dialer_test.go can substitute fakes without spinning up a daemon.
 type DialerConfig struct {
@@ -38,20 +38,23 @@ type DialerConfig struct {
 	AgentVersion string
 
 	GetState      func() (OwnerRuleset, AgentMeta)
-	OnRegister    func(forwards []wsproto.Forward) // called when register_local_ack arrives
 	OnApply       func(ctx context.Context, rev string, rules []nft.Rule) error
-	OnTuiNotice   func(forwards []wsproto.Forward) // optional; nil = skip notice
 	OnPanelNotice func(forwards []wsproto.Forward) // optional; nil = skip notice
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
 	CountersFn func() []wsproto.CounterSample
 }
 
+type upgradeResult struct {
+	id  string
+	ack wsproto.UpgradeAck
+}
+
 type Dialer struct {
 	cfg DialerConfig
 
-	tuiCh   chan []nft.Rule
-	panelCh chan []nft.Rule
+	panelCh   chan []nft.Rule
+	upgradeCh chan upgradeResult
 
 	cmdCh     chan wsproto.Envelope
 	pendMu    sync.Mutex
@@ -66,13 +69,13 @@ type Dialer struct {
 
 func NewDialer(cfg DialerConfig) *Dialer {
 	return &Dialer{
-		cfg:     cfg,
-		tuiCh:   make(chan []nft.Rule, 1),
-		panelCh: make(chan []nft.Rule, 1),
-		cmdCh:   make(chan wsproto.Envelope),
-		pending: make(map[string]chan wsproto.ChainCmdAck),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		cfg:       cfg,
+		panelCh:   make(chan []nft.Rule, 1),
+		upgradeCh: make(chan upgradeResult, 1),
+		cmdCh:     make(chan wsproto.Envelope),
+		pending:   make(map[string]chan wsproto.ChainCmdAck),
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -88,31 +91,10 @@ func (d *Dialer) Done() <-chan struct{} {
 	return d.done
 }
 
-// NotifyTuiChanged accepts a new tui-segment snapshot from the
-// unix-socket handler. Last-write-wins: if a previous snapshot is still
-// queued, drain it and push the newer one so only the latest state
-// reaches the panel.
-func (d *Dialer) NotifyTuiChanged(rules []nft.Rule) {
-	cp := append([]nft.Rule(nil), rules...)
-	select {
-	case d.tuiCh <- cp:
-	default:
-		// Channel full — drain the stale snapshot and replace it.
-		select {
-		case <-d.tuiCh:
-		default:
-		}
-		select {
-		case d.tuiCh <- cp:
-		default:
-		}
-	}
-}
-
 // NotifyPanelEdited accepts a new panel-segment snapshot from the
 // unix-socket handler after a TUI edit to a server-managed forward.
-// Last-write-wins, mirroring NotifyTuiChanged: drain the stale snapshot
-// and push the newer one so only the latest state reaches the panel.
+// Last-write-wins: drain the stale snapshot and push the newer one so
+// only the latest state reaches the panel.
 func (d *Dialer) NotifyPanelEdited(rules []nft.Rule) {
 	cp := append([]nft.Rule(nil), rules...)
 	select {
@@ -279,33 +261,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	}
 	helloAcked = true
 
-	owners, meta := d.cfg.GetState()
-
-	// Legacy migration: first-time panel connection imports tui-segment
-	// rules into the panel DB.
-	if meta.MigratedAt.IsZero() && len(owners["tui"]) > 0 {
-		fwds := rulesToForwards(owners["tui"])
-		rlp, err := json.Marshal(wsproto.RegisterLocal{Forwards: fwds})
-		if err != nil {
-			return helloAcked, fmt.Errorf("marshal register_local: %w", err)
-		}
-		if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeRegisterLocal, ID: "reg-1", Payload: rlp}); err != nil {
-			return helloAcked, fmt.Errorf("write register_local: %w", err)
-		}
-		rlAck, err := readOne(ctx, ws, dialerReadTimeout)
-		if err != nil {
-			return helloAcked, fmt.Errorf("read register_local_ack: %w", err)
-		}
-		if rlAck.Type == wsproto.TypeRegisterLocalAck {
-			var ack wsproto.RegisterLocalAck
-			if err := json.Unmarshal(rlAck.Payload, &ack); err != nil {
-				log.Printf("dialer: unmarshal %s: %v", rlAck.Type, err)
-			}
-			if ack.Error == "" && d.cfg.OnRegister != nil {
-				d.cfg.OnRegister(fwds)
-			}
-		}
-	}
+	owners, _ := d.cfg.GetState()
 
 	// Sync local panel-segment rules so the server DB knows about rules
 	// created via TUI while offline. Without this, the server dispatches
@@ -394,11 +350,13 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
 					continue
 				}
-				ack := d.handleUpgrade(ctx, u)
-				ap, _ := json.Marshal(ack)
-				if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeUpgradeAck, ID: env.ID, Payload: ap}); err != nil {
-					return helloAcked, err
-				}
+				go func(id string) {
+					ack := d.handleUpgrade(ctx, u)
+					select {
+					case d.upgradeCh <- upgradeResult{id: id, ack: ack}:
+					default:
+					}
+				}(env.ID)
 			case wsproto.TypePong:
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
@@ -443,19 +401,6 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cp}); err != nil {
 				log.Printf("dialer: write %s: %v", wsproto.TypeCounters, err)
 			}
-		case rules := <-d.tuiCh:
-			if d.cfg.OnTuiNotice == nil {
-				continue
-			}
-			fwds := rulesToForwards(rules)
-			tp, err := json.Marshal(wsproto.TuiSegmentChanged{Forwards: fwds})
-			if err != nil {
-				log.Printf("dialer: marshal %s: %v", wsproto.TypeTuiSegmentChanged, err)
-				continue
-			}
-			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeTuiSegmentChanged, Payload: tp}); err != nil {
-				log.Printf("dialer: write %s: %v", wsproto.TypeTuiSegmentChanged, err)
-			}
 		case rules := <-d.panelCh:
 			if d.cfg.OnPanelNotice == nil {
 				continue
@@ -468,6 +413,11 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			}
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp}); err != nil {
 				log.Printf("dialer: write %s: %v", wsproto.TypePanelSegmentEdit, err)
+			}
+		case res := <-d.upgradeCh:
+			ap, _ := json.Marshal(res.ack)
+			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeUpgradeAck, ID: res.id, Payload: ap}); err != nil {
+				return helloAcked, err
 			}
 		case env := <-d.cmdCh:
 			if err := writeOne(ctx, ws, env); err != nil {

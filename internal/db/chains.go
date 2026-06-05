@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
@@ -24,17 +23,9 @@ const (
 	ChainPortMax = 60000
 )
 
-// OccupiedPortsOnNode returns every listen port held on (node, proto), unioning
-// the panel forwards table with the node's last-reported tui-segment snapshot.
-// The daemon rejects cross-segment port conflicts at apply time, so the tui
-// snapshot must be consulted or auto-allocation would pick ports the daemon
-// then refuses. excludeChainID>0 drops that chain's own forwards so a chain
-// regenerating in place doesn't see itself as occupying its ports.
-//
-// Invariant: node_tui_snapshot only ever holds the daemon's non-panel TUI-segment
-// ports; panel and chain forwards live in the forwards table. So the snapshot can
-// never contain a chain's own port, which is why it is unioned in unconditionally
-// (excludeChainID applies only to the forwards query) without breaking stable reuse.
+// OccupiedPortsOnNode returns every listen port held on (node, proto) in the
+// panel forwards table. excludeChainID>0 drops that chain's own forwards so a
+// chain regenerating in place doesn't see itself as occupying its ports.
 func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeChainID int64) (map[int]bool, error) {
 	out := map[int]bool{}
 	rows, err := d.Query(
@@ -52,27 +43,6 @@ func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeChainID int6
 		out[p] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	// tui snapshot is best-effort (may be stale/absent); the daemon's 409 is the
-	// ultimate authority, this only avoids the common collisions up front.
-	var fj string
-	switch err := d.QueryRow(`SELECT forwards_json FROM node_tui_snapshot WHERE node_id=?`, nodeID).Scan(&fj); err {
-	case nil:
-		var snap []struct {
-			Proto      string `json:"proto"`
-			ListenPort int    `json:"listen_port"`
-		}
-		if json.Unmarshal([]byte(fj), &snap) == nil {
-			for _, f := range snap {
-				if f.Proto == proto {
-					out[f.ListenPort] = true
-				}
-			}
-		}
-	case sql.ErrNoRows:
-		// node never reported a tui segment; nothing to union
-	default:
 		return nil, err
 	}
 	return out, nil

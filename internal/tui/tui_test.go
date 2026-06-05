@@ -375,7 +375,7 @@ func TestViewListClampsCommentWidthOnNarrowTerminal(t *testing.T) {
 	_ = m.View() // must not panic
 }
 
-func TestLoadInitialRulesMergesSegments(t *testing.T) {
+func TestLoadInitialRulesLoadsPanelOnly(t *testing.T) {
 	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
 		"tui":   {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
 		"panel": {{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200, ChainID: 5, ChainName: "seednet-vless"}},
@@ -384,8 +384,8 @@ func TestLoadInitialRulesMergesSegments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 2 {
-		t.Fatalf("expected 2 merged rules, got %d", len(rules))
+	if len(rules) != 1 || rules[0].SrcPort != 200 {
+		t.Fatalf("expected 1 panel rule on port 200, got %+v", rules)
 	}
 }
 
@@ -568,13 +568,3 @@ func TestUpdateEditChainRowLocksTargetNotListenPort(t *testing.T) {
 	}
 }
 
-func TestCommitOwnerPostsGivenOwner(t *testing.T) {
-	fc := &fakeDaemonClient{}
-	applied, err := commitOwner(fc, "panel", []nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fc.postedOwner != "panel" || len(applied) != 1 {
-		t.Fatalf("commitOwner posted owner=%q applied=%+v", fc.postedOwner, applied)
-	}
-}

@@ -94,31 +94,13 @@ func initialModel(client daemonClient, rules []nft.Rule) model {
 	}
 }
 
-// loadInitialRules fetches the merged ruleset from the daemon. If legacy
-// "tui" rules exist, they are migrated to the unified "panel" segment so
-// subsequent writes don't hit cross-owner port conflicts in MergedRuleset.
+// loadInitialRules fetches the panel-segment ruleset from the daemon.
 func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
 	owners, err := client.GetRuleset()
 	if err != nil {
 		return nil, fmt.Errorf("加载规则失败: %w", err)
 	}
 	panelRules := owners["panel"]
-	tuiRules := owners["tui"]
-
-	if len(tuiRules) > 0 {
-		seen := make(map[string]bool)
-		for _, r := range panelRules {
-			seen[fmt.Sprintf("%s/%d", r.Proto, r.SrcPort)] = true
-		}
-		for _, r := range tuiRules {
-			if !seen[fmt.Sprintf("%s/%d", r.Proto, r.SrcPort)] {
-				panelRules = append(panelRules, r)
-			}
-		}
-		_ = client.PostRuleset("tui", nil)
-		_ = client.PostRuleset("panel", panelRules)
-	}
-
 	if panelRules == nil {
 		panelRules = []nft.Rule{}
 	}
@@ -208,19 +190,15 @@ func (m *model) refresh() {
 	m.status = "已从 daemon 重新加载"
 }
 
-// commitOwner posts a full segment snapshot for owner to the daemon. Raw
-// rules go on the wire — the daemon resolves hostnames at apply time — so
+// commit posts a full panel-segment snapshot to the daemon. Raw rules go
+// on the wire — the daemon resolves hostnames at apply time — so
 // DestHost/DestIP are sent as the user typed them.
-func commitOwner(client daemonClient, owner string, rules []nft.Rule) ([]nft.Rule, error) {
+func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
-	if err := client.PostRuleset(owner, rules); err != nil {
+	if err := client.PostRuleset("panel", rules); err != nil {
 		return nil, err
 	}
 	return rules, nil
-}
-
-func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
-	return commitOwner(client, "panel", rules)
 }

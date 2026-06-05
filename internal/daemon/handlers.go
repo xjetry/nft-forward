@@ -43,11 +43,11 @@ type Daemon struct {
 	dialer     atomic.Pointer[Dialer]
 
 	// reconcileMu serializes the data-plane reconcile/close calls against the
-	// DNS refresh and write paths. setOwnerRuleset and demoteToTui reconcile
-	// while holding d.mu; refreshOnce reconciles without it. Without this lock
-	// those paths could mutate the data plane concurrently. Lock order is
-	// always d.mu → reconcileMu (never the reverse), so the two write paths
-	// that nest both locks can't deadlock against refreshOnce which takes only
+	// DNS refresh and write paths. setOwnerRuleset reconciles while holding
+	// d.mu; refreshOnce reconciles without it. Without this lock those paths
+	// could mutate the data plane concurrently. Lock order is always
+	// d.mu → reconcileMu (never the reverse), so the two write paths that
+	// nest both locks can't deadlock against refreshOnce which takes only
 	// reconcileMu.
 	reconcileMu sync.Mutex
 
@@ -56,17 +56,12 @@ type Daemon struct {
 	meta         AgentMeta
 	lastResolved []nft.Rule
 
-	// tuiHook, if non-nil, is invoked after a successful write to
-	// owners["tui"] via setOwnerRuleset. Production wires this to
-	// dialer.NotifyTuiChanged so the panel sees local TUI edits. Tests
-	// substitute a fake. Invoked outside d.mu so the callback (which may
-	// block on a channel send) cannot stall other writers.
-	tuiHook func(rules []nft.Rule)
-
-	// panelHook mirrors tuiHook for owner=="panel" writes. Production wires
-	// it to dialer.NotifyPanelEdited so a TUI edit to a server-managed
-	// forward is reported back to the panel for persistence. Invoked outside
-	// d.mu for the same reason as tuiHook.
+	// panelHook, if non-nil, is invoked after a successful write to
+	// owners["panel"] via setOwnerRuleset. Production wires it to
+	// dialer.NotifyPanelEdited so a TUI edit to a server-managed forward
+	// is reported back to the panel for persistence. Invoked outside d.mu
+	// so the callback (which may block on a channel send) cannot stall
+	// other writers.
 	panelHook func(rules []nft.Rule)
 }
 
@@ -96,7 +91,7 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 // previous set — the DNS-refresh no-op case).
 //
 // metaFn, if non-nil, is called under d.mu right before commit to let the
-// caller adjust AgentMeta (e.g. record a panel rev or clear MigratedAt).
+// caller adjust AgentMeta (e.g. record a panel rev).
 //
 // saveToDisk controls whether SaveState is called as part of the commit.
 // The DNS refresh path skips persistence because the resolver output is
@@ -188,7 +183,6 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/v1/counters", d.handleCounters)
 	mux.HandleFunc("/v1/ruleset", d.handleRulesetRoot)
 	mux.HandleFunc("/v1/ruleset/", d.handleRulesetOwner)
-	mux.HandleFunc("/v1/admin/demote-to-tui", d.handleDemoteToTui)
 	mux.HandleFunc("/v1/chain/edit", d.handleChainEdit)
 	mux.HandleFunc("/v1/chain/delete", d.handleChainDelete)
 	return mux
@@ -292,20 +286,13 @@ func (d *Daemon) setOwnerRuleset(ctx context.Context, owner string, rules []nft.
 		return d.classifyWriteError(err)
 	}
 
-	// Hooks fire outside d.mu so a slow callback can't stall other writers.
+	// Hook fires outside d.mu so a slow callback can't stall other writers.
 	// Snapshot the hook and segment under the lock, then invoke.
-	d.mu.Lock()
-	tuiHook := d.tuiHook
-	panelHook := d.panelHook
-	hookRules := append([]nft.Rule(nil), d.owners[owner]...)
-	d.mu.Unlock()
-
-	switch owner {
-	case "tui":
-		if tuiHook != nil {
-			tuiHook(hookRules)
-		}
-	case "panel":
+	if owner == "panel" {
+		d.mu.Lock()
+		panelHook := d.panelHook
+		hookRules := append([]nft.Rule(nil), d.owners[owner]...)
+		d.mu.Unlock()
 		if panelHook != nil {
 			panelHook(hookRules)
 		}
@@ -332,80 +319,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-// demoteToTui folds the panel segment into the tui segment with panel
-// rules winning any (proto, src_port) collision, then clears panel
-// ownership and the panel-specific meta fields. Used when an agent
-// node leaves panel management (install.sh uninstall agent without
-// --purge) so panel-pushed forwards survive as locally-managed rules
-// instead of disappearing the moment the dialer goes away.
-func (d *Daemon) demoteToTui(ctx context.Context) error {
-	_, _, err := d.reconcileOwners(ctx,
-		func(candidate OwnerRuleset) {
-			tui := append([]nft.Rule(nil), candidate["tui"]...)
-			panel := candidate["panel"]
-
-			type key struct {
-				Proto string
-				Port  int
-			}
-			idx := make(map[key]int, len(tui))
-			for i, r := range tui {
-				idx[key{r.Proto, r.SrcPort}] = i
-			}
-			for _, p := range panel {
-				k := key{p.Proto, p.SrcPort}
-				if i, ok := idx[k]; ok {
-					tui[i] = p
-				} else {
-					tui = append(tui, p)
-					idx[k] = len(tui) - 1
-				}
-			}
-			if len(tui) == 0 {
-				delete(candidate, "tui")
-			} else {
-				candidate["tui"] = tui
-			}
-			delete(candidate, "panel")
-		},
-		func(meta *AgentMeta) {
-			meta.MigratedAt = time.Time{}
-			meta.LastAppliedRev = ""
-			meta.PanelURL = ""
-		},
-		true, // persist to disk
-	)
-	if err != nil {
-		return err
-	}
-
-	// Notify the dialer (if any is still around between disengagement and
-	// process exit) so the panel sees the merged tui snapshot before the
-	// session tears down.
-	d.mu.Lock()
-	hook := d.tuiHook
-	hookRules := append([]nft.Rule(nil), d.owners["tui"]...)
-	d.mu.Unlock()
-	if hook != nil {
-		hook(hookRules)
-	}
-	return nil
-}
-
-// handleDemoteToTui serves POST /v1/admin/demote-to-tui. No request body
-// is read; the merge logic is fully driven by current daemon state.
-func (d *Daemon) handleDemoteToTui(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if err := d.demoteToTui(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleChainEdit relays a TUI edit of a chain hop to the server through the

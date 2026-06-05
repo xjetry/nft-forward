@@ -5,23 +5,21 @@ import (
 	"testing"
 )
 
-func TestOccupiedPortsUnionsForwardsAndTuiSnapshot(t *testing.T) {
+func TestOccupiedPortsReturnsForwards(t *testing.T) {
 	d := openMemDB(t)
 	n, _ := CreateNode(d, "n1", "https://p", "t")
-	// panel segment: one tcp forward holds 20000
 	if _, err := CreateForward(d, &Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 20000, TargetIP: "1.1.1.1", TargetPort: 1}); err != nil {
 		t.Fatal(err)
 	}
-	// node-local tui segment snapshot: tcp holds 20001, udp holds 53
-	if err := UpsertTuiSnapshot(d, n.ID, `[{"proto":"tcp","listen_port":20001,"target_ip":"2.2.2.2","target_port":2},{"proto":"udp","listen_port":53,"target_ip":"3.3.3.3","target_port":3}]`); err != nil {
+	if _, err := CreateForward(d, &Forward{NodeID: n.ID, Proto: "udp", ListenPort: 53, TargetIP: "8.8.8.8", TargetPort: 53}); err != nil {
 		t.Fatal(err)
 	}
 	occ, err := OccupiedPortsOnNode(d, n.ID, "tcp", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !occ[20000] || !occ[20001] {
-		t.Fatalf("tcp occupancy should include panel(20000) ∪ tui(20001): %v", occ)
+	if !occ[20000] {
+		t.Fatalf("tcp forward on 20000 should be occupied: %v", occ)
 	}
 	if occ[53] {
 		t.Fatalf("udp port 53 must not appear in tcp occupancy: %v", occ)
