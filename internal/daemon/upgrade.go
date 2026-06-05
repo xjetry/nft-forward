@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"nft-forward/internal/wsproto"
@@ -113,13 +114,32 @@ func atomicReplace(path string, data []byte) error {
 
 func restartSelf() {
 	time.Sleep(time.Second)
-	// Use systemd-run to execute the restart from a detached scope so our
-	// process can exit cleanly without deadlocking on its own stop.
+	unit := detectUnit()
+	log.Printf("upgrade: restarting unit %s", unit)
 	if out, err := exec.Command(
 		"systemd-run", "--no-block", "--",
-		"systemctl", "restart", "nft-forward",
+		"systemctl", "restart", unit,
 	).CombinedOutput(); err != nil {
 		log.Printf("upgrade: systemd-run restart failed: %v: %s — trying direct restart", err, out)
-		exec.Command("systemctl", "restart", "nft-forward").Start()
+		exec.Command("systemctl", "restart", unit).Start()
 	}
+}
+
+func detectUnit() string {
+	pid := os.Getpid()
+	out, err := exec.Command("systemctl", "--pid", fmt.Sprintf("%d", pid), "--no-pager", "-l", "--plain", "--output=short").CombinedOutput()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "nft-forward") && strings.HasSuffix(line, ".service") {
+				return strings.Fields(line)[0]
+			}
+		}
+	}
+	for _, name := range []string{"nft-forward-daemon", "nft-forward"} {
+		if out, err := exec.Command("systemctl", "is-active", name+".service").CombinedOutput(); err == nil && strings.TrimSpace(string(out)) == "active" {
+			return name
+		}
+	}
+	return "nft-forward"
 }
