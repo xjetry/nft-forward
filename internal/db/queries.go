@@ -457,11 +457,11 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 }
 
 // MarkNodeOnline records a successful hello/heartbeat from an agent and
-// refreshes the reported binary version.
-func MarkNodeOnline(d *sql.DB, id int64, agentVersion string) error {
+// refreshes the reported binary version and connect IP.
+func MarkNodeOnline(d *sql.DB, id int64, agentVersion, connectIP string) error {
 	_, err := d.Exec(
-		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, last_error=NULL WHERE id=?`,
-		now(), agentVersion, id)
+		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, last_error=NULL, address=? WHERE id=?`,
+		now(), agentVersion, connectIP, id)
 	return err
 }
 

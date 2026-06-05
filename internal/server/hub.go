@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -145,8 +146,12 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion); err != nil {
+	connectIP := extractIP(r)
+	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
+	}
+	if node.RelayHost == "" && connectIP != "" {
+		_ = db.UpdateNodeRelayHost(h.DB, node.ID, connectIP)
 	}
 
 	go h.writerLoop(ac)
@@ -340,6 +345,23 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) error
 }
 
 // Helpers --------------------------------------------------------------
+
+func extractIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.Index(xff, ","); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return strings.Trim(host, "[]")
+}
 
 func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
 	if secret == "" {

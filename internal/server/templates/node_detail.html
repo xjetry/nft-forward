@@ -4,8 +4,10 @@
   <div class="card-head"><h3>基本信息</h3></div>
   <div class="card-body">
     <div class="form-grid" style="grid-template-columns:140px 1fr">
+      <label class="fl">连接 IP</label>
+      <div class="mono">{{if .Node.Address}}<span class="sens">{{.Node.Address}}</span>{{else}}<span style="color:var(--ink-3)">未连接</span>{{end}}</div>
       <label class="fl">中继地址（数据面）</label>
-      <div class="mono">{{if .Node.RelayHost}}{{.Node.RelayHost}}{{else}}<span style="color:var(--ink-3)">未设置（设置后才能进链路）</span>{{end}}</div>
+      <div class="mono">{{if .Node.RelayHost}}<span class="sens">{{.Node.RelayHost}}</span>{{else}}<span style="color:var(--ink-3)">未设置（设置后才能进链路）</span>{{end}}</div>
       <label class="fl">Token</label>
       <div class="mono"><span class="sens">{{.Node.Secret}}</span></div>
       <label class="fl">最近同步</label>

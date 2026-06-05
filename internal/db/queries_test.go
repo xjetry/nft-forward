@@ -43,14 +43,14 @@ func TestMarkNodeOnlineUpdatesFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := MarkNodeOnline(d, n.ID, "v1.2.3"); err != nil {
+	if err := MarkNodeOnline(d, n.ID, "v1.2.3", "1.2.3.4"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := GetNode(d, n.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Online != 1 || got.AgentVersion != "v1.2.3" || got.LastSeen == nil {
+	if got.Online != 1 || got.AgentVersion != "v1.2.3" || got.LastSeen == nil || got.Address != "1.2.3.4" {
 		t.Fatalf("MarkNodeOnline did not update fields: %+v", got)
 	}
 }
