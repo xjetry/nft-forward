@@ -248,6 +248,7 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 				log.Printf("hub: node %d malformed panel_segment_edit: %v", ac.nodeID, err)
 				continue
 			}
+			log.Printf("hub: node %d panel_segment_edit: %d forwards", ac.nodeID, len(pse.Forwards))
 			h.applyPanelEdits(ac.nodeID, pse.Forwards)
 		case wsproto.TypeChainHopEdit:
 			var e wsproto.ChainHopEdit
