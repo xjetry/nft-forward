@@ -11,6 +11,7 @@
       <div class="seg" style="max-width:380px">
         <label><input type="radio" name="proto" value="tcp"{{if eq .Forward.Proto "tcp"}} checked{{end}}><span>TCP</span></label>
         <label><input type="radio" name="proto" value="udp"{{if eq .Forward.Proto "udp"}} checked{{end}}><span>UDP</span></label>
+        <label><input type="radio" name="proto" value="tcp+udp"{{if eq .Forward.Proto "tcp+udp"}} checked{{end}}><span>TCP+UDP</span></label>
       </div>
       <label class="fl">模式</label>
       <div class="seg" style="max-width:340px">

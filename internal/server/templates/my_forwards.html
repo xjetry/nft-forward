@@ -17,7 +17,7 @@
       <td class="id-cell">{{.ID}}</td>
       <td style="font-weight:600">{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td class="mono" style="color:var(--ink-2)">{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
-      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Proto}}</span></td>
+      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
       <td><span class="tag {{if eq .Mode "kernel"}}mode-k{{else}}mode-u{{end}}">{{.Mode}}</span></td>
       <td class="mono">:{{.ListenPort}}</td>
       <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
@@ -42,7 +42,7 @@
         {{range .Tunnels}}<option value="{{.ID}}" data-port-start="{{.PortStart}}" data-port-end="{{.PortEnd}}" data-proto-mask="{{.ProtoMask}}" data-cidr="{{.TargetCIDRAllow}}">{{.Name}} (节点 #{{.NodeID}}，{{.PortStart}}-{{.PortEnd}}/{{.ProtoMask}})</option>{{end}}
       </select>
       <label class="fl">协议</label>
-      <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+      <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp">TCP+UDP</option></select>
       <label class="fl">模式</label>
       <select class="inp" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
       <label class="fl">监听端口</label>
@@ -74,10 +74,11 @@
         port.min = s; port.max = e;
         ip.placeholder = '在 ' + cidr + ' 范围内';
         Array.from(proto.options).forEach(function(o){
-          o.disabled = (mask !== 'tcp+udp' && mask !== o.value);
+          if (mask === 'tcp+udp') { o.disabled = false; }
+          else { o.disabled = (o.value !== mask); }
         });
         if (proto.options[proto.selectedIndex].disabled) {
-          proto.value = (mask === 'udp') ? 'udp' : 'tcp';
+          proto.value = mask;
         }
       }
       sel.addEventListener('change', syncTunnelHints);

@@ -11,7 +11,7 @@
       <td class="id-cell">{{.ID}}</td>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td class="mono" style="color:var(--ink-2)">{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}admin{{end}}</td>
-      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Proto}}</span></td>
+      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
       <td><span class="tag {{if eq .Mode "kernel"}}mode-k{{else}}mode-u{{end}}">{{.Mode}}</span></td>
       <td class="mono">:{{.ListenPort}}</td>
       <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
@@ -40,6 +40,7 @@
       <div class="seg" style="max-width:380px">
         <label><input type="radio" name="proto" value="tcp" checked><span>TCP</span></label>
         <label><input type="radio" name="proto" value="udp"><span>UDP</span></label>
+        <label><input type="radio" name="proto" value="tcp+udp"><span>TCP+UDP</span></label>
       </div>
       <label class="fl">模式</label>
       <div class="seg" style="max-width:340px">

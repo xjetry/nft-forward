@@ -9,7 +9,7 @@
       <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText('{{.View.Entry}}');toast('入口地址已复制')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制</button>
     </div>
     <div class="form-grid" style="margin-top:20px;grid-template-columns:90px 1fr">
-      <label class="fl">协议</label><div><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Chain.Proto}}</span></div>
+      <label class="fl">协议</label><div><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else if eq .Chain.Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Chain.Proto}}</span></div>
       <label class="fl">路径</label><div class="mono" style="color:var(--ink-2)">{{.View.Path}}</div>
       <label class="fl">出口</label><div class="mono">{{.Chain.ExitHost}}:{{.Chain.ExitPort}}</div>
     </div>
@@ -46,7 +46,7 @@
       <label class="fl">名称</label>
       <input class="inp" name="name" value="{{.Chain.Name}}" required>
       <label class="fl">协议</label>
-      <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp"{{if eq .Chain.Proto "tcp"}} selected{{end}}>TCP</option><option value="udp"{{if eq .Chain.Proto "udp"}} selected{{end}}>UDP</option></select>
+      <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp"{{if eq .Chain.Proto "tcp"}} selected{{end}}>TCP</option><option value="udp"{{if eq .Chain.Proto "udp"}} selected{{end}}>UDP</option><option value="tcp+udp"{{if eq .Chain.Proto "tcp+udp"}} selected{{end}}>TCP+UDP</option></select>
       <label class="fl">出口</label>
       <input class="inp mono" name="exit" value="{{.Chain.ExitHost}}:{{.Chain.ExitPort}}" required>
     </div>

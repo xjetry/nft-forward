@@ -13,7 +13,7 @@
     <tr>
       <td class="id-cell">{{.Chain.ID}}</td>
       <td style="font-weight:600">{{.Chain.Name}}</td>
-      <td><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Chain.Proto}}</span></td>
+      <td><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else if eq .Chain.Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Chain.Proto}}</span></td>
       <td class="mono" style="color:var(--ink-2)">{{.Path}}</td>
       <td class="mono" style="font-weight:600">{{.Entry}}</td>
       <td class="actions">
