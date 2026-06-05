@@ -461,7 +461,7 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 // refreshes the reported binary version.
 func MarkNodeOnline(d *sql.DB, id int64, agentVersion string) error {
 	_, err := d.Exec(
-		`UPDATE nodes SET online=1, last_seen=?, agent_version=? WHERE id=?`,
+		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, last_error=NULL WHERE id=?`,
 		now(), agentVersion, id)
 	return err
 }
