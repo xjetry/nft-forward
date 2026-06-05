@@ -28,36 +28,16 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list forwards: chain hop info: %v", err)
 	}
 
-	const perPage = 10
-	total := len(allForwards)
-	totalPages := (total + perPage - 1) / perPage
-	if totalPages < 1 {
-		totalPages = 1
-	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-	if page > totalPages {
-		page = totalPages
-	}
-	start := (page - 1) * perPage
-	end := start + perPage
-	if end > total {
-		end = total
-	}
-	forwards := allForwards[start:end]
+	forwards, pager := paginate(allForwards, r)
 
 	s.render(w, "forwards.html", map[string]any{
-		"User":       u,
-		"Forwards":   forwards,
-		"Nodes":      nodes,
-		"NodeByID":   nodeByID,
-		"HopInfo":    hopInfo,
-		"Total":      total,
-		"Page":       page,
-		"TotalPages": totalPages,
-		"Flash":      flashFromCookie(w, r),
+		"User":     u,
+		"Forwards": forwards,
+		"Nodes":    nodes,
+		"NodeByID": nodeByID,
+		"HopInfo":  hopInfo,
+		"Pager":    pager,
+		"Flash":    flashFromCookie(w, r),
 	})
 }
 

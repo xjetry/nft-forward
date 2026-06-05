@@ -26,11 +26,14 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("list nodes: get panel_url: %v", err)
 	}
+	paged, pager := paginate(nodes, r)
 	s.render(w, "nodes.html", map[string]any{
 		"User":          u,
-		"Nodes":         nodes,
+		"Nodes":         paged,
+		"AllNodes":      nodes,
 		"PanelURL":      panelURL,
 		"ServerVersion": serverVersion(),
+		"Pager":         pager,
 		"Flash":         flashFromCookie(w, r),
 	})
 }

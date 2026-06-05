@@ -1,7 +1,7 @@
 {{template "header" (mkmap "Title" "用户" "Nav" "tenants" "Crumb" "资源 / 用户" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-  <div class="card-head"><h3>用户列表</h3><span class="desc">一个用户对应一份配额与可授权的通道</span></div>
+  <div class="card-head"><h3>用户列表</h3><span class="desc">{{.Pager.Total}} 个用户</span></div>
   {{if .Tenants}}
   <table class="tbl">
     <thead><tr><th style="width:50px">ID</th><th>名称</th><th>最大转发</th><th>流量配额</th><th>已用</th><th>状态</th><th class="actions">操作</th></tr></thead>
@@ -22,6 +22,7 @@
     {{end}}
     </tbody>
   </table>
+  {{template "pager" .Pager}}
   {{else}}
   <div class="empty">
     <div class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M17 11h4M19 9v4"/></svg></div>

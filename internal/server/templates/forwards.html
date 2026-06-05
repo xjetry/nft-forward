@@ -1,7 +1,7 @@
 {{template "header" (mkmap "Title" "转发规则" "Nav" "forwards" "Crumb" "转发 / 转发规则" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-  <div class="card-head"><h3>当前规则</h3><span class="desc">{{.Total}} 条转发规则</span></div>
+  <div class="card-head"><h3>当前规则</h3><span class="desc">{{.Pager.Total}} 条转发规则</span></div>
   {{if .Forwards}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th class="actions">操作</th></tr></thead>
@@ -24,13 +24,7 @@
     {{end}}
     </tbody>
   </table>
-  {{if gt .TotalPages 1}}
-  <div class="pager">
-    {{if gt .Page 1}}<a href="?page={{sub .Page 1}}">&laquo; 上一页</a>{{end}}
-    {{range pages .TotalPages .Page}}<a{{if eq . $.Page}} class="cur"{{end}} href="?page={{.}}">{{.}}</a>{{end}}
-    {{if lt .Page .TotalPages}}<a href="?page={{add .Page 1}}">下一页 &raquo;</a>{{end}}
-  </div>
-  {{end}}
+  {{template "pager" .Pager}}
   {{else}}<div class="empty"><h4>暂无转发规则</h4></div>{{end}}
 </div>
 

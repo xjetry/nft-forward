@@ -26,11 +26,13 @@ func (s *Server) listTunnels(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list tunnels: list nodes: %v", err)
 	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	paged, pager := paginate(tunnels, r)
 	s.render(w, "tunnels.html", map[string]any{
 		"User":     u,
-		"Tunnels":  tunnels,
+		"Tunnels":  paged,
 		"Nodes":    nodes,
 		"NodeByID": nodeByID,
+		"Pager":    pager,
 		"Flash":    flashFromCookie(w, r),
 	})
 }
@@ -122,9 +124,11 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("list tenants: %v", err)
 	}
+	paged, pager := paginate(tenants, r)
 	s.render(w, "tenants.html", map[string]any{
 		"User":    u,
-		"Tenants": tenants,
+		"Tenants": paged,
+		"Pager":   pager,
 		"Flash":   flashFromCookie(w, r),
 	})
 }

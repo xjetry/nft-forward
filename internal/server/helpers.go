@@ -66,3 +66,35 @@ func buildMap[T any](items []*T, key func(*T) int64) map[int64]*T {
 	}
 	return m
 }
+
+// PageInfo holds pagination state passed to templates.
+type PageInfo struct {
+	Page       int
+	TotalPages int
+	Total      int
+}
+
+const perPage = 10
+
+// paginate slices items for the requested page and returns the page slice
+// plus PageInfo for the template pager.
+func paginate[T any](items []*T, r *http.Request) ([]*T, PageInfo) {
+	total := len(items)
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * perPage
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return items[start:end], PageInfo{Page: page, TotalPages: totalPages, Total: total}
+}

@@ -1,7 +1,7 @@
 {{template "header" (mkmap "Title" "通道" "Nav" "channels" "Crumb" "资源 / 通道" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-  <div class="card-head"><h3>所有通道</h3><span class="desc">{{len .Tunnels}} 条</span></div>
+  <div class="card-head"><h3>所有通道</h3><span class="desc">{{.Pager.Total}} 条</span></div>
   {{if .Tunnels}}
   <table class="tbl">
     <thead><tr><th style="width:50px">ID</th><th>名称</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>带宽</th><th class="actions">操作</th></tr></thead>
@@ -22,6 +22,7 @@
     {{end}}
     </tbody>
   </table>
+  {{template "pager" .Pager}}
   {{else}}<div class="empty"><h4>尚无通道</h4></div>{{end}}
 </div>
 
