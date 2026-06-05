@@ -10,7 +10,7 @@ CREATE TABLE chains (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
   name              TEXT NOT NULL,
-  proto             TEXT NOT NULL CHECK(proto IN ('tcp','udp')),
+  proto             TEXT NOT NULL CHECK(proto IN ('tcp','udp','tcp+udp')),
   exit_host         TEXT NOT NULL,
   exit_port         INTEGER NOT NULL CHECK(exit_port BETWEEN 1 AND 65535),
   -- SET NULL (not CASCADE): when the entry node is deleted the chain config is

@@ -32,7 +32,7 @@ CREATE TABLE nodes (
 CREATE TABLE forwards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  proto TEXT NOT NULL CHECK(proto IN ('tcp','udp')),
+  proto TEXT NOT NULL CHECK(proto IN ('tcp','udp','tcp+udp')),
   listen_port INTEGER NOT NULL CHECK(listen_port BETWEEN 1 AND 65535),
   target_ip TEXT NOT NULL,
   target_port INTEGER NOT NULL CHECK(target_port BETWEEN 1 AND 65535),
