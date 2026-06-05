@@ -381,13 +381,11 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
 					continue
 				}
-				go func(id string) {
-					ack := d.handleUpgrade(ctx, u)
-					ap, _ := json.Marshal(ack)
-					if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeUpgradeAck, ID: id, Payload: ap}); err != nil {
-						log.Printf("dialer: write %s: %v", wsproto.TypeUpgradeAck, err)
-					}
-				}(env.ID)
+				ack := d.handleUpgrade(ctx, u)
+				ap, _ := json.Marshal(ack)
+				if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeUpgradeAck, ID: env.ID, Payload: ap}); err != nil {
+					return helloAcked, err
+				}
 			case wsproto.TypePong:
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:

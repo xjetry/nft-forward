@@ -21,7 +21,7 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	log.Printf("upgrade: received version=%s sha256=%s size=%d from=%s",
 		u.Version, u.SHA256, u.Size, u.DownloadAt)
 
-	binary, err := downloadBinary(ctx, u)
+	binary, err := downloadBinary(u)
 	if err != nil {
 		log.Printf("upgrade: download failed: %v", err)
 		return wsproto.UpgradeAck{Error: err.Error()}
@@ -39,18 +39,15 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	if err := atomicReplace(exePath, binary); err != nil {
 		return wsproto.UpgradeAck{Error: "replace binary: " + err.Error()}
 	}
-	log.Printf("upgrade: binary replaced at %s, restarting service", exePath)
+	log.Printf("upgrade: binary replaced at %s (%d bytes), scheduling restart", exePath, len(binary))
 
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		restartSelf()
-	}()
+	go restartSelf()
 
 	return wsproto.UpgradeAck{OK: true}
 }
 
-func downloadBinary(ctx context.Context, u wsproto.Upgrade) ([]byte, error) {
-	dlCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+func downloadBinary(u wsproto.Upgrade) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	client := &http.Client{
@@ -58,7 +55,7 @@ func downloadBinary(ctx context.Context, u wsproto.Upgrade) ([]byte, error) {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	req, err := http.NewRequestWithContext(dlCtx, "GET", u.DownloadAt, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u.DownloadAt, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +72,7 @@ func downloadBinary(ctx context.Context, u wsproto.Upgrade) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
+	log.Printf("upgrade: downloaded %d bytes", len(data))
 
 	h := sha256.Sum256(data)
 	got := hex.EncodeToString(h[:])
@@ -91,24 +89,37 @@ func atomicReplace(path string, data []byte) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
+		os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Chmod(0755); err != nil {
 		tmp.Close()
+		os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 func restartSelf() {
-	if out, err := exec.Command("systemctl", "restart", "nft-forward").CombinedOutput(); err != nil {
-		log.Printf("upgrade: systemctl restart failed: %v: %s", err, out)
+	time.Sleep(time.Second)
+	// Use systemd-run to execute the restart from a detached scope so our
+	// process can exit cleanly without deadlocking on its own stop.
+	if out, err := exec.Command(
+		"systemd-run", "--no-block", "--",
+		"systemctl", "restart", "nft-forward",
+	).CombinedOutput(); err != nil {
+		log.Printf("upgrade: systemd-run restart failed: %v: %s — trying direct restart", err, out)
+		exec.Command("systemctl", "restart", "nft-forward").Start()
 	}
 }
