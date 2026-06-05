@@ -262,6 +262,11 @@ func ListNodes(d *sql.DB) ([]*Node, error) {
 	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY id`, scanNode)
 }
 
+func RenameNode(d *sql.DB, id int64, name string) error {
+	_, err := d.Exec(`UPDATE nodes SET name=? WHERE id=?`, name, id)
+	return err
+}
+
 func DeleteNode(d *sql.DB, id int64) error {
 	_, err := d.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	return err
@@ -377,7 +382,7 @@ func listForwardsWhere(d *sql.DB, where string, args ...any) ([]*Forward, error)
 	if where != "" {
 		q += " WHERE " + where
 	}
-	q += ` ORDER BY node_id, listen_port`
+	q += ` ORDER BY COALESCE(chain_id, 999999999), chain_id IS NULL, node_id, listen_port`
 	return queryAll(d, q, scanForward, args...)
 }
 

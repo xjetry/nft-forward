@@ -278,6 +278,11 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .back-link{display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-weight:600;font-size:13px;margin-top:20px;cursor:pointer}
 .back-link:hover{text-decoration:underline}
 
+.pager{display:flex;align-items:center;justify-content:center;gap:6px;padding:14px 0 4px}
+.pager a,.pager span{display:inline-flex;align-items:center;justify-content:center;min-width:32px;height:32px;padding:0 8px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-2);text-decoration:none}
+.pager a:hover{background:var(--accent-soft);color:var(--accent)}
+.pager .cur{background:var(--accent);color:#fff;font-weight:600}
+
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#11151c;color:#e8edf4;padding:11px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;z-index:100;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast svg{width:16px;height:16px;color:#4ade80}

@@ -14,7 +14,7 @@ import (
 
 func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	forwards, err := db.ListForwards(s.DB)
+	allForwards, err := db.ListForwards(s.DB)
 	if err != nil {
 		log.Printf("list forwards: %v", err)
 	}
@@ -23,12 +23,36 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list forwards: list nodes: %v", err)
 	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+
+	const perPage = 10
+	total := len(allForwards)
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * perPage
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	forwards := allForwards[start:end]
+
 	s.render(w, "forwards.html", map[string]any{
-		"User":     u,
-		"Forwards": forwards,
-		"Nodes":    nodes,
-		"NodeByID": nodeByID,
-		"Flash":    flashFromCookie(w, r),
+		"User":       u,
+		"Forwards":   forwards,
+		"Nodes":      nodes,
+		"NodeByID":   nodeByID,
+		"Total":      total,
+		"Page":       page,
+		"TotalPages": totalPages,
+		"Flash":      flashFromCookie(w, r),
 	})
 }
 

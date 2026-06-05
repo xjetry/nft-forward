@@ -67,7 +67,15 @@ func New(d *sql.DB) (*Server, error) {
 			return s.String
 		},
 		"upper": strings.ToUpper,
-		"add":   func(a, b int) int { return a + b },
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
+		"pages": func(total, cur int) []int {
+			var out []int
+			for i := 1; i <= total; i++ {
+				out = append(out, i)
+			}
+			return out
+		},
 		"div": func(a, b int64) int64 {
 			if b == 0 {
 				return 0
@@ -383,6 +391,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/nodes", s.listNodes)
 		r.Post("/nodes", s.createNode)
 		r.Get("/nodes/{id}", s.showNode)
+		r.Post("/nodes/{id}/rename", s.renameNode)
 		r.Post("/nodes/{id}/delete", s.deleteNode)
 		r.Post("/nodes/{id}/resync", s.resyncNode)
 		r.Post("/nodes/{id}/import-tui", s.handleImportTuiSnapshot)

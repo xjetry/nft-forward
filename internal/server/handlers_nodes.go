@@ -115,6 +115,26 @@ func (s *Server) showNode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) renameNode(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		s.flashRedirect(w, r, "名称不能为空", fmt.Sprintf("/nodes/%d", id))
+		return
+	}
+	if err := db.RenameNode(s.DB, id, name); err != nil {
+		s.flashRedirect(w, r, "重命名失败: "+err.Error(), fmt.Sprintf("/nodes/%d", id))
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.rename", strconv.FormatInt(id, 10), name)
+	s.flashRedirect(w, r, "节点已重命名", fmt.Sprintf("/nodes/%d", id))
+}
+
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

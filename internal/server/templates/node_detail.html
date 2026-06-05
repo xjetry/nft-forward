@@ -24,6 +24,21 @@
 </div>
 
 <div class="card">
+  <div class="card-head"><h3>节点名称</h3></div>
+  <div class="card-body">
+    <form method="post" action="/nodes/{{.Node.ID}}/rename">
+    <div class="form-grid">
+      <label class="fl">名称</label>
+      <input class="inp" name="name" value="{{.Node.Name}}" required style="max-width:320px">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit">保存名称</button>
+    </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-head"><h3>中继地址</h3><span class="desc">中继链路用它作为上一跳打向本节点的目标地址</span></div>
   <div class="card-body">
     <form method="post" action="/nodes/{{.Node.ID}}/relay-host">
@@ -74,9 +89,9 @@ sudo bash install.sh agent \
 
 {{template "_tui_snapshot_partial.html" .}}
 
-<div style="display:flex;gap:10px;margin-top:20px">
+<div style="display:flex;align-items:center;gap:10px;margin-top:20px">
   <form method="post" action="/nodes/{{.Node.ID}}/resync" class="inline"><button class="btn btn-ghost" type="submit">重新同步</button></form>
-  <a class="back-link" href="/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回节点列表</a>
+  <a class="back-link" href="/nodes" style="margin-top:0;white-space:nowrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回节点列表</a>
 </div>
 
 {{template "footer" (mkmap "User" .User)}}
