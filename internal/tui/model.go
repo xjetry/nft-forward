@@ -94,21 +94,35 @@ func initialModel(client daemonClient, rules []nft.Rule) model {
 	}
 }
 
-// loadInitialRules fetches the merged ruleset from the daemon. The TUI
-// operates on a single unified segment ("panel"); legacy "tui" rules are
-// included so nothing disappears during migration.
+// loadInitialRules fetches the merged ruleset from the daemon. If legacy
+// "tui" rules exist, they are migrated to the unified "panel" segment so
+// subsequent writes don't hit cross-owner port conflicts in MergedRuleset.
 func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
 	owners, err := client.GetRuleset()
 	if err != nil {
 		return nil, fmt.Errorf("加载规则失败: %w", err)
 	}
-	var rules []nft.Rule
-	rules = append(rules, owners["panel"]...)
-	rules = append(rules, owners["tui"]...)
-	if rules == nil {
-		rules = []nft.Rule{}
+	panelRules := owners["panel"]
+	tuiRules := owners["tui"]
+
+	if len(tuiRules) > 0 {
+		seen := make(map[string]bool)
+		for _, r := range panelRules {
+			seen[fmt.Sprintf("%s/%d", r.Proto, r.SrcPort)] = true
+		}
+		for _, r := range tuiRules {
+			if !seen[fmt.Sprintf("%s/%d", r.Proto, r.SrcPort)] {
+				panelRules = append(panelRules, r)
+			}
+		}
+		_ = client.PostRuleset("tui", nil)
+		_ = client.PostRuleset("panel", panelRules)
 	}
-	return rules, nil
+
+	if panelRules == nil {
+		panelRules = []nft.Rule{}
+	}
+	return panelRules, nil
 }
 
 func (m model) totalRows() int {
