@@ -5,13 +5,13 @@
   <div class="card-body">
     <div class="copy-field">
       <span class="lbl">ENTRY</span>
-      {{.View.Entry}}
+      <span class="sens">{{.View.Entry}}</span>
       <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText('{{.View.Entry}}');toast('入口地址已复制')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制</button>
     </div>
     <div class="form-grid" style="margin-top:20px;grid-template-columns:90px 1fr">
       <label class="fl">协议</label><div><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else if eq .Chain.Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Chain.Proto}}</span></div>
-      <label class="fl">路径</label><div class="mono" style="color:var(--ink-2)">{{.View.Path}}</div>
-      <label class="fl">出口</label><div class="mono">{{.Chain.ExitHost}}:{{.Chain.ExitPort}}</div>
+      <label class="fl">路径</label><div class="mono" style="color:var(--ink-2)"><span class="sens">{{.View.Path}}</span></div>
+      <label class="fl">出口</label><div class="mono"><span class="sens">{{.Chain.ExitHost}}:{{.Chain.ExitPort}}</span></div>
     </div>
   </div>
 </div>

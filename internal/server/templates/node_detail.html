@@ -7,7 +7,7 @@
       <label class="fl">中继地址（数据面）</label>
       <div class="mono">{{if .Node.RelayHost}}{{.Node.RelayHost}}{{else}}<span style="color:var(--ink-3)">未设置（设置后才能进链路）</span>{{end}}</div>
       <label class="fl">Token</label>
-      <div class="mono">{{.Node.Secret}}</div>
+      <div class="mono"><span class="sens">{{.Node.Secret}}</span></div>
       <label class="fl">最近同步</label>
       <div class="mono">{{unix .Node.LastApplyAt}} <span style="color:var(--ink-3)">· {{timeAgo .Node.LastApplyAt}}</span></div>
       <label class="fl">最近心跳</label>

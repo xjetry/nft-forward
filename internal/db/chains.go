@@ -200,6 +200,36 @@ func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
 	return queryAll(d, `SELECT chain_id,position,node_id,tunnel_id,listen_port,mode,comment FROM chain_hops WHERE chain_id=? ORDER BY position`, scanChainHop, chainID)
 }
 
+type ChainHopInfo struct {
+	ChainName string
+	Position  int
+	TotalHops int
+}
+
+func ChainHopInfoMap(d DBTX) (map[int64]*ChainHopInfo, error) {
+	rows, err := d.Query(`
+		SELECT f.id, c.name, h.position,
+			(SELECT COUNT(*) FROM chain_hops h2 WHERE h2.chain_id = c.id)
+		FROM forwards f
+		JOIN chains c ON c.id = f.chain_id
+		JOIN chain_hops h ON h.chain_id = f.chain_id AND h.node_id = f.node_id
+		WHERE f.chain_id IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]*ChainHopInfo)
+	for rows.Next() {
+		var fwdID int64
+		var info ChainHopInfo
+		if err := rows.Scan(&fwdID, &info.ChainName, &info.Position, &info.TotalHops); err != nil {
+			return nil, err
+		}
+		m[fwdID] = &info
+	}
+	return m, rows.Err()
+}
+
 func ListForwardsByChain(d DBTX, chainID int64) ([]*Forward, error) {
 	return queryAll(d, `SELECT `+forwardCols+` FROM forwards WHERE chain_id=? ORDER BY node_id, listen_port`, scanForward, chainID)
 }

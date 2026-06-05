@@ -283,6 +283,13 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .pager a:hover{background:var(--accent-soft);color:var(--accent)}
 .pager .cur{background:var(--accent);color:#fff;font-weight:600}
 
+.blur-active .sens{filter:blur(5px);-webkit-filter:blur(5px);transition:filter .2s;user-select:none}
+.blur-active .sens:hover{filter:blur(2px)}
+.blur-tog{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-3);cursor:pointer;user-select:none;margin-left:auto;padding:4px 10px;border-radius:6px;border:1px solid transparent;transition:.15s}
+.blur-tog:hover{background:var(--accent-soft);color:var(--accent);border-color:#d7e2fb}
+.blur-tog svg{width:15px;height:15px}
+.blur-tog.on{color:var(--accent);background:var(--accent-soft);border-color:#d7e2fb}
+
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#11151c;color:#e8edf4;padding:11px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;z-index:100;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast svg{width:16px;height:16px;color:#4ade80}
@@ -388,11 +395,12 @@ pre code{background:transparent;padding:0}
   </aside>
 
   <main class="content">
-    <div class="topbar">
+    <div class="topbar" style="display:flex;align-items:flex-start;justify-content:space-between">
       <div>
         <div class="crumb"><b>nft-forward</b> / {{if .Crumb}}{{.Crumb}}{{else}}{{.Title}}{{end}}</div>
         <div class="page-title">{{.Title}}</div>
       </div>
+      <span class="blur-tog" id="blurToggle" onclick="toggleBlur()" title="模糊敏感信息"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="blurLabel">脱敏</span></span>
     </div>
     <div class="scroll">
       {{if .Flash}}<div class="flash">{{.Flash}}</div>{{end}}
@@ -411,6 +419,8 @@ pre code{background:transparent;padding:0}
 <script>
 var toastTimer;
 function toast(msg){var t=document.getElementById('toast');document.getElementById('toastMsg').textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove('show')},1800);}
+function toggleBlur(){var b=document.body,on=b.classList.toggle('blur-active');document.getElementById('blurToggle').classList.toggle('on',on);localStorage.setItem('nf-blur',on?'1':'0');}
+(function(){if(localStorage.getItem('nf-blur')==='1'){document.body.classList.add('blur-active');var t=document.getElementById('blurToggle');if(t)t.classList.add('on');}})();
 var CK='<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
 var CHEV='<svg class="cs-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
 function buildSelect(sel){

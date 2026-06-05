@@ -20,7 +20,7 @@
       <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
       <td><span class="tag {{if eq .Mode "kernel"}}mode-k{{else}}mode-u{{end}}">{{.Mode}}</span></td>
       <td class="mono">:{{.ListenPort}}</td>
-      <td class="mono">{{.TargetIP}}:{{.TargetPort}}</td>
+      <td class="mono"><span class="sens">{{.TargetIP}}:{{.TargetPort}}</span></td>
       <td class="num-col">{{fmtBytes .TotalBytes}}</td>
       <td><span class="note-text">{{.Comment}}</span></td>
       <td class="actions"><form method="post" action="/my/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form></td>

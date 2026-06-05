@@ -34,10 +34,8 @@ var (
 // column reserves colGap trailing cells (content is truncated to width-colGap)
 // so adjacent columns never visually merge, even when content fills the width.
 const (
-	colGap     = 2
-	colOwner   = 16 // 本地 / server / 链路 X（链路名过长则截断）
-	colTenant  = 12 // 租户名 / —
-	colProto   = 10 // tcp+udp / tcp (U)
+	colGap    = 2
+	colProto  = 10 // tcp+udp / tcp (U)
 	colSrcPort = 12 // 65535
 	colDest    = 24 // IPv4(15) 或常见域名 + gap
 	colDstPort = 12 // 65535
@@ -101,7 +99,8 @@ func (m model) View() string {
 	case viewAdd, viewEdit:
 		inner = m.viewForm()
 	case viewConfirmDelete:
-		if r, owner, _ := m.rowAt(m.cursor); owner == "panel" && r.ChainID != 0 {
+		r := m.rowAt(m.cursor)
+		if r.ChainID != 0 {
 			inner = m.viewConfirm(fmt.Sprintf(
 				"确认删除整条链路「%s」？\n\n  这会删除该链路在所有节点上的全部转发，不可恢复。\n", r.ChainName))
 		} else {
@@ -128,24 +127,19 @@ func (m model) viewList() string {
 	if m.totalRows() == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
 	} else {
-		header := padCol("来源", colOwner) +
-			padCol("用户", colTenant) +
-			renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
+		header := renderTableRow("协议", "本机端口", "目标", "远程端口", "备注")
 		b.WriteString(headerStyle.Render(header) + "\n")
 
-		fixedWidth := colOwner + colTenant + colProto + colSrcPort + colDest + colDstPort
+		fixedWidth := colProto + colSrcPort + colDest + colDstPort
 		const minComment = 10
 		innerWidth := m.width - 2*colMargin
 		if innerWidth < fixedWidth+minComment {
-			// Narrow terminal: keep a minimum comment column so commentWidth
-			// never goes negative; the row may exceed the viewport and the
-			// terminal soft-wraps, which is preferable to a broken render.
 			innerWidth = fixedWidth + minComment
 		}
 		commentWidth := innerWidth - fixedWidth
 
 		for i := 0; i < m.totalRows(); i++ {
-			r, owner, _ := m.rowAt(i)
+			r := m.rowAt(i)
 			destHost := r.DestIP
 			if r.DestHost != "" {
 				destHost = r.DestHost
@@ -154,27 +148,22 @@ func (m model) viewList() string {
 			if r.EffectiveMode() == nft.ModeUserspace {
 				protoCell += " (U)"
 			}
-			ownerTag := "本地"
-			if owner == "panel" {
-				if r.ChainID != 0 {
-					ownerTag = "链路 " + r.ChainName
-				} else {
-					ownerTag = "server"
+			var commentCell string
+			if r.ChainID != 0 {
+				commentCell = "链路 " + r.ChainName
+				if r.Comment != "" {
+					commentCell += " · " + r.Comment
 				}
+			} else {
+				commentCell = r.Comment
 			}
-			tenantTag := "—"
-			if r.TenantName != "" {
-				tenantTag = r.TenantName
-			}
-			line := padCol(ownerTag, colOwner) +
-				padCol(tenantTag, colTenant) +
-				renderTableRow(
-					protoCell,
-					strconv.Itoa(r.SrcPort),
-					destHost,
-					strconv.Itoa(r.DestPort),
-					cellStyle(commentWidth).Render(r.Comment),
-				)
+			line := renderTableRow(
+				protoCell,
+				strconv.Itoa(r.SrcPort),
+				destHost,
+				strconv.Itoa(r.DestPort),
+				cellStyle(commentWidth).Render(commentCell),
+			)
 			if i == m.cursor {
 				b.WriteString(selectedStyle.Render(line) + "\n")
 			} else {

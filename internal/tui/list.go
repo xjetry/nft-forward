@@ -35,15 +35,8 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.totalRows() == 0 {
 			return m, nil
 		}
-		r, owner, _ := m.rowAt(m.cursor)
-		if owner == "tui" || r.ChainID != 0 {
-			// tui rows delete locally; chain rows delete the whole chain via
-			// the server. Non-chain server rows aren't deletable from here.
-			m.mode = viewConfirmDelete
-			m.err = ""
-		} else {
-			m.status = "server 托管规则不能在此删除"
-		}
+		m.mode = viewConfirmDelete
+		m.err = ""
 	case "c":
 		if len(m.rules) > 0 {
 			m.mode = viewConfirmClear
@@ -58,18 +51,14 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		r, owner, _ := m.rowAt(m.cursor)
-		if owner == "panel" && r.ChainID != 0 {
+		r := m.rowAt(m.cursor)
+		if r.ChainID != 0 {
 			if err := m.client.ChainDelete(r.ChainID); err != nil {
 				m.err = err.Error()
 				m.mode = viewList
 				return m, nil
 			}
 			m.status = fmt.Sprintf("已提交删除链路「%s」，按 r 刷新查看", r.ChainName)
-			m.mode = viewList
-			return m, nil
-		}
-		if owner != "tui" {
 			m.mode = viewList
 			return m, nil
 		}

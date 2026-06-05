@@ -520,11 +520,24 @@ func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
 		log.Printf("hub: node %d load forward map for panel edits: %v", nodeID, err)
 		return
 	}
+
+	incoming := make(map[string]bool, len(forwards))
 	for _, f := range forwards {
 		key := fmt.Sprintf("%s/%d", f.Proto, f.ListenPort)
+		incoming[key] = true
 		existing, ok := fwdMap[key]
 		if !ok {
-			log.Printf("hub: node %d panel edit for %s/%d matched no forward row (rule may have been deleted)", nodeID, f.Proto, f.ListenPort)
+			if _, err := db.CreateForward(h.DB, &db.Forward{
+				NodeID:     nodeID,
+				Proto:      f.Proto,
+				ListenPort: f.ListenPort,
+				TargetIP:   f.TargetIP,
+				TargetPort: f.TargetPort,
+				Comment:    f.Comment,
+				Mode:       db.NormalizeForwardMode(f.Mode),
+			}); err != nil {
+				log.Printf("hub: node %d panel edit create %s/%d: %v", nodeID, f.Proto, f.ListenPort, err)
+			}
 			continue
 		}
 		if existing.ChainID.Valid {
@@ -532,7 +545,18 @@ func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
 		}
 		if _, err := db.UpdateForward(h.DB, nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, f.Mode); err != nil {
 			log.Printf("hub: node %d panel edit update for %s/%d: %v", nodeID, f.Proto, f.ListenPort, err)
+		}
+	}
+
+	for key, existing := range fwdMap {
+		if incoming[key] {
 			continue
+		}
+		if existing.ChainID.Valid {
+			continue
+		}
+		if _, err := db.DeleteForward(h.DB, existing.ID); err != nil {
+			log.Printf("hub: node %d panel edit delete %s: %v", nodeID, key, err)
 		}
 	}
 }

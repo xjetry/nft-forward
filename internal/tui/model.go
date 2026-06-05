@@ -51,14 +51,10 @@ var protoOptions = []string{"tcp", "udp", "tcp+udp"}
 var modeOptions = []string{nft.ModeKernel, nft.ModeUserspace}
 
 type model struct {
-	mode       viewMode
-	rules      []nft.Rule
-	panelRules []nft.Rule // server-pushed segment, shown read-only
-	cursor     int
-	// editingOwner records which segment the in-progress edit targets so
-	// submitEdit posts back to the right owner ("tui" or "panel").
-	editingOwner string
-	// editingChainID is the chain a panel chain-hop edit targets (0 = the
+	mode   viewMode
+	rules  []nft.Rule
+	cursor int
+	// editingChainID is the chain a chain-hop edit targets (0 = the
 	// row is not a chain hop). It routes submitEdit to the chain command path
 	// and selects the field-lock set.
 	editingChainID int64
@@ -80,68 +76,55 @@ type model struct {
 // Run starts the TUI bound to the given daemon client. Caller (cmd) is
 // responsible for verifying the daemon is reachable before invoking Run.
 func Run(client daemonClient) error {
-	rules, panelRules, err := loadInitialRules(client)
+	rules, err := loadInitialRules(client)
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(initialModel(client, rules, panelRules), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(client, rules), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func initialModel(client daemonClient, rules, panelRules []nft.Rule) model {
+func initialModel(client daemonClient, rules []nft.Rule) model {
 	return model{
-		mode:       viewList,
-		rules:      rules,
-		panelRules: panelRules,
-		inputs:     buildInputs(),
-		client:     client,
+		mode:   viewList,
+		rules:  rules,
+		inputs: buildInputs(),
+		client: client,
 	}
 }
 
-// loadInitialRules fetches the local (tui) and server-pushed (panel) segments
-// from the daemon. nil segments become empty slices so the rest of the TUI
-// does not have to nil-check.
-func loadInitialRules(client daemonClient) (tui []nft.Rule, panel []nft.Rule, err error) {
+// loadInitialRules fetches the merged ruleset from the daemon. The TUI
+// operates on a single unified segment ("panel"); legacy "tui" rules are
+// included so nothing disappears during migration.
+func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
 	owners, err := client.GetRuleset()
 	if err != nil {
-		return nil, nil, fmt.Errorf("加载规则失败: %w", err)
+		return nil, fmt.Errorf("加载规则失败: %w", err)
 	}
-	tui = owners["tui"]
-	if tui == nil {
-		tui = []nft.Rule{}
+	var rules []nft.Rule
+	rules = append(rules, owners["panel"]...)
+	rules = append(rules, owners["tui"]...)
+	if rules == nil {
+		rules = []nft.Rule{}
 	}
-	panel = owners["panel"]
-	if panel == nil {
-		panel = []nft.Rule{}
-	}
-	return tui, panel, nil
+	return rules, nil
 }
 
-// totalRows is the count of selectable rows across both segments: the
-// editable tui segment followed by the server-managed panel segment.
 func (m model) totalRows() int {
-	return len(m.rules) + len(m.panelRules)
+	return len(m.rules)
 }
 
-// rowAt resolves a unified cursor index to its rule and owner. Indices
-// [0,len(rules)) map to the tui segment; the remainder map to the panel
-// segment. editable is always true: chain hops are editable for their safe
-// fields (listen_port/mode/comment) — which fields are locked is decided per
-// row by lockedFields, not here.
-func (m model) rowAt(i int) (r nft.Rule, owner string, editable bool) {
-	if i < len(m.rules) {
-		return m.rules[i], "tui", true
-	}
-	return m.panelRules[i-len(m.rules)], "panel", true
+func (m model) rowAt(i int) nft.Rule {
+	return m.rules[i]
 }
 
 // lockedFields returns the form field indices that stay read-only for the
-// row being edited. Standalone rows (both tui and panel non-chain) lock
-// nothing — all fields are editable. Panel chain rows lock proto+target
-// (the relay skeleton owned by the server) but free listen_port/mode/comment.
+// row being edited. Standalone rows lock nothing — all fields are editable.
+// Chain rows lock proto+target (the relay skeleton owned by the server) but
+// free listen_port/mode/comment.
 func (m model) lockedFields() map[int]bool {
-	if m.editingOwner == "panel" && m.editingChainID != 0 {
+	if m.editingChainID != 0 {
 		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
 	}
 	return nil
@@ -196,21 +179,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) refresh() {
-	owners, err := m.client.GetRuleset()
+	rules, err := loadInitialRules(m.client)
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
-	tui := owners["tui"]
-	if tui == nil {
-		tui = []nft.Rule{}
-	}
-	m.rules = tui
-	panel := owners["panel"]
-	if panel == nil {
-		panel = []nft.Rule{}
-	}
-	m.panelRules = panel
+	m.rules = rules
 	if m.cursor >= m.totalRows() {
 		m.cursor = m.totalRows() - 1
 	}
@@ -234,5 +208,5 @@ func commitOwner(client daemonClient, owner string, rules []nft.Rule) ([]nft.Rul
 }
 
 func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
-	return commitOwner(client, "tui", rules)
+	return commitOwner(client, "panel", rules)
 }

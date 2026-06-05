@@ -23,6 +23,10 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list forwards: list nodes: %v", err)
 	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	hopInfo, err := db.ChainHopInfoMap(s.DB)
+	if err != nil {
+		log.Printf("list forwards: chain hop info: %v", err)
+	}
 
 	const perPage = 10
 	total := len(allForwards)
@@ -49,6 +53,7 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		"Forwards":   forwards,
 		"Nodes":      nodes,
 		"NodeByID":   nodeByID,
+		"HopInfo":    hopInfo,
 		"Total":      total,
 		"Page":       page,
 		"TotalPages": totalPages,
