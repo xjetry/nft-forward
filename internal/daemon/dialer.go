@@ -279,8 +279,10 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	}
 	helloAcked = true
 
-	// Trigger register_local if needed.
 	owners, meta := d.cfg.GetState()
+
+	// Legacy migration: first-time panel connection imports tui-segment
+	// rules into the panel DB.
 	if meta.MigratedAt.IsZero() && len(owners["tui"]) > 0 {
 		fwds := rulesToForwards(owners["tui"])
 		rlp, err := json.Marshal(wsproto.RegisterLocal{Forwards: fwds})
@@ -302,6 +304,17 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			if ack.Error == "" && d.cfg.OnRegister != nil {
 				d.cfg.OnRegister(fwds)
 			}
+		}
+	}
+
+	// Sync local panel-segment rules so the server DB knows about rules
+	// created via TUI while offline. Without this, the server dispatches
+	// an empty ruleset on connect and overwrites them.
+	if len(owners["panel"]) > 0 {
+		fwds := rulesToForwards(owners["panel"])
+		pp, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
+		if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp}); err != nil {
+			log.Printf("dialer: write initial panel sync: %v", err)
 		}
 	}
 
