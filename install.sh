@@ -252,11 +252,11 @@ persist_script() {
 do_update_script() {
   local stmp
   stmp="$(mktemp -d)"
-  trap 'rm -rf "$stmp"' EXIT
   note "下载最新 install.sh ..."
   curl -fsSL "$SCRIPT_URL" -o "$stmp/upgrade.sh" \
-    || die "下载失败: $SCRIPT_URL"
+    || { rm -rf "$stmp"; die "下载失败: $SCRIPT_URL"; }
   install -m 0755 "$stmp/upgrade.sh" "$SCRIPT_PATH"
+  rm -rf "$stmp"
   ok "升级脚本已更新: $SCRIPT_PATH"
 }
 
