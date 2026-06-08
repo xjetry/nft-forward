@@ -62,13 +62,12 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
 		return
 	}
-	targetPort, err := parseFormInt(r, "target_port")
+	targetIP, targetPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
 		return
 	}
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
-	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
 	comment := strings.TrimSpace(r.FormValue("comment"))
 	mode := strings.TrimSpace(r.FormValue("mode"))
 	if !validMode(mode) {
@@ -229,17 +228,15 @@ func (s *Server) createForwardFromCombo(w http.ResponseWriter, r *http.Request, 
 		s.flashRedirect(w, r, "协议须为 tcp 或 udp", "/forwards")
 		return
 	}
-	targetIP := strings.TrimSpace(r.FormValue("target_ip"))
-	targetPort, _ := strconv.Atoi(r.FormValue("target_port"))
-	if targetIP == "" || targetPort < 1 || targetPort > 65535 {
-		s.flashRedirect(w, r, "目标地址或端口无效", "/forwards")
+	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
+	if err != nil {
+		s.flashRedirect(w, r, err.Error(), "/forwards")
 		return
 	}
-	exitStr := fmt.Sprintf("%s:%d", targetIP, targetPort)
 
 	chainName := strings.TrimSpace(r.FormValue("chain_name"))
 	if chainName == "" {
-		chainName = combo.Name + "-" + targetIP
+		chainName = combo.Name + "-" + exitHost
 	}
 
 	hops := make([]db.HopInput, 0, len(comboHops))
@@ -251,8 +248,6 @@ func (s *Server) createForwardFromCombo(w http.ResponseWriter, r *http.Request, 
 		}
 		hops = append(hops, db.HopInput{NodeID: tun.NodeID, Mode: ch.Mode})
 	}
-
-	exitHost, exitPort, err := parseExit(exitStr)
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
 		return

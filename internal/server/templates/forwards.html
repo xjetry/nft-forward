@@ -63,9 +63,7 @@
       <label class="fl fwd-only">监听端口</label>
       <input class="inp mono fwd-only" name="listen_port" type="number" min="1" max="65535" required placeholder="例如 44751" style="max-width:200px">
       <label class="fl">目标</label>
-      <div class="field-row" style="max-width:480px">
-        <input class="inp mono" name="target_ip" required placeholder="目标 IPv4 或域名" style="flex:2"><span style="color:var(--ink-3)">:</span><input class="inp mono" name="target_port" type="number" min="1" max="65535" required placeholder="端口" style="flex:1">
-      </div>
+      <input class="inp mono" name="exit" required placeholder="host:port（如 1.2.3.4:8443）">
       <label class="fl fwd-only">备注 <span class="opt">（可选）</span></label>
       <input class="inp fwd-only" name="comment" placeholder="可选">
       <label class="fl combo-only" style="display:none">链路名称</label>

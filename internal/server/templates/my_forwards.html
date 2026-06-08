@@ -58,10 +58,8 @@
       <select class="inp fwd-only" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
       <label class="fl fwd-only">监听端口</label>
       <input class="inp mono fwd-only" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
-      <label class="fl">目标地址</label>
-      <input class="inp mono" name="target_ip" id="my-target-ip" required>
-      <label class="fl">目标端口</label>
-      <input class="inp mono" name="target_port" type="number" min="1" max="65535" required style="max-width:200px">
+      <label class="fl">目标</label>
+      <input class="inp mono" name="exit" id="my-exit" required placeholder="host:port">
       <label class="fl fwd-only">备注 <span class="opt">（可选）</span></label>
       <input class="inp fwd-only" name="comment" placeholder="可选">
       <label class="fl combo-only" style="display:none">链路名称 <span class="opt">（可选）</span></label>
@@ -88,7 +86,7 @@
       var sel = document.getElementById('my-tunnel-select');
       var proto = document.getElementById('my-proto-select');
       var port = document.getElementById('my-listen-port');
-      var ip = document.getElementById('my-target-ip');
+      var exit = document.getElementById('my-exit');
       window.syncTunnelHints=function(){
         var opt = sel.options[sel.selectedIndex];
         if (!opt||!opt.dataset.portStart) return;
@@ -96,7 +94,7 @@
         var mask = opt.dataset.protoMask, cidr = opt.dataset.cidr;
         port.placeholder = '范围 ' + s + '-' + e + '，留空自动分配';
         port.min = s; port.max = e;
-        ip.placeholder = '在 ' + cidr + ' 范围内';
+        exit.placeholder = cidr !== '0.0.0.0/0' ? 'CIDR ' + cidr + ' 内的 host:port' : 'host:port';
         Array.from(proto.options).forEach(function(o){
           if (mask === 'tcp+udp') { o.disabled = false; }
           else { o.disabled = (o.value !== mask); }
