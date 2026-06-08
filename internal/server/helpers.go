@@ -72,6 +72,7 @@ type PageInfo struct {
 	Page       int
 	TotalPages int
 	Total      int
+	Extra      string // additional query params prepended to page links, e.g. "tab=chain&"
 }
 
 const perPage = 10

@@ -7,17 +7,21 @@
 <div class="card">
   <div class="card-head">
     <h3>当前转发</h3><span class="desc">{{len .Forwards}} 条</span>
-    {{if and (not .Tenant.Disabled) .Tunnels}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-my-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新增转发</button></div>{{end}}
+    {{if and (not .Tenant.Disabled) .Tunnels}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-my-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button></div>{{end}}
+  </div>
+  <div class="tab-bar">
+    <a class="tab-btn{{if eq .Tab "normal"}} active{{end}}" href="?tab=normal">普通规则</a>
+    <a class="tab-btn{{if eq .Tab "chain"}} active{{end}}" href="?tab=chain">链路规则</a>
   </div>
   {{if .Forwards}}
+  {{if eq .Tab "normal"}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Forwards}}
     {{$n := index $.NodeByID .NodeID}}
     {{$t := index $.TunnelByID .TunnelID.Int64}}
-    {{$hi := index $.HopInfo .ID}}
-    <tr{{if .ChainID.Valid}} class="grp" data-chain="{{.ChainID.Int64}}"{{end}}>
+    <tr>
       <td style="font-weight:600">{{if $n}}{{$n.Name}}{{else}}—{{end}}</td>
       <td class="mono" style="color:var(--ink-2)">{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
       <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
@@ -25,13 +29,37 @@
       <td class="mono">:{{.ListenPort}}</td>
       <td class="mono"><span class="sens">{{.TargetIP}}:{{.TargetPort}}</span></td>
       <td class="num-col">{{fmtBytes .TotalBytes}}</td>
-      <td>{{if $hi}}<span class="note-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:-1px;margin-right:3px"><path d="M9.5 14.5l5-5"/><path d="M8 9l-2.5 2.5a3.5 3.5 0 0 0 5 5L13 14"/><path d="M16 15l2.5-2.5a3.5 3.5 0 0 0-5-5L11 10"/></svg>{{$hi.ChainName}} · 第{{add $hi.Position 1}}/{{$hi.TotalHops}}跳</span>{{else if .Comment}}<span class="note-text">{{.Comment}}</span>{{else}}<span class="note-none">—</span>{{end}}</td>
+      <td>{{if .Comment}}<span class="note-text">{{.Comment}}</span>{{else}}<span class="note-none">—</span>{{end}}</td>
       <td>{{if and $n (ne $n.RelayHost "")}}<button class="probe-btn" onclick="probeTarget(this,'{{$n.RelayHost}}:{{.ListenPort}}')">测试</button><span></span>{{else}}—{{end}}</td>
-      <td class="actions">{{if not .ChainID.Valid}}<form method="post" action="/my/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>{{end}}</td>
+      <td class="actions"><form method="post" action="/my/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form></td>
     </tr>
     {{end}}
     </tbody>
   </table>
+  {{else}}
+  <table class="tbl">
+    <thead><tr><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>链路</th><th>测试</th><th class="actions">操作</th></tr></thead>
+    <tbody>
+    {{range .Forwards}}
+    {{$n := index $.NodeByID .NodeID}}
+    {{$t := index $.TunnelByID .TunnelID.Int64}}
+    {{$hi := index $.HopInfo .ID}}
+    <tr class="grp" data-chain="{{.ChainID.Int64}}">
+      <td style="font-weight:600">{{if $n}}{{$n.Name}}{{else}}—{{end}}</td>
+      <td class="mono" style="color:var(--ink-2)">{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
+      <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
+      <td><span class="tag {{if eq .Mode "kernel"}}mode-k{{else}}mode-u{{end}}">{{.Mode}}</span></td>
+      <td class="mono">:{{.ListenPort}}</td>
+      <td class="mono"><span class="sens">{{.TargetIP}}:{{.TargetPort}}</span></td>
+      <td class="num-col">{{fmtBytes .TotalBytes}}</td>
+      <td>{{if $hi}}<span class="note-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:-1px;margin-right:3px"><path d="M9.5 14.5l5-5"/><path d="M8 9l-2.5 2.5a3.5 3.5 0 0 0 5 5L13 14"/><path d="M16 15l2.5-2.5a3.5 3.5 0 0 0-5-5L11 10"/></svg>{{$hi.ChainName}} · 第{{add $hi.Position 1}}/{{$hi.TotalHops}}跳</span>{{else}}<span class="note-none">—</span>{{end}}</td>
+      <td>{{if and $n (ne $n.RelayHost "")}}<button class="probe-btn" onclick="probeTarget(this,'{{$n.RelayHost}}:{{.ListenPort}}')">测试</button><span></span>{{else}}—{{end}}</td>
+      <td class="actions"></td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
   {{else}}<div class="empty"><h4>暂无转发</h4></div>{{end}}
 </div>
 

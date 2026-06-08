@@ -6,15 +6,15 @@
     {{if .Nodes}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button></div>{{end}}
   </div>
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchFwdTab('normal',this)">普通规则</button>
-    <button class="tab-btn" onclick="switchFwdTab('chain',this)">链路规则</button>
+    <a class="tab-btn{{if eq .Tab "normal"}} active{{end}}" href="?tab=normal">普通规则</a>
+    <a class="tab-btn{{if eq .Tab "chain"}} active{{end}}" href="?tab=chain">链路规则</a>
   </div>
   {{if .Forwards}}
-  <div class="tab-pane active" id="fwd-tab-normal">
+  {{if eq .Tab "normal"}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
-    {{range .Forwards}}{{if not .ChainID.Valid}}
+    {{range .Forwards}}
     <tr{{if .TenantID.Valid}} data-tenant="1"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td style="color:var(--ink-2)">{{if .TenantID.Valid}}{{$tn := index $.TenantByID .TenantID.Int64}}{{if $tn}}{{$tn.Name}}{{else}}#{{.TenantID.Int64}}{{end}}{{else}}admin{{end}}</td>
@@ -30,15 +30,14 @@
         <form method="post" action="/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
       </td>
     </tr>
-    {{end}}{{end}}
+    {{end}}
     </tbody>
   </table>
-  </div>
-  <div class="tab-pane" id="fwd-tab-chain">
+  {{else}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>链路</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
-    {{range .Forwards}}{{if .ChainID.Valid}}
+    {{range .Forwards}}
     <tr class="grp" data-chain="{{.ChainID.Int64}}"{{if .TenantID.Valid}} data-tenant="1"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td style="color:var(--ink-2)">{{if .TenantID.Valid}}{{$tn := index $.TenantByID .TenantID.Int64}}{{if $tn}}{{$tn.Name}}{{else}}#{{.TenantID.Int64}}{{end}}{{else}}admin{{end}}</td>
@@ -53,21 +52,13 @@
         <form method="post" action="/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('确认删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
       </td>
     </tr>
-    {{end}}{{end}}
+    {{end}}
     </tbody>
   </table>
-  </div>
+  {{end}}
   {{template "pager" .Pager}}
   {{else}}<div class="empty"><h4>暂无转发规则</h4></div>{{end}}
 </div>
-<script>
-function switchFwdTab(tab,btn){
-  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});
-  btn.classList.add('active');
-  document.getElementById('fwd-tab-normal').classList.toggle('active',tab==='normal');
-  document.getElementById('fwd-tab-chain').classList.toggle('active',tab==='chain');
-}
-</script>
 
 {{if .Nodes}}
 <div class="modal-bg" id="dlg-add-fwd">

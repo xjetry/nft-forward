@@ -30,7 +30,23 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 	tenantByID, _ := db.TenantsByID(s.DB)
 	combos, _ := db.ListTunnelCombos(s.DB)
 
-	forwards, pager := paginate(allForwards, r)
+	tab := r.URL.Query().Get("tab")
+	if tab != "chain" {
+		tab = "normal"
+	}
+	var filtered []*db.Forward
+	for _, f := range allForwards {
+		if tab == "chain" && f.ChainID.Valid {
+			filtered = append(filtered, f)
+		} else if tab == "normal" && !f.ChainID.Valid {
+			filtered = append(filtered, f)
+		}
+	}
+
+	forwards, pager := paginate(filtered, r)
+	if tab != "" {
+		pager.Extra = "tab=" + tab + "&"
+	}
 
 	s.render(w, "forwards.html", map[string]any{
 		"User":       u,
@@ -41,6 +57,7 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		"TenantByID": tenantByID,
 		"Combos":     combos,
 		"Pager":      pager,
+		"Tab":        tab,
 		"Flash":      flashFromCookie(w, r),
 	})
 }

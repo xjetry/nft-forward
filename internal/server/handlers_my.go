@@ -70,16 +70,29 @@ func (s *Server) tenantListForwards(w http.ResponseWriter, r *http.Request) {
 	tunnelByID := buildMap(tunnels, func(tn *db.Tunnel) int64 { return tn.ID })
 	hopInfo, _ := db.ChainHopInfoMap(s.DB)
 	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
+	tab := r.URL.Query().Get("tab")
+	if tab != "chain" {
+		tab = "normal"
+	}
+	var filtered []*db.Forward
+	for _, f := range forwards {
+		if tab == "chain" && f.ChainID.Valid {
+			filtered = append(filtered, f)
+		} else if tab == "normal" && !f.ChainID.Valid {
+			filtered = append(filtered, f)
+		}
+	}
 	s.render(w, "my_forwards.html", map[string]any{
 		"User":       u,
 		"Tenant":     t,
 		"Tunnels":    tunnels,
 		"Grants":     grants,
-		"Forwards":   forwards,
+		"Forwards":   filtered,
 		"NodeByID":   nodeByID,
 		"TunnelByID": tunnelByID,
 		"HopInfo":    hopInfo,
 		"Combos":     combos,
+		"Tab":        tab,
 		"Flash":      flashFromCookie(w, r),
 	})
 }
