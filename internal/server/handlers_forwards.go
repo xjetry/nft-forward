@@ -82,11 +82,6 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
 		return
 	}
-	listenPort, err := parseFormInt(r, "listen_port")
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
 	targetIP, targetPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
@@ -98,6 +93,31 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	if !validMode(mode) {
 		s.flashRedirect(w, r, "无效的转发模式", "/forwards")
 		return
+	}
+
+	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
+	if err != nil {
+		s.flashRedirect(w, r, "端口检查失败: "+err.Error(), "/forwards")
+		return
+	}
+	listenPortStr := strings.TrimSpace(r.FormValue("listen_port"))
+	var listenPort int
+	if listenPortStr == "" {
+		listenPort = db.PickFreePort(db.ChainPortMin, db.ChainPortMax, occupied)
+		if listenPort == 0 {
+			s.flashRedirect(w, r, fmt.Sprintf("端口段 %d-%d 内已无可用端口", db.ChainPortMin, db.ChainPortMax), "/forwards")
+			return
+		}
+	} else {
+		listenPort, err = strconv.Atoi(listenPortStr)
+		if err != nil || listenPort < 1 || listenPort > 65535 {
+			s.flashRedirect(w, r, "监听端口非法", "/forwards")
+			return
+		}
+		if occupied[listenPort] {
+			s.flashRedirect(w, r, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort), "/forwards")
+			return
+		}
 	}
 
 	f := &db.Forward{
@@ -122,15 +142,6 @@ func (s *Server) createForward(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := nft.Validate(testRule); err != nil {
 		s.flashRedirect(w, r, err.Error(), "/forwards")
-		return
-	}
-	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
-	if err != nil {
-		s.flashRedirect(w, r, "端口检查失败: "+err.Error(), "/forwards")
-		return
-	}
-	if occupied[listenPort] {
-		s.flashRedirect(w, r, fmt.Sprintf("端口 %d 已被占用（本地 TUI / 其他转发）", listenPort), "/forwards")
 		return
 	}
 	id, err := db.CreateForward(s.DB, f)

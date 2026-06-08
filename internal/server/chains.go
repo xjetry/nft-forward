@@ -71,17 +71,6 @@ func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "chains.html", map[string]any{"User": u, "Chains": views, "Nodes": nodes, "Combos": combos, "Flash": flashFromCookie(w, r)})
 }
 
-func (s *Server) newChain(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		log.Printf("new chain form: list nodes: %v", err)
-	}
-	s.render(w, "chain_form.html", map[string]any{
-		"User": u, "Nodes": nodes, "Chain": nil, "Hops": nil, "Flash": flashFromCookie(w, r),
-	})
-}
-
 // parseExit splits an "host:port" exit string. host may be IPv4 or hostname.
 func parseExit(raw string) (string, int, error) {
 	raw = strings.TrimSpace(raw)
@@ -127,29 +116,29 @@ func adminHopInputs(r *http.Request) ([]db.HopInput, error) {
 func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	if err := r.ParseForm(); err != nil {
-		s.flashRedirect(w, r, "表单解析失败", "/chains/new")
+		s.flashRedirect(w, r, "表单解析失败", "/chains")
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	if name == "" || (proto != "tcp" && proto != "udp") {
-		s.flashRedirect(w, r, "名称必填，协议须为 tcp 或 udp", "/chains/new")
+		s.flashRedirect(w, r, "名称必填，协议须为 tcp 或 udp", "/chains")
 		return
 	}
 	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/chains/new")
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	hops, err := adminHopInputs(r)
 	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/chains/new")
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	if ep := strings.TrimSpace(r.FormValue("entry_port")); ep != "" {
 		port, err := strconv.Atoi(ep)
 		if err != nil || port < 1 || port > 65535 {
-			s.flashRedirect(w, r, "入口端口非法", "/chains/new")
+			s.flashRedirect(w, r, "入口端口非法", "/chains")
 			return
 		}
 		hops[0].DesiredPort = port
@@ -157,24 +146,24 @@ func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := s.DB.Begin()
 	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/chains/new")
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	defer tx.Rollback()
 	c := &db.Chain{Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
 	id, err := db.CreateChain(tx, c)
 	if err != nil {
-		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/chains/new")
+		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/chains")
 		return
 	}
 	c.ID = id
 	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
 	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/chains/new")
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		s.flashRedirect(w, r, err.Error(), "/chains/new")
+		s.flashRedirect(w, r, err.Error(), "/chains")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "chain.create", strconv.FormatInt(id, 10), name)

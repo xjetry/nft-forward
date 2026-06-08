@@ -39,28 +39,6 @@ func (s *Server) tenantListChains(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) tenantNewChain(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	tunnels, _, err := db.ListTunnelsForTenant(s.DB, t.ID)
-	if err != nil {
-		log.Printf("tenant new chain %d: list tunnels: %v", t.ID, err)
-	}
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		log.Printf("tenant new chain %d: list nodes: %v", t.ID, err)
-	}
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
-	s.render(w, "my_chain_form.html", map[string]any{
-		"User": u, "Tunnels": tunnels, "NodeByID": nodeByID, "Combos": combos, "Flash": flashFromCookie(w, r),
-	})
-}
-
 // tenantHopInputs reads hop_tunnel[] + hop_mode[], verifies each tunnel is
 // granted to the tenant, and derives the node from the tunnel. Combo selections
 // (prefixed "combo:") are expanded into their constituent hops.
@@ -140,33 +118,33 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		setFlash(w, "表单解析失败")
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	proto := strings.ToLower(strings.TrimSpace(r.FormValue("proto")))
 	if name == "" || (proto != "tcp" && proto != "udp") {
 		setFlash(w, "名称必填，协议须为 tcp 或 udp")
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	exitHost, exitPort, err := parseExit(r.FormValue("exit"))
 	if err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	hops, lastTunnel, err := s.tenantHopInputs(r, t.ID)
 	if err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	if ep := strings.TrimSpace(r.FormValue("entry_port")); ep != "" {
 		port, err := strconv.Atoi(ep)
 		if err != nil || port < 1 || port > 65535 {
 			setFlash(w, "入口端口非法")
-			http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+			http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 			return
 		}
 		hops[0].DesiredPort = port
@@ -174,20 +152,20 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 	// 出口必须落在末跳通道的 CIDR 白名单内（中间跳目标是受信中继地址，免检）。
 	if err := exitAllowedByTunnel(lastTunnel, exitHost); err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	// 配额：新链路新增 len(hops) 条 forward（每个通道 1 条）。
 	if err := s.checkTenantChainQuota(t, hops, 0); err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 
 	tx, err := s.DB.Begin()
 	if err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	c := &db.Chain{TenantID: nullInt64(t.ID), Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
@@ -195,7 +173,7 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		tx.Rollback()
 		setFlash(w, "创建失败: "+err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	c.ID = id
@@ -203,12 +181,12 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		tx.Rollback()
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		setFlash(w, err.Error())
-		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+		http.Redirect(w, r, "/my/chains", http.StatusSeeOther)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "chain.tenant_create", strconv.FormatInt(id, 10), name)

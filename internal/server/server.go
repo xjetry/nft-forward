@@ -419,7 +419,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/settings", s.saveSettings)
 
 		r.Get("/chains", s.listChains)
-		r.Get("/chains/new", s.newChain)
 		r.Post("/chains", s.createChain)
 		r.Get("/chains/{id}", s.showChain)
 		r.Post("/chains/{id}", s.saveChain)
@@ -468,7 +467,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/my/forwards/{id}/delete", s.tenantDeleteForward)
 
 		r.Get("/my/chains", s.tenantListChains)
-		r.Get("/my/chains/new", s.tenantNewChain)
 		r.Post("/my/chains", s.tenantCreateChain)
 		r.Post("/my/chains/{id}/delete", s.tenantDeleteChain)
 	})
