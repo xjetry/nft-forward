@@ -88,7 +88,8 @@
       document.getElementById('my-fwd-single').style.display=isCombo?'none':'';
       document.getElementById('my-fwd-comment').style.display=isCombo?'none':'';
       document.getElementById('my-combo-name').style.display=isCombo?'':'none';
-      document.getElementById('my-fwd-proto').style.display=isCombo?'none':'';
+      var tcpUdp=document.getElementById('my-tcp-udp');
+      if(tcpUdp){tcpUdp.style.display=isCombo?'none':'';if(isCombo&&tcpUdp.selected)document.getElementById('my-proto-select').value='tcp';}
       var lp=document.getElementById('my-listen-port');if(lp)lp.required=!isCombo;
       if(!isCombo)syncTunnelHints();
     }

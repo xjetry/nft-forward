@@ -49,11 +49,13 @@
         {{range .Nodes}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
         </optgroup>
       </select>
+    </div>
+    <div class="form-grid" id="adm-fwd-proto">
       <label class="fl">协议</label>
       <div class="seg" style="max-width:380px">
         <label><input type="radio" name="proto" value="tcp" checked><span>TCP</span></label>
         <label><input type="radio" name="proto" value="udp"><span>UDP</span></label>
-        <label><input type="radio" name="proto" value="tcp+udp" id="fwd-tcp-udp"><span>TCP+UDP</span></label>
+        <label id="fwd-tcp-udp-label"><input type="radio" name="proto" value="tcp+udp" id="fwd-tcp-udp"><span>TCP+UDP</span></label>
       </div>
     </div>
     <div class="form-grid" id="adm-fwd-single">
@@ -89,7 +91,8 @@
       document.getElementById('adm-fwd-single').style.display=isCombo?'none':'';
       document.getElementById('adm-fwd-comment').style.display=isCombo?'none':'';
       document.getElementById('adm-combo-name').style.display=isCombo?'':'none';
-      document.getElementById('fwd-tcp-udp').parentElement.style.display=isCombo?'none':'';
+      document.getElementById('fwd-tcp-udp-label').style.display=isCombo?'none':'';
+      if(isCombo&&document.getElementById('fwd-tcp-udp').checked)document.querySelector('input[name=proto][value=tcp]').checked=true;
       var lp=document.querySelector('#adm-fwd-single input[name=listen_port]');
       if(lp)lp.required=!isCombo;
     }
