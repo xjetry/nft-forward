@@ -28,6 +28,7 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list forwards: chain hop info: %v", err)
 	}
 	tenantByID, _ := db.TenantsByID(s.DB)
+	combos, _ := db.ListTunnelCombos(s.DB)
 
 	forwards, pager := paginate(allForwards, r)
 
@@ -38,6 +39,7 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		"NodeByID":   nodeByID,
 		"HopInfo":    hopInfo,
 		"TenantByID": tenantByID,
+		"Combos":     combos,
 		"Pager":      pager,
 		"Flash":      flashFromCookie(w, r),
 	})
