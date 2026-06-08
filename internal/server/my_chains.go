@@ -30,7 +30,13 @@ func (s *Server) tenantListChains(w http.ResponseWriter, r *http.Request) {
 	for _, c := range chains {
 		views = append(views, s.buildChainView(c))
 	}
-	s.render(w, "my_chains.html", map[string]any{"User": u, "Chains": views, "Flash": flashFromCookie(w, r)})
+	tunnels, _, _ := db.ListTunnelsForTenant(s.DB, t.ID)
+	nodes, _ := db.ListNodes(s.DB)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
+	s.render(w, "my_chains.html", map[string]any{
+		"User": u, "Chains": views, "Tunnels": tunnels, "NodeByID": nodeByID, "Combos": combos, "Flash": flashFromCookie(w, r),
+	})
 }
 
 func (s *Server) tenantNewChain(w http.ResponseWriter, r *http.Request) {

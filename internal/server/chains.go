@@ -61,7 +61,8 @@ func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	s.render(w, "chains.html", map[string]any{"User": u, "Chains": views, "Flash": flashFromCookie(w, r)})
+	nodes, _ := db.ListNodes(s.DB)
+	s.render(w, "chains.html", map[string]any{"User": u, "Chains": views, "Nodes": nodes, "Flash": flashFromCookie(w, r)})
 }
 
 func (s *Server) newChain(w http.ResponseWriter, r *http.Request) {

@@ -1,7 +1,10 @@
 {{template "header" (mkmap "Title" "转发规则" "Nav" "forwards" "Crumb" "转发 / 转发规则" "User" .User "Flash" .Flash)}}
 
 <div class="card">
-  <div class="card-head"><h3>当前规则</h3><span class="desc">{{.Pager.Total}} 条转发规则</span></div>
+  <div class="card-head">
+    <h3>当前规则</h3><span class="desc">{{.Pager.Total}} 条转发规则</span>
+    {{if .Nodes}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button></div>{{end}}
+  </div>
   {{if .Forwards}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th class="actions">操作</th></tr></thead>
@@ -28,10 +31,12 @@
   {{else}}<div class="empty"><h4>暂无转发规则</h4></div>{{end}}
 </div>
 
+{{if .Nodes}}
+<div class="modal-bg" id="dlg-add-fwd">
+<div class="modal">
 <div class="card">
   <div class="card-head"><h3>添加转发</h3><span class="desc">管理员快速通道，无 tenant 约束</span></div>
   <div class="card-body">
-    {{if .Nodes}}
     <form method="post" action="/forwards">
     <div class="form-grid">
       <label class="fl">节点</label>
@@ -58,11 +63,13 @@
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>
-      <span class="hint">用户自助添加请用 <a class="strong-link" href="/tenants">用户面板</a>。</span>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-add-fwd')">取消</button>
     </div>
     </form>
-    {{else}}<div class="empty"><h4>请先<a class="strong-link" href="/nodes">添加节点</a></h4></div>{{end}}
   </div>
 </div>
+</div>
+</div>
+{{end}}
 
 {{template "footer" (mkmap "User" .User)}}

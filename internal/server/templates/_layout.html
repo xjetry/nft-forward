@@ -299,6 +299,16 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .copy-wrap.copied::after{content:'已复制';position:absolute;top:-26px;left:50%;transform:translateX(-50%);background:#11151c;color:#e8edf4;padding:2px 8px;border-radius:5px;font-size:11px;white-space:nowrap;pointer-events:none;animation:fadeout 1.2s forwards}
 @keyframes fadeout{0%{opacity:1}70%{opacity:1}100%{opacity:0}}
 
+/* modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:200;display:none;align-items:flex-start;justify-content:center;padding:60px 20px;overflow-y:auto}
+.modal-bg.open{display:flex}
+.modal{background:#fff;border-radius:var(--r);box-shadow:0 20px 60px rgba(0,0,0,.2);width:100%;max-width:680px;animation:modalIn .2s ease}
+@keyframes modalIn{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:none}}
+.modal .card{box-shadow:none;border-radius:var(--r)}
+.modal .card-head{padding:20px 24px 16px}
+.modal .card-body{padding:16px 24px 24px}
+.modal .form-foot{border-top:1px solid var(--line-soft);padding-top:16px;margin-top:16px}
+
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#11151c;color:#e8edf4;padding:11px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;z-index:100;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast svg{width:16px;height:16px;color:#4ade80}
@@ -470,6 +480,9 @@ function buildSelect(sel){
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
 document.addEventListener('click',closeAllCS);
+function openModal(id){document.getElementById(id).classList.add('open')}
+function closeModal(id){document.getElementById(id).classList.remove('open')}
+document.querySelectorAll('.modal-bg').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open')})});
 document.querySelectorAll('select.inp').forEach(buildSelect);
 (function(){
   var rows=document.querySelectorAll('tr.grp[data-chain]');

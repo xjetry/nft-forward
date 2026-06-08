@@ -3,7 +3,7 @@
 <div class="card">
   <div class="card-head">
     <h3>链路列表</h3>
-    <div class="right"><a class="btn btn-primary btn-sm" href="/my/chains/new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</a></div>
+    {{if .Tunnels}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-my-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</button></div>{{end}}
   </div>
   {{if .Chains}}
   <table class="tbl">
@@ -24,5 +24,69 @@
   </table>
   {{else}}<div class="empty"><h4>尚无链路</h4><p>点击上方「新建链路」创建。</p></div>{{end}}
 </div>
+
+{{if .Tunnels}}
+<div class="modal-bg" id="dlg-my-chain">
+<div class="modal">
+<div class="card">
+  <div class="card-head"><h3>新建中继链路</h3></div>
+  <div class="card-body">
+    <form method="post" action="/my/chains">
+    <div class="form-grid">
+      <label class="fl">名称</label>
+      <input class="inp" name="name" required>
+      <label class="fl">协议</label>
+      <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+      <label class="fl">出口</label>
+      <input class="inp mono" name="exit" required placeholder="目标 host:port">
+    </div>
+
+    <div class="sec-title" style="margin-top:20px">中继通道（按顺序）</div>
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:100%" id="hops"></div>
+    <p style="color:var(--ink-3);font-size:12.5px;margin-top:10px">入口 IP:端口由系统自动生成。每一跳消耗对应通道一条转发配额。</p>
+
+    <div class="form-foot" style="gap:10px">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addHop()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加一跳</button>
+      <button type="submit" class="btn btn-primary">创建链路</button>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-my-chain')">取消</button>
+    </div>
+    </form>
+
+    <template id="hopRow">
+    <div class="hop-row" style="display:flex;align-items:center;gap:12px">
+      <div class="hop-ctrl">
+        <button type="button" onclick="moveHop(this,-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+        <button type="button" onclick="moveHop(this,1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
+      </div>
+      <select class="inp" name="hop_tunnel" required style="flex:1" onchange="toggleComboMode(this)">
+        <option value="">— 选择通道 —</option>
+        {{if .Combos}}<optgroup label="组合通道">
+        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
+        </optgroup>{{end}}
+        <optgroup label="单通道">
+        {{$nb := .NodeByID}}
+        {{range .Tunnels}}{{$n := index $nb .NodeID}}<option value="{{.ID}}"{{if and $n (eq $n.RelayHost "")}} disabled{{end}}>{{.Name}} @ {{if $n}}{{$n.Name}}{{if eq $n.RelayHost ""}}（节点未设中继地址）{{end}}{{else}}—{{end}}（{{.PortStart}}-{{.PortEnd}}）</option>{{end}}
+        </optgroup>
+      </select>
+      <select class="inp" name="hop_mode" style="width:200px">
+        <option value="userspace">用户态(split-TCP)</option>
+        <option value="kernel">内核态(零拷贝)</option>
+      </select>
+      <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.hop-row').remove()">删除</button>
+    </div>
+    </template>
+
+    <script>
+    function addHop(){document.getElementById('hops').appendChild(document.getElementById('hopRow').content.cloneNode(true));syncModes();}
+    function moveHop(btn,dir){var row=btn.closest('.hop-row'),parent=row.parentNode;if(dir<0&&row.previousElementSibling)parent.insertBefore(row,row.previousElementSibling);if(dir>0&&row.nextElementSibling)parent.insertBefore(row.nextElementSibling,row);}
+    function syncModes(){var udp=document.getElementById('proto').value==='udp';document.querySelectorAll('select[name=hop_mode]').forEach(function(s){var us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
+    function toggleComboMode(sel){var ms=sel.closest('.hop-row').querySelector('select[name=hop_mode]');if(ms)ms.style.visibility=sel.value.startsWith('combo:')? 'hidden':'visible';}
+    addHop();
+    </script>
+  </div>
+</div>
+</div>
+</div>
+{{end}}
 
 {{template "footer" (mkmap "User" .User)}}

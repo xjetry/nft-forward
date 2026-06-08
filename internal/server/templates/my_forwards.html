@@ -5,7 +5,10 @@
 {{end}}
 
 <div class="card">
-  <div class="card-head"><h3>当前转发</h3><span class="desc">{{len .Forwards}} 条</span></div>
+  <div class="card-head">
+    <h3>当前转发</h3><span class="desc">{{len .Forwards}} 条</span>
+    {{if and (not .Tenant.Disabled) .Tunnels}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-my-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新增转发</button></div>{{end}}
+  </div>
   {{if .Forwards}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th class="actions">操作</th></tr></thead>
@@ -32,6 +35,8 @@
 </div>
 
 {{if and (not .Tenant.Disabled) .Tunnels}}
+<div class="modal-bg" id="dlg-my-fwd">
+<div class="modal">
 <div class="card">
   <div class="card-head"><h3>新增转发</h3></div>
   <div class="card-body">
@@ -47,7 +52,7 @@
       <select class="inp" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
       <label class="fl">监听端口</label>
       <input class="inp mono" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
-      <label class="fl">目标 IPv4</label>
+      <label class="fl">目标地址</label>
       <input class="inp mono" name="target_ip" id="my-target-ip" required>
       <label class="fl">目标端口</label>
       <input class="inp mono" name="target_port" type="number" min="1" max="65535" required style="max-width:200px">
@@ -56,7 +61,8 @@
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit">添加</button>
-      <span class="hint">监听端口留空则在所选通道允许的端口段内随机分配；目标地址必须落在 CIDR 白名单内。</span>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-my-fwd')">取消</button>
+      <span class="hint">监听端口留空则自动分配；目标地址须在 CIDR 白名单内。</span>
     </div>
     </form>
     <script>
@@ -77,15 +83,15 @@
           if (mask === 'tcp+udp') { o.disabled = false; }
           else { o.disabled = (o.value !== mask); }
         });
-        if (proto.options[proto.selectedIndex].disabled) {
-          proto.value = mask;
-        }
+        if (proto.options[proto.selectedIndex].disabled) proto.value = mask;
       }
       sel.addEventListener('change', syncTunnelHints);
       syncTunnelHints();
     })();
     </script>
   </div>
+</div>
+</div>
 </div>
 {{end}}
 
