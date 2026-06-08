@@ -62,10 +62,13 @@
   <div class="card-body">
     <p style="font-size:13px;color:var(--ink-2);margin-bottom:10px">在目标节点（已安装 nftables，root 用户）执行下列命令即可：</p>
     {{if not .PanelURLConfigured}}<div class="flash">⚠ 尚未设置面板地址，下面用你当前访问的域名 <code>{{.PanelURL}}</code> 推断。如 agent 走不同地址，请到<a href="/nodes">节点页</a>设置后再复制。</div>{{end}}
-    <pre>curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh
+    <div style="position:relative">
+    <pre id="install-cmd">curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh
 sudo bash install.sh agent \
   --panel-url {{.PanelURL}} \
   --token {{.Node.Secret}}</pre>
+    <button type="button" class="btn btn-ghost btn-sm" style="position:absolute;top:8px;right:8px;font-size:12px;padding:3px 10px" onclick="var t=document.getElementById('install-cmd').textContent;navigator.clipboard.writeText(t);this.textContent='已复制';var b=this;setTimeout(function(){b.textContent='复制'},1500)">复制</button>
+    </div>
     <p style="color:var(--ink-3);font-size:12.5px;margin-top:10px">install.sh 会装好 daemon、把 token 写入 <code>/etc/nft-forward/panel.token</code>、并把 daemon unit 配成 <code>--connect</code> 到该面板的 <code>/v1/agents</code>。无需在节点本机开放任何端口。</p>
   </div>
 </div>
