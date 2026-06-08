@@ -381,7 +381,7 @@ func listForwardsWhere(d *sql.DB, where string, args ...any) ([]*Forward, error)
 	if where != "" {
 		q += " WHERE " + where
 	}
-	q += ` ORDER BY COALESCE(chain_id, 999999999), chain_id IS NULL, listen_port, node_id`
+	q += ` ORDER BY COALESCE(chain_id, 999999999), chain_id IS NULL, (SELECT h.position FROM chain_hops h WHERE h.chain_id = forwards.chain_id AND h.node_id = forwards.node_id), listen_port, node_id`
 	return queryAll(d, q, scanForward, args...)
 }
 
