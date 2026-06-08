@@ -311,6 +311,12 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .modal .card-body{padding:16px 24px 24px}
 .modal .form-foot{border-top:1px solid var(--line-soft);padding-top:16px;margin-top:16px}
 
+.probe-btn{cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--line-soft);background:#fff;color:var(--ink-2);white-space:nowrap}
+.probe-btn:hover{border-color:var(--accent);color:var(--accent)}
+.probe-ok{color:var(--green);font-weight:600;font-size:11px}
+.probe-fail{color:var(--red);font-size:11px}
+.probe-loading{color:var(--ink-3);font-size:11px}
+
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#11151c;color:#e8edf4;padding:11px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;z-index:100;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast svg{width:16px;height:16px;color:#4ade80}
@@ -481,6 +487,14 @@ function buildSelect(sel){
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
+function probeTarget(btn,target){
+  var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
+  span.className='probe-loading';span.textContent='测试中…';
+  fetch('/api/probe?target='+encodeURIComponent(target)).then(function(r){return r.json()}).then(function(d){
+    if(d.ok){span.className='probe-ok';span.textContent=d.latency_ms+'ms';}
+    else{span.className='probe-fail';span.textContent='不通';}
+  }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});
+}
 (function(){
   var map={'节点':'/nodes','通道':'/tunnels','组合通道':'/combos','组合':'/combos','用户':'/tenants','转发规则':'/forwards','中继链路':'/chains','账号':'/users','我的转发':'/my/forwards','我的链路':'/my/chains','概览':'/'};
   var el=document.getElementById('crumb-bar');

@@ -7,7 +7,7 @@
   </div>
   {{if .Chains}}
   <table class="tbl">
-    <thead><tr><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th class="actions">操作</th></tr></thead>
+    <thead><tr><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Chains}}
     <tr>
@@ -15,6 +15,7 @@
       <td><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else}}udp{{end}}">{{upper .Chain.Proto}}</span></td>
       <td class="mono" style="color:var(--ink-2)">{{.Path}}</td>
       <td class="mono" style="font-weight:600">{{if ne .Entry "—"}}<span class="copy-wrap" onclick="navigator.clipboard.writeText(this.dataset.v).then(function(){var el=event.target.closest('.copy-wrap');el.classList.add('copied');setTimeout(function(){el.classList.remove('copied')},1200)})" data-v="{{.Entry}}" title="点击复制">{{.Entry}} <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px;opacity:.4;cursor:pointer"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>{{else}}—{{end}}</td>
+      <td>{{if ne .Entry "—"}}<button class="probe-btn" onclick="probeTarget(this,'{{.Entry}}')">测试</button><span></span>{{else}}—{{end}}</td>
       <td class="actions">
         <form method="post" action="/my/chains/{{.Chain.ID}}/delete" class="inline" onsubmit="return confirm('删除该链路？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
       </td>

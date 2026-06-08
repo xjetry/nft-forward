@@ -1,12 +1,14 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nft-forward/internal/db"
 )
@@ -148,6 +150,11 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 		MaxForwards:       maxForwards,
 		TrafficQuotaBytes: quotaMB * 1024 * 1024,
 	}
+	if raw := strings.TrimSpace(r.FormValue("expires_at")); raw != "" {
+		if et, err := time.Parse("2006-01-02", raw); err == nil {
+			t.ExpiresAt = sql.NullInt64{Int64: et.Unix(), Valid: true}
+		}
+	}
 	id, err := db.CreateTenant(s.DB, t)
 	if err != nil {
 		s.flashRedirect(w, r, "创建失败: "+err.Error(), "/tenants")
@@ -281,6 +288,35 @@ func (s *Server) setTenantQuotaBytes(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "tenant.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(bytes, 10))
 	s.flashRedirect(w, r, fmt.Sprintf("配额已更新为 %d 字节", bytes), fmt.Sprintf("/tenants/%d", id))
+}
+
+func (s *Server) setTenantExpiry(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	raw := strings.TrimSpace(r.FormValue("expires_at"))
+	var expiresAt int64
+	if raw != "" {
+		t, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			s.flashRedirect(w, r, "日期格式无效（需 YYYY-MM-DD）", fmt.Sprintf("/tenants/%d", id))
+			return
+		}
+		expiresAt = t.Unix()
+	}
+	if _, err := s.DB.Exec(`UPDATE tenants SET expires_at=? WHERE id=?`, expiresAt, id); err != nil {
+		s.flashRedirect(w, r, err.Error(), fmt.Sprintf("/tenants/%d", id))
+		return
+	}
+	msg := "已清除到期时间"
+	if expiresAt > 0 {
+		msg = "到期时间已设为 " + raw
+	}
+	db.WriteAudit(s.DB, u.ID, "tenant.set_expiry", strconv.FormatInt(id, 10), raw)
+	s.flashRedirect(w, r, msg, fmt.Sprintf("/tenants/%d", id))
 }
 
 func (s *Server) resetTenantTraffic(w http.ResponseWriter, r *http.Request) {

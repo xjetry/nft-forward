@@ -68,6 +68,15 @@ func New(d *sql.DB) (*Server, error) {
 		},
 		"upper": strings.ToUpper,
 		"add": func(a, b int) int { return a + b },
+		"date": func(ts int64) string {
+			return time.Unix(ts, 0).Format("2006-01-02")
+		},
+		"dateInput": func(ts int64) string {
+			return time.Unix(ts, 0).Format("2006-01-02")
+		},
+		"expired": func(ts int64) bool {
+			return ts > 0 && ts < time.Now().Unix()
+		},
 		"sub": func(a, b int) int { return a - b },
 		"pages": func(total, cur int) []int {
 			var out []int
@@ -386,6 +395,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/", s.dashboard)
 		r.Get("/change-password", s.getChangePassword)
 		r.Post("/change-password", s.postChangePassword)
+		r.Get("/api/probe", s.probeEndpoint)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -432,6 +442,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tenants/{id}/toggle", s.toggleTenant)
 		r.Post("/tenants/{id}/reset-traffic", s.resetTenantTraffic)
 		r.Post("/tenants/{id}/quota-bytes", s.setTenantQuotaBytes)
+		r.Post("/tenants/{id}/expiry", s.setTenantExpiry)
 		r.Post("/tenants/{id}/grants", s.grantTenantTunnel)
 		r.Post("/tenants/{id}/grants/{tunnelID}/delete", s.revokeTenantTunnel)
 		r.Post("/tenants/{id}/combo-grants", s.grantTenantCombo)

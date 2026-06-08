@@ -7,13 +7,19 @@
       <label class="fl">最大转发数</label><div class="mono">{{.Tenant.MaxForwards}}</div>
       <label class="fl">流量配额</label><div class="mono">{{if eq .Tenant.TrafficQuotaBytes 0}}∞（不限）{{else}}{{div .Tenant.TrafficQuotaBytes 1048576}} MB{{end}}</div>
       <label class="fl">已用流量</label><div class="mono">{{div .Tenant.TrafficUsedBytes 1048576}} MB {{if gt .Tenant.TrafficQuotaBytes 0}}({{pct .Tenant.TrafficUsedBytes .Tenant.TrafficQuotaBytes}}%){{end}}</div>
+      <label class="fl">到期时间</label>
+      <div class="mono">{{if and .Tenant.ExpiresAt.Valid (gt .Tenant.ExpiresAt.Int64 0)}}{{date .Tenant.ExpiresAt.Int64}}{{if expired .Tenant.ExpiresAt.Int64}} <span class="pill pill-red">已过期</span>{{end}}{{else}}永不过期{{end}}</div>
       <label class="fl">状态</label>
       <div>
         {{if .Tenant.Disabled}}<span class="pill pill-amber">已禁用</span>&nbsp;原因：{{nullstr .Tenant.DisableReason}}
         {{else}}<span class="pill pill-green">正常</span>{{end}}
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:18px">
+    <div style="display:flex;gap:8px;align-items:center;margin-top:18px;flex-wrap:wrap">
+      <form method="post" action="/tenants/{{.Tenant.ID}}/expiry" class="inline" style="display:flex;gap:6px;align-items:center">
+        <input class="inp mono" name="expires_at" type="date" value="{{if and .Tenant.ExpiresAt.Valid (gt .Tenant.ExpiresAt.Int64 0)}}{{dateInput .Tenant.ExpiresAt.Int64}}{{end}}" style="width:160px">
+        <button class="btn btn-ghost btn-sm" type="submit">设到期</button>
+      </form>
       <form method="post" action="/tenants/{{.Tenant.ID}}/toggle" class="inline"><button class="btn btn-ghost btn-sm" type="submit">{{if .Tenant.Disabled}}重新启用{{else}}禁用{{end}}</button></form>
       <form method="post" action="/tenants/{{.Tenant.ID}}/reset-traffic" class="inline" onsubmit="return confirm('清零已用流量并重新启用？');"><button class="btn btn-ghost btn-sm" type="submit">重置流量并启用</button></form>
       <form method="post" action="/tenants/{{.Tenant.ID}}/delete" class="inline" onsubmit="return confirm('删除用户？关联的转发将被一并清除。');"><button class="btn btn-danger btn-sm" type="submit">删除用户</button></form>
