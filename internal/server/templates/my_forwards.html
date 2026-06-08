@@ -54,24 +54,18 @@
       </select>
       <label class="fl">协议</label>
       <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp" id="my-tcp-udp">TCP+UDP</option></select>
-      <div id="my-single-fields">
-      <label class="fl">模式</label>
-      <select class="inp" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
-      <label class="fl">监听端口</label>
-      <input class="inp mono" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
-      </div>
+      <label class="fl fwd-only">模式</label>
+      <select class="inp fwd-only" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
+      <label class="fl fwd-only">监听端口</label>
+      <input class="inp mono fwd-only" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
       <label class="fl">目标地址</label>
       <input class="inp mono" name="target_ip" id="my-target-ip" required>
       <label class="fl">目标端口</label>
       <input class="inp mono" name="target_port" type="number" min="1" max="65535" required style="max-width:200px">
-      <div id="my-single-comment">
-      <label class="fl">备注 <span class="opt">（可选）</span></label>
-      <input class="inp" name="comment" placeholder="可选">
-      </div>
-      <div id="my-combo-name" style="display:none">
-      <label class="fl">链路名称 <span class="opt">（可选）</span></label>
-      <input class="inp" name="chain_name" placeholder="自动命名或手填">
-      </div>
+      <label class="fl fwd-only">备注 <span class="opt">（可选）</span></label>
+      <input class="inp fwd-only" name="comment" placeholder="可选">
+      <label class="fl combo-only" style="display:none">链路名称 <span class="opt">（可选）</span></label>
+      <input class="inp combo-only" name="chain_name" placeholder="自动命名或手填" style="display:none">
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit">添加</button>
@@ -83,11 +77,11 @@
     function toggleMyFwdMode(){
       var sel=document.getElementById('my-tunnel-select');
       var isCombo=sel.value.startsWith('combo:');
-      document.getElementById('my-single-fields').style.display=isCombo?'none':'';
-      document.getElementById('my-single-comment').style.display=isCombo?'none':'';
-      document.getElementById('my-combo-name').style.display=isCombo?'':'none';
+      document.querySelectorAll('#dlg-my-fwd .fwd-only').forEach(function(e){e.style.display=isCombo?'none':''});
+      document.querySelectorAll('#dlg-my-fwd .combo-only').forEach(function(e){e.style.display=isCombo?'':'none'});
       var tcpUdp=document.getElementById('my-tcp-udp');
       if(tcpUdp)tcpUdp.parentElement.style.display=isCombo?'none':'';
+      var lp=document.getElementById('my-listen-port');if(lp)lp.required=!isCombo;
       if(!isCombo)syncTunnelHints();
     }
     (function(){
