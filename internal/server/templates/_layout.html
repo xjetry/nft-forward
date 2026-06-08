@@ -442,6 +442,7 @@ pre code{background:transparent;padding:0}
         <div class="page-title">{{.Title}}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
+      <span class="blur-tog" id="showAllToggle" onclick="toggleShowAll()" title="显示所有用户的规则" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 0 1 0 5.5M18 19a5 5 0 0 0-3-4.6"/></svg><span>所有用户</span></span>
       <span class="blur-tog" id="blurToggle" onclick="toggleBlur()" title="模糊敏感信息"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="blurLabel">脱敏</span></span>
       </div>
     </div>
@@ -542,6 +543,18 @@ function buildSelect(sel){
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
+function toggleShowAll(){
+  var u=new URL(location.href);var cur=u.searchParams.get('owner');
+  u.searchParams.set('owner',cur==='all'?'admin':'all');u.searchParams.delete('page');
+  location.href=u.toString();
+}
+(function(){
+  var tog=document.getElementById('showAllToggle');
+  if(tog&&/\/(forwards|chains)/.test(location.pathname)){
+    tog.style.display='';
+    if(new URL(location.href).searchParams.get('owner')==='all')tog.classList.add('on');
+  }
+})();
 function probeCombo(btn,targets){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';

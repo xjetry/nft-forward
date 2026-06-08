@@ -8,7 +8,6 @@
   <div class="tab-bar">
     <a class="tab-btn{{if eq .Tab "normal"}} active{{end}}" href="?tab=normal&owner={{.Owner}}">普通规则</a>
     <a class="tab-btn{{if eq .Tab "chain"}} active{{end}}" href="?tab=chain&owner={{.Owner}}">链路规则</a>
-    <div style="margin-left:auto">{{if eq .Owner "admin"}}<a class="tab-btn" href="?tab={{.Tab}}&owner=all">显示所有用户</a>{{else}}<a class="tab-btn active" href="?tab={{.Tab}}&owner=admin">显示所有用户</a>{{end}}</div>
   </div>
   {{if .Forwards}}
   {{if eq .Tab "normal"}}
