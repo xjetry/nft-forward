@@ -3,10 +3,7 @@
 <div class="card">
   <div class="card-head">
     <h3>所有链路</h3><span class="desc">{{len .Chains}} 条中继链路</span>
-    <div class="right" style="display:flex;gap:10px;align-items:center">
-      <label style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="chain-show-all" onchange="filterOwner('chain-tbody',this.checked)"> 显示所有用户</label>
-      {{if .Nodes}}<button class="btn btn-primary btn-sm" onclick="openModal('dlg-new-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</button>{{end}}
-    </div>
+    {{if .Nodes}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-new-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</button></div>{{end}}
   </div>
   {{if .Chains}}
   <table class="tbl">

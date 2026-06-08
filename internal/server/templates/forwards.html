@@ -3,10 +3,7 @@
 <div class="card">
   <div class="card-head">
     <h3>当前规则</h3><span class="desc">{{.Pager.Total}} 条转发规则</span>
-    <div class="right" style="display:flex;gap:10px;align-items:center">
-      <label style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="fwd-show-all" onchange="filterOwner('fwd-tbody',this.checked)"> 显示所有用户</label>
-      {{if .Nodes}}<button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>{{end}}
-    </div>
+    {{if .Nodes}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button></div>{{end}}
   </div>
   {{if .Forwards}}
   <table class="tbl">
