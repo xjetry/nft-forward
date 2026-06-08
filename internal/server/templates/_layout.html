@@ -603,6 +603,7 @@ document.addEventListener('click',closeAllCS);
 function openModal(id){document.getElementById(id).classList.add('open')}
 function closeModal(id){document.getElementById(id).classList.remove('open')}
 document.querySelectorAll('.modal-bg').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open')})});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){var m=document.querySelector('.modal-bg.open');if(m)m.classList.remove('open')}});
 document.querySelectorAll('select.inp').forEach(buildSelect);
 (function(){
   var rows=document.querySelectorAll('tr.grp[data-chain]');

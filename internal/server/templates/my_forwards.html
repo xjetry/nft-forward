@@ -39,7 +39,7 @@
 <div class="modal-bg" id="dlg-my-fwd">
 <div class="modal">
 <div class="card">
-  <div class="card-head"><h3>新增转发</h3></div>
+  <div class="card-head"><h3>添加转发</h3><span class="desc">选组合通道将自动创建链路</span></div>
   <div class="card-body">
     <form method="post" action="/my/forwards">
     <div class="form-grid">
@@ -55,30 +55,36 @@
     </div>
     <div class="form-grid" id="my-fwd-proto">
       <label class="fl">协议</label>
-      <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp" id="my-tcp-udp">TCP+UDP</option></select>
+      <div class="seg" style="max-width:380px">
+        <label><input type="radio" name="proto" value="tcp" checked><span>TCP</span></label>
+        <label><input type="radio" name="proto" value="udp"><span>UDP</span></label>
+        <label id="my-tcp-udp-label"><input type="radio" name="proto" value="tcp+udp" id="my-tcp-udp"><span>TCP+UDP</span></label>
+      </div>
     </div>
     <div class="form-grid" id="my-fwd-single">
       <label class="fl">模式</label>
-      <select class="inp" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
+      <div class="seg" style="max-width:340px">
+        <label><input type="radio" name="mode" value="kernel" checked><span>内核态 (零拷贝)</span></label>
+        <label><input type="radio" name="mode" value="userspace"><span>用户态 (split-TCP)</span></label>
+      </div>
       <label class="fl">监听端口</label>
-      <input class="inp mono" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
+      <input class="inp mono" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:200px">
     </div>
     <div class="form-grid">
       <label class="fl">目标</label>
-      <input class="inp mono" name="exit" id="my-exit" required placeholder="host:port">
+      <input class="inp mono" name="exit" id="my-exit" required placeholder="host:port（如 1.2.3.4:8443）">
     </div>
     <div class="form-grid" id="my-fwd-comment">
       <label class="fl">备注 <span class="opt">（可选）</span></label>
       <input class="inp" name="comment" placeholder="可选">
     </div>
     <div class="form-grid" id="my-combo-name" style="display:none">
-      <label class="fl">链路名称 <span class="opt">（可选）</span></label>
+      <label class="fl">链路名称</label>
       <input class="inp" name="chain_name" placeholder="自动命名或手填">
     </div>
     <div class="form-foot">
-      <button class="btn btn-primary" type="submit">添加</button>
+      <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>
       <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-my-fwd')">取消</button>
-      <span class="hint">监听端口留空则自动分配；目标地址须在 CIDR 白名单内。</span>
     </div>
     </form>
     <script>
@@ -88,16 +94,16 @@
       document.getElementById('my-fwd-single').style.display=isCombo?'none':'';
       document.getElementById('my-fwd-comment').style.display=isCombo?'none':'';
       document.getElementById('my-combo-name').style.display=isCombo?'':'none';
-      var tcpUdp=document.getElementById('my-tcp-udp');
-      if(tcpUdp){tcpUdp.style.display=isCombo?'none':'';if(isCombo&&tcpUdp.selected)document.getElementById('my-proto-select').value='tcp';}
+      document.getElementById('my-tcp-udp-label').style.display=isCombo?'none':'';
+      if(isCombo&&document.getElementById('my-tcp-udp').checked)document.querySelector('#dlg-my-fwd input[name=proto][value=tcp]').checked=true;
       var lp=document.getElementById('my-listen-port');if(lp)lp.required=!isCombo;
       if(!isCombo)syncTunnelHints();
     }
     (function(){
       var sel = document.getElementById('my-tunnel-select');
-      var proto = document.getElementById('my-proto-select');
       var port = document.getElementById('my-listen-port');
       var exit = document.getElementById('my-exit');
+      var form = document.getElementById('dlg-my-fwd');
       window.syncTunnelHints=function(){
         var opt = sel.options[sel.selectedIndex];
         if (!opt||!opt.dataset.portStart) return;
@@ -105,12 +111,13 @@
         var mask = opt.dataset.protoMask, cidr = opt.dataset.cidr;
         port.placeholder = '范围 ' + s + '-' + e + '，留空自动分配';
         port.min = s; port.max = e;
-        exit.placeholder = cidr !== '0.0.0.0/0' ? 'CIDR ' + cidr + ' 内的 host:port' : 'host:port';
-        Array.from(proto.options).forEach(function(o){
-          if (mask === 'tcp+udp') { o.disabled = false; }
-          else { o.disabled = (o.value !== mask); }
+        exit.placeholder = cidr !== '0.0.0.0/0' ? 'CIDR ' + cidr + ' 内的 host:port' : 'host:port（如 1.2.3.4:8443）';
+        var radios = form.querySelectorAll('input[name=proto]');
+        radios.forEach(function(r){
+          var lbl = r.closest('label');
+          if (mask === 'tcp+udp') { lbl.style.display=''; r.disabled=false; }
+          else { var match = r.value===mask; lbl.style.display=match?'':'none'; r.disabled=!match; if(match) r.checked=true; }
         });
-        if (proto.options[proto.selectedIndex].disabled) proto.value = mask;
       };
       sel.addEventListener('change', function(){if(!sel.value.startsWith('combo:'))syncTunnelHints()});
       toggleMyFwdMode();
