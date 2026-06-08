@@ -52,6 +52,8 @@
         {{range .Tunnels}}{{$tn := index $.NodeByID .NodeID}}<option value="{{.ID}}" data-port-start="{{.PortStart}}" data-port-end="{{.PortEnd}}" data-proto-mask="{{.ProtoMask}}" data-cidr="{{.TargetCIDRAllow}}">{{.Name}} @ {{if $tn}}{{$tn.Name}}{{else}}—{{end}}（{{.PortStart}}-{{.PortEnd}}/{{.ProtoMask}}）</option>{{end}}
         </optgroup>
       </select>
+    </div>
+    <div class="form-grid" id="my-fwd-proto">
       <label class="fl">协议</label>
       <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp" id="my-tcp-udp">TCP+UDP</option></select>
     </div>
@@ -86,8 +88,7 @@
       document.getElementById('my-fwd-single').style.display=isCombo?'none':'';
       document.getElementById('my-fwd-comment').style.display=isCombo?'none':'';
       document.getElementById('my-combo-name').style.display=isCombo?'':'none';
-      var tcpUdp=document.getElementById('my-tcp-udp');
-      if(tcpUdp)tcpUdp.parentElement.style.display=isCombo?'none':'';
+      document.getElementById('my-fwd-proto').style.display=isCombo?'none':'';
       var lp=document.getElementById('my-listen-port');if(lp)lp.required=!isCombo;
       if(!isCombo)syncTunnelHints();
     }
