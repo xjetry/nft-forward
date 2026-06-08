@@ -156,3 +156,24 @@ func (s *Server) resyncNode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.flashRedirect(w, r, "已触发重新同步", fmt.Sprintf("/nodes/%d", id))
 }
+
+func (s *Server) resyncAllNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		s.flashRedirect(w, r, "获取节点列表失败", "/nodes")
+		return
+	}
+	var ok, fail int
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n.ID); err != nil {
+			fail++
+		} else {
+			ok++
+		}
+	}
+	msg := fmt.Sprintf("同步完成：%d 成功", ok)
+	if fail > 0 {
+		msg += fmt.Sprintf("，%d 失败", fail)
+	}
+	s.flashRedirect(w, r, msg, "/nodes")
+}
