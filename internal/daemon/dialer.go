@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"runtime"
 	"strconv"
 	"sync"
@@ -357,6 +358,20 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 					default:
 					}
 				}(env.ID)
+			case wsproto.TypeProbe:
+				var p wsproto.Probe
+				if err := json.Unmarshal(env.Payload, &p); err != nil {
+					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
+					continue
+				}
+				go func(id string) {
+					ack := doProbe(p.Target)
+					raw, _ := json.Marshal(ack)
+					select {
+					case d.cmdCh <- wsproto.Envelope{Type: wsproto.TypeProbeAck, ID: id, Payload: raw}:
+					default:
+					}
+				}(env.ID)
 			case wsproto.TypePong:
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
@@ -475,4 +490,15 @@ func writeOne(ctx context.Context, ws *websocket.Conn, env wsproto.Envelope) err
 func jitter(d time.Duration) time.Duration {
 	delta := float64(d) * 0.2
 	return d + time.Duration((rand.Float64()*2-1)*delta)
+}
+
+func doProbe(target string) wsproto.ProbeAck {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", target, 5*time.Second)
+	elapsed := time.Since(start)
+	if err != nil {
+		return wsproto.ProbeAck{Error: err.Error()}
+	}
+	conn.Close()
+	return wsproto.ProbeAck{OK: true, Latency: int(elapsed.Milliseconds())}
 }

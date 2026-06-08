@@ -565,10 +565,12 @@ function probeCombo(btn,targets){
     span.textContent=parts.join(' → ');
   }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});
 }
-function probeTarget(btn,target){
+function probeTarget(btn,target,nodeID){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';
-  fetch('/api/probe?target='+encodeURIComponent(target)).then(function(r){return r.json()}).then(function(d){
+  var url='/api/probe?target='+encodeURIComponent(target);
+  if(nodeID)url+='&node='+nodeID;
+  fetch(url).then(function(r){return r.json()}).then(function(d){
     if(d.ok){span.className='probe-ok';span.textContent=d.latency_ms+'ms';}
     else{span.className='probe-fail';span.textContent='不通';}
   }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});

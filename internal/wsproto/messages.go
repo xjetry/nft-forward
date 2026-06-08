@@ -25,6 +25,8 @@ const (
 	TypeChainCmdAck      = "chain_cmd_ack"
 	TypeUpgrade          = "upgrade"
 	TypeUpgradeAck       = "upgrade_ack"
+	TypeProbe            = "probe"
+	TypeProbeAck         = "probe_ack"
 	TypePing             = "ping"
 	TypePong             = "pong"
 	TypeError            = "error"
@@ -152,6 +154,16 @@ type Upgrade struct {
 type UpgradeAck struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+}
+
+type Probe struct {
+	Target string `json:"target"`
+}
+
+type ProbeAck struct {
+	OK      bool   `json:"ok"`
+	Latency int    `json:"latency_ms"`
+	Error   string `json:"error,omitempty"`
 }
 
 type Ping struct {

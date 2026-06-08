@@ -276,7 +276,7 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 			}
 			ackP, _ := json.Marshal(ack)
 			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck:
+		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
 			ac.dispatchAck(env)
 		default:
 			log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
@@ -342,6 +342,41 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) error
 		return errors.New("apply_ack timeout")
 	case <-ac.closed:
 		return errors.New("connection closed before ack")
+	}
+}
+
+func (h *Hub) SendProbe(nodeID int64, target string) (wsproto.ProbeAck, error) {
+	h.mu.RLock()
+	ac, ok := h.conns[nodeID]
+	h.mu.RUnlock()
+	if !ok {
+		return wsproto.ProbeAck{}, fmt.Errorf("node %d not connected", nodeID)
+	}
+	id := ac.nextID()
+	ch := make(chan json.RawMessage, 1)
+	ac.pendMu.Lock()
+	ac.pending[id] = ch
+	ac.pendMu.Unlock()
+	defer func() {
+		ac.pendMu.Lock()
+		delete(ac.pending, id)
+		ac.pendMu.Unlock()
+	}()
+
+	payload, _ := json.Marshal(wsproto.Probe{Target: target})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeProbe, ID: id, Payload: payload})
+
+	select {
+	case raw := <-ch:
+		var ack wsproto.ProbeAck
+		if err := json.Unmarshal(raw, &ack); err != nil {
+			return wsproto.ProbeAck{}, fmt.Errorf("malformed probe_ack: %w", err)
+		}
+		return ack, nil
+	case <-time.After(10 * time.Second):
+		return wsproto.ProbeAck{}, errors.New("probe timeout")
+	case <-ac.closed:
+		return wsproto.ProbeAck{}, errors.New("connection closed")
 	}
 }
 

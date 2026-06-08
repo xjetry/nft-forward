@@ -16,10 +16,11 @@ import (
 
 // chainView is the per-chain row the list/detail templates render.
 type chainView struct {
-	Chain      *db.Chain
-	Path       string // "gomami → nnc-hk → seednet:8443"
-	Entry      string // "1.1.1.1:20000" or "—"
-	TenantName string // owning tenant display name, empty for admin chains
+	Chain       *db.Chain
+	Path        string // "gomami → nnc-hk → seednet:8443"
+	Entry       string // "1.1.1.1:20000" or "—"
+	EntryNodeID int64  // entry node for remote probe
+	TenantName  string // owning tenant display name, empty for admin chains
 }
 
 // buildChainView assembles the display path + entry endpoint for a chain.
@@ -41,7 +42,11 @@ func (s *Server) buildChainView(c *db.Chain) chainView {
 			entry = net.JoinHostPort(n.RelayHost, strconv.Itoa(c.EntryListenPort))
 		}
 	}
-	return chainView{Chain: c, Path: strings.Join(names, " → "), Entry: entry}
+	var entryNodeID int64
+	if c.EntryNodeID.Valid {
+		entryNodeID = c.EntryNodeID.Int64
+	}
+	return chainView{Chain: c, Path: strings.Join(names, " → "), Entry: entry, EntryNodeID: entryNodeID}
 }
 
 func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {

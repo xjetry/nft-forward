@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -23,6 +24,22 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+
+	nodeStr := r.URL.Query().Get("node")
+	if nodeStr != "" {
+		nodeID, err := strconv.ParseInt(nodeStr, 10, 64)
+		if err != nil {
+			json.NewEncoder(w).Encode(probeResult{Error: "invalid node id"})
+			return
+		}
+		ack, err := s.Hub.SendProbe(nodeID, target)
+		if err != nil {
+			json.NewEncoder(w).Encode(probeResult{Error: err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(probeResult{OK: ack.OK, Latency: ack.Latency, Error: ack.Error})
+		return
+	}
 
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", target, probeTimeout)
