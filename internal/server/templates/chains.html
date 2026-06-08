@@ -3,14 +3,17 @@
 <div class="card">
   <div class="card-head">
     <h3>所有链路</h3><span class="desc">{{len .Chains}} 条中继链路</span>
-    {{if .Nodes}}<div class="right"><button class="btn btn-primary btn-sm" onclick="openModal('dlg-new-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</button></div>{{end}}
+    <div class="right" style="display:flex;gap:10px;align-items:center">
+      <label style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="chain-show-all" onchange="filterOwner('chain-tbody',this.checked)"> 显示所有用户</label>
+      {{if .Nodes}}<button class="btn btn-primary btn-sm" onclick="openModal('dlg-new-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>新建链路</button>{{end}}
+    </div>
   </div>
   {{if .Chains}}
   <table class="tbl">
     <thead><tr><th style="width:46px">ID</th><th>名称</th><th>用户</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th>测试</th><th class="actions">操作</th></tr></thead>
-    <tbody>
+    <tbody id="chain-tbody">
     {{range .Chains}}
-    <tr>
+    <tr{{if .TenantName}} data-tenant="1"{{end}}>
       <td class="id-cell">{{.Chain.ID}}</td>
       <td style="font-weight:600">{{.Chain.Name}}</td>
       <td style="color:var(--ink-2)">{{if .TenantName}}{{.TenantName}}{{else}}—{{end}}</td>
@@ -61,14 +64,9 @@
         <button type="button" onclick="moveHop(this,-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         <button type="button" onclick="moveHop(this,1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
       </div>
-      <select class="inp" name="hop_node" required style="flex:1" onchange="toggleComboMode(this)">
-        <option value="">— 选择节点/组合 —</option>
-        {{if .Combos}}<optgroup label="组合通道">
-        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
-        </optgroup>{{end}}
-        <optgroup label="单节点">
+      <select class="inp" name="hop_node" required style="flex:1">
+        <option value="">— 选择节点 —</option>
         {{range .Nodes}}<option value="{{.ID}}"{{if eq .RelayHost ""}} disabled{{end}}>{{.Name}}{{if eq .RelayHost ""}}（未设中继地址）{{else}} ({{.RelayHost}}){{end}}</option>{{end}}
-        </optgroup>
       </select>
       <select class="inp" name="hop_mode" class="modeSel" style="width:200px">
         <option value="userspace">用户态(split-TCP)</option>
@@ -82,7 +80,6 @@
     function addHop(){document.getElementById('hops').appendChild(document.getElementById('hopRow').content.cloneNode(true));syncModes();}
     function moveHop(btn,dir){var row=btn.closest('.hop-row'),parent=row.parentNode;if(dir<0&&row.previousElementSibling)parent.insertBefore(row,row.previousElementSibling);if(dir>0&&row.nextElementSibling)parent.insertBefore(row.nextElementSibling,row);}
     function syncModes(){var udp=document.getElementById('proto').value==='udp';document.querySelectorAll('select[name=hop_mode]').forEach(function(s){var us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
-    function toggleComboMode(sel){var ms=sel.closest('.hop-row').querySelector('select[name=hop_mode]');if(ms)ms.style.visibility=sel.value.startsWith('combo:')? 'hidden':'visible';}
     addHop();
     </script>
   </div>

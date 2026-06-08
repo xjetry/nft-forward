@@ -3,17 +3,17 @@
 <div class="card">
   <div class="card-head">
     <h3>当前规则</h3><span class="desc">{{.Pager.Total}} 条转发规则</span>
-    {{if .Nodes}}<div class="right" style="display:flex;gap:8px">
-      <button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>
-      <button class="btn btn-ghost btn-sm" onclick="openModal('dlg-new-chain')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"/><path d="M8 9l-2.5 2.5a3.5 3.5 0 0 0 5 5L13 14"/><path d="M16 15l2.5-2.5a3.5 3.5 0 0 0-5-5L11 10"/></svg>新建链路</button>
-    </div>{{end}}
+    <div class="right" style="display:flex;gap:10px;align-items:center">
+      <label style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="fwd-show-all" onchange="filterOwner('fwd-tbody',this.checked)"> 显示所有用户</label>
+      {{if .Nodes}}<button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-fwd')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>{{end}}
+    </div>
   </div>
   {{if .Forwards}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th>测试</th><th class="actions">操作</th></tr></thead>
-    <tbody>
+    <tbody id="fwd-tbody">
     {{range .Forwards}}
-    <tr{{if .ChainID.Valid}} class="grp" data-chain="{{.ChainID.Int64}}"{{end}}>
+    <tr{{if .ChainID.Valid}} class="grp" data-chain="{{.ChainID.Int64}}"{{end}}{{if .TenantID.Valid}} data-tenant="1"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
       <td style="color:var(--ink-2)">{{if .TenantID.Valid}}{{$tn := index $.TenantByID .TenantID.Int64}}{{if $tn}}{{$tn.Name}}{{else}}#{{.TenantID.Int64}}{{end}}{{else}}admin{{end}}</td>
       <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
@@ -39,18 +39,26 @@
 <div class="modal-bg" id="dlg-add-fwd">
 <div class="modal">
 <div class="card">
-  <div class="card-head"><h3>添加转发</h3><span class="desc">管理员快速通道，无 tenant 约束</span></div>
+  <div class="card-head"><h3>添加转发</h3><span class="desc">选组合通道将自动创建链路</span></div>
   <div class="card-body">
-    <form method="post" action="/forwards">
+    <form method="post" action="/forwards" id="fwd-form">
     <div class="form-grid">
-      <label class="fl">节点</label>
-      <select class="inp" name="node_id" required>{{range .Nodes}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+      <label class="fl">节点 / 组合</label>
+      <select class="inp" name="node_id" id="fwd-node-sel" required onchange="toggleFwdMode()">
+        {{if .Combos}}<optgroup label="组合通道">
+        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
+        </optgroup>{{end}}
+        <optgroup label="单节点">
+        {{range .Nodes}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+        </optgroup>
+      </select>
       <label class="fl">协议</label>
       <div class="seg" style="max-width:380px">
         <label><input type="radio" name="proto" value="tcp" checked><span>TCP</span></label>
         <label><input type="radio" name="proto" value="udp"><span>UDP</span></label>
-        <label><input type="radio" name="proto" value="tcp+udp"><span>TCP+UDP</span></label>
+        <label><input type="radio" name="proto" value="tcp+udp" id="fwd-tcp-udp"><span>TCP+UDP</span></label>
       </div>
+      <div id="fwd-single-fields">
       <label class="fl">模式</label>
       <div class="seg" style="max-width:340px">
         <label><input type="radio" name="mode" value="kernel" checked><span>内核态 (零拷贝)</span></label>
@@ -58,75 +66,37 @@
       </div>
       <label class="fl">监听端口</label>
       <input class="inp mono" name="listen_port" type="number" min="1" max="65535" required placeholder="例如 44751" style="max-width:200px">
+      </div>
       <label class="fl">目标</label>
       <div class="field-row" style="max-width:480px">
         <input class="inp mono" name="target_ip" required placeholder="目标 IPv4 或域名" style="flex:2"><span style="color:var(--ink-3)">:</span><input class="inp mono" name="target_port" type="number" min="1" max="65535" required placeholder="端口" style="flex:1">
       </div>
+      <div id="fwd-single-comment">
       <label class="fl">备注 <span class="opt">（可选）</span></label>
       <input class="inp" name="comment" placeholder="可选">
+      </div>
+      <div id="fwd-combo-name" style="display:none">
+      <label class="fl">链路名称</label>
+      <input class="inp" name="chain_name" placeholder="自动命名或手填">
+      </div>
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>
       <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-add-fwd')">取消</button>
     </div>
     </form>
-  </div>
-</div>
-</div>
-</div>
-{{end}}
-
-{{if .Nodes}}
-<div class="modal-bg" id="dlg-new-chain">
-<div class="modal">
-<div class="card">
-  <div class="card-head"><h3>新建中继链路</h3></div>
-  <div class="card-body">
-    <form method="post" action="/chains">
-    <div class="form-grid">
-      <label class="fl">名称</label>
-      <input class="inp" name="name" required placeholder="如 vless-seednet">
-      <label class="fl">协议</label>
-      <select class="inp" name="proto" id="chain-proto" onchange="syncChainModes()" style="max-width:200px"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
-      <label class="fl">出口</label>
-      <input class="inp mono" name="exit" required placeholder="目标 host:port">
-    </div>
-    <div class="sec-title" style="margin-top:20px">中继节点（按顺序）</div>
-    <div style="display:flex;flex-direction:column;gap:10px;max-width:100%" id="chain-hops"></div>
-    <div class="form-foot" style="gap:10px">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="addChainHop()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加一跳</button>
-      <button type="submit" class="btn btn-primary">创建链路</button>
-      <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-new-chain')">取消</button>
-    </div>
-    </form>
-    <template id="chainHopRow">
-    <div class="hop-row" style="display:flex;align-items:center;gap:12px">
-      <div class="hop-ctrl">
-        <button type="button" onclick="moveHop(this,-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
-        <button type="button" onclick="moveHop(this,1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
-      </div>
-      <select class="inp" name="hop_node" required style="flex:1" onchange="toggleComboMode(this)">
-        <option value="">— 选择节点/组合 —</option>
-        {{if .Combos}}<optgroup label="组合通道">
-        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
-        </optgroup>{{end}}
-        <optgroup label="单节点">
-        {{range .Nodes}}<option value="{{.ID}}"{{if eq .RelayHost ""}} disabled{{end}}>{{.Name}}{{if eq .RelayHost ""}}（未设中继地址）{{else}} ({{.RelayHost}}){{end}}</option>{{end}}
-        </optgroup>
-      </select>
-      <select class="inp" name="hop_mode" style="width:200px">
-        <option value="userspace">用户态(split-TCP)</option>
-        <option value="kernel">内核态(零拷贝)</option>
-      </select>
-      <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.hop-row').remove()">删除</button>
-    </div>
-    </template>
     <script>
-    function addChainHop(){document.getElementById('chain-hops').appendChild(document.getElementById('chainHopRow').content.cloneNode(true));syncChainModes();}
-    function moveHop(btn,dir){var row=btn.closest('.hop-row'),parent=row.parentNode;if(dir<0&&row.previousElementSibling)parent.insertBefore(row,row.previousElementSibling);if(dir>0&&row.nextElementSibling)parent.insertBefore(row.nextElementSibling,row);}
-    function syncChainModes(){var udp=document.getElementById('chain-proto').value==='udp';document.querySelectorAll('#dlg-new-chain select[name=hop_mode]').forEach(function(s){var us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
-    function toggleComboMode(sel){var ms=sel.closest('.hop-row').querySelector('select[name=hop_mode]');if(ms)ms.style.visibility=sel.value.startsWith('combo:')? 'hidden':'visible';}
-    addChainHop();
+    function toggleFwdMode(){
+      var sel=document.getElementById('fwd-node-sel');
+      var val=sel.value;
+      var isCombo=val.startsWith('combo:');
+      document.getElementById('fwd-single-fields').style.display=isCombo?'none':'';
+      document.getElementById('fwd-single-comment').style.display=isCombo?'none':'';
+      document.getElementById('fwd-combo-name').style.display=isCombo?'':'none';
+      document.getElementById('fwd-tcp-udp').parentElement.style.display=isCombo?'none':'';
+      var lp=document.querySelector('#fwd-single-fields input[name=listen_port]');
+      if(lp)lp.required=!isCombo;
+    }
     </script>
   </div>
 </div>

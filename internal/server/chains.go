@@ -1,7 +1,6 @@
 package server
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net"
@@ -98,46 +97,24 @@ func parseExit(raw string) (string, int, error) {
 	return host, port, nil
 }
 
-// adminHopInputs reads the ordered hop_node[] + hop_mode[] arrays. Each value
-// is either a plain node ID or "combo:<id>" which expands into the combo's
-// constituent hops.
-func adminHopInputs(r *http.Request, d *sql.DB) ([]db.HopInput, error) {
-	selections := r.Form["hop_node"]
+// adminHopInputs reads the ordered hop_node[] + hop_mode[] arrays.
+func adminHopInputs(r *http.Request) ([]db.HopInput, error) {
+	nodeIDs := r.Form["hop_node"]
 	modes := r.Form["hop_mode"]
-	if len(selections) == 0 {
+	if len(nodeIDs) == 0 {
 		return nil, fmt.Errorf("至少添加一个节点")
 	}
-	hops := make([]db.HopInput, 0, len(selections))
-	for i, sel := range selections {
-		defaultMode := "kernel"
-		if i < len(modes) {
-			defaultMode = modes[i]
-		}
-
-		if strings.HasPrefix(sel, "combo:") {
-			comboID, err := strconv.ParseInt(sel[6:], 10, 64)
-			if err != nil || comboID == 0 {
-				return nil, fmt.Errorf("第 %d 跳组合通道非法", i+1)
-			}
-			comboHops, err := db.ListComboHops(d, comboID)
-			if err != nil || len(comboHops) == 0 {
-				return nil, fmt.Errorf("组合通道 %d 无效", comboID)
-			}
-			for _, ch := range comboHops {
-				tun, err := db.GetTunnel(d, ch.TunnelID)
-				if err != nil {
-					return nil, fmt.Errorf("组合通道内的通道 %d 不存在", ch.TunnelID)
-				}
-				hops = append(hops, db.HopInput{NodeID: tun.NodeID, Mode: ch.Mode})
-			}
-			continue
-		}
-
-		id, err := strconv.ParseInt(sel, 10, 64)
+	hops := make([]db.HopInput, 0, len(nodeIDs))
+	for i, idStr := range nodeIDs {
+		id, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil || id == 0 {
 			return nil, fmt.Errorf("第 %d 跳节点非法", i+1)
 		}
-		hops = append(hops, db.HopInput{NodeID: id, Mode: defaultMode})
+		mode := "kernel"
+		if i < len(modes) {
+			mode = modes[i]
+		}
+		hops = append(hops, db.HopInput{NodeID: id, Mode: mode})
 	}
 	return hops, nil
 }
@@ -159,7 +136,7 @@ func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
-	hops, err := adminHopInputs(r, s.DB)
+	hops, err := adminHopInputs(r)
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
@@ -254,7 +231,7 @@ func (s *Server) saveChain(w http.ResponseWriter, r *http.Request) {
 		s.flashRedirect(w, r, err.Error(), redirect)
 		return
 	}
-	hops, err := adminHopInputs(r, s.DB)
+	hops, err := adminHopInputs(r)
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), redirect)
 		return

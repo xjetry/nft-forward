@@ -433,7 +433,7 @@ pre code{background:transparent;padding:0}
   <main class="content">
     <div class="topbar" style="display:flex;align-items:flex-start;justify-content:space-between">
       <div>
-        <div class="crumb" id="crumb-bar"><a href="/">nft-forward</a><span class="sep"> / </span>{{if .Crumb}}{{.Crumb}}{{else}}{{.Title}}{{end}}</div>
+        <div class="crumb" id="crumb-bar"><a href="/">nft-forward</a> / {{if .Crumb}}{{.Crumb}}{{else}}{{.Title}}{{end}}</div>
         <div class="page-title">{{.Title}}</div>
       </div>
       <span class="blur-tog" id="blurToggle" onclick="toggleBlur()" title="模糊敏感信息"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="blurLabel">脱敏</span></span>
@@ -535,6 +535,13 @@ function buildSelect(sel){
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
+function filterOwner(tbodyId,showAll){
+  var rows=document.getElementById(tbodyId);if(!rows)return;
+  [].slice.call(rows.children).forEach(function(tr){
+    if(!tr.dataset.tenant){tr.style.display='';return;}
+    tr.style.display=showAll?'':'none';
+  });
+}
 function probeCombo(btn,targets){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';
@@ -558,10 +565,10 @@ function probeTarget(btn,target){
   var el=document.getElementById('crumb-bar');
   if(!el)return;
   var first=el.querySelector('a');
-  var rest=el.lastChild;
-  if(!rest||rest.nodeType!==3||!rest.textContent.trim())return;
-  var parts=rest.textContent.split(' / ').map(function(s){return s.trim()}).filter(Boolean);
-  rest.textContent='';
+  var nodes=[].slice.call(el.childNodes);
+  var raw='';
+  nodes.forEach(function(n){if(n!==first&&n.nodeType===3){raw+=n.textContent;n.remove()}});
+  var parts=raw.split('/').map(function(s){return s.trim()}).filter(Boolean);
   parts.forEach(function(p,i){
     el.appendChild(document.createTextNode(' / '));
     if(i<parts.length-1&&map[p]){
