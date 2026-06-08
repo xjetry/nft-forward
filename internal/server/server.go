@@ -437,6 +437,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/combos", s.listCombos)
 		r.Post("/combos", s.createCombo)
+		r.Post("/combos/{id}", s.saveCombo)
 		r.Post("/combos/{id}/delete", s.deleteCombo)
 
 		r.Get("/tenants", s.listTenants)

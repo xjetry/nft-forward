@@ -105,6 +105,50 @@ func (s *Server) createCombo(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/combos", http.StatusSeeOther)
 }
 
+func (s *Server) saveCombo(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.flashRedirect(w, r, "表单解析失败", "/combos")
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		s.flashRedirect(w, r, "名称必填", "/combos")
+		return
+	}
+	tunnelIDs := r.Form["hop_tunnel"]
+	modes := r.Form["hop_mode"]
+	if len(tunnelIDs) < 2 {
+		s.flashRedirect(w, r, "组合通道至少需要 2 个通道", "/combos")
+		return
+	}
+	hops := make([]db.TunnelComboHop, 0, len(tunnelIDs))
+	for i, idStr := range tunnelIDs {
+		tid, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || tid == 0 {
+			s.flashRedirect(w, r, fmt.Sprintf("第 %d 个通道 ID 无效", i+1), "/combos")
+			return
+		}
+		mode := "userspace"
+		if i < len(modes) && modes[i] != "" {
+			mode = modes[i]
+		}
+		hops = append(hops, db.TunnelComboHop{TunnelID: tid, Mode: mode})
+	}
+	if err := db.UpdateTunnelCombo(s.DB, id, name, hops); err != nil {
+		s.flashRedirect(w, r, "保存失败: "+err.Error(), "/combos")
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "combo.save", strconv.FormatInt(id, 10), name)
+	setFlash(w, "组合通道已保存")
+	http.Redirect(w, r, "/combos", http.StatusSeeOther)
+}
+
 func (s *Server) deleteCombo(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

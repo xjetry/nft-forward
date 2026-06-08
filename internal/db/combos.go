@@ -80,6 +80,22 @@ func ListComboHops(d *sql.DB, comboID int64) ([]*TunnelComboHop, error) {
 	return out, rows.Err()
 }
 
+func UpdateTunnelCombo(d DBTX, id int64, name string, hops []TunnelComboHop) error {
+	if _, err := d.Exec(`UPDATE tunnel_combos SET name=? WHERE id=?`, name, id); err != nil {
+		return err
+	}
+	if _, err := d.Exec(`DELETE FROM tunnel_combo_hops WHERE combo_id=?`, id); err != nil {
+		return err
+	}
+	for i, h := range hops {
+		if _, err := d.Exec(`INSERT INTO tunnel_combo_hops(combo_id, position, tunnel_id, mode) VALUES (?,?,?,?)`,
+			id, i, h.TunnelID, h.Mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func DeleteTunnelCombo(d *sql.DB, id int64) error {
 	_, err := d.Exec(`DELETE FROM tunnel_combos WHERE id=?`, id)
 	return err
