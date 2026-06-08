@@ -68,6 +68,7 @@ func (s *Server) tenantListForwards(w http.ResponseWriter, r *http.Request) {
 	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	tunnelByID := buildMap(tunnels, func(tn *db.Tunnel) int64 { return tn.ID })
+	hopInfo, _ := db.ChainHopInfoMap(s.DB)
 	s.render(w, "my_forwards.html", map[string]any{
 		"User":       u,
 		"Tenant":     t,
@@ -76,6 +77,7 @@ func (s *Server) tenantListForwards(w http.ResponseWriter, r *http.Request) {
 		"Forwards":   forwards,
 		"NodeByID":   nodeByID,
 		"TunnelByID": tunnelByID,
+		"HopInfo":    hopInfo,
 		"Flash":      flashFromCookie(w, r),
 	})
 }
