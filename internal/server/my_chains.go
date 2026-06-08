@@ -162,6 +162,15 @@ func (s *Server) tenantCreateChain(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
 		return
 	}
+	if ep := strings.TrimSpace(r.FormValue("entry_port")); ep != "" {
+		port, err := strconv.Atoi(ep)
+		if err != nil || port < 1 || port > 65535 {
+			setFlash(w, "入口端口非法")
+			http.Redirect(w, r, "/my/chains/new", http.StatusSeeOther)
+			return
+		}
+		hops[0].DesiredPort = port
+	}
 	// 出口必须落在末跳通道的 CIDR 白名单内（中间跳目标是受信中继地址，免检）。
 	if err := exitAllowedByTunnel(lastTunnel, exitHost); err != nil {
 		setFlash(w, err.Error())

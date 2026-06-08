@@ -12,11 +12,13 @@
       <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
       <label class="fl">出口</label>
       <input class="inp mono" name="exit" required placeholder="目标 host:port（须落在末跳通道 CIDR 内）">
+      <label class="fl">入口端口</label>
+      <input class="inp mono" name="entry_port" type="number" min="1" max="65535" placeholder="留空自动分配">
     </div>
 
     <div class="sec-title" style="margin-top:26px">中继通道（按顺序）</div>
     <div style="display:flex;flex-direction:column;gap:10px;max-width:760px" id="hops"></div>
-    <p style="color:var(--ink-3);font-size:12.5px;margin-top:10px">从你被授权的通道里挑选并排序；入口 IP:端口由系统自动生成并在保存后显示。每一跳消耗对应通道一条转发配额。</p>
+    <p style="color:var(--ink-3);font-size:12.5px;margin-top:10px">从你被授权的通道里挑选并排序；入口 = 第一跳节点的中继地址 : 端口（可自定义或留空自动分配），保存后显示。每一跳消耗对应通道一条转发配额。</p>
 
     <div class="form-foot" style="max-width:760px;gap:10px">
       <button type="button" class="btn btn-ghost btn-sm" onclick="addHop()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加一跳</button>

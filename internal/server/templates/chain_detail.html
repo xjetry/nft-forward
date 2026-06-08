@@ -49,6 +49,8 @@
       <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp"{{if eq .Chain.Proto "tcp"}} selected{{end}}>TCP</option><option value="udp"{{if eq .Chain.Proto "udp"}} selected{{end}}>UDP</option><option value="tcp+udp"{{if eq .Chain.Proto "tcp+udp"}} selected{{end}}>TCP+UDP</option></select>
       <label class="fl">出口</label>
       <input class="inp mono" name="exit" value="{{.Chain.ExitHost}}:{{.Chain.ExitPort}}" required>
+      <label class="fl">入口端口</label>
+      <input class="inp mono" name="entry_port" type="number" min="1" max="65535" value="{{if gt .Chain.EntryListenPort 0}}{{.Chain.EntryListenPort}}{{end}}" placeholder="留空自动分配">
     </div>
 
     <div class="sec-title" style="margin-top:26px">中继节点（按顺序）</div>

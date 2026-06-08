@@ -146,6 +146,14 @@ func (s *Server) createChain(w http.ResponseWriter, r *http.Request) {
 		s.flashRedirect(w, r, err.Error(), "/chains/new")
 		return
 	}
+	if ep := strings.TrimSpace(r.FormValue("entry_port")); ep != "" {
+		port, err := strconv.Atoi(ep)
+		if err != nil || port < 1 || port > 65535 {
+			s.flashRedirect(w, r, "入口端口非法", "/chains/new")
+			return
+		}
+		hops[0].DesiredPort = port
+	}
 
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -240,6 +248,14 @@ func (s *Server) saveChain(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.flashRedirect(w, r, err.Error(), redirect)
 		return
+	}
+	if ep := strings.TrimSpace(r.FormValue("entry_port")); ep != "" {
+		port, err := strconv.Atoi(ep)
+		if err != nil || port < 1 || port > 65535 {
+			s.flashRedirect(w, r, "入口端口非法", redirect)
+			return
+		}
+		hops[0].DesiredPort = port
 	}
 	c.Name, c.Proto, c.ExitHost, c.ExitPort = name, proto, exitHost, exitPort
 
