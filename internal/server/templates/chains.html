@@ -43,6 +43,8 @@
       <select class="inp" name="proto" id="proto" onchange="syncModes()" style="max-width:200px"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
       <label class="fl">出口</label>
       <input class="inp mono" name="exit" required placeholder="目标 host:port">
+      <label class="fl">入口端口</label>
+      <input class="inp mono" name="entry_port" type="number" min="1" max="65535" placeholder="留空自动分配">
     </div>
 
     <div class="sec-title" style="margin-top:20px">中继节点（按顺序）</div>
