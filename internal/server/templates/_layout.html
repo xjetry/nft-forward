@@ -465,8 +465,8 @@ var CHEV='<svg class="cs-chev" viewBox="0 0 24 24" fill="none" stroke="currentCo
 function buildSelect(sel){
   var wrap=document.createElement('div');
   wrap.className='cs'+(sel.classList.contains('mono')?' mono':'');
-  var searchable=sel.options.length>6;
-  if(searchable)wrap.classList.add('searchable');
+  ['fwd-only','combo-only','searchable'].forEach(function(c){if(sel.classList.contains(c))wrap.classList.add(c)});
+  if(sel.options.length>6)wrap.classList.add('searchable');
   if(sel.style.cssText)wrap.style.cssText=sel.style.cssText;
   sel.style.cssText='';
   sel.parentNode.insertBefore(wrap,sel);
