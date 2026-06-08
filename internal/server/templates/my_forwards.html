@@ -14,7 +14,7 @@
     {{$n := index $.NodeByID .NodeID}}
     {{$t := index $.TunnelByID .TunnelID.Int64}}
     {{$hi := index $.HopInfo .ID}}
-    <tr{{if .ChainID.Valid}} class="grp"{{end}}>
+    <tr{{if .ChainID.Valid}} class="grp" data-chain="{{.ChainID.Int64}}"{{end}}>
       <td style="font-weight:600">{{if $n}}{{$n.Name}}{{else}}—{{end}}</td>
       <td class="mono" style="color:var(--ink-2)">{{if $t}}{{$t.Name}}{{else}}—{{end}}</td>
       <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
