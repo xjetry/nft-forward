@@ -24,6 +24,7 @@
     <h3>已注册节点</h3>
     <span class="desc">{{.Pager.Total}} 个节点 · server {{.ServerVersion}}</span>
     <div class="right" style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="openModal('dlg-add-node')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加节点</button>
       <form method="post" action="/nodes/resync-all" class="inline" onsubmit="return confirm('向所有节点重新推送转发规则？');"><button class="btn btn-ghost btn-sm" type="submit">同步所有</button></form>
       <form method="post" action="/nodes/upgrade-all" class="inline" onsubmit="return confirm('向所有版本不一致的节点推送升级？');"><button class="btn btn-ghost btn-sm" type="submit">一键升级全部</button></form>
     </div>
@@ -53,9 +54,11 @@
     </tbody>
   </table>
   {{template "pager" .Pager}}
-  {{else}}<div class="empty"><h4>尚未注册任何节点</h4></div>{{end}}
+  {{else}}<div class="empty"><h4>尚未注册任何节点</h4><p>点击上方「添加节点」创建。</p></div>{{end}}
 </div>
 
+<div class="modal-bg" id="dlg-add-node">
+<div class="modal">
 <div class="card">
   <div class="card-head"><h3>添加节点</h3></div>
   <div class="card-body">
@@ -68,10 +71,13 @@
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加节点</button>
-      <span class="hint">添加后会生成 token 与一行安装命令，在目标节点执行即可。</span>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('dlg-add-node')">取消</button>
+      <span class="hint">添加后会生成 token 与安装命令，在目标节点执行即可。</span>
     </div>
     </form>
   </div>
+</div>
+</div>
 </div>
 
 {{template "footer" (mkmap "User" .User)}}
