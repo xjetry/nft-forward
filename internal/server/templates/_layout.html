@@ -131,6 +131,11 @@ a{color:inherit;text-decoration:none}
 .card-head h3{font-size:14.5px;font-weight:700}
 .card-head .desc{font-size:12.5px;color:var(--ink-2);font-weight:400}
 .card-head .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.tab-bar{display:flex;gap:0;border-bottom:1px solid var(--line-soft);padding:0 20px}
+.tab-btn{padding:10px 18px;font-size:13px;font-weight:600;color:var(--ink-2);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:.15s}
+.tab-btn:hover{color:var(--ink)}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-pane{display:none}.tab-pane.active{display:block}
 .card-body{padding:20px}
 .card-body.tight{padding:6px 8px}
 
@@ -375,7 +380,7 @@ pre code{background:transparent;padding:0}
         </a>
         <a href="/combos" class="nav-item{{if eq .Nav "combos"}} active{{end}}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>
-          <span>组合</span><span class="count">{{index $sc "combos"}}</span>
+          <span>组合通道</span><span class="count">{{index $sc "combos"}}</span>
         </a>
         <a href="/tenants" class="nav-item{{if eq .Nav "tenants"}} active{{end}}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 0 1 0 5.5M18 19a5 5 0 0 0-3-4.6"/></svg>
