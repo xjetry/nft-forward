@@ -545,13 +545,24 @@ function buildSelect(sel){
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
 function applyOwnerFilter(){
   var on=document.body.classList.contains('show-all-owners');
+  var total=0,hidden=0;
   ['fwd-tbody','chain-tbody'].forEach(function(id){
     var tb=document.getElementById(id);if(!tb)return;
     [].slice.call(tb.children).forEach(function(tr){
+      total++;
       if(!tr.dataset.tenant){tr.style.display='';return;}
-      tr.style.display=on?'':'none';
+      if(on){tr.style.display=''}else{tr.style.display='none';hidden++}
     });
   });
+  if(!on&&total>0&&hidden===total){
+    document.body.classList.add('show-all-owners');
+    var t=document.getElementById('showAllToggle');if(t)t.classList.add('on');
+    localStorage.setItem('nf-show-all','1');
+    ['fwd-tbody','chain-tbody'].forEach(function(id){
+      var tb=document.getElementById(id);if(!tb)return;
+      [].slice.call(tb.children).forEach(function(tr){tr.style.display=''});
+    });
+  }
 }
 function toggleShowAll(){
   var on=document.body.classList.toggle('show-all-owners');
