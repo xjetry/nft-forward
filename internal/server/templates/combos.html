@@ -4,7 +4,7 @@
   <div class="card-head"><h3>所有组合通道</h3><span class="desc">{{len .Combos}} 条</span></div>
   {{if .Combos}}
   <table class="tbl">
-    <thead><tr><th style="width:50px">ID</th><th>名称</th><th>路径</th><th>跳数</th><th class="actions">操作</th></tr></thead>
+    <thead><tr><th style="width:50px">ID</th><th>名称</th><th>路径</th><th>跳数</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Combos}}
     <tr>
@@ -12,6 +12,7 @@
       <td style="font-weight:600">{{.Combo.Name}}</td>
       <td class="mono" style="color:var(--ink-2)">{{.Path}}</td>
       <td class="mono">{{len .Hops}}</td>
+      <td>{{if .NodeHosts}}<button class="probe-btn" onclick="probeCombo(this,[{{range $i,$h := .NodeHosts}}{{if $i}},{{end}}'{{$h}}'{{end}}])">测通</button><span></span>{{else}}—{{end}}</td>
       <td class="actions">
         <form method="post" action="/combos/{{.Combo.ID}}/delete" class="inline" onsubmit="return confirm('删除该组合通道？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>
       </td>

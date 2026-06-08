@@ -11,7 +11,7 @@
   </div>
   {{if .Forwards}}
   <table class="tbl">
-    <thead><tr><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th class="actions">操作</th></tr></thead>
+    <thead><tr><th>节点</th><th>通道</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th>测试</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Forwards}}
     {{$n := index $.NodeByID .NodeID}}
@@ -26,6 +26,7 @@
       <td class="mono"><span class="sens">{{.TargetIP}}:{{.TargetPort}}</span></td>
       <td class="num-col">{{fmtBytes .TotalBytes}}</td>
       <td>{{if $hi}}<span class="note-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:-1px;margin-right:3px"><path d="M9.5 14.5l5-5"/><path d="M8 9l-2.5 2.5a3.5 3.5 0 0 0 5 5L13 14"/><path d="M16 15l2.5-2.5a3.5 3.5 0 0 0-5-5L11 10"/></svg>{{$hi.ChainName}} · 第{{add $hi.Position 1}}/{{$hi.TotalHops}}跳</span>{{else if .Comment}}<span class="note-text">{{.Comment}}</span>{{else}}<span class="note-none">—</span>{{end}}</td>
+      <td>{{if and $n (ne $n.RelayHost "")}}<button class="probe-btn" onclick="probeTarget(this,'{{$n.RelayHost}}:{{.ListenPort}}')">测试</button><span></span>{{else}}—{{end}}</td>
       <td class="actions">{{if not .ChainID.Valid}}<form method="post" action="/my/forwards/{{.ID}}/delete" class="inline" onsubmit="return confirm('删除该转发？');"><button class="btn btn-danger btn-sm" type="submit">删除</button></form>{{end}}</td>
     </tr>
     {{end}}

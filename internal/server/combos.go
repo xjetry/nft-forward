@@ -28,14 +28,16 @@ func (s *Server) listCombos(w http.ResponseWriter, r *http.Request) {
 	tunnelByID := buildMap(tunnels, func(t *db.Tunnel) int64 { return t.ID })
 
 	type comboView struct {
-		Combo *db.TunnelCombo
-		Hops  []*db.TunnelComboHop
-		Path  string
+		Combo     *db.TunnelCombo
+		Hops      []*db.TunnelComboHop
+		Path      string
+		NodeHosts []string
 	}
 	views := make([]comboView, 0, len(combos))
 	for _, c := range combos {
 		hops, _ := db.ListComboHops(s.DB, c.ID)
 		names := make([]string, 0, len(hops))
+		var hosts []string
 		for _, h := range hops {
 			t := tunnelByID[h.TunnelID]
 			if t == nil {
@@ -45,11 +47,14 @@ func (s *Server) listCombos(w http.ResponseWriter, r *http.Request) {
 			n := nodeByID[t.NodeID]
 			if n != nil {
 				names = append(names, n.Name)
+				if n.RelayHost != "" {
+					hosts = append(hosts, n.RelayHost+":"+strconv.Itoa(t.PortStart))
+				}
 			} else {
 				names = append(names, t.Name)
 			}
 		}
-		views = append(views, comboView{Combo: c, Hops: hops, Path: strings.Join(names, " → ")})
+		views = append(views, comboView{Combo: c, Hops: hops, Path: strings.Join(names, " → "), NodeHosts: hosts})
 	}
 	s.render(w, "combos.html", map[string]any{
 		"User":    u,

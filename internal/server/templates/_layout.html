@@ -512,6 +512,16 @@ function buildSelect(sel){
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
+function probeCombo(btn,targets){
+  var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
+  span.className='probe-loading';span.textContent='测试中…';
+  Promise.all(targets.map(function(t){return fetch('/api/probe?target='+encodeURIComponent(t)).then(function(r){return r.json()})})).then(function(results){
+    var parts=results.map(function(d,i){return d.ok?d.latency_ms+'ms':'✗'});
+    var allOk=results.every(function(d){return d.ok});
+    span.className=allOk?'probe-ok':'probe-fail';
+    span.textContent=parts.join(' → ');
+  }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});
+}
 function probeTarget(btn,target){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';
