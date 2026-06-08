@@ -248,7 +248,7 @@ func validateAgainstTunnel(t *db.Tunnel, proto string, listenPort int, target st
 		if !resolver.IsHostname(target) {
 			return errors.New("目标地址格式非法")
 		}
-		if strings.TrimSpace(t.TargetCIDRAllow) != "" {
+		if !cidrAllowsAll(t.TargetCIDRAllow) {
 			return errors.New("该通道限制了目标 CIDR，仅允许 IPv4 目标")
 		}
 		return nil

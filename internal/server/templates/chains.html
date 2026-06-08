@@ -7,12 +7,13 @@
   </div>
   {{if .Chains}}
   <table class="tbl">
-    <thead><tr><th style="width:46px">ID</th><th>名称</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th class="actions">操作</th></tr></thead>
+    <thead><tr><th style="width:46px">ID</th><th>名称</th><th>用户</th><th>协议</th><th>路径</th><th>入口（可复制）</th><th class="actions">操作</th></tr></thead>
     <tbody>
     {{range .Chains}}
     <tr>
       <td class="id-cell">{{.Chain.ID}}</td>
       <td style="font-weight:600">{{.Chain.Name}}</td>
+      <td style="color:var(--ink-2)">{{if .TenantName}}{{.TenantName}}{{else}}—{{end}}</td>
       <td><span class="tag {{if eq .Chain.Proto "tcp"}}tcp{{else if eq .Chain.Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Chain.Proto}}</span></td>
       <td class="mono" style="color:var(--ink-2)"><span class="sens">{{.Path}}</span></td>
       <td class="mono" style="font-weight:600"><span class="sens">{{.Entry}}</span></td>

@@ -27,17 +27,19 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("list forwards: chain hop info: %v", err)
 	}
+	tenantByID, _ := db.TenantsByID(s.DB)
 
 	forwards, pager := paginate(allForwards, r)
 
 	s.render(w, "forwards.html", map[string]any{
-		"User":     u,
-		"Forwards": forwards,
-		"Nodes":    nodes,
-		"NodeByID": nodeByID,
-		"HopInfo":  hopInfo,
-		"Pager":    pager,
-		"Flash":    flashFromCookie(w, r),
+		"User":       u,
+		"Forwards":   forwards,
+		"Nodes":      nodes,
+		"NodeByID":   nodeByID,
+		"HopInfo":    hopInfo,
+		"TenantByID": tenantByID,
+		"Pager":      pager,
+		"Flash":      flashFromCookie(w, r),
 	})
 }
 

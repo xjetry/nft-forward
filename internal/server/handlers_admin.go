@@ -514,11 +514,26 @@ func validateCIDRList(s string) error {
 	return nil
 }
 
+// cidrAllowsAll reports whether the comma-separated CIDR list is empty or
+// contains 0.0.0.0/0, meaning every IPv4 destination is permitted.
+func cidrAllowsAll(list string) bool {
+	list = strings.TrimSpace(list)
+	if list == "" {
+		return true
+	}
+	for _, part := range strings.Split(list, ",") {
+		part = strings.TrimSpace(part)
+		if part == "0.0.0.0/0" {
+			return true
+		}
+	}
+	return false
+}
+
 // targetIPInCIDR reports whether ip falls within any of the CIDR entries in
 // the comma-separated list. Empty list ≡ no restriction.
 func targetIPInCIDR(ip net.IP, list string) bool {
-	list = strings.TrimSpace(list)
-	if list == "" {
+	if cidrAllowsAll(list) {
 		return true
 	}
 	for _, part := range strings.Split(list, ",") {

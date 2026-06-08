@@ -211,7 +211,7 @@ func exitAllowedByTunnel(t *db.Tunnel, exitHost string) error {
 	}
 	ip := net.ParseIP(exitHost)
 	if ip == nil {
-		if strings.TrimSpace(t.TargetCIDRAllow) != "" {
+		if !cidrAllowsAll(t.TargetCIDRAllow) {
 			return fmt.Errorf("末跳通道限制了目标 CIDR，出口仅允许 IPv4")
 		}
 		return nil

@@ -16,9 +16,10 @@ import (
 
 // chainView is the per-chain row the list/detail templates render.
 type chainView struct {
-	Chain *db.Chain
-	Path  string // "gomami → nnc-hk → seednet:8443"
-	Entry string // "1.1.1.1:20000" or "—"
+	Chain      *db.Chain
+	Path       string // "gomami → nnc-hk → seednet:8443"
+	Entry      string // "1.1.1.1:20000" or "—"
+	TenantName string // owning tenant display name, empty for admin chains
 }
 
 // buildChainView assembles the display path + entry endpoint for a chain.
@@ -45,13 +46,20 @@ func (s *Server) buildChainView(c *db.Chain) chainView {
 
 func (s *Server) listChains(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	chains, err := db.ListAdminChains(s.DB)
+	chains, err := db.ListAllChains(s.DB)
 	if err != nil {
 		log.Printf("list chains: %v", err)
 	}
+	tenants, _ := db.TenantsByID(s.DB)
 	views := make([]chainView, 0, len(chains))
 	for _, c := range chains {
-		views = append(views, s.buildChainView(c))
+		v := s.buildChainView(c)
+		if c.TenantID.Valid {
+			if t := tenants[c.TenantID.Int64]; t != nil {
+				v.TenantName = t.Name
+			}
+		}
+		views = append(views, v)
 	}
 	s.render(w, "chains.html", map[string]any{"User": u, "Chains": views, "Flash": flashFromCookie(w, r)})
 }

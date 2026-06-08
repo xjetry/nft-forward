@@ -9,7 +9,7 @@
     {{range .Forwards}}
     <tr{{if .ChainID.Valid}} class="grp"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
-      <td class="mono" style="color:var(--ink-2)">{{if .TenantID.Valid}}#{{.TenantID.Int64}}{{else}}admin{{end}}</td>
+      <td style="color:var(--ink-2)">{{if .TenantID.Valid}}{{$tn := index $.TenantByID .TenantID.Int64}}{{if $tn}}{{$tn.Name}}{{else}}#{{.TenantID.Int64}}{{end}}{{else}}admin{{end}}</td>
       <td><span class="tag {{if eq .Proto "tcp"}}tcp{{else if eq .Proto "udp"}}udp{{else}}tcp-udp{{end}}">{{upper .Proto}}</span></td>
       <td><span class="tag {{if eq .Mode "kernel"}}mode-k{{else}}mode-u{{end}}">{{.Mode}}</span></td>
       <td class="mono">:{{.ListenPort}}</td>
