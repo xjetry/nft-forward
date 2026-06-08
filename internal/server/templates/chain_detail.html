@@ -31,7 +31,7 @@
       <td class="mono">:{{.ListenPort}}</td>
       <td class="mono">{{if $f}}{{$f.TargetIP}}:{{$f.TargetPort}}{{end}}</td>
       <td>{{if $n}}{{if nullstr $n.LastError}}<span class="pill pill-red">{{nullstr $n.LastError}}</span>{{else if eq $n.Online 1}}<span class="pill pill-green">在线</span>{{else}}<span class="pill pill-amber">离线/待同步</span>{{end}}{{end}}</td>
-      <td class="actions"><form method="post" action="/chains/{{$.Chain.ID}}/hops/{{.Position}}/reallocate" class="inline"><button class="btn btn-ghost btn-sm" type="submit">换端口</button></form></td>
+      <td class="actions"><form method="post" action="/chains/{{$.Chain.ID}}/hops/{{.Position}}/reallocate" class="inline" style="display:flex;align-items:center;gap:6px"><input class="inp mono" name="port" type="number" min="1" max="65535" placeholder="随机" style="width:90px;height:28px;font-size:12px;padding:0 6px"><button class="btn btn-ghost btn-sm" type="submit">换端口</button></form></td>
     </tr>
     {{end}}
     </tbody>

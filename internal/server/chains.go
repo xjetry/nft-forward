@@ -320,7 +320,17 @@ func (s *Server) reallocateHop(w http.ResponseWriter, r *http.Request) {
 	for i, h := range hops {
 		inputs[i] = db.HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
 	}
-	avoid := map[int64]int{hops[pos].NodeID: hops[pos].ListenPort}
+	var avoid map[int64]int
+	if portStr := strings.TrimSpace(r.FormValue("port")); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			s.flashRedirect(w, r, "端口非法", redirect)
+			return
+		}
+		inputs[pos].DesiredPort = port
+	} else {
+		avoid = map[int64]int{hops[pos].NodeID: hops[pos].ListenPort}
+	}
 
 	tx, err := s.DB.Begin()
 	if err != nil {
