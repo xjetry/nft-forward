@@ -94,6 +94,40 @@
 </div>
 
 <div class="card">
+  <div class="card-head"><h3>已授权组合通道</h3></div>
+  {{if .Combos}}
+  <table class="tbl">
+    <thead><tr><th>组合</th><th>本用户上限</th><th class="actions">操作</th></tr></thead>
+    <tbody>
+    {{range $i, $c := .Combos}}{{$g := index $.ComboGrants $i}}
+    <tr>
+      <td style="font-weight:600">{{$c.Name}}</td>
+      <td class="mono">{{$g.MaxForwards}}</td>
+      <td class="actions"><form method="post" action="/tenants/{{$.Tenant.ID}}/combo-grants/{{$c.ID}}/delete" class="inline"><button class="btn btn-danger btn-sm" type="submit">撤销</button></form></td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<div class="empty"><h4>尚未授权任何组合通道</h4></div>{{end}}
+  <div class="card-body" style="border-top:1px solid var(--line-soft)">
+    <div class="sec-title">授权新组合</div>
+    {{if .AllCombos}}
+    <form method="post" action="/tenants/{{.Tenant.ID}}/combo-grants">
+    <div class="form-grid">
+      <label class="fl">组合通道</label>
+      <select class="inp" name="combo_id" required>{{range .AllCombos}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+      <label class="fl">本用户上限</label>
+      <input class="inp mono" name="combo_max_forwards" type="number" min="1" value="10" style="max-width:160px">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-primary" type="submit">授权</button>
+    </div>
+    </form>
+    {{else}}<div class="empty"><p>请先<a class="strong-link" href="/combos">创建组合通道</a>。</p></div>{{end}}
+  </div>
+</div>
+
+<div class="card">
   <div class="card-head"><h3>该用户的转发</h3><span class="desc">{{len .Forwards}} 条</span></div>
   {{if .Forwards}}
   <table class="tbl">

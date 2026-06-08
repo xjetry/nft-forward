@@ -147,15 +147,16 @@ func New(d *sql.DB) (*Server, error) {
 			return strings.ToUpper(s[:1])
 		},
 		"sidebarCounts": func() map[string]int {
-			var nodes, tunnels, tenants, forwards, chains int
+			var nodes, tunnels, tenants, forwards, chains, combos int
 			d.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes)
 			d.QueryRow("SELECT COUNT(*) FROM tunnels").Scan(&tunnels)
 			d.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenants)
 			d.QueryRow("SELECT COUNT(*) FROM forwards WHERE chain_id IS NULL").Scan(&forwards)
 			d.QueryRow("SELECT COUNT(*) FROM chains WHERE tenant_id IS NULL").Scan(&chains)
+			d.QueryRow("SELECT COUNT(*) FROM tunnel_combos").Scan(&combos)
 			return map[string]int{
 				"nodes": nodes, "tunnels": tunnels, "tenants": tenants,
-				"forwards": forwards, "chains": chains,
+				"forwards": forwards, "chains": chains, "combos": combos,
 			}
 		},
 	}).ParseFS(templatesFS, "templates/*.html")
@@ -419,6 +420,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tunnels", s.createTunnel)
 		r.Post("/tunnels/{id}/delete", s.deleteTunnel)
 
+		r.Get("/combos", s.listCombos)
+		r.Post("/combos", s.createCombo)
+		r.Post("/combos/{id}/delete", s.deleteCombo)
+
 		r.Get("/tenants", s.listTenants)
 		r.Post("/tenants", s.createTenant)
 		r.Get("/tenants/{id}", s.showTenant)
@@ -428,6 +433,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tenants/{id}/quota-bytes", s.setTenantQuotaBytes)
 		r.Post("/tenants/{id}/grants", s.grantTenantTunnel)
 		r.Post("/tenants/{id}/grants/{tunnelID}/delete", s.revokeTenantTunnel)
+		r.Post("/tenants/{id}/combo-grants", s.grantTenantCombo)
+		r.Post("/tenants/{id}/combo-grants/{comboID}/delete", s.revokeTenantCombo)
 		r.Post("/tenants/{id}/users", s.createTenantUser)
 
 		r.Get("/users", s.listUsers)

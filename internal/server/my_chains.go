@@ -49,24 +49,53 @@ func (s *Server) tenantNewChain(w http.ResponseWriter, r *http.Request) {
 		log.Printf("tenant new chain %d: list nodes: %v", t.ID, err)
 	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
 	s.render(w, "my_chain_form.html", map[string]any{
-		"User": u, "Tunnels": tunnels, "NodeByID": nodeByID, "Flash": flashFromCookie(w, r),
+		"User": u, "Tunnels": tunnels, "NodeByID": nodeByID, "Combos": combos, "Flash": flashFromCookie(w, r),
 	})
 }
 
 // tenantHopInputs reads hop_tunnel[] + hop_mode[], verifies each tunnel is
-// granted to the tenant, and derives the node from the tunnel. It also returns
-// the last hop's tunnel so the caller can enforce the exit CIDR.
+// granted to the tenant, and derives the node from the tunnel. Combo selections
+// (prefixed "combo:") are expanded into their constituent hops.
 func (s *Server) tenantHopInputs(r *http.Request, tenantID int64) ([]db.HopInput, *db.Tunnel, error) {
-	tunnelIDs := r.Form["hop_tunnel"]
+	selections := r.Form["hop_tunnel"]
 	modes := r.Form["hop_mode"]
-	if len(tunnelIDs) == 0 {
+	if len(selections) == 0 {
 		return nil, nil, fmt.Errorf("至少添加一个通道")
 	}
-	hops := make([]db.HopInput, 0, len(tunnelIDs))
+	hops := make([]db.HopInput, 0, len(selections))
 	var last *db.Tunnel
-	for i, idStr := range tunnelIDs {
-		tid, err := strconv.ParseInt(idStr, 10, 64)
+	for i, sel := range selections {
+		defaultMode := "kernel"
+		if i < len(modes) {
+			defaultMode = modes[i]
+		}
+
+		if strings.HasPrefix(sel, "combo:") {
+			comboID, err := strconv.ParseInt(sel[6:], 10, 64)
+			if err != nil || comboID == 0 {
+				return nil, nil, fmt.Errorf("第 %d 跳组合通道非法", i+1)
+			}
+			if _, err := db.GetComboGrant(s.DB, tenantID, comboID); err != nil {
+				return nil, nil, fmt.Errorf("无权使用组合通道 %d", comboID)
+			}
+			comboHops, err := db.ListComboHops(s.DB, comboID)
+			if err != nil || len(comboHops) == 0 {
+				return nil, nil, fmt.Errorf("组合通道 %d 无效", comboID)
+			}
+			for _, ch := range comboHops {
+				tun, err := db.GetTunnel(s.DB, ch.TunnelID)
+				if err != nil {
+					return nil, nil, fmt.Errorf("组合通道内的通道 %d 不存在", ch.TunnelID)
+				}
+				hops = append(hops, db.HopInput{NodeID: tun.NodeID, TunnelID: nullInt64(ch.TunnelID), Mode: ch.Mode})
+				last = tun
+			}
+			continue
+		}
+
+		tid, err := strconv.ParseInt(sel, 10, 64)
 		if err != nil || tid == 0 {
 			return nil, nil, fmt.Errorf("第 %d 跳通道非法", i+1)
 		}
@@ -77,11 +106,7 @@ func (s *Server) tenantHopInputs(r *http.Request, tenantID int64) ([]db.HopInput
 		if err != nil {
 			return nil, nil, fmt.Errorf("通道 %d 不存在", tid)
 		}
-		mode := "kernel"
-		if i < len(modes) {
-			mode = modes[i]
-		}
-		hops = append(hops, db.HopInput{NodeID: tun.NodeID, TunnelID: nullInt64(tid), Mode: mode})
+		hops = append(hops, db.HopInput{NodeID: tun.NodeID, TunnelID: nullInt64(tid), Mode: defaultMode})
 		last = tun
 	}
 	return hops, last, nil

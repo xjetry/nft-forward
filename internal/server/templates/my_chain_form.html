@@ -31,10 +31,15 @@
         <button type="button" onclick="moveHop(this,-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         <button type="button" onclick="moveHop(this,1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
       </div>
-      <select class="inp" name="hop_tunnel" required style="flex:1">
+      <select class="inp" name="hop_tunnel" required style="flex:1" onchange="toggleComboMode(this)">
         <option value="">— 选择通道 —</option>
+        {{if .Combos}}<optgroup label="组合通道">
+        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
+        </optgroup>{{end}}
+        <optgroup label="单通道">
         {{$nb := .NodeByID}}
         {{range .Tunnels}}{{$n := index $nb .NodeID}}<option value="{{.ID}}"{{if and $n (eq $n.RelayHost "")}} disabled{{end}}>{{.Name}} @ {{if $n}}{{$n.Name}}{{if eq $n.RelayHost ""}}（节点未设中继地址）{{end}}{{else}}—{{end}}（{{.PortStart}}-{{.PortEnd}}）</option>{{end}}
+        </optgroup>
       </select>
       <select class="inp" name="hop_mode" class="modeSel" style="width:200px">
         <option value="userspace">用户态(split-TCP)</option>
@@ -48,6 +53,7 @@
     function addHop(){document.getElementById('hops').appendChild(document.getElementById('hopRow').content.cloneNode(true));syncModes();}
     function moveHop(btn,dir){var row=btn.closest('.hop-row'),parent=row.parentNode;if(dir<0&&row.previousElementSibling)parent.insertBefore(row,row.previousElementSibling);if(dir>0&&row.nextElementSibling)parent.insertBefore(row.nextElementSibling,row);}
     function syncModes(){var udp=document.getElementById('proto').value==='udp';document.querySelectorAll('select[name=hop_mode]').forEach(function(s){var us=s.querySelector('option[value="userspace"]');if(us)us.disabled=udp;if(udp)s.value='kernel';});}
+    function toggleComboMode(sel){var ms=sel.closest('.hop-row').querySelector('select[name=hop_mode]');if(ms)ms.style.visibility=sel.value.startsWith('combo:')? 'hidden':'visible';}
     addHop();
     </script>
     {{else}}<div class="empty"><h4>管理员尚未为你授权任何通道</h4><p>无法建链路。请联系管理员。</p></div>{{end}}

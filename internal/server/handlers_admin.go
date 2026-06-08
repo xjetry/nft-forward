@@ -195,6 +195,8 @@ func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 			tenantUsers = append(tenantUsers, usr)
 		}
 	}
+	combos, comboGrants, _ := db.ListCombosForTenant(s.DB, id)
+	allCombos, _ := db.ListTunnelCombos(s.DB)
 	s.render(w, "tenant_detail.html", map[string]any{
 		"User":        u,
 		"Tenant":      t,
@@ -204,6 +206,9 @@ func (s *Server) showTenant(w http.ResponseWriter, r *http.Request) {
 		"AllNodes":    allNodes,
 		"Forwards":    forwards,
 		"TenantUsers": tenantUsers,
+		"Combos":      combos,
+		"ComboGrants": comboGrants,
+		"AllCombos":   allCombos,
 		"Flash":       flashFromCookie(w, r),
 	})
 }
