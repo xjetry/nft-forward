@@ -27,7 +27,7 @@
     {{range $i, $t := .Tunnels}}{{$g := index $.Grants $i}}{{$n := index $.NodeByID $t.NodeID}}
     <tr>
       <td style="font-weight:600">{{$t.Name}}</td>
-      <td class="mono" style="color:var(--ink-2)">{{if $n}}{{$n.Name}}{{else}}#{{$t.NodeID}}{{end}}</td>
+      <td class="mono" style="color:var(--ink-2)">{{if $n}}{{$n.Name}}{{else}}—{{end}}</td>
       <td>{{$t.ProtoMask}}</td>
       <td class="mono">{{$t.PortStart}}-{{$t.PortEnd}}</td>
       <td class="mono" style="color:var(--ink-2)">{{$t.TargetCIDRAllow}}</td>

@@ -34,7 +34,7 @@
       <select class="inp" name="hop_tunnel" required style="flex:1">
         <option value="">— 选择通道 —</option>
         {{$nb := .NodeByID}}
-        {{range .Tunnels}}{{$n := index $nb .NodeID}}<option value="{{.ID}}"{{if and $n (eq $n.RelayHost "")}} disabled{{end}}>{{.Name}} @ {{if $n}}{{$n.Name}}{{if eq $n.RelayHost ""}}（节点未设中继地址）{{end}}{{else}}#{{.NodeID}}{{end}}（{{.PortStart}}-{{.PortEnd}}）</option>{{end}}
+        {{range .Tunnels}}{{$n := index $nb .NodeID}}<option value="{{.ID}}"{{if and $n (eq $n.RelayHost "")}} disabled{{end}}>{{.Name}} @ {{if $n}}{{$n.Name}}{{if eq $n.RelayHost ""}}（节点未设中继地址）{{end}}{{else}}—{{end}}（{{.PortStart}}-{{.PortEnd}}）</option>{{end}}
       </select>
       <select class="inp" name="hop_mode" class="modeSel" style="width:200px">
         <option value="userspace">用户态(split-TCP)</option>

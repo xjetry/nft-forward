@@ -290,6 +290,11 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .blur-tog svg{width:15px;height:15px}
 .blur-tog.on{color:var(--accent);background:var(--accent-soft);border-color:#d7e2fb}
 
+.copy-wrap{cursor:pointer;position:relative}
+.copy-wrap:hover .copy-icon{opacity:.7}
+.copy-wrap.copied::after{content:'已复制';position:absolute;top:-26px;left:50%;transform:translateX(-50%);background:#11151c;color:#e8edf4;padding:2px 8px;border-radius:5px;font-size:11px;white-space:nowrap;pointer-events:none;animation:fadeout 1.2s forwards}
+@keyframes fadeout{0%{opacity:1}70%{opacity:1}100%{opacity:0}}
+
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#11151c;color:#e8edf4;padding:11px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;z-index:100;display:flex;align-items:center;gap:9px}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast svg{width:16px;height:16px;color:#4ade80}
