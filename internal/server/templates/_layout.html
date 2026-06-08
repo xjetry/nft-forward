@@ -242,8 +242,11 @@ select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns
 .cs.mono .cs-btn{font-family:var(--mono);font-size:13px}
 .cs.open .cs-btn{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
 .cs.open .cs-chev{transform:rotate(180deg)}
-.cs-pop{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:0 12px 28px -8px rgba(16,24,40,.22),0 2px 6px rgba(16,24,40,.06);padding:5px;max-height:264px;overflow-y:auto;display:none}
-.cs.open .cs-pop{display:block}
+.cs-pop{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:0 12px 28px -8px rgba(16,24,40,.22),0 2px 6px rgba(16,24,40,.06);padding:5px;display:none;overflow:hidden;display:none}
+.cs.open .cs-pop{display:flex;flex-direction:column}
+.cs-search{border:none;border-bottom:1px solid var(--line-soft);padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;width:100%;box-sizing:border-box;flex:none;display:none}
+.cs.searchable .cs-search{display:block}
+.cs-opts{max-height:240px;overflow-y:auto;flex:1}
 .cs-opt{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;font-size:13.5px;color:var(--ink);cursor:pointer;line-height:1.3}
 .cs.mono .cs-opt{font-family:var(--mono);font-size:13px}
 .cs-opt .ck{width:15px;height:15px;flex:none;color:var(--accent);opacity:0}
@@ -457,6 +460,8 @@ var CHEV='<svg class="cs-chev" viewBox="0 0 24 24" fill="none" stroke="currentCo
 function buildSelect(sel){
   var wrap=document.createElement('div');
   wrap.className='cs'+(sel.classList.contains('mono')?' mono':'');
+  var searchable=sel.options.length>6;
+  if(searchable)wrap.classList.add('searchable');
   if(sel.style.cssText)wrap.style.cssText=sel.style.cssText;
   sel.style.cssText='';
   sel.parentNode.insertBefore(wrap,sel);
@@ -467,23 +472,43 @@ function buildSelect(sel){
   wrap.appendChild(btn);
   var pop=document.createElement('div');
   pop.className='cs-pop';wrap.appendChild(pop);
+  var search=document.createElement('input');
+  search.type='text';search.className='cs-search';search.placeholder='搜索…';
+  search.addEventListener('click',function(e){e.stopPropagation()});
+  pop.appendChild(search);
+  var optsWrap=document.createElement('div');
+  optsWrap.className='cs-opts';pop.appendChild(optsWrap);
   var valEl=btn.querySelector('.cs-val');
+  var allOpts=[];
   [].slice.call(sel.options).forEach(function(o,i){
     var opt=document.createElement('div');
     opt.className='cs-opt'+(o.selected?' sel':'');
     opt.innerHTML=CK+'<span>'+o.textContent+'</span>';
+    opt.dataset.text=o.textContent.toLowerCase();
     opt.addEventListener('click',function(){
       sel.selectedIndex=i;
       valEl.textContent=o.textContent;
-      pop.querySelectorAll('.cs-opt').forEach(function(e){e.classList.remove('sel')});
+      optsWrap.querySelectorAll('.cs-opt').forEach(function(e){e.classList.remove('sel')});
       opt.classList.add('sel');
       wrap.classList.remove('open');
+      search.value='';
+      filterOpts('');
       sel.dispatchEvent(new Event('change',{bubbles:true}));
     });
-    pop.appendChild(opt);
+    optsWrap.appendChild(opt);
+    allOpts.push(opt);
   });
+  function filterOpts(q){
+    q=q.toLowerCase();
+    allOpts.forEach(function(o){o.style.display=(!q||o.dataset.text.indexOf(q)>=0)?'':'none'});
+  }
+  search.addEventListener('input',function(){filterOpts(this.value)});
   valEl.textContent=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].textContent:'';
-  btn.addEventListener('click',function(e){e.stopPropagation();wrap.classList.contains('open')?wrap.classList.remove('open'):(closeAllCS(),wrap.classList.add('open'));});
+  btn.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(wrap.classList.contains('open')){wrap.classList.remove('open')}
+    else{closeAllCS();wrap.classList.add('open');if(searchable){search.value='';filterOpts('');search.focus()}}
+  });
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
