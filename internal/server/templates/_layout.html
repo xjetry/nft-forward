@@ -442,7 +442,6 @@ pre code{background:transparent;padding:0}
         <div class="page-title">{{.Title}}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
-      <span class="blur-tog" id="showAllToggle" onclick="toggleShowAll()" title="显示所有用户的规则" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 0 1 0 5.5M18 19a5 5 0 0 0-3-4.6"/></svg><span id="showAllLabel">所有用户</span></span>
       <span class="blur-tog" id="blurToggle" onclick="toggleBlur()" title="模糊敏感信息"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span id="blurLabel">脱敏</span></span>
       </div>
     </div>
@@ -543,42 +542,6 @@ function buildSelect(sel){
   wrap._close=function(){wrap.classList.remove('open')};
 }
 function closeAllCS(){document.querySelectorAll('.cs.open').forEach(function(c){c._close&&c._close()});}
-function applyOwnerFilter(){
-  var on=document.body.classList.contains('show-all-owners');
-  var total=0,hidden=0;
-  ['fwd-tbody','chain-tbody'].forEach(function(id){
-    var tb=document.getElementById(id);if(!tb)return;
-    [].slice.call(tb.children).forEach(function(tr){
-      total++;
-      if(!tr.dataset.tenant){tr.style.display='';return;}
-      if(on){tr.style.display=''}else{tr.style.display='none';hidden++}
-    });
-  });
-  if(!on&&total>0&&hidden===total){
-    document.body.classList.add('show-all-owners');
-    var t=document.getElementById('showAllToggle');if(t)t.classList.add('on');
-    localStorage.setItem('nf-show-all','1');
-    ['fwd-tbody','chain-tbody'].forEach(function(id){
-      var tb=document.getElementById(id);if(!tb)return;
-      [].slice.call(tb.children).forEach(function(tr){tr.style.display=''});
-    });
-  }
-}
-function toggleShowAll(){
-  var on=document.body.classList.toggle('show-all-owners');
-  var t=document.getElementById('showAllToggle');if(t)t.classList.toggle('on',on);
-  localStorage.setItem('nf-show-all',on?'1':'0');
-  applyOwnerFilter();
-}
-(function(){
-  var hasTb=document.getElementById('fwd-tbody')||document.getElementById('chain-tbody');
-  var tog=document.getElementById('showAllToggle');
-  if(hasTb&&tog){
-    tog.style.display='';
-    if(localStorage.getItem('nf-show-all')==='1'){document.body.classList.add('show-all-owners');tog.classList.add('on');}
-    applyOwnerFilter();
-  }
-})();
 function probeCombo(btn,targets){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';

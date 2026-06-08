@@ -34,19 +34,26 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 	if tab != "chain" {
 		tab = "normal"
 	}
+	owner := r.URL.Query().Get("owner")
+	if owner != "all" {
+		owner = "admin"
+	}
 	var filtered []*db.Forward
 	for _, f := range allForwards {
-		if tab == "chain" && f.ChainID.Valid {
-			filtered = append(filtered, f)
-		} else if tab == "normal" && !f.ChainID.Valid {
-			filtered = append(filtered, f)
+		if tab == "chain" && !f.ChainID.Valid {
+			continue
 		}
+		if tab == "normal" && f.ChainID.Valid {
+			continue
+		}
+		if owner == "admin" && f.TenantID.Valid {
+			continue
+		}
+		filtered = append(filtered, f)
 	}
 
 	forwards, pager := paginate(filtered, r)
-	if tab != "" {
-		pager.Extra = "tab=" + tab + "&"
-	}
+	pager.Extra = "tab=" + tab + "&owner=" + owner + "&"
 
 	s.render(w, "forwards.html", map[string]any{
 		"User":       u,
@@ -58,6 +65,7 @@ func (s *Server) listForwards(w http.ResponseWriter, r *http.Request) {
 		"Combos":     combos,
 		"Pager":      pager,
 		"Tab":        tab,
+		"Owner":      owner,
 		"Flash":      flashFromCookie(w, r),
 	})
 }
