@@ -85,6 +85,9 @@ func New(d *sql.DB) (*Server, error) {
 			}
 			return out
 		},
+		"pageURL": func(extra string, page int) template.URL {
+			return template.URL(extra + fmt.Sprintf("page=%d", page))
+		},
 		"div": func(a, b int64) int64 {
 			if b == 0 {
 				return 0

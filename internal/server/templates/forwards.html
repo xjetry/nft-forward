@@ -13,7 +13,7 @@
   {{if eq .Tab "normal"}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>备注</th><th>测试</th><th class="actions">操作</th></tr></thead>
-    <tbody>
+    <tbody id="fwd-tbody">
     {{range .Forwards}}
     <tr{{if .TenantID.Valid}} data-tenant="1"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
@@ -36,7 +36,7 @@
   {{else}}
   <table class="tbl">
     <thead><tr><th>节点</th><th>用户</th><th>协议</th><th>模式</th><th>监听</th><th>目标</th><th class="num-col">累计流量</th><th>链路</th><th>测试</th><th class="actions">操作</th></tr></thead>
-    <tbody>
+    <tbody id="fwd-tbody">
     {{range .Forwards}}
     <tr class="grp" data-chain="{{.ChainID.Int64}}"{{if .TenantID.Valid}} data-tenant="1"{{end}}>
       <td style="font-weight:600">{{$n := index $.NodeByID .NodeID}}{{if $n}}{{$n.Name}}{{else}}#{{.NodeID}}{{end}}</td>
