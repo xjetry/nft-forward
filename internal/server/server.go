@@ -400,6 +400,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/change-password", s.getChangePassword)
 		r.Post("/change-password", s.postChangePassword)
 		r.Get("/api/probe", s.probeEndpoint)
+		r.Get("/api/probe-chain", s.probeChainEndpoint)
 	})
 
 	r.Group(func(r chi.Router) {

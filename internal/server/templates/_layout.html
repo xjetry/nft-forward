@@ -565,6 +565,21 @@ function probeCombo(btn,targets){
     span.textContent=parts.join(' → ');
   }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});
 }
+function probeChainHops(btn,chainID){
+  var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
+  span.className='probe-loading';span.textContent='测试中…';
+  fetch('/api/probe-chain?chain='+chainID).then(function(r){return r.json()}).then(function(d){
+    if(d.hops&&d.hops.length){
+      var parts=d.hops.map(function(h){return h.error?'✗':h.latency_ms+'ms'});
+      span.className=d.ok?'probe-ok':'probe-fail';
+      span.textContent=parts.join(' + ')+' = '+d.latency_ms+'ms';
+    }else if(d.ok){
+      span.className='probe-ok';span.textContent=d.latency_ms+'ms';
+    }else{
+      span.className='probe-fail';span.textContent=d.error||'不通';
+    }
+  }).catch(function(){span.className='probe-fail';span.textContent='请求失败';});
+}
 function probeTarget(btn,target,nodeID){
   var span=btn.nextElementSibling;if(!span){span=document.createElement('span');btn.parentNode.appendChild(span);}
   span.className='probe-loading';span.textContent='测试中…';
