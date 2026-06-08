@@ -44,21 +44,34 @@
     <form method="post" action="/my/forwards">
     <div class="form-grid">
       <label class="fl">通道</label>
-      <select class="inp" name="tunnel_id" id="my-tunnel-select" required>
+      <select class="inp" name="tunnel_id" id="my-tunnel-select" required onchange="toggleMyFwdMode()">
+        {{if .Combos}}<optgroup label="组合通道">
+        {{range .Combos}}<option value="combo:{{.ID}}">{{.Name}}</option>{{end}}
+        </optgroup>{{end}}
+        <optgroup label="单通道">
         {{range .Tunnels}}{{$tn := index $.NodeByID .NodeID}}<option value="{{.ID}}" data-port-start="{{.PortStart}}" data-port-end="{{.PortEnd}}" data-proto-mask="{{.ProtoMask}}" data-cidr="{{.TargetCIDRAllow}}">{{.Name}} @ {{if $tn}}{{$tn.Name}}{{else}}—{{end}}（{{.PortStart}}-{{.PortEnd}}/{{.ProtoMask}}）</option>{{end}}
+        </optgroup>
       </select>
       <label class="fl">协议</label>
-      <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp">TCP+UDP</option></select>
+      <select class="inp" name="proto" id="my-proto-select"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp" id="my-tcp-udp">TCP+UDP</option></select>
+      <div id="my-single-fields">
       <label class="fl">模式</label>
       <select class="inp" name="mode" style="max-width:280px"><option value="kernel">内核态(零拷贝)</option><option value="userspace">用户态(TCP)</option></select>
       <label class="fl">监听端口</label>
       <input class="inp mono" name="listen_port" id="my-listen-port" type="number" min="1" max="65535" placeholder="" style="max-width:240px">
+      </div>
       <label class="fl">目标地址</label>
       <input class="inp mono" name="target_ip" id="my-target-ip" required>
       <label class="fl">目标端口</label>
       <input class="inp mono" name="target_port" type="number" min="1" max="65535" required style="max-width:200px">
+      <div id="my-single-comment">
       <label class="fl">备注 <span class="opt">（可选）</span></label>
       <input class="inp" name="comment" placeholder="可选">
+      </div>
+      <div id="my-combo-name" style="display:none">
+      <label class="fl">链路名称 <span class="opt">（可选）</span></label>
+      <input class="inp" name="chain_name" placeholder="自动命名或手填">
+      </div>
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit">添加</button>
@@ -67,14 +80,24 @@
     </div>
     </form>
     <script>
+    function toggleMyFwdMode(){
+      var sel=document.getElementById('my-tunnel-select');
+      var isCombo=sel.value.startsWith('combo:');
+      document.getElementById('my-single-fields').style.display=isCombo?'none':'';
+      document.getElementById('my-single-comment').style.display=isCombo?'none':'';
+      document.getElementById('my-combo-name').style.display=isCombo?'':'none';
+      var tcpUdp=document.getElementById('my-tcp-udp');
+      if(tcpUdp)tcpUdp.parentElement.style.display=isCombo?'none':'';
+      if(!isCombo)syncTunnelHints();
+    }
     (function(){
       var sel = document.getElementById('my-tunnel-select');
       var proto = document.getElementById('my-proto-select');
       var port = document.getElementById('my-listen-port');
       var ip = document.getElementById('my-target-ip');
-      function syncTunnelHints(){
+      window.syncTunnelHints=function(){
         var opt = sel.options[sel.selectedIndex];
-        if (!opt) return;
+        if (!opt||!opt.dataset.portStart) return;
         var s = opt.dataset.portStart, e = opt.dataset.portEnd;
         var mask = opt.dataset.protoMask, cidr = opt.dataset.cidr;
         port.placeholder = '范围 ' + s + '-' + e + '，留空自动分配';
@@ -85,9 +108,9 @@
           else { o.disabled = (o.value !== mask); }
         });
         if (proto.options[proto.selectedIndex].disabled) proto.value = mask;
-      }
-      sel.addEventListener('change', syncTunnelHints);
-      syncTunnelHints();
+      };
+      sel.addEventListener('change', function(){if(!sel.value.startsWith('combo:'))syncTunnelHints()});
+      toggleMyFwdMode();
     })();
     </script>
   </div>
