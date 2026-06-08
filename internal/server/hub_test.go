@@ -427,7 +427,7 @@ func TestHubApplyChainHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
 	var got []int64
 	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
 
-	entry, err := hub.applyChainHopEdit(n1, c.ID, 21222, "kernel", "renamed")
+	entry, err := hub.applyChainHopEdit(n1, c.ID, 11222, "kernel", "renamed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,11 +439,11 @@ func TestHubApplyChainHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
 	for _, f := range fwds {
 		byNode[f.NodeID] = f
 	}
-	if byNode[n1].ListenPort != 21222 {
-		t.Fatalf("hop n1 listen_port = %d, want 21222", byNode[n1].ListenPort)
+	if byNode[n1].ListenPort != 11222 {
+		t.Fatalf("hop n1 listen_port = %d, want 11222", byNode[n1].ListenPort)
 	}
-	if byNode[n0].TargetPort != 21222 {
-		t.Fatalf("upstream n0 target_port = %d, want 21222", byNode[n0].TargetPort)
+	if byNode[n0].TargetPort != 11222 {
+		t.Fatalf("upstream n0 target_port = %d, want 11222", byNode[n0].TargetPort)
 	}
 	if len(got) == 0 {
 		t.Fatal("Redispatch was not called")

@@ -19,8 +19,8 @@ type DBTX interface {
 // Admin chains allocate listen ports from this high range, skipping anything
 // already occupied on the node. Tenant chains use their tunnel's port range.
 const (
-	ChainPortMin = 20000
-	ChainPortMax = 60000
+	ChainPortMin = 10001
+	ChainPortMax = 20000
 )
 
 // OccupiedPortsOnNode returns every listen port held on (node, proto) in the

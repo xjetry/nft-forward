@@ -55,19 +55,27 @@
         <label><input type="radio" name="proto" value="udp"><span>UDP</span></label>
         <label><input type="radio" name="proto" value="tcp+udp" id="fwd-tcp-udp"><span>TCP+UDP</span></label>
       </div>
-      <label class="fl fwd-only">模式</label>
-      <div class="seg fwd-only" style="max-width:340px">
+    </div>
+    <div class="form-grid" id="adm-fwd-single">
+      <label class="fl">模式</label>
+      <div class="seg" style="max-width:340px">
         <label><input type="radio" name="mode" value="kernel" checked><span>内核态 (零拷贝)</span></label>
         <label><input type="radio" name="mode" value="userspace"><span>用户态 (split-TCP)</span></label>
       </div>
-      <label class="fl fwd-only">监听端口</label>
-      <input class="inp mono fwd-only" name="listen_port" type="number" min="1" max="65535" required placeholder="例如 44751" style="max-width:200px">
+      <label class="fl">监听端口</label>
+      <input class="inp mono" name="listen_port" type="number" min="1" max="65535" required placeholder="例如 44751" style="max-width:200px">
+    </div>
+    <div class="form-grid">
       <label class="fl">目标</label>
       <input class="inp mono" name="exit" required placeholder="host:port（如 1.2.3.4:8443）">
-      <label class="fl fwd-only">备注 <span class="opt">（可选）</span></label>
-      <input class="inp fwd-only" name="comment" placeholder="可选">
-      <label class="fl combo-only" style="display:none">链路名称</label>
-      <input class="inp combo-only" name="chain_name" placeholder="自动命名或手填" style="display:none">
+    </div>
+    <div class="form-grid" id="adm-fwd-comment">
+      <label class="fl">备注 <span class="opt">（可选）</span></label>
+      <input class="inp" name="comment" placeholder="可选">
+    </div>
+    <div class="form-grid" id="adm-combo-name" style="display:none">
+      <label class="fl">链路名称</label>
+      <input class="inp" name="chain_name" placeholder="自动命名或手填">
     </div>
     <div class="form-foot">
       <button class="btn btn-primary" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>添加转发</button>
@@ -78,10 +86,11 @@
     function toggleFwdMode(){
       var sel=document.getElementById('fwd-node-sel');
       var isCombo=sel.value.startsWith('combo:');
-      document.querySelectorAll('#dlg-add-fwd .fwd-only').forEach(function(e){e.style.display=isCombo?'none':''});
-      document.querySelectorAll('#dlg-add-fwd .combo-only').forEach(function(e){e.style.display=isCombo?'':'none'});
+      document.getElementById('adm-fwd-single').style.display=isCombo?'none':'';
+      document.getElementById('adm-fwd-comment').style.display=isCombo?'none':'';
+      document.getElementById('adm-combo-name').style.display=isCombo?'':'none';
       document.getElementById('fwd-tcp-udp').parentElement.style.display=isCombo?'none':'';
-      var lp=document.querySelector('#dlg-add-fwd input[name=listen_port]');
+      var lp=document.querySelector('#adm-fwd-single input[name=listen_port]');
       if(lp)lp.required=!isCombo;
     }
     </script>

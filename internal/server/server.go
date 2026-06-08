@@ -155,6 +155,7 @@ func New(d *sql.DB) (*Server, error) {
 			}
 			return strings.ToUpper(s[:1])
 		},
+		"serverVersion": serverVersion,
 		"sidebarCounts": func() map[string]int {
 			var nodes, tunnels, tenants, forwards, chains, combos int
 			d.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes)

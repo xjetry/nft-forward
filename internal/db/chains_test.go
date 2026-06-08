@@ -538,7 +538,7 @@ func TestRegenerateChainHonorsDesiredPortAndSyncsUpstream(t *testing.T) {
 	for i, h := range hops {
 		inputs[i] = HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
 		if h.NodeID == n1 {
-			inputs[i].DesiredPort = 21111
+			inputs[i].DesiredPort = 11111
 		}
 	}
 	tx, _ := d.Begin()
@@ -553,11 +553,11 @@ func TestRegenerateChainHonorsDesiredPortAndSyncsUpstream(t *testing.T) {
 	for _, f := range fwds {
 		byNode[f.NodeID] = f
 	}
-	if byNode[n1].ListenPort != 21111 {
-		t.Fatalf("hop 1 listen_port = %d, want 21111", byNode[n1].ListenPort)
+	if byNode[n1].ListenPort != 11111 {
+		t.Fatalf("hop 1 listen_port = %d, want 11111", byNode[n1].ListenPort)
 	}
-	if byNode[n0].TargetPort != 21111 {
-		t.Fatalf("upstream hop 0 target_port = %d, want 21111 (must follow downstream)", byNode[n0].TargetPort)
+	if byNode[n0].TargetPort != 11111 {
+		t.Fatalf("upstream hop 0 target_port = %d, want 11111 (must follow downstream)", byNode[n0].TargetPort)
 	}
 }
 
