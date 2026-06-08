@@ -18,11 +18,13 @@ const maxConnsPerPort = 1024
 // listener is one userspace TCP forward: a net.Listener plus the hot-updatable
 // dial target and rate limiter shared by all of its connections.
 type listener struct {
-	port  int
-	ln    net.Listener
-	tgt   atomic.Pointer[target]
-	lim   atomic.Pointer[rate.Limiter]
-	bytes atomic.Int64
+	port     int
+	ln       net.Listener
+	tgt      atomic.Pointer[target]
+	lim      atomic.Pointer[rate.Limiter]
+	bytes    atomic.Int64
+	pool     *connPool // nil when poolSize == 0
+	poolSize int
 
 	sem    chan struct{} // counting semaphore; cap == maxConnsPerPort
 	conns  sync.Map     // net.Conn -> struct{}; only so close() can tear them down
@@ -31,15 +33,19 @@ type listener struct {
 	wg     sync.WaitGroup
 }
 
-func openListener(r nft.Rule) (*listener, error) {
+func openListener(r nft.Rule, poolSize int) (*listener, error) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf(":%d", r.SrcPort))
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &listener{port: r.SrcPort, ln: ln, ctx: ctx, cancel: cancel, sem: make(chan struct{}, maxConnsPerPort)}
-	l.tgt.Store(&target{addr: targetAddr(r)})
+	addr := targetAddr(r)
+	l := &listener{port: r.SrcPort, ln: ln, ctx: ctx, cancel: cancel, sem: make(chan struct{}, maxConnsPerPort), poolSize: poolSize}
+	l.tgt.Store(&target{addr: addr})
 	l.lim.Store(makeLimiter(r.BandwidthMbps))
+	if poolSize > 0 {
+		l.pool = newConnPool(addr, poolSize)
+	}
 	l.wg.Add(1)
 	go l.acceptLoop()
 	return l, nil
@@ -77,7 +83,13 @@ func (l *listener) handle(client net.Conn) {
 	if tgt == nil {
 		return
 	}
-	upstream, err := net.DialTimeout("tcp4", tgt.addr, dialTimeout)
+	var upstream net.Conn
+	var err error
+	if l.pool != nil {
+		upstream, err = l.pool.Get()
+	} else {
+		upstream, err = net.DialTimeout("tcp4", tgt.addr, dialTimeout)
+	}
 	if err != nil {
 		return
 	}
@@ -108,6 +120,9 @@ func (l *listener) handle(client net.Conn) {
 func (l *listener) close() {
 	l.cancel()
 	_ = l.ln.Close()
+	if l.pool != nil {
+		l.pool.Close()
+	}
 	l.conns.Range(func(k, _ any) bool {
 		if c, ok := k.(net.Conn); ok {
 			_ = c.Close()
@@ -121,10 +136,11 @@ func (l *listener) close() {
 type userspaceBackend struct {
 	mu        sync.Mutex
 	listeners map[int]*listener
+	poolSize  int
 }
 
 func newUserspaceBackend() *userspaceBackend {
-	return &userspaceBackend{listeners: map[int]*listener{}}
+	return &userspaceBackend{listeners: map[int]*listener{}, poolSize: envPoolSize()}
 }
 
 // Reconcile makes the running listener set match rules. New listeners open
@@ -145,7 +161,7 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 		if _, ok := b.listeners[port]; ok {
 			continue
 		}
-		l, err := openListener(r)
+		l, err := openListener(r, b.poolSize)
 		if err != nil {
 			for _, ol := range opened {
 				ol.close()
@@ -159,8 +175,16 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 
 	for port, r := range desired {
 		l := b.listeners[port]
-		l.tgt.Store(&target{addr: targetAddr(r)})
+		newAddr := targetAddr(r)
+		oldTgt := l.tgt.Load()
+		l.tgt.Store(&target{addr: newAddr})
 		l.lim.Store(makeLimiter(r.BandwidthMbps))
+		if oldTgt != nil && oldTgt.addr != newAddr && b.poolSize > 0 {
+			if l.pool != nil {
+				l.pool.Close()
+			}
+			l.pool = newConnPool(newAddr, b.poolSize)
+		}
 	}
 
 	for port, l := range b.listeners {
