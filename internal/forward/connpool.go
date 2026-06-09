@@ -12,7 +12,13 @@ import (
 const (
 	defaultPoolSize  = 4
 	poolRetryBackoff = 2 * time.Second
+	poolConnMaxAge   = 90 * time.Second
 )
+
+type timedConn struct {
+	net.Conn
+	created time.Time
+}
 
 func envPoolSize() int {
 	s := os.Getenv("NFT_FORWARD_POOL_SIZE")
@@ -32,7 +38,7 @@ func envPoolSize() int {
 type connPool struct {
 	addr string
 	size int
-	idle chan net.Conn
+	idle chan timedConn
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -44,7 +50,7 @@ func newConnPool(addr string, size int) *connPool {
 	p := &connPool{
 		addr:   addr,
 		size:   size,
-		idle:   make(chan net.Conn, size),
+		idle:   make(chan timedConn, size),
 		ctx:    ctx,
 		cancel: cancel,
 	}
@@ -59,11 +65,15 @@ func newConnPool(addr string, size int) *connPool {
 func (p *connPool) Get() (net.Conn, error) {
 	for {
 		select {
-		case c := <-p.idle:
-			if isConnAlive(c) {
-				return c, nil
+		case tc := <-p.idle:
+			if time.Since(tc.created) > poolConnMaxAge {
+				tc.Close()
+				continue
 			}
-			c.Close()
+			if isConnAlive(tc.Conn) {
+				return tc.Conn, nil
+			}
+			tc.Close()
 			continue
 		default:
 			return net.DialTimeout("tcp4", p.addr, dialTimeout)
@@ -101,7 +111,7 @@ func (p *connPool) replenish() {
 		}
 
 		select {
-		case p.idle <- c:
+		case p.idle <- timedConn{Conn: c, created: time.Now()}:
 		case <-p.ctx.Done():
 			c.Close()
 			return
@@ -113,8 +123,8 @@ func (p *connPool) Close() {
 	p.cancel()
 	p.wg.Wait()
 	close(p.idle)
-	for c := range p.idle {
-		c.Close()
+	for tc := range p.idle {
+		tc.Close()
 	}
 }
 
