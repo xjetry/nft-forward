@@ -223,6 +223,31 @@ func DeleteChain(d *sql.DB, id int64) ([]int64, error) {
 	return nodes, nil
 }
 
+// EntryChainForwardIDs returns the forward IDs on nodeID that are entry hops
+// of their chain. Non-entry hops should not count toward tenant traffic so
+// the same bytes aren't billed once per relay node.
+func EntryChainForwardIDs(d DBTX, nodeID int64) (map[int64]bool, error) {
+	rows, err := d.Query(`
+		SELECT f.id FROM forwards f
+		JOIN chains c ON c.id = f.chain_id
+		WHERE f.node_id = ?
+		  AND c.entry_node_id = f.node_id
+		  AND c.entry_listen_port = f.listen_port`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		m[id] = true
+	}
+	return m, rows.Err()
+}
+
 // ChainsReferencingNode returns the distinct chain IDs that have a hop on the
 // given node. Chain forwards bake the next hop's relay_host into their target,
 // so when a node's relay_host changes or the node is removed, every chain it

@@ -466,6 +466,13 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		log.Printf("hub: node %d load forward map for counters: %v", nodeID, err)
 		return
 	}
+	// Entry-hop set: only entry hops of a chain count toward tenant traffic
+	// so the same bytes aren't billed once per relay node.
+	entryFwds, err := db.EntryChainForwardIDs(h.DB, nodeID)
+	if err != nil {
+		log.Printf("hub: node %d load entry chain forwards: %v", nodeID, err)
+		entryFwds = nil // degrade: count all (over-bill rather than silently lose data)
+	}
 	touched := map[int64]bool{}
 	for _, s := range samples {
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
@@ -480,6 +487,9 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			continue
 		}
 		if f.TenantID.Valid && s.BytesDelta > 0 {
+			if f.ChainID.Valid && !entryFwds[f.ID] {
+				continue // non-entry chain hop: skip tenant billing
+			}
 			if err := db.AddTenantTraffic(h.DB, f.TenantID.Int64, s.BytesDelta); err != nil {
 				log.Printf("hub: tenant %d traffic add: %v", f.TenantID.Int64, err)
 				continue

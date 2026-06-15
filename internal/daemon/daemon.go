@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -71,9 +72,14 @@ func New(cfg Config) (*Daemon, error) {
 	iface := cfg.Iface
 	if iface == "" {
 		iface = tc.DefaultIface()
-		if iface == "" {
-			iface = "eth0"
+	}
+	if iface != "" {
+		if _, err := net.InterfaceByName(iface); err != nil {
+			log.Printf("WARN: tc interface %q not found — bandwidth shaping disabled", iface)
+			iface = ""
 		}
+	} else {
+		log.Printf("WARN: no default-route interface detected — bandwidth shaping disabled (use --iface to set manually)")
 	}
 	if cfg.Dataplane == nil {
 		cfg.Dataplane = forward.New(forward.Config{Iface: iface})
