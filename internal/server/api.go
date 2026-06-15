@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ import (
 // --- JSON helpers ---
 
 func jsonOK(w http.ResponseWriter, data any) {
+	if m, ok := data.(map[string]any); ok {
+		ensureNonNilSlices(m)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }
@@ -37,6 +41,20 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// ensureNonNilSlices replaces nil slices with empty slices so JSON
+// serialization produces [] instead of null.
+func ensureNonNilSlices(m map[string]any) {
+	for k, v := range m {
+		if v == nil {
+			continue
+		}
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			m[k] = []any{}
+		}
+	}
 }
 
 // --- API auth middleware ---

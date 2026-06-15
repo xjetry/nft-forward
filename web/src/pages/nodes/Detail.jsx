@@ -27,7 +27,8 @@ export default function NodeDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="节点不存在" /></Layout>
 
-  const { node, forwards = [], panel_url, panel_url_configured, server_version } = data
+  const { node, panel_url, panel_url_configured, server_version } = data
+  const forwards = data.forwards || []
 
   const saveName = async (e) => {
     e.preventDefault()
