@@ -5,34 +5,34 @@ import (
 )
 
 type Tenant struct {
-	ID                int64
-	Name              string
-	MaxForwards       int
-	TrafficQuotaBytes int64
-	TrafficUsedBytes  int64
-	ExpiresAt         sql.NullInt64
-	Disabled          bool
-	DisableReason     sql.NullString
-	CreatedAt         int64
+	ID                int64          `json:"id"`
+	Name              string         `json:"name"`
+	MaxForwards       int            `json:"max_forwards"`
+	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
+	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
+	ExpiresAt         sql.NullInt64  `json:"expires_at"`
+	Disabled          bool           `json:"disabled"`
+	DisableReason     sql.NullString `json:"disable_reason"`
+	CreatedAt         int64          `json:"created_at"`
 }
 
 type Tunnel struct {
-	ID              int64
-	Name            string
-	NodeID          int64
-	ProtoMask       string
-	PortStart       int
-	PortEnd         int
-	TargetCIDRAllow string
-	BandwidthMbps   int
-	CreatedAt       int64
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	NodeID          int64  `json:"node_id"`
+	ProtoMask       string `json:"proto_mask"`
+	PortStart       int    `json:"port_start"`
+	PortEnd         int    `json:"port_end"`
+	TargetCIDRAllow string `json:"target_cidr_allow"`
+	BandwidthMbps   int    `json:"bandwidth_mbps"`
+	CreatedAt       int64  `json:"created_at"`
 }
 
 type TenantTunnel struct {
-	TenantID    int64
-	TunnelID    int64
-	MaxForwards int
-	GrantedAt   int64
+	TenantID    int64 `json:"tenant_id"`
+	TunnelID    int64 `json:"tunnel_id"`
+	MaxForwards int   `json:"max_forwards"`
+	GrantedAt   int64 `json:"granted_at"`
 }
 
 // Tenants

@@ -72,25 +72,25 @@ func PickFreePort(start, end int, used map[int]bool) int {
 }
 
 type Chain struct {
-	ID              int64
-	TenantID        sql.NullInt64
-	Name            string
-	Proto           string
-	ExitHost        string
-	ExitPort        int
-	EntryNodeID     sql.NullInt64
-	EntryListenPort int
-	CreatedAt       int64
+	ID              int64         `json:"id"`
+	TenantID        sql.NullInt64 `json:"tenant_id"`
+	Name            string        `json:"name"`
+	Proto           string        `json:"proto"`
+	ExitHost        string        `json:"exit_host"`
+	ExitPort        int           `json:"exit_port"`
+	EntryNodeID     sql.NullInt64 `json:"entry_node_id"`
+	EntryListenPort int           `json:"entry_listen_port"`
+	CreatedAt       int64         `json:"created_at"`
 }
 
 type ChainHop struct {
-	ChainID    int64
-	Position   int
-	NodeID     int64
-	TunnelID   sql.NullInt64
-	ListenPort int
-	Mode       string
-	Comment    string
+	ChainID    int64         `json:"chain_id"`
+	Position   int           `json:"position"`
+	NodeID     int64         `json:"node_id"`
+	TunnelID   sql.NullInt64 `json:"tunnel_id"`
+	ListenPort int           `json:"listen_port"`
+	Mode       string        `json:"mode"`
+	Comment    string        `json:"comment"`
 }
 
 const chainCols = `id,tenant_id,name,proto,exit_host,exit_port,entry_node_id,entry_listen_port,created_at`
@@ -175,9 +175,9 @@ func ListChainHops(d DBTX, chainID int64) ([]*ChainHop, error) {
 }
 
 type ChainHopInfo struct {
-	ChainName string
-	Position  int
-	TotalHops int
+	ChainName string `json:"chain_name"`
+	Position  int    `json:"position"`
+	TotalHops int    `json:"total_hops"`
 }
 
 func ChainHopInfoMap(d DBTX) (map[int64]*ChainHopInfo, error) {

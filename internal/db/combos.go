@@ -3,23 +3,23 @@ package db
 import "database/sql"
 
 type TunnelCombo struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 type TunnelComboHop struct {
-	ComboID  int64
-	Position int
-	TunnelID int64
-	Mode     string
+	ComboID  int64  `json:"combo_id"`
+	Position int    `json:"position"`
+	TunnelID int64  `json:"tunnel_id"`
+	Mode     string `json:"mode"`
 }
 
 type TenantTunnelCombo struct {
-	TenantID    int64
-	ComboID     int64
-	MaxForwards int
-	GrantedAt   int64
+	TenantID    int64 `json:"tenant_id"`
+	ComboID     int64 `json:"combo_id"`
+	MaxForwards int   `json:"max_forwards"`
+	GrantedAt   int64 `json:"granted_at"`
 }
 
 func CreateTunnelCombo(d DBTX, name string, hops []TunnelComboHop) (int64, error) {
