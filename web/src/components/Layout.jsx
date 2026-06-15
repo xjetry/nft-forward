@@ -15,7 +15,7 @@ export function UserProvider({ children }) {
   const idRef = useRef(0)
 
   useEffect(() => {
-    api.get('/me').then(u => setUser(u)).catch(() => setUser(null))
+    api.get('/me').then(data => setUser(data?.user ?? null)).catch(() => setUser(null))
   }, [])
 
   const toast = useCallback((msg) => {

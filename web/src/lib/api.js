@@ -8,7 +8,9 @@ async function request(method, path, body) {
   }
   const res = await fetch(BASE + path, opts)
   if (res.status === 401) {
-    window.location.href = '/login'
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
     return null
   }
   if (res.status === 204) return null
