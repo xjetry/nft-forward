@@ -166,8 +166,8 @@ func TestChainCRUD(t *testing.T) {
 	if c.Name != "vless" || c.Proto != "tcp" || c.ExitHost != "seednet" || c.ExitPort != 8443 {
 		t.Fatalf("round-trip mismatch: %+v", c)
 	}
-	if c.TenantID.Valid || c.EntryListenPort != 0 {
-		t.Fatalf("fresh admin chain should have NULL tenant + entry 0: %+v", c)
+	if c.OwnerID.Valid || c.EntryListenPort != 0 {
+		t.Fatalf("fresh admin chain should have NULL owner + entry 0: %+v", c)
 	}
 	admin, err := ListAdminChains(d)
 	if err != nil {
@@ -220,34 +220,34 @@ func TestDeleteChainReturnsAffectedNodes(t *testing.T) {
 	}
 }
 
-func TestListChainsByTenant(t *testing.T) {
+func TestListChainsByUser(t *testing.T) {
 	d := openMemDB(t)
-	tid, err := CreateTenant(d, &Tenant{Name: "acme"})
+	uid, err := CreateUser(d, "acme", "hash", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, err := CreateChain(d, &Chain{TenantID: sql.NullInt64{Int64: tid, Valid: true}, Name: "owned", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	owned, err := CreateChain(d, &Chain{OwnerID: sql.NullInt64{Int64: uid, Valid: true}, Name: "owned", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := CreateChain(d, &Chain{Name: "admin", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443}); err != nil {
 		t.Fatal(err)
 	}
-	byTenant, err := ListChainsByTenant(d, tid)
+	byUser, err := ListChainsByUser(d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(byTenant) != 1 || byTenant[0].ID != owned {
-		t.Fatalf("ListChainsByTenant = %+v, want only chain %d", byTenant, owned)
+	if len(byUser) != 1 || byUser[0].ID != owned {
+		t.Fatalf("ListChainsByUser = %+v, want only chain %d", byUser, owned)
 	}
-	// ListAdminChains filters tenant_id IS NULL, so it must exclude the tenant chain.
+	// ListAdminChains filters owner_id IS NULL, so it must exclude the user chain.
 	admin, err := ListAdminChains(d)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range admin {
 		if c.ID == owned {
-			t.Fatalf("ListAdminChains must not include tenant-owned chain %d", owned)
+			t.Fatalf("ListAdminChains must not include user-owned chain %d", owned)
 		}
 	}
 }

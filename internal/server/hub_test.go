@@ -214,15 +214,19 @@ func TestHubCountersUpdatesForwardBytes(t *testing.T) {
 	}
 }
 
-func TestHubCountersAccumulatesTenantTrafficAndNotifies(t *testing.T) {
+func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	srv, hub, n := newHubTestServer(t)
-	tid, err := db.CreateTenant(hub.DB, &db.Tenant{Name: "acme", TrafficQuotaBytes: 1000})
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(hub.DB, "acme", hash, "user")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
 	fid, err := db.CreateForward(hub.DB, &db.Forward{
 		NodeID:     n.ID,
-		TenantID:   sql.NullInt64{Int64: tid, Valid: true},
+		OwnerID:    sql.NullInt64{Int64: uid, Valid: true},
 		Proto:      "tcp",
 		ListenPort: 9100,
 		TargetIP:   "10.0.0.20",
@@ -233,7 +237,7 @@ func TestHubCountersAccumulatesTenantTrafficAndNotifies(t *testing.T) {
 	}
 
 	var notified []int64
-	hub.OnTrafficUpdate = func(tenantID int64) { notified = append(notified, tenantID) }
+	hub.OnTrafficUpdate = func(userID int64) { notified = append(notified, userID) }
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{
@@ -247,26 +251,26 @@ func TestHubCountersAccumulatesTenantTrafficAndNotifies(t *testing.T) {
 	if gotFwd.TotalBytes != delta {
 		t.Fatalf("forward total_bytes = %d, want %d", gotFwd.TotalBytes, delta)
 	}
-	gotTenant, err := db.GetTenant(hub.DB, tid)
+	gotUser, err := db.GetUserByID(hub.DB, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotTenant.TrafficUsedBytes != delta {
-		t.Fatalf("tenant traffic_used_bytes = %d, want %d", gotTenant.TrafficUsedBytes, delta)
+	if gotUser.TrafficUsedBytes != delta {
+		t.Fatalf("user traffic_used_bytes = %d, want %d", gotUser.TrafficUsedBytes, delta)
 	}
-	if len(notified) != 1 || notified[0] != tid {
-		t.Fatalf("OnTrafficUpdate calls = %v, want [%d]", notified, tid)
+	if len(notified) != 1 || notified[0] != uid {
+		t.Fatalf("OnTrafficUpdate calls = %v, want [%d]", notified, uid)
 	}
 	_ = srv
 }
 
-func TestEnforceTenantQuotaDisablesOverQuotaTenant(t *testing.T) {
+func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 	d := openDB(t)
 	s, err := New(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Route the tenant's forward through the self-node so the re-dispatch the
+	// Route the user's forward through the self-node so the re-dispatch the
 	// enforcer triggers hits the stubbed local sender instead of a real socket.
 	self, err := EnsureSelfNode(d)
 	if err != nil {
@@ -278,16 +282,20 @@ func TestEnforceTenantQuotaDisablesOverQuotaTenant(t *testing.T) {
 		return nil
 	}
 
-	tid, err := db.CreateTenant(d, &db.Tenant{Name: "over", TrafficQuotaBytes: 1000})
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(d, "over", hash, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddTenantTraffic(d, tid, 1500); err != nil { // push usage past the quota
+	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddUserTraffic(d, uid, 1500); err != nil { // push usage past the quota
 		t.Fatal(err)
 	}
 	if _, err := db.CreateForward(d, &db.Forward{
 		NodeID:     self.ID,
-		TenantID:   sql.NullInt64{Int64: tid, Valid: true},
+		OwnerID:    sql.NullInt64{Int64: uid, Valid: true},
 		Proto:      "tcp",
 		ListenPort: 9200,
 		TargetIP:   "10.0.0.30",
@@ -296,40 +304,44 @@ func TestEnforceTenantQuotaDisablesOverQuotaTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.enforceTenantQuota(tid)
+	s.enforceUserQuota(uid)
 
-	got, err := db.GetTenant(d, tid)
+	got, err := db.GetUserByID(d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.Disabled {
-		t.Fatalf("expected tenant %d disabled after exceeding quota", tid)
+		t.Fatalf("expected user %d disabled after exceeding quota", uid)
 	}
 	if !dispatched {
-		t.Fatalf("expected re-dispatch to the tenant's node after disabling")
+		t.Fatalf("expected re-dispatch to the user's node after disabling")
 	}
 }
 
-func TestEnforceTenantQuotaLeavesUnderQuotaTenantEnabled(t *testing.T) {
+func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
 	d := openDB(t)
 	s, err := New(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid, err := db.CreateTenant(d, &db.Tenant{Name: "under", TrafficQuotaBytes: 1000})
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(d, "under", hash, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddTenantTraffic(d, tid, 200); err != nil {
+	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
-	s.enforceTenantQuota(tid)
-	got, err := db.GetTenant(d, tid)
+	if err := db.AddUserTraffic(d, uid, 200); err != nil {
+		t.Fatal(err)
+	}
+	s.enforceUserQuota(uid)
+	got, err := db.GetUserByID(d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Disabled {
-		t.Fatalf("tenant under quota should stay enabled, got disabled")
+		t.Fatalf("user under quota should stay enabled, got disabled")
 	}
 }
 

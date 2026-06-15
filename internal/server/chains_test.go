@@ -315,21 +315,23 @@ func TestDeleteMidNodeRewiresChain(t *testing.T) {
 	}
 }
 
-func TestDeleteNodeTearsDownTenantChainOnCIDRViolation(t *testing.T) {
+func TestDeleteNodeTearsDownUserChainOnCIDRViolation(t *testing.T) {
 	d := openDB(t)
-	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 100})
+	hash, _ := HashPassword("pw")
+	uid, _ := db.CreateUser(d, "acme", hash, "user")
+	d.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, 100, uid)
 	n1, _ := db.CreateNode(d, "node-1", "https://p", "t1")
 	n2, _ := db.CreateNode(d, "node-2", "https://p", "t2")
 	_ = db.UpdateNodeRelayHost(d, n1.ID, "1.1.1.1")
 	_ = db.UpdateNodeRelayHost(d, n2.ID, "2.2.2.2")
 	tunA, _ := db.CreateTunnel(d, &db.Tunnel{Name: "a", NodeID: n1.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "10.0.0.0/8"})
 	tunB, _ := db.CreateTunnel(d, &db.Tunnel{Name: "b", NodeID: n2.ID, ProtoMask: "tcp+udp", PortStart: 31000, PortEnd: 31100, TargetCIDRAllow: "0.0.0.0/0"})
-	_ = db.GrantTunnel(d, tid, tunA, 5)
-	_ = db.GrantTunnel(d, tid, tunB, 5)
+	_ = db.GrantTunnel(d, uid, tunA, 5)
+	_ = db.GrantTunnel(d, uid, tunB, 5)
 
-	// Seed a tenant chain whose exit (9.9.9.9) is allowed only because the last
+	// Seed a user chain whose exit (9.9.9.9) is allowed only because the last
 	// hop is tunnel B (0.0.0.0/0); tunnel A alone (10.0.0.0/8) would forbid it.
-	cid, _ := db.CreateChain(d, &db.Chain{TenantID: sql.NullInt64{Int64: tid, Valid: true}, Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
+	cid, _ := db.CreateChain(d, &db.Chain{OwnerID: sql.NullInt64{Int64: uid, Valid: true}, Name: "c", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443})
 	c, _ := db.GetChain(d, cid)
 	tx, err := d.Begin()
 	if err != nil {
@@ -358,8 +360,8 @@ func TestDeleteNodeTearsDownTenantChainOnCIDRViolation(t *testing.T) {
 		t.Fatalf("delete node status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	if chains, _ := db.ListChainsByTenant(d, tid); len(chains) != 0 {
-		t.Fatalf("tenant chain must be removed when the promoted last hop forbids the exit, got %d", len(chains))
+	if chains, _ := db.ListChainsByUser(d, uid); len(chains) != 0 {
+		t.Fatalf("user chain must be removed when the promoted last hop forbids the exit, got %d", len(chains))
 	}
 	if fws, _ := db.ListForwardsByChain(d, cid); len(fws) != 0 {
 		t.Fatalf("chain forwards must be gone after teardown, got %d", len(fws))

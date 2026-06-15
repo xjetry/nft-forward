@@ -1,9 +1,0 @@
-{{define "pager"}}
-{{if gt .TotalPages 1}}
-<div class="pager">
-  {{if gt .Page 1}}<a href="?{{pageURL .Extra (sub .Page 1)}}">&laquo; 上一页</a>{{end}}
-  {{range pages .TotalPages .Page}}<a{{if eq . $.Page}} class="cur"{{end}} href="?{{pageURL $.Extra .}}">{{.}}</a>{{end}}
-  {{if lt .Page .TotalPages}}<a href="?{{pageURL .Extra (add .Page 1)}}">下一页 &raquo;</a>{{end}}
-</div>
-{{end}}
-{{end}}

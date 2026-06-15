@@ -16,15 +16,15 @@ export default function MyDashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { tenant, tunnels = [], grants = [], node_by_id = {} } = data
+  const { user, tunnels = [], grants = [], node_by_id = {} } = data
 
-  const expiresAt = tenant.expires_at?.Valid && tenant.expires_at.Int64 > 0 ? tenant.expires_at.Int64 : null
+  const expiresAt = user.expires_at?.Valid && user.expires_at.Int64 > 0 ? user.expires_at.Int64 : null
 
   return (
     <Layout>
-      {tenant.disabled && (
+      {user.disabled && (
         <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm font-medium">
-          您的账号已被禁用：{nullStr(tenant.disable_reason)}。请联系管理员。
+          您的账号已被禁用：{nullStr(user.disable_reason)}。请联系管理员。
         </div>
       )}
 
@@ -33,12 +33,12 @@ export default function MyDashboard() {
         <div className="card-header"><h3 className="text-sm font-bold">我的配额</h3></div>
         <div className="p-5">
           <div className="grid grid-cols-[140px_1fr] gap-4 items-center text-sm">
-            <span className="fl">最大转发数</span><span className="font-mono">{tenant.max_forwards}</span>
-            <span className="fl">流量配额</span><span className="font-mono">{tenant.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;（不限）</span> : `${Math.floor(tenant.traffic_quota_bytes / 1048576)} MB`}</span>
+            <span className="fl">最大转发数</span><span className="font-mono">{user.max_forwards}</span>
+            <span className="fl">流量配额</span><span className="font-mono">{user.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;（不限）</span> : `${Math.floor(user.traffic_quota_bytes / 1048576)} MB`}</span>
             <span className="fl">已用流量</span>
             <span className="font-mono">
-              {Math.floor(tenant.traffic_used_bytes / 1048576)} MB
-              {tenant.traffic_quota_bytes > 0 && ` (${pct(tenant.traffic_used_bytes, tenant.traffic_quota_bytes)}%)`}
+              {Math.floor(user.traffic_used_bytes / 1048576)} MB
+              {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
             </span>
             <span className="fl">到期时间</span>
             <span className="font-mono">

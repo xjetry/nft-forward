@@ -9,12 +9,16 @@ import (
 )
 
 type User struct {
-	ID       int64         `json:"id"`
-	Username string        `json:"username"`
-	PwHash   string        `json:"-"`
-	Role     string        `json:"role"`
-	TenantID sql.NullInt64 `json:"tenant_id"`
-	Disabled bool          `json:"disabled"`
+	ID                int64          `json:"id"`
+	Username          string         `json:"username"`
+	PwHash            string         `json:"-"`
+	Role              string         `json:"role"`
+	Disabled          bool           `json:"disabled"`
+	DisableReason     sql.NullString `json:"disable_reason"`
+	MaxForwards       int            `json:"max_forwards"`
+	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
+	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
+	ExpiresAt         sql.NullInt64  `json:"expires_at"`
 }
 
 type Node struct {
@@ -51,7 +55,7 @@ type Node struct {
 type Forward struct {
 	ID         int64         `json:"id"`
 	NodeID     int64         `json:"node_id"`
-	TenantID   sql.NullInt64 `json:"tenant_id"`
+	OwnerID    sql.NullInt64 `json:"owner_id"`
 	TunnelID   sql.NullInt64 `json:"tunnel_id"`
 	Proto      string        `json:"proto"`
 	ListenPort int           `json:"listen_port"`
@@ -90,37 +94,28 @@ func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
 	return res.LastInsertId()
 }
 
-func CreateTenantUser(d *sql.DB, tenantID int64, username, pwHash string) (int64, error) {
-	res, err := d.Exec(`INSERT INTO users(username, pw_hash, role, tenant_id, created_at) VALUES (?,?,?,?,?)`,
-		username, pwHash, "tenant", tenantID, now())
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
 func scanUser(r rowScanner) (*User, error) {
 	u := &User{}
 	var disabled int
-	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &u.TenantID, &disabled); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.ExpiresAt); err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
 	return u, nil
 }
 
-const userCols = `id, username, pw_hash, role, tenant_id, disabled`
+const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, expires_at`
 
 func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
 }
 
-func SetUserDisabled(d *sql.DB, id int64, disabled bool) error {
+func SetUserDisabled(d *sql.DB, id int64, disabled bool, reason string) error {
 	v := 0
 	if disabled {
 		v = 1
 	}
-	_, err := d.Exec(`UPDATE users SET disabled=? WHERE id=?`, v, id)
+	_, err := d.Exec(`UPDATE users SET disabled=?, disable_reason=? WHERE id=?`, v, reason, id)
 	return err
 }
 
@@ -129,18 +124,14 @@ func DeleteUser(d *sql.DB, id int64) error {
 	return err
 }
 
-func CountUsersByTenant(d *sql.DB, tenantID int64) (int, error) {
-	return count(d, `SELECT COUNT(*) FROM users WHERE tenant_id=?`, tenantID)
-}
-
-// DeleteForwardsForTenant removes all forwards owned by a tenant and returns
+// DeleteForwardsForUser removes all forwards owned by a user and returns
 // the list of node IDs whose ruleset needs to be re-pushed.
-func DeleteForwardsForTenant(d *sql.DB, tenantID int64) ([]int64, error) {
-	nodes, err := DistinctTenantNodes(d, tenantID)
+func DeleteForwardsForUser(d *sql.DB, userID int64) ([]int64, error) {
+	nodes, err := DistinctUserNodes(d, userID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := d.Exec(`DELETE FROM forwards WHERE tenant_id=?`, tenantID); err != nil {
+	if _, err := d.Exec(`DELETE FROM forwards WHERE owner_id=?`, userID); err != nil {
 		return nil, err
 	}
 	return nodes, nil
@@ -170,9 +161,11 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
+const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.expires_at`
+
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
-		SELECT `+userCols+`
+		SELECT `+userColsQualified+`
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, token))
 }
@@ -280,12 +273,12 @@ func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
 
 // Forwards
 
-const forwardCols = `id,node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,disabled,last_bytes,total_bytes,created_at,mode,chain_id`
+const forwardCols = `id,node_id,owner_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,disabled,last_bytes,total_bytes,created_at,mode,chain_id`
 
 func scanForward(r rowScanner) (*Forward, error) {
 	f := &Forward{}
 	var disabled int
-	if err := r.Scan(&f.ID, &f.NodeID, &f.TenantID, &f.TunnelID, &f.Proto, &f.ListenPort, &f.TargetIP, &f.TargetPort, &f.Comment, &disabled, &f.LastBytes, &f.TotalBytes, &f.CreatedAt, &f.Mode, &f.ChainID); err != nil {
+	if err := r.Scan(&f.ID, &f.NodeID, &f.OwnerID, &f.TunnelID, &f.Proto, &f.ListenPort, &f.TargetIP, &f.TargetPort, &f.Comment, &disabled, &f.LastBytes, &f.TotalBytes, &f.CreatedAt, &f.Mode, &f.ChainID); err != nil {
 		return nil, err
 	}
 	f.Disabled = disabled == 1
@@ -303,8 +296,8 @@ func NormalizeForwardMode(m string) string {
 }
 
 func CreateForward(d *sql.DB, f *Forward) (int64, error) {
-	res, err := d.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		f.NodeID, f.TenantID, f.TunnelID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, now(), NormalizeForwardMode(f.Mode), f.ChainID)
+	res, err := d.Exec(`INSERT INTO forwards(node_id,owner_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		f.NodeID, f.OwnerID, f.TunnelID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, now(), NormalizeForwardMode(f.Mode), f.ChainID)
 	if err != nil {
 		return 0, err
 	}
@@ -394,30 +387,30 @@ func ListForwardsByNode(d *sql.DB, nodeID int64) ([]*Forward, error) {
 }
 
 // ActiveForwardsForPush returns forwards eligible to be installed on a node.
-// Forwards belonging to a disabled or expired tenant are excluded so the
+// Forwards belonging to a disabled or expired user are excluded so the
 // kernel state reflects current quota/expiry decisions.
 func ActiveForwardsForPush(d *sql.DB, nodeID int64) ([]*Forward, error) {
 	q := `SELECT ` + forwardCols + ` FROM forwards f
 		WHERE f.node_id=? AND f.disabled=0
 		AND NOT EXISTS (
-		  SELECT 1 FROM tenants t
-		  WHERE t.id = f.tenant_id
-		  AND (t.disabled = 1 OR (t.expires_at IS NOT NULL AND t.expires_at > 0 AND t.expires_at < strftime('%s','now')))
+		  SELECT 1 FROM users u
+		  WHERE u.id = f.owner_id
+		  AND (u.disabled = 1 OR (u.expires_at IS NOT NULL AND u.expires_at > 0 AND u.expires_at < strftime('%s','now')))
 		)
 		ORDER BY listen_port`
 	return queryAll(d, q, scanForward, nodeID)
 }
 
-func ListForwardsForTenant(d *sql.DB, tenantID int64) ([]*Forward, error) {
-	return listForwardsWhere(d, "tenant_id=?", tenantID)
+func ListForwardsForUser(d *sql.DB, userID int64) ([]*Forward, error) {
+	return listForwardsWhere(d, "owner_id=?", userID)
 }
 
-func CountForwardsForTenant(d *sql.DB, tenantID int64) (int, error) {
-	return count(d, `SELECT COUNT(*) FROM forwards WHERE tenant_id=?`, tenantID)
+func CountForwardsForUser(d *sql.DB, userID int64) (int, error) {
+	return count(d, `SELECT COUNT(*) FROM forwards WHERE owner_id=?`, userID)
 }
 
-func CountForwardsForTenantTunnel(d *sql.DB, tenantID, tunnelID int64) (int, error) {
-	return count(d, `SELECT COUNT(*) FROM forwards WHERE tenant_id=? AND tunnel_id=?`, tenantID, tunnelID)
+func CountForwardsForUserTunnel(d *sql.DB, userID, tunnelID int64) (int, error) {
+	return count(d, `SELECT COUNT(*) FROM forwards WHERE owner_id=? AND tunnel_id=?`, userID, tunnelID)
 }
 
 // CountForwardsByTunnel counts all forwards bound to a tunnel (any tenant, plus
@@ -426,8 +419,20 @@ func CountForwardsByTunnel(d *sql.DB, tunnelID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM forwards WHERE tunnel_id=?`, tunnelID)
 }
 
-func DistinctTenantNodes(d *sql.DB, tenantID int64) ([]int64, error) {
-	return queryInt64s(d, `SELECT DISTINCT node_id FROM forwards WHERE tenant_id=?`, tenantID)
+func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
+	return queryInt64s(d, `SELECT DISTINCT node_id FROM forwards WHERE owner_id=?`, userID)
+}
+
+// AddUserTraffic increments a user's traffic_used_bytes by delta.
+func AddUserTraffic(d *sql.DB, id int64, delta int64) error {
+	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, id)
+	return err
+}
+
+// ResetUserTraffic zeroes a user's traffic counter, re-enables, and clears reason.
+func ResetUserTraffic(d *sql.DB, id int64) error {
+	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = 0, disabled=0, disable_reason=NULL WHERE id=?`, id)
+	return err
 }
 
 // Audit

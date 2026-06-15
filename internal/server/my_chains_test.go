@@ -13,32 +13,36 @@ import (
 	"nft-forward/internal/db"
 )
 
-// loginAsTenant creates a tenant + bound user + session, returns the cookie.
-func loginAsTenant(t *testing.T, d *sql.DB, tenantID int64) *http.Cookie {
+// loginAsUser creates a user with role "user" and the given max_forwards quota,
+// returns the user ID and a session cookie.
+func loginAsUser(t *testing.T, d *sql.DB, maxForwards int) (int64, *http.Cookie) {
 	t.Helper()
 	hash, _ := HashPassword("pw")
-	uid, err := db.CreateTenantUser(d, tenantID, fmt.Sprintf("tenant-%d", tenantID), hash)
+	uid, err := db.CreateUser(d, fmt.Sprintf("user-%d", time.Now().UnixNano()), hash, "user")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, maxForwards, uid); err != nil {
 		t.Fatal(err)
 	}
 	tok, err := db.CreateSession(d, uid, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &http.Cookie{Name: sessionCookie, Value: tok}
+	return uid, &http.Cookie{Name: sessionCookie, Value: tok}
 }
 
-func TestTenantCreateChainAcrossGrantedTunnels(t *testing.T) {
+func TestUserCreateChainAcrossGrantedTunnels(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	h, _ := db.CreateNode(d, "nnc-hk", "https://p", "t2")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	_ = db.UpdateNodeRelayHost(d, h.ID, "2.2.2.2")
-	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 10})
+	uid, cookie := loginAsUser(t, d, 10)
 	tunA, _ := db.CreateTunnel(d, &db.Tunnel{Name: "a", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
 	tunB, _ := db.CreateTunnel(d, &db.Tunnel{Name: "b", NodeID: h.ID, ProtoMask: "tcp+udp", PortStart: 31000, PortEnd: 31100, TargetCIDRAllow: "0.0.0.0/0"})
-	_ = db.GrantTunnel(d, tid, tunA, 5)
-	_ = db.GrantTunnel(d, tid, tunB, 5)
+	_ = db.GrantTunnel(d, uid, tunA, 5)
+	_ = db.GrantTunnel(d, uid, tunB, 5)
 
 	s, _ := New(d)
 	body, _ := json.Marshal(map[string]any{
@@ -52,26 +56,26 @@ func TestTenantCreateChainAcrossGrantedTunnels(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(loginAsTenant(t, d, tid))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	chains, _ := db.ListChainsByTenant(d, tid)
+	chains, _ := db.ListChainsByUser(d, uid)
 	if len(chains) != 1 {
-		t.Fatalf("want 1 tenant chain, got %d", len(chains))
+		t.Fatalf("want 1 user chain, got %d", len(chains))
 	}
 	fws, _ := db.ListForwardsByChain(d, chains[0].ID)
 	if len(fws) != 2 {
 		t.Fatalf("want 2 forwards, got %d", len(fws))
 	}
 	for _, f := range fws {
-		if !f.TenantID.Valid || f.TenantID.Int64 != tid {
-			t.Fatalf("tenant chain forward must carry tenant_id")
+		if !f.OwnerID.Valid || f.OwnerID.Int64 != uid {
+			t.Fatalf("user chain forward must carry owner_id")
 		}
 		if !f.TunnelID.Valid {
-			t.Fatalf("tenant chain forward must carry tunnel_id")
+			t.Fatalf("user chain forward must carry tunnel_id")
 		}
 		if f.NodeID == g.ID && (f.ListenPort < 30000 || f.ListenPort > 30100) {
 			t.Fatalf("hop on gomami port %d out of tunnel range", f.ListenPort)
@@ -79,11 +83,11 @@ func TestTenantCreateChainAcrossGrantedTunnels(t *testing.T) {
 	}
 }
 
-func TestTenantCreateChainRejectsUngrantedTunnel(t *testing.T) {
+func TestUserCreateChainRejectsUngrantedTunnel(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 10})
+	uid, cookie := loginAsUser(t, d, 10)
 	other, _ := db.CreateTunnel(d, &db.Tunnel{Name: "x", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
 	// not granted
 	s, _ := New(d)
@@ -97,22 +101,22 @@ func TestTenantCreateChainRejectsUngrantedTunnel(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(loginAsTenant(t, d, tid))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	chains, _ := db.ListChainsByTenant(d, tid)
+	chains, _ := db.ListChainsByUser(d, uid)
 	if len(chains) != 0 {
 		t.Fatalf("ungranted tunnel must be rejected; got %d chains", len(chains))
 	}
 }
 
-func TestTenantCreateChainRejectsExitOutsideCIDR(t *testing.T) {
+func TestUserCreateChainRejectsExitOutsideCIDR(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 10})
+	uid, cookie := loginAsUser(t, d, 10)
 	tun, _ := db.CreateTunnel(d, &db.Tunnel{Name: "a", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "10.0.0.0/8"})
-	_ = db.GrantTunnel(d, tid, tun, 5)
+	_ = db.GrantTunnel(d, uid, tun, 5)
 
 	s, _ := New(d)
 	body, _ := json.Marshal(map[string]any{
@@ -125,26 +129,26 @@ func TestTenantCreateChainRejectsExitOutsideCIDR(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(loginAsTenant(t, d, tid))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	chains, _ := db.ListChainsByTenant(d, tid)
+	chains, _ := db.ListChainsByUser(d, uid)
 	if len(chains) != 0 {
 		t.Fatalf("exit outside tunnel CIDR must be rejected; got %d chains", len(chains))
 	}
 }
 
-func TestTenantCreateChainRejectsOverQuota(t *testing.T) {
+func TestUserCreateChainRejectsOverQuota(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	h, _ := db.CreateNode(d, "nnc-hk", "https://p", "t2")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	_ = db.UpdateNodeRelayHost(d, h.ID, "2.2.2.2")
-	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 1})
+	uid, cookie := loginAsUser(t, d, 1)
 	tunA, _ := db.CreateTunnel(d, &db.Tunnel{Name: "a", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
 	tunB, _ := db.CreateTunnel(d, &db.Tunnel{Name: "b", NodeID: h.ID, ProtoMask: "tcp+udp", PortStart: 31000, PortEnd: 31100, TargetCIDRAllow: "0.0.0.0/0"})
-	_ = db.GrantTunnel(d, tid, tunA, 5)
-	_ = db.GrantTunnel(d, tid, tunB, 5)
+	_ = db.GrantTunnel(d, uid, tunA, 5)
+	_ = db.GrantTunnel(d, uid, tunB, 5)
 
 	s, _ := New(d)
 	body, _ := json.Marshal(map[string]any{
@@ -158,29 +162,27 @@ func TestTenantCreateChainRejectsOverQuota(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(loginAsTenant(t, d, tid))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	chains, _ := db.ListChainsByTenant(d, tid)
+	chains, _ := db.ListChainsByUser(d, uid)
 	if len(chains) != 0 {
 		t.Fatalf("chain exceeding max_forwards must be rejected; got %d chains", len(chains))
 	}
 }
 
-func TestTenantDeleteChainBlocksCrossTenant(t *testing.T) {
+func TestUserDeleteChainBlocksCrossUser(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	tidA, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 10})
-	tidB, _ := db.CreateTenant(d, &db.Tenant{Name: "beta", MaxForwards: 10})
+	uidA, cookieA := loginAsUser(t, d, 10)
+	_, cookieB := loginAsUser(t, d, 10)
 	tunA, _ := db.CreateTunnel(d, &db.Tunnel{Name: "a", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
-	_ = db.GrantTunnel(d, tidA, tunA, 5)
+	_ = db.GrantTunnel(d, uidA, tunA, 5)
 
 	s, _ := New(d)
-	cookieA := loginAsTenant(t, d, tidA)
-	cookieB := loginAsTenant(t, d, tidB)
 
-	// Tenant A creates a chain via the JSON API.
+	// User A creates a chain via the JSON API.
 	body, _ := json.Marshal(map[string]any{
 		"name":  "a-chain",
 		"proto": "tcp",
@@ -195,23 +197,23 @@ func TestTenantDeleteChainBlocksCrossTenant(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("tenant A create status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("user A create status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	chains, _ := db.ListChainsByTenant(d, tidA)
+	chains, _ := db.ListChainsByUser(d, uidA)
 	if len(chains) != 1 {
-		t.Fatalf("want 1 chain for tenant A, got %d", len(chains))
+		t.Fatalf("want 1 chain for user A, got %d", len(chains))
 	}
 	chainID := chains[0].ID
 
-	// Tenant B tries to delete tenant A's chain.
+	// User B tries to delete user A's chain.
 	delReq := httptest.NewRequest("DELETE", fmt.Sprintf("/api/my/chains/%d", chainID), nil)
 	delReq.AddCookie(cookieB)
 	delRec := httptest.NewRecorder()
 	s.Router().ServeHTTP(delRec, delReq)
 	if delRec.Code != http.StatusForbidden {
-		t.Fatalf("cross-tenant delete must be 403, got %d", delRec.Code)
+		t.Fatalf("cross-user delete must be 403, got %d", delRec.Code)
 	}
 	if _, err := db.GetChain(d, chainID); err != nil {
-		t.Fatalf("tenant A's chain must survive cross-tenant delete attempt: %v", err)
+		t.Fatalf("user A's chain must survive cross-user delete attempt: %v", err)
 	}
 }

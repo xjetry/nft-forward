@@ -44,7 +44,7 @@ export default function ChainList() {
                 <tr key={c.chain.id}>
                   <td className="font-mono text-xs text-gray-400">#{c.chain.id}</td>
                   <td className="font-semibold">{c.chain.name}</td>
-                  <td className="text-gray-500">{c.tenant_name || '--'}</td>
+                  <td className="text-gray-500">{c.owner_name || '--'}</td>
                   <td><ProtoBadge proto={c.chain.proto} /></td>
                   <td className="font-mono text-xs text-gray-500"><SensText blurred={blurred}>{c.path}</SensText></td>
                   <td className="font-mono font-semibold">

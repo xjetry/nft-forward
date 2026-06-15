@@ -98,15 +98,13 @@ export function Layout({ children }) {
                   <SideLink to="/nodes" icon={<IconNodes />}>节点</SideLink>
                   <SideLink to="/tunnels" icon={<IconTunnels />}>通道</SideLink>
                   <SideLink to="/combos" icon={<IconCombos />}>组合通道</SideLink>
-                  <SideLink to="/tenants" icon={<IconTenants />}>用户</SideLink>
+                  <SideLink to="/users" icon={<IconUserGroup />}>用户</SideLink>
                 </NavGroup>
                 <NavGroup label="转发">
                   <SideLink to="/forwards" icon={<IconForwards />}>转发规则</SideLink>
                   <SideLink to="/chains" icon={<IconChains />}>中继链路</SideLink>
                 </NavGroup>
-                <NavGroup label="系统">
-                  <SideLink to="/users" icon={<IconUsers />}>账号</SideLink>
-                </NavGroup>
+                {false /* accounts merged into /users */}
               </>
             ) : (
               <>
@@ -205,7 +203,7 @@ function IconTunnels() {
 function IconCombos() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>
 }
-function IconTenants() {
+function IconUserGroup() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 0 1 0 5.5M18 19a5 5 0 0 0-3-4.6"/></svg>
 }
 function IconForwards() {

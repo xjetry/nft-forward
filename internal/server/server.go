@@ -1,21 +1,16 @@
 package server
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,14 +19,10 @@ import (
 	"nft-forward/internal/resolver"
 )
 
-//go:embed templates/*.html
-var templatesFS embed.FS
-
 type Server struct {
 	DB         *sql.DB
 	Hub        *Hub
 	Dispatcher *Dispatcher
-	tmpl       *template.Template
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -40,183 +31,44 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	tmpl, err := template.New("").Funcs(template.FuncMap{
-		// unix renders a unix-seconds timestamp. It accepts both the legacy
-		// sql.NullInt64 columns and the agent-dialer *int64 columns so a
-		// single helper covers every timestamp field templates display.
-		"unix": func(v any) string {
-			switch t := v.(type) {
-			case sql.NullInt64:
-				if !t.Valid {
-					return "—"
-				}
-				return fmtUnix(t.Int64)
-			case *int64:
-				if t == nil {
-					return "—"
-				}
-				return fmtUnix(*t)
-			default:
-				return "—"
-			}
-		},
-		"nullstr": func(s sql.NullString) string {
-			if !s.Valid {
-				return ""
-			}
-			return s.String
-		},
-		"upper": strings.ToUpper,
-		"add": func(a, b int) int { return a + b },
-		"date": func(ts int64) string {
-			return time.Unix(ts, 0).Format("2006-01-02")
-		},
-		"dateInput": func(ts int64) string {
-			return time.Unix(ts, 0).Format("2006-01-02")
-		},
-		"expired": func(ts int64) bool {
-			return ts > 0 && ts < time.Now().Unix()
-		},
-		"sub": func(a, b int) int { return a - b },
-		"pages": func(total, cur int) []int {
-			var out []int
-			for i := 1; i <= total; i++ {
-				out = append(out, i)
-			}
-			return out
-		},
-		"pageURL": func(extra string, page int) template.URL {
-			return template.URL(extra + fmt.Sprintf("page=%d", page))
-		},
-		"div": func(a, b int64) int64 {
-			if b == 0 {
-				return 0
-			}
-			return a / b
-		},
-		"pct": func(used, total int64) int {
-			if total <= 0 {
-				return 0
-			}
-			p := int(used * 100 / total)
-			if p > 100 {
-				p = 100
-			}
-			return p
-		},
-		"mkmap": func(pairs ...any) map[string]any {
-			m := map[string]any{}
-			for i := 0; i+1 < len(pairs); i += 2 {
-				k, _ := pairs[i].(string)
-				m[k] = pairs[i+1]
-			}
-			return m
-		},
-		"fmtBytes": func(b int64) string {
-			switch {
-			case b < 1024:
-				return fmt.Sprintf("%d B", b)
-			case b < 1024*1024:
-				return fmt.Sprintf("%.1f KB", float64(b)/1024)
-			case b < 1024*1024*1024:
-				return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
-			default:
-				return fmt.Sprintf("%.1f GB", float64(b)/(1024*1024*1024))
-			}
-		},
-		"timeAgo": func(v any) string {
-			var ts int64
-			switch t := v.(type) {
-			case sql.NullInt64:
-				if !t.Valid {
-					return "—"
-				}
-				ts = t.Int64
-			case *int64:
-				if t == nil {
-					return "—"
-				}
-				ts = *t
-			default:
-				return "—"
-			}
-			d := time.Since(time.Unix(ts, 0))
-			switch {
-			case d < time.Minute:
-				return "刚刚"
-			case d < time.Hour:
-				return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
-			case d < 24*time.Hour:
-				return fmt.Sprintf("%d 小时前", int(d.Hours()))
-			default:
-				return fmt.Sprintf("%d 天前", int(d.Hours()/24))
-			}
-		},
-		"firstChar": func(s string) string {
-			if s == "" {
-				return "?"
-			}
-			return strings.ToUpper(s[:1])
-		},
-		"serverVersion": serverVersion,
-		"sidebarCounts": func() map[string]int {
-			var nodes, tunnels, tenants, forwards, chains, combos int
-			d.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes)
-			d.QueryRow("SELECT COUNT(*) FROM tunnels").Scan(&tunnels)
-			d.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenants)
-			d.QueryRow("SELECT COUNT(*) FROM forwards WHERE chain_id IS NULL").Scan(&forwards)
-			d.QueryRow("SELECT COUNT(*) FROM chains WHERE tenant_id IS NULL").Scan(&chains)
-			d.QueryRow("SELECT COUNT(*) FROM tunnel_combos").Scan(&combos)
-			return map[string]int{
-				"nodes": nodes, "tunnels": tunnels, "tenants": tenants,
-				"forwards": forwards, "chains": chains, "combos": combos,
-			}
-		},
-	}).ParseFS(templatesFS, "templates/*.html")
-	if err != nil {
-		return nil, err
-	}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, tmpl: tmpl}
-	// The Hub accumulates tenant usage but owns no policy; the Server decides
-	// what a quota breach means and drives the re-dispatch, keeping the Hub a
-	// pure transport that never imports the dispatch path.
-	hub.OnTrafficUpdate = s.enforceTenantQuota
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp}
+	hub.OnTrafficUpdate = s.enforceUserQuota
 	hub.Redispatch = s.redispatchNodes
 	return s, nil
 }
 
-// enforceTenantQuota disables a tenant that has reached its traffic quota and
+// enforceUserQuota disables a user that has reached its traffic quota and
 // re-pushes every node it had forwards on so ActiveForwardsForPush (which
-// excludes disabled tenants) removes them from the kernel. Quota 0 = unlimited.
-func (s *Server) enforceTenantQuota(tenantID int64) {
-	t, err := db.GetTenant(s.DB, tenantID)
+// excludes disabled users) removes them from the kernel. Quota 0 = unlimited.
+func (s *Server) enforceUserQuota(userID int64) {
+	u, err := db.GetUserByID(s.DB, userID)
 	if err != nil {
-		log.Printf("quota: load tenant %d: %v", tenantID, err)
+		log.Printf("quota: load user %d: %v", userID, err)
 		return
 	}
-	if t.Disabled || t.TrafficQuotaBytes <= 0 || t.TrafficUsedBytes < t.TrafficQuotaBytes {
+	if u.Disabled || u.TrafficQuotaBytes <= 0 || u.TrafficUsedBytes < u.TrafficQuotaBytes {
 		return
 	}
-	if err := db.SetTenantDisabled(s.DB, tenantID, true, "流量超额"); err != nil {
-		log.Printf("quota: disable tenant %d: %v", tenantID, err)
+	if err := db.SetUserDisabled(s.DB, userID, true, "流量超额"); err != nil {
+		log.Printf("quota: disable user %d: %v", userID, err)
 		return
 	}
-	log.Printf("tenant %d disabled: traffic quota reached (%d/%d bytes)", tenantID, t.TrafficUsedBytes, t.TrafficQuotaBytes)
-	nodes, err := db.DistinctTenantNodes(s.DB, tenantID)
+	log.Printf("user %d disabled: traffic quota reached (%d/%d bytes)", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
+	nodes, err := db.DistinctUserNodes(s.DB, userID)
 	if err != nil {
-		log.Printf("quota: tenant %d nodes: %v", tenantID, err)
+		log.Printf("quota: user %d nodes: %v", userID, err)
 		return
 	}
 	for _, n := range nodes {
 		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("quota: re-dispatch node %d after disabling tenant %d: %v", n, tenantID, err)
+			log.Printf("quota: re-dispatch node %d after disabling user %d: %v", n, userID, err)
 		}
 	}
 }
 
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
 // forwards DB and dispatches it via the Hub (or unix socket for the
-// self-node). Called after admin CRUD on forwards/tunnels/tenants.
+// self-node). Called after admin CRUD on forwards/tunnels/users.
 //
 // The outcome is reflected on the nodes row so the panel UI can show
 // "已同步 / 错误" without each handler having to write that itself:
@@ -256,9 +108,9 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 	}
 }
 
-// dispatchAfterFanout dispatches to every node touched by a tenant-scope
-// mutation (e.g. tenant toggle/delete affects every node that ran the
-// tenant's forwards). Per-node errors are aggregated into a single flash
+// dispatchAfterFanout dispatches to every node touched by a user-scope
+// mutation (e.g. user toggle/delete affects every node that ran the
+// user's forwards). Per-node errors are aggregated into a single flash
 // because the flash cookie holds only one message; per-node detail still
 // lands in last_error on each affected nodes row.
 func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, action string) {
@@ -321,9 +173,9 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 	if chains == nil {
 		chains = map[int64]*db.Chain{}
 	}
-	tenants, _ := db.TenantsByID(d)
-	if tenants == nil {
-		tenants = map[int64]*db.Tenant{}
+	users, _ := db.UsersByID(d)
+	if users == nil {
+		users = map[int64]*db.User{}
 	}
 	rules := make([]nft.Rule, 0, len(forwards))
 	for _, f := range forwards {
@@ -347,9 +199,9 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 				rule.ChainName = c.Name
 			}
 		}
-		if f.TenantID.Valid {
-			if tn := tenants[f.TenantID.Int64]; tn != nil {
-				rule.TenantName = tn.Name
+		if f.OwnerID.Valid {
+			if u := users[f.OwnerID.Int64]; u != nil {
+				rule.TenantName = u.Username
 			}
 		}
 		if resolver.IsHostname(f.TargetIP) {
@@ -445,19 +297,15 @@ func (s *Server) Router() http.Handler {
 			r.Put("/combos/{id}", s.apiUpdateCombo)
 			r.Delete("/combos/{id}", s.apiDeleteCombo)
 
-			r.Get("/tenants", s.apiListTenants)
-			r.Post("/tenants", s.apiCreateTenant)
-			r.Get("/tenants/{id}", s.apiGetTenant)
-			r.Delete("/tenants/{id}", s.apiDeleteTenant)
-			r.Post("/tenants/{id}/toggle", s.apiToggleTenant)
-			r.Post("/tenants/{id}/reset-traffic", s.apiResetTenantTraffic)
-			r.Post("/tenants/{id}/quota", s.apiSetTenantQuota)
-			r.Post("/tenants/{id}/expiry", s.apiSetTenantExpiry)
-			r.Post("/tenants/{id}/grants", s.apiGrantTunnel)
-			r.Delete("/tenants/{id}/grants/{tunnelID}", s.apiRevokeTunnel)
-			r.Post("/tenants/{id}/combo-grants", s.apiGrantCombo)
-			r.Delete("/tenants/{id}/combo-grants/{comboID}", s.apiRevokeCombo)
-			r.Post("/tenants/{id}/users", s.apiCreateTenantUser)
+			r.Get("/users/{id}", s.apiGetUser)
+			r.Post("/users", s.apiCreateUser)
+			r.Post("/users/{id}/grants", s.apiGrantTunnel)
+			r.Delete("/users/{id}/grants/{tunnelID}", s.apiRevokeTunnel)
+			r.Post("/users/{id}/combo-grants", s.apiGrantCombo)
+			r.Delete("/users/{id}/combo-grants/{comboID}", s.apiRevokeCombo)
+			r.Post("/users/{id}/quota", s.apiSetUserQuota)
+			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
+			r.Post("/users/{id}/reset-traffic", s.apiResetUserTraffic)
 
 			r.Get("/users", s.apiListUsers)
 			r.Post("/users/{id}/toggle", s.apiToggleUser)
@@ -465,9 +313,9 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/users/{id}", s.apiDeleteUser)
 		})
 
-		// Tenant routes
+		// User routes
 		r.Group(func(r chi.Router) {
-			r.Use(s.requireAPIAuth, s.requireRole("tenant"))
+			r.Use(s.requireAPIAuth, s.requireRole("user"))
 			r.Get("/my", s.apiMyDashboard)
 			r.Get("/my/forwards", s.apiMyListForwards)
 			r.Post("/my/forwards", s.apiMyCreateForward)
@@ -492,62 +340,9 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"ok":true}`)
 }
 
-func (s *Server) render(w http.ResponseWriter, name string, data map[string]any) {
-	if data == nil {
-		data = map[string]any{}
-	}
-	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
-		http.Error(w, "template: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	buf.WriteTo(w)
-}
-
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	if u.Role == "tenant" {
-		http.Redirect(w, r, "/my", http.StatusSeeOther)
-		return
-	}
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		log.Printf("dashboard: list nodes: %v", err)
-	}
-	forwards, err := db.ListForwards(s.DB)
-	if err != nil {
-		log.Printf("dashboard: list forwards: %v", err)
-	}
-	tenants, err := db.ListTenants(s.DB)
-	if err != nil {
-		log.Printf("dashboard: list tenants: %v", err)
-	}
-	tunnels, err := db.ListTunnels(s.DB)
-	if err != nil {
-		log.Printf("dashboard: list tunnels: %v", err)
-	}
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	s.render(w, "dashboard.html", map[string]any{
-		"User":     u,
-		"Nodes":    nodes,
-		"Forwards": forwards,
-		"Tenants":  tenants,
-		"Tunnels":  tunnels,
-		"NodeByID": nodeByID,
-	})
-}
-
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
-}
-
-func fmtUnix(t int64) string {
-	if t == 0 {
-		return "—"
-	}
-	return strconv.FormatInt(t, 10) // raw seconds; template can prettify later
 }

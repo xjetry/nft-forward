@@ -14,9 +14,8 @@ import ForwardEdit from './pages/forwards/Edit'
 import ChainList from './pages/chains/List'
 import ChainDetail from './pages/chains/Detail'
 import ComboList from './pages/combos/List'
-import TenantList from './pages/tenants/List'
-import TenantDetail from './pages/tenants/Detail'
 import UserList from './pages/users/List'
+import UserDetail from './pages/users/Detail'
 
 import MyDashboard from './pages/my/Dashboard'
 import MyForwards from './pages/my/Forwards'
@@ -37,7 +36,7 @@ function AdminRoute({ children }) {
   return children
 }
 
-function TenantRoute({ children }) {
+function UserRoute({ children }) {
   const { user } = useUser()
   if (user === undefined) return <Loading />
   if (user === null) return <Navigate to="/login" replace />
@@ -71,7 +70,6 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
 
-          {/* Root: admin gets dashboard, tenant gets /my */}
           <Route path="/" element={<RootRedirect />} />
 
           {/* Admin routes */}
@@ -83,14 +81,13 @@ export default function App() {
           <Route path="/chains" element={<AdminRoute><ChainList /></AdminRoute>} />
           <Route path="/chains/:id" element={<AdminRoute><ChainDetail /></AdminRoute>} />
           <Route path="/combos" element={<AdminRoute><ComboList /></AdminRoute>} />
-          <Route path="/tenants" element={<AdminRoute><TenantList /></AdminRoute>} />
-          <Route path="/tenants/:id" element={<AdminRoute><TenantDetail /></AdminRoute>} />
           <Route path="/users" element={<AdminRoute><UserList /></AdminRoute>} />
+          <Route path="/users/:id" element={<AdminRoute><UserDetail /></AdminRoute>} />
 
-          {/* Tenant routes */}
-          <Route path="/my" element={<TenantRoute><MyDashboard /></TenantRoute>} />
-          <Route path="/my/forwards" element={<TenantRoute><MyForwards /></TenantRoute>} />
-          <Route path="/my/chains" element={<TenantRoute><MyChains /></TenantRoute>} />
+          {/* Regular user routes */}
+          <Route path="/my" element={<UserRoute><MyDashboard /></UserRoute>} />
+          <Route path="/my/forwards" element={<UserRoute><MyForwards /></UserRoute>} />
+          <Route path="/my/chains" element={<UserRoute><MyChains /></UserRoute>} />
 
           {/* Shared routes */}
           <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />

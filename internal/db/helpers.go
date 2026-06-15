@@ -29,7 +29,7 @@ func count(d DBTX, query string, args ...any) (int, error) {
 
 // queryInt64s collects a single int64 column from a query result set,
 // replacing the repeated scan-into-int64 loops in functions like
-// DistinctTenantNodes and ChainsReferencingNode.
+// DistinctUserNodes and ChainsReferencingNode.
 func queryInt64s(d DBTX, query string, args ...any) ([]int64, error) {
 	rows, err := d.Query(query, args...)
 	if err != nil {

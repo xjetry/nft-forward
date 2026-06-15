@@ -78,22 +78,23 @@ func TestBuildRules_FillsTenantName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid, err := db.CreateTenant(d, &db.Tenant{Name: "qqpw"})
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(d, "qqpw", hash, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	withTenant := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 17171, TargetIP: "72.234.229.145", TargetPort: 17171, TenantID: sql.NullInt64{Int64: tid, Valid: true}}
-	noTenant := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 18000, TargetIP: "10.0.0.1", TargetPort: 18000}
+	withOwner := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 17171, TargetIP: "72.234.229.145", TargetPort: 17171, OwnerID: sql.NullInt64{Int64: uid, Valid: true}}
+	noOwner := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 18000, TargetIP: "10.0.0.1", TargetPort: 18000}
 
-	rules := buildRules(d, []*db.Forward{withTenant, noTenant})
+	rules := buildRules(d, []*db.Forward{withOwner, noOwner})
 	if len(rules) != 2 {
 		t.Fatalf("want 2 rules, got %d", len(rules))
 	}
 	if rules[0].TenantName != "qqpw" {
-		t.Fatalf("tenant forward should carry tenant name, got %q", rules[0].TenantName)
+		t.Fatalf("owner forward should carry tenant name (from username), got %q", rules[0].TenantName)
 	}
 	if rules[1].TenantName != "" {
-		t.Fatalf("tenant-less forward should leave TenantName empty, got %q", rules[1].TenantName)
+		t.Fatalf("ownerless forward should leave TenantName empty, got %q", rules[1].TenantName)
 	}
 }
 

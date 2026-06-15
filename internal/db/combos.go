@@ -15,8 +15,8 @@ type TunnelComboHop struct {
 	Mode     string `json:"mode"`
 }
 
-type TenantTunnelCombo struct {
-	TenantID    int64 `json:"tenant_id"`
+type UserTunnelCombo struct {
+	UserID      int64 `json:"user_id"`
 	ComboID     int64 `json:"combo_id"`
 	MaxForwards int   `json:"max_forwards"`
 	GrantedAt   int64 `json:"granted_at"`
@@ -101,32 +101,32 @@ func DeleteTunnelCombo(d *sql.DB, id int64) error {
 	return err
 }
 
-func GrantCombo(d *sql.DB, tenantID, comboID int64, maxForwards int) error {
-	_, err := d.Exec(`INSERT INTO tenant_tunnel_combos(tenant_id, combo_id, max_forwards, granted_at) VALUES (?,?,?,?)
-		ON CONFLICT(tenant_id, combo_id) DO UPDATE SET max_forwards=excluded.max_forwards`,
-		tenantID, comboID, maxForwards, now())
+func GrantCombo(d *sql.DB, userID, comboID int64, maxForwards int) error {
+	_, err := d.Exec(`INSERT INTO user_tunnel_combos(user_id, combo_id, max_forwards, granted_at) VALUES (?,?,?,?)
+		ON CONFLICT(user_id, combo_id) DO UPDATE SET max_forwards=excluded.max_forwards`,
+		userID, comboID, maxForwards, now())
 	return err
 }
 
-func RevokeCombo(d *sql.DB, tenantID, comboID int64) error {
-	_, err := d.Exec(`DELETE FROM tenant_tunnel_combos WHERE tenant_id=? AND combo_id=?`, tenantID, comboID)
+func RevokeCombo(d *sql.DB, userID, comboID int64) error {
+	_, err := d.Exec(`DELETE FROM user_tunnel_combos WHERE user_id=? AND combo_id=?`, userID, comboID)
 	return err
 }
 
-func ListCombosForTenant(d *sql.DB, tenantID int64) ([]*TunnelCombo, []*TenantTunnelCombo, error) {
+func ListCombosForUser(d *sql.DB, userID int64) ([]*TunnelCombo, []*UserTunnelCombo, error) {
 	rows, err := d.Query(`
 		SELECT c.id, c.name, c.created_at, g.max_forwards, g.granted_at
-		FROM tunnel_combos c JOIN tenant_tunnel_combos g ON g.combo_id = c.id
-		WHERE g.tenant_id = ? ORDER BY c.id`, tenantID)
+		FROM tunnel_combos c JOIN user_tunnel_combos g ON g.combo_id = c.id
+		WHERE g.user_id = ? ORDER BY c.id`, userID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	var combos []*TunnelCombo
-	var grants []*TenantTunnelCombo
+	var grants []*UserTunnelCombo
 	for rows.Next() {
 		c := &TunnelCombo{}
-		g := &TenantTunnelCombo{TenantID: tenantID}
+		g := &UserTunnelCombo{UserID: userID}
 		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt, &g.MaxForwards, &g.GrantedAt); err != nil {
 			return nil, nil, err
 		}
@@ -137,10 +137,10 @@ func ListCombosForTenant(d *sql.DB, tenantID int64) ([]*TunnelCombo, []*TenantTu
 	return combos, grants, rows.Err()
 }
 
-func GetComboGrant(d *sql.DB, tenantID, comboID int64) (*TenantTunnelCombo, error) {
-	row := d.QueryRow(`SELECT tenant_id, combo_id, max_forwards, granted_at FROM tenant_tunnel_combos WHERE tenant_id=? AND combo_id=?`, tenantID, comboID)
-	g := &TenantTunnelCombo{}
-	if err := row.Scan(&g.TenantID, &g.ComboID, &g.MaxForwards, &g.GrantedAt); err != nil {
+func GetComboGrant(d *sql.DB, userID, comboID int64) (*UserTunnelCombo, error) {
+	row := d.QueryRow(`SELECT user_id, combo_id, max_forwards, granted_at FROM user_tunnel_combos WHERE user_id=? AND combo_id=?`, userID, comboID)
+	g := &UserTunnelCombo{}
+	if err := row.Scan(&g.UserID, &g.ComboID, &g.MaxForwards, &g.GrantedAt); err != nil {
 		return nil, err
 	}
 	return g, nil

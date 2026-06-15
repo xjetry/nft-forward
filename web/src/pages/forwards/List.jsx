@@ -27,7 +27,7 @@ export default function ForwardList() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { forwards = [], nodes = [], combos = [], node_by_id = {}, tenant_by_id = {}, hop_info = {} } = data || {}
+  const { forwards = [], nodes = [], combos = [], node_by_id = {}, user_by_id = {}, hop_info = {} } = data || {}
 
   return (
     <Layout>
@@ -59,12 +59,12 @@ export default function ForwardList() {
               <tbody>
                 {forwards.map(f => {
                   const node = node_by_id?.[f.node_id]
-                  const tenantId = nullInt(f.tenant_id)
-                  const tenant = tenantId ? tenant_by_id?.[tenantId] : null
+                  const ownerId = nullInt(f.owner_id)
+                  const owner = ownerId ? user_by_id?.[ownerId] : null
                   return (
                     <tr key={f.id}>
                       <td className="font-semibold">{node?.name || `#${f.node_id}`}</td>
-                      <td className="text-gray-500">{tenant ? tenant.name : 'admin'}</td>
+                      <td className="text-gray-500">{owner ? owner.username : 'admin'}</td>
                       <td><ProtoBadge proto={f.proto} /></td>
                       <td><ModeBadge mode={f.mode} /></td>
                       <td className="font-mono">:{f.listen_port}</td>
@@ -87,14 +87,14 @@ export default function ForwardList() {
               <tbody>
                 {forwards.map(f => {
                   const node = node_by_id?.[f.node_id]
-                  const tenantId = nullInt(f.tenant_id)
-                  const tenant = tenantId ? tenant_by_id?.[tenantId] : null
+                  const ownerId = nullInt(f.owner_id)
+                  const owner = ownerId ? user_by_id?.[ownerId] : null
                   const hi = hop_info?.[f.id]
                   const chainId = nullInt(f.chain_id)
                   return (
                     <tr key={f.id} className="bg-blue-50/30">
                       <td className="font-semibold">{node?.name || `#${f.node_id}`}</td>
-                      <td className="text-gray-500">{tenant ? tenant.name : 'admin'}</td>
+                      <td className="text-gray-500">{owner ? owner.username : 'admin'}</td>
                       <td><ProtoBadge proto={f.proto} /></td>
                       <td><ModeBadge mode={f.mode} /></td>
                       <td className="font-mono">:{f.listen_port}</td>

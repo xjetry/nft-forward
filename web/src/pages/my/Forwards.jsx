@@ -27,13 +27,13 @@ export default function MyForwards() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { tenant, forwards = [], tunnels = [], combos = [], node_by_id = {}, tunnel_by_id = {}, hop_info = {} } = data || {}
+  const { user, forwards = [], tunnels = [], combos = [], node_by_id = {}, tunnel_by_id = {}, hop_info = {} } = data || {}
 
   return (
     <Layout>
-      {tenant?.disabled && (
+      {user?.disabled && (
         <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm font-medium">
-          账号已被禁用：{nullStr(tenant.disable_reason)}。新增已暂停，可联系管理员重置。
+          账号已被禁用：{nullStr(user.disable_reason)}。新增已暂停，可联系管理员重置。
         </div>
       )}
 
@@ -41,7 +41,7 @@ export default function MyForwards() {
         <div className="card-header">
           <h3 className="text-sm font-bold">当前转发</h3>
           <span className="text-xs text-gray-400">{forwards.length} 条</span>
-          {!tenant?.disabled && tunnels?.length > 0 && (
+          {!user?.disabled && tunnels?.length > 0 && (
             <button onClick={() => setShowAdd(true)} className="btn-primary text-xs ml-auto">+ 添加转发</button>
           )}
         </div>
@@ -123,7 +123,7 @@ export default function MyForwards() {
         ) : <Empty title="暂无转发" />}
       </div>
 
-      {!tenant?.disabled && tunnels?.length > 0 && (
+      {!user?.disabled && tunnels?.length > 0 && (
         <AddMyForwardModal open={showAdd} onClose={() => setShowAdd(false)} tunnels={tunnels} combos={combos} nodeById={node_by_id} onDone={() => { setShowAdd(false); load() }} />
       )}
     </Layout>

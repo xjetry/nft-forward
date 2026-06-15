@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
-import { Loading, Badge } from '../../components/ui'
+import { Loading, Empty, Badge, Modal } from '../../components/ui'
 
 export default function UserList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
   const { user: currentUser } = useUser()
   const toast = useToast()
 
@@ -17,7 +20,7 @@ export default function UserList() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { users = [], tenant_by_id = {} } = data || {}
+  const { users = [] } = data || {}
 
   const toggleUser = async (u) => {
     try { await api.post(`/users/${u.id}/toggle`); toast(u.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
@@ -30,48 +33,119 @@ export default function UserList() {
     } catch (err) { toast(err.message) }
   }
   const deleteUser = async (u) => {
-    if (!confirm('删除该账号？若是用户记录账号且为其唯一账号，用户记录与转发会一并清除。')) return
+    if (!confirm('删除该用户？关联的转发将被一并清除。')) return
     try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   return (
     <Layout>
       <div className="card">
-        <div className="card-header"><h3 className="text-sm font-bold">账号列表</h3></div>
-        <table className="tbl">
-          <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>用户记录</th><th>状态</th><th className="text-right">操作</th></tr></thead>
-          <tbody>
-            {users.map(u => {
-              const tenantId = u.tenant_id?.Valid ? u.tenant_id.Int64 : null
-              const tenant = tenantId ? tenant_by_id?.[tenantId] : null
-              const isSelf = u.id === currentUser?.id
-              return (
-                <tr key={u.id}>
-                  <td className="font-mono text-xs text-gray-400">{u.id}</td>
-                  <td className="font-semibold">{u.username}</td>
-                  <td><span className="inline-flex items-center font-mono text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{u.role}</span></td>
-                  <td>{tenant ? tenant.name : <span className="text-gray-300">--</span>}</td>
-                  <td>{u.disabled ? <Badge color="amber">禁用</Badge> : <Badge color="green">正常</Badge>}</td>
-                  <td className="text-right whitespace-nowrap">
-                    {isSelf ? (
-                      <span className="text-xs text-gray-400">(当前用户)</span>
-                    ) : (
-                      <>
-                        <button onClick={() => toggleUser(u)} className="btn-secondary text-xs mr-1.5">{u.disabled ? '启用' : '禁用'}</button>
-                        <button onClick={() => resetPassword(u)} className="btn-secondary text-xs mr-1.5">重置密码</button>
-                        <button onClick={() => deleteUser(u)} className="btn-danger-sm text-xs">删除</button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-        <div className="p-5 border-t border-gray-100">
-          <p className="text-xs text-gray-400">用户记录账号在 <a href="/tenants" className="text-blue-600 font-semibold">用户记录详情页</a> 创建。Admin 账号需直接通过 CLI 或 SQL 添加。</p>
+        <div className="card-header">
+          <h3 className="text-sm font-bold">用户列表</h3>
+          <span className="text-xs text-gray-400">{users.length} 个用户</span>
+          <button onClick={() => setShowCreate(true)} className="btn-primary text-xs ml-auto">+ 新建用户</button>
         </div>
+        {users.length ? (
+          <table className="tbl">
+            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>最大转发</th><th>流量配额</th><th>已用</th><th>状态</th><th className="text-right">操作</th></tr></thead>
+            <tbody>
+              {users.map(u => {
+                const isSelf = u.id === currentUser?.id
+                return (
+                  <tr key={u.id}>
+                    <td className="font-mono text-xs text-gray-400">{u.id}</td>
+                    <td><Link to={`/users/${u.id}`} className="text-blue-600 font-semibold hover:underline">{u.username}</Link></td>
+                    <td><span className="inline-flex items-center font-mono text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{u.role}</span></td>
+                    <td className="font-mono">{u.role === 'user' ? u.max_forwards : '--'}</td>
+                    <td className="font-mono">{u.role === 'user' ? (u.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;</span> : `${Math.floor(u.traffic_quota_bytes / 1048576)} MB`) : '--'}</td>
+                    <td className="font-mono">{u.role === 'user' ? `${Math.floor((u.traffic_used_bytes || 0) / 1048576)} MB` : '--'}</td>
+                    <td>
+                      {u.disabled ? (
+                        <Badge color="amber" title={nullStr(u.disable_reason)}>已禁用</Badge>
+                      ) : <Badge color="green">正常</Badge>}
+                    </td>
+                    <td className="text-right whitespace-nowrap">
+                      {isSelf ? (
+                        <span className="text-xs text-gray-400">(当前用户)</span>
+                      ) : (
+                        <>
+                          <Link to={`/users/${u.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>
+                          <button onClick={() => toggleUser(u)} className="btn-secondary text-xs mr-1.5">{u.disabled ? '启用' : '禁用'}</button>
+                          <button onClick={() => resetPassword(u)} className="btn-secondary text-xs mr-1.5">重置密码</button>
+                          <button onClick={() => deleteUser(u)} className="btn-danger-sm text-xs">删除</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <Empty title="暂无用户" desc="点击上方「新建用户」创建。" />
+        )}
       </div>
+
+      <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
+  )
+}
+
+function CreateUserModal({ open, onClose, onDone }) {
+  const [form, setForm] = useState({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_mb: '0', expires_at: '' })
+  const [loading, setLoading] = useState(false)
+  const toast = useToast()
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.post('/users', {
+        username: form.username,
+        password: form.password,
+        role: form.role,
+        max_forwards: Number(form.max_forwards),
+        traffic_quota_mb: Number(form.traffic_quota_mb),
+        expires_at: form.expires_at || undefined,
+      })
+      toast('用户已创建')
+      setForm({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_mb: '0', expires_at: '' })
+      onDone()
+    } catch (err) { toast(err.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="新建用户">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-[150px_1fr] gap-4 items-center">
+          <label className="fl">用户名</label>
+          <input className="input-field" value={form.username} onChange={e => set('username', e.target.value)} required placeholder="登录用户名" />
+          <label className="fl">密码</label>
+          <input className="input-field" type="password" value={form.password} onChange={e => set('password', e.target.value)} required />
+          <label className="fl">角色</label>
+          <select className="input-field" value={form.role} onChange={e => set('role', e.target.value)} style={{ maxWidth: 200 }}>
+            <option value="user">user (普通用户)</option>
+            <option value="admin">admin (管理员)</option>
+          </select>
+          {form.role === 'user' && (
+            <>
+              <label className="fl">最大转发数</label>
+              <input className="input-field font-mono" type="number" min="1" value={form.max_forwards} onChange={e => set('max_forwards', e.target.value)} style={{ maxWidth: 160 }} />
+              <label className="fl">流量配额 <span className="text-gray-400 font-normal text-xs">(MB)</span></label>
+              <input className="input-field font-mono" type="number" min="0" value={form.traffic_quota_mb} onChange={e => set('traffic_quota_mb', e.target.value)} style={{ maxWidth: 160 }} />
+              <label className="fl">到期时间 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
+              <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+          <button type="submit" disabled={loading} className="btn-primary">创建用户</button>
+          <button type="button" onClick={onClose} className="btn-secondary">取消</button>
+          {form.role === 'user' && <span className="text-xs text-gray-400">配额为 0 时不限制；超额后自动禁用。</span>}
+        </div>
+      </form>
+    </Modal>
   )
 }

@@ -17,7 +17,7 @@ export default function Dashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { nodes = [], tunnels = [], forwards = [], tenants = [], node_by_id = {} } = data
+  const { nodes = [], tunnels = [], forwards = [], users = [], node_by_id = {} } = data
   const onlineCount = nodes.filter(n => !n.disabled && n.online === 1).length
 
   return (
@@ -27,7 +27,7 @@ export default function Dashboard() {
         <StatCard icon="blue" label="节点" value={nodes.length} meta={<><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 mr-1" />{onlineCount} 在线</>} />
         <StatCard icon="violet" label="通道" value={tunnels.length} />
         <StatCard icon="green" label="转发规则" value={forwards.length} />
-        <StatCard icon="amber" label="用户" value={tenants.length} />
+        <StatCard icon="amber" label="用户" value={users.length} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">

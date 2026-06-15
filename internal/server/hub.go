@@ -30,12 +30,12 @@ const (
 type Hub struct {
 	DB *sql.DB
 
-	// OnTrafficUpdate, when set, is invoked once per tenant whose usage was
+	// OnTrafficUpdate, when set, is invoked once per user whose usage was
 	// advanced by a counters batch. The Hub stays a pure transport: it knows
 	// how to accumulate bytes but delegates quota policy (and the re-dispatch
 	// it may trigger) to the owner that wires this callback, so the dispatch
 	// path is never imported here.
-	OnTrafficUpdate func(tenantID int64)
+	OnTrafficUpdate func(userID int64)
 
 	// Redispatch re-pushes kernel state to a set of nodes after the hub
 	// mutates chain state on their behalf. Like OnTrafficUpdate it keeps the
@@ -444,16 +444,16 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 }
 
 // applyCounters folds per-rule bytes_delta into the forwards table and the
-// owning tenant's usage. last_bytes is the most recent delta (UI surfaces it
+// owning user's usage. last_bytes is the most recent delta (UI surfaces it
 // as "current rate input"); total_bytes is monotonically accumulated. The
 // (node_id, listen_port, proto) tuple identifies the rule — there is no
 // rule_id on the wire because agent restarts re-key the same forward.
 //
 // Each sample is resolved to its forward row so we learn the forward id and
-// the tenant it belongs to; tenant-owned bytes are added to the tenant's
-// usage. Touched tenants are collected and OnTrafficUpdate fires once per
-// tenant after the loop rather than once per sample, so a batch carrying many
-// of a tenant's rules triggers a single quota evaluation instead of N.
+// the user it belongs to; user-owned bytes are added to the user's
+// usage. Touched users are collected and OnTrafficUpdate fires once per
+// user after the loop rather than once per sample, so a batch carrying many
+// of a user's rules triggers a single quota evaluation instead of N.
 //
 // Per-sample failures (DB error, or a lookup miss meaning the rule was
 // deleted on the panel side between the agent's count and the frame's
@@ -466,7 +466,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		log.Printf("hub: node %d load forward map for counters: %v", nodeID, err)
 		return
 	}
-	// Entry-hop set: only entry hops of a chain count toward tenant traffic
+	// Entry-hop set: only entry hops of a chain count toward user traffic
 	// so the same bytes aren't billed once per relay node.
 	entryFwds, err := db.EntryChainForwardIDs(h.DB, nodeID)
 	if err != nil {
@@ -486,15 +486,15 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
 			continue
 		}
-		if f.TenantID.Valid && s.BytesDelta > 0 {
+		if f.OwnerID.Valid && s.BytesDelta > 0 {
 			if f.ChainID.Valid && !entryFwds[f.ID] {
-				continue // non-entry chain hop: skip tenant billing
+				continue // non-entry chain hop: skip user billing
 			}
-			if err := db.AddTenantTraffic(h.DB, f.TenantID.Int64, s.BytesDelta); err != nil {
-				log.Printf("hub: tenant %d traffic add: %v", f.TenantID.Int64, err)
+			if err := db.AddUserTraffic(h.DB, f.OwnerID.Int64, s.BytesDelta); err != nil {
+				log.Printf("hub: user %d traffic add: %v", f.OwnerID.Int64, err)
 				continue
 			}
-			touched[f.TenantID.Int64] = true
+			touched[f.OwnerID.Int64] = true
 		}
 	}
 	if h.OnTrafficUpdate != nil {

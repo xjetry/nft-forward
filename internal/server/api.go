@@ -195,11 +195,11 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	tunnels, _ := db.ListTunnels(s.DB)
 	forwards, _ := db.ListForwards(s.DB)
-	tenants, _ := db.ListTenants(s.DB)
+	users, _ := db.ListUsers(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "tunnels": tunnels,
-		"forwards": forwards, "tenants": tenants,
+		"forwards": forwards, "users": users,
 		"node_by_id": nodeByID,
 	})
 }
@@ -547,7 +547,7 @@ func (s *Server) apiListForwards(w http.ResponseWriter, r *http.Request) {
 	allForwards, _ := db.ListForwards(s.DB)
 	nodes, _ := db.ListNodes(s.DB)
 	hopInfo, _ := db.ChainHopInfoMap(s.DB)
-	tenantByID, _ := db.TenantsByID(s.DB)
+	ownerByID, _ := db.UsersByID(s.DB)
 	combos, _ := db.ListTunnelCombos(s.DB)
 
 	tab := r.URL.Query().Get("tab")
@@ -566,7 +566,7 @@ func (s *Server) apiListForwards(w http.ResponseWriter, r *http.Request) {
 		if tab == "normal" && f.ChainID.Valid {
 			continue
 		}
-		if owner == "admin" && f.TenantID.Valid {
+		if owner == "admin" && f.OwnerID.Valid {
 			continue
 		}
 		filtered = append(filtered, f)
@@ -574,7 +574,7 @@ func (s *Server) apiListForwards(w http.ResponseWriter, r *http.Request) {
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"forwards": filtered, "nodes": nodes, "node_by_id": nodeByID,
-		"hop_info": hopInfo, "tenant_by_id": tenantByID, "combos": combos,
+		"hop_info": hopInfo, "owner_by_id": ownerByID, "combos": combos,
 	})
 }
 
@@ -826,18 +826,18 @@ func (s *Server) apiDeleteForward(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiListChains(w http.ResponseWriter, r *http.Request) {
 	chains, _ := db.ListAllChains(s.DB)
 	nodes, _ := db.ListNodes(s.DB)
-	tenants, _ := db.TenantsByID(s.DB)
+	users, _ := db.UsersByID(s.DB)
 	views := make([]map[string]any, 0, len(chains))
 	for _, c := range chains {
 		v := s.buildChainView(c)
-		tname := ""
-		if c.TenantID.Valid {
-			if t := tenants[c.TenantID.Int64]; t != nil {
-				tname = t.Name
+		oname := ""
+		if c.OwnerID.Valid {
+			if u := users[c.OwnerID.Int64]; u != nil {
+				oname = u.Username
 			}
 		}
 		views = append(views, map[string]any{
-			"chain": c, "tenant_name": tname,
+			"chain": c, "owner_name": oname,
 			"path": v.Path, "entry": v.Entry,
 			"entry_node_id": v.EntryNodeID,
 		})
@@ -1213,150 +1213,191 @@ func (s *Server) apiDeleteCombo(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// --- Tenants ---
+// --- Users ---
 
-func (s *Server) apiListTenants(w http.ResponseWriter, r *http.Request) {
-	tenants, err := db.ListTenants(s.DB)
+func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := db.ListUsers(s.DB)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"tenants": tenants})
+	jsonOK(w, map[string]any{"users": users})
 }
 
-func (s *Server) apiCreateTenant(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	var body struct {
-		Name           string `json:"name"`
-		MaxForwards    int    `json:"max_forwards"`
-		TrafficQuotaMB int64  `json:"traffic_quota_mb"`
-		ExpiresAt      string `json:"expires_at"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		jsonErr(w, http.StatusBadRequest, "名称不能为空")
-		return
-	}
-	maxFwd := body.MaxForwards
-	if maxFwd <= 0 {
-		maxFwd = 100
-	}
-	t := &db.Tenant{
-		Name: name, MaxForwards: maxFwd,
-		TrafficQuotaBytes: body.TrafficQuotaMB * 1024 * 1024,
-	}
-	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
-		if et, err := time.Parse("2006-01-02", raw); err == nil {
-			t.ExpiresAt = sql.NullInt64{Int64: et.Unix(), Valid: true}
-		}
-	}
-	id, err := db.CreateTenant(s.DB, t)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tenant.create", strconv.FormatInt(id, 10), name)
-	t, _ = db.GetTenant(s.DB, id)
-	jsonOK(w, map[string]any{"tenant": t})
-}
-
-func (s *Server) apiGetTenant(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	t, err := db.GetTenant(s.DB, id)
+	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "租户不存在")
+		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, id)
+	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, id)
 	allTunnels, _ := db.ListTunnels(s.DB)
-	forwards, _ := db.ListForwardsForTenant(s.DB, id)
-	users, _ := db.ListUsers(s.DB)
-	var tenantUsers []*db.User
-	for _, usr := range users {
-		if usr.TenantID.Valid && usr.TenantID.Int64 == id {
-			tenantUsers = append(tenantUsers, usr)
-		}
-	}
-	combos, comboGrants, _ := db.ListCombosForTenant(s.DB, id)
+	forwards, _ := db.ListForwardsForUser(s.DB, id)
+	combos, comboGrants, _ := db.ListCombosForUser(s.DB, id)
 	allCombos, _ := db.ListTunnelCombos(s.DB)
 	jsonOK(w, map[string]any{
-		"tenant": t, "users": tenantUsers, "tunnels": tunnels,
+		"user": target, "tunnels": tunnels,
 		"grants": grants, "all_tunnels": allTunnels,
 		"combos": combos, "combo_grants": comboGrants,
 		"all_combos": allCombos, "forwards": forwards,
 	})
 }
 
-func (s *Server) apiDeleteTenant(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
+	var body struct {
+		Username          string `json:"username"`
+		Password          string `json:"password"`
+		Role              string `json:"role"`
+		MaxForwards       int    `json:"max_forwards"`
+		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
+		ExpiresAt         string `json:"expires_at"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	username := strings.TrimSpace(body.Username)
+	if username == "" || body.Password == "" {
+		jsonErr(w, http.StatusBadRequest, "用户名和密码不能为空")
+		return
+	}
+	role := body.Role
+	if role == "" {
+		role = "user"
+	}
+	if role != "admin" && role != "user" {
+		jsonErr(w, http.StatusBadRequest, "角色须为 admin 或 user")
+		return
+	}
+	hash, err := HashPassword(body.Password)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id, err := db.CreateUser(s.DB, username, hash, role)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Set quota fields if provided
+	maxFwd := body.MaxForwards
+	if maxFwd <= 0 {
+		maxFwd = 100
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
+		maxFwd, body.TrafficQuotaBytes, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
+		if et, err := time.Parse("2006-01-02", raw); err == nil {
+			s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, et.Unix(), id)
+		}
+	}
+	db.WriteAudit(s.DB, u.ID, "user.create", strconv.FormatInt(id, 10), username)
+	created, _ := db.GetUserByID(s.DB, id)
+	jsonOK(w, map[string]any{"user": created})
+}
+
+func (s *Server) apiGrantTunnel(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
-	if err := db.DeleteTenant(s.DB, id); err != nil {
+	var body struct {
+		TunnelID    int64 `json:"tunnel_id"`
+		MaxForwards int   `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.MaxForwards <= 0 {
+		body.MaxForwards = 10
+	}
+	if err := db.GrantTunnel(s.DB, userID, body.TunnelID, body.MaxForwards); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "tenant.delete", strconv.FormatInt(id, 10), "")
-	s.apiDispatchFanout(nodes)
+	db.WriteAudit(s.DB, u.ID, "user.grant", strconv.FormatInt(userID, 10), strconv.FormatInt(body.TunnelID, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiToggleTenant(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiRevokeTunnel(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
+	userID, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	t, err := db.GetTenant(s.DB, id)
+	tunnelID, err := urlParamInt64(r, "tunnelID")
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "租户不存在")
+		jsonErr(w, http.StatusBadRequest, "bad tunnel id")
 		return
 	}
-	target := !t.Disabled
-	reason := ""
-	if target {
-		reason = "管理员手动禁用"
-	}
-	if err := db.SetTenantDisabled(s.DB, id, target, reason); err != nil {
+	if err := db.RevokeTunnel(s.DB, userID, tunnelID); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "tenant.toggle", strconv.FormatInt(id, 10), fmt.Sprintf("disabled=%v", target))
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
-	s.apiDispatchFanout(nodes)
-	jsonOK(w, map[string]any{"ok": true, "disabled": target})
-}
-
-func (s *Server) apiResetTenantTraffic(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	if err := db.ResetTenantTraffic(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tenant.reset_traffic", strconv.FormatInt(id, 10), "")
-	nodes, _ := db.DistinctTenantNodes(s.DB, id)
-	s.apiDispatchFanout(nodes)
+	db.WriteAudit(s.DB, u.ID, "user.revoke", strconv.FormatInt(userID, 10), strconv.FormatInt(tunnelID, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiSetTenantQuota(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiGrantCombo(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		ComboID     int64 `json:"combo_id"`
+		MaxForwards int   `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.MaxForwards <= 0 {
+		body.MaxForwards = 10
+	}
+	if err := db.GrantCombo(s.DB, userID, body.ComboID, body.MaxForwards); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.grant_combo", strconv.FormatInt(userID, 10), strconv.FormatInt(body.ComboID, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiRevokeCombo(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	comboID, err := urlParamInt64(r, "comboID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad combo id")
+		return
+	}
+	if err := db.RevokeCombo(s.DB, userID, comboID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.revoke_combo", strconv.FormatInt(userID, 10), strconv.FormatInt(comboID, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -1374,15 +1415,15 @@ func (s *Server) apiSetTenantQuota(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "字节数无效")
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE tenants SET traffic_quota_bytes=? WHERE id=?`, body.TrafficQuotaBytes, id); err != nil {
+	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, body.TrafficQuotaBytes, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "tenant.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(body.TrafficQuotaBytes, 10))
+	db.WriteAudit(s.DB, u.ID, "user.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(body.TrafficQuotaBytes, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiSetTenantExpiry(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiSetUserExpiry(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -1406,150 +1447,29 @@ func (s *Server) apiSetTenantExpiry(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = t.Unix()
 	}
-	if _, err := s.DB.Exec(`UPDATE tenants SET expires_at=? WHERE id=?`, expiresAt, id); err != nil {
+	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAt, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "tenant.set_expiry", strconv.FormatInt(id, 10), raw)
+	db.WriteAudit(s.DB, u.ID, "user.set_expiry", strconv.FormatInt(id, 10), raw)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiGrantTunnel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tenantID, err := urlParamInt64(r, "id")
+	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	var body struct {
-		TunnelID    int64 `json:"tunnel_id"`
-		MaxForwards int   `json:"max_forwards"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	if body.MaxForwards <= 0 {
-		body.MaxForwards = 10
-	}
-	if err := db.GrantTunnel(s.DB, tenantID, body.TunnelID, body.MaxForwards); err != nil {
+	if err := db.ResetUserTraffic(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "tenant.grant", strconv.FormatInt(tenantID, 10), strconv.FormatInt(body.TunnelID, 10))
+	db.WriteAudit(s.DB, u.ID, "user.reset_traffic", strconv.FormatInt(id, 10), "")
+	nodes, _ := db.DistinctUserNodes(s.DB, id)
+	s.apiDispatchFanout(nodes)
 	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiRevokeTunnel(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	tenantID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	tunnelID, err := urlParamInt64(r, "tunnelID")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad tunnel id")
-		return
-	}
-	if err := db.RevokeTunnel(s.DB, tenantID, tunnelID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tenant.revoke", strconv.FormatInt(tenantID, 10), strconv.FormatInt(tunnelID, 10))
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiGrantCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	tenantID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		ComboID     int64 `json:"combo_id"`
-		MaxForwards int   `json:"max_forwards"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	if body.MaxForwards <= 0 {
-		body.MaxForwards = 10
-	}
-	if err := db.GrantCombo(s.DB, tenantID, body.ComboID, body.MaxForwards); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tenant.grant_combo", strconv.FormatInt(tenantID, 10), strconv.FormatInt(body.ComboID, 10))
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiRevokeCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	tenantID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	comboID, err := urlParamInt64(r, "comboID")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad combo id")
-		return
-	}
-	if err := db.RevokeCombo(s.DB, tenantID, comboID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tenant.revoke_combo", strconv.FormatInt(tenantID, 10), strconv.FormatInt(comboID, 10))
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiCreateTenantUser(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	tenantID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	username := strings.TrimSpace(body.Username)
-	if username == "" || body.Password == "" {
-		jsonErr(w, http.StatusBadRequest, "用户名和密码不能为空")
-		return
-	}
-	hash, err := HashPassword(body.Password)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	id, err := db.CreateTenantUser(s.DB, tenantID, username, hash)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.create", strconv.FormatInt(id, 10), username)
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-// --- Users ---
-
-func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := db.ListUsers(s.DB)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	tenants, _ := db.TenantsByID(s.DB)
-	jsonOK(w, map[string]any{"users": users, "tenant_by_id": tenants})
 }
 
 func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
@@ -1569,17 +1489,16 @@ func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	willDisable := !target.Disabled
-	if err := db.SetUserDisabled(s.DB, id, willDisable); err != nil {
+	reason := ""
+	if willDisable {
+		reason = "管理员手动禁用"
+	}
+	if err := db.SetUserDisabled(s.DB, id, willDisable, reason); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if target.Role == "tenant" && target.TenantID.Valid {
-		reason := ""
-		if willDisable {
-			reason = "登录账号被禁用"
-		}
-		_ = db.SetTenantDisabled(s.DB, target.TenantID.Int64, willDisable, reason)
-		if nodes, err := db.DistinctTenantNodes(s.DB, target.TenantID.Int64); err == nil {
+	if willDisable {
+		if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
 			s.apiDispatchFanout(nodes)
 		}
 	}
@@ -1624,23 +1543,14 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "不能删除自己")
 		return
 	}
-	target, err := db.GetUserByID(s.DB, id)
-	if err != nil {
+	if _, err := db.GetUserByID(s.DB, id); err != nil {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	var affected []int64
-	if target.Role == "tenant" && target.TenantID.Valid {
-		others, _ := db.CountUsersByTenant(s.DB, target.TenantID.Int64)
-		if others <= 1 {
-			nodes, err := db.DeleteForwardsForTenant(s.DB, target.TenantID.Int64)
-			if err != nil {
-				jsonErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			affected = nodes
-			_ = db.DeleteTenant(s.DB, target.TenantID.Int64)
-		}
+	affected, err := db.DeleteForwardsForUser(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	if err := db.DeleteUser(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1651,37 +1561,27 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// --- Tenant (My) endpoints ---
+// --- My (user self-service) endpoints ---
 
 func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	forwards, _ := db.ListForwardsForTenant(s.DB, t.ID)
+	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, u.ID)
+	forwards, _ := db.ListForwardsForUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
-		"tenant": t, "tunnels": tunnels, "grants": grants,
+		"user": apiUserFullView(u), "tunnels": tunnels, "grants": grants,
 		"forwards": forwards, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
 func (s *Server) apiMyListForwards(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
-	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	forwards, _ := db.ListForwardsForTenant(s.DB, t.ID)
+	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, u.ID)
+	forwards, _ := db.ListForwardsForUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
 	hopInfo, _ := db.ChainHopInfoMap(s.DB)
-	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
+	combos, _, _ := db.ListCombosForUser(s.DB, u.ID)
 
 	tab := r.URL.Query().Get("tab")
 	if tab != "chain" {
@@ -1698,7 +1598,7 @@ func (s *Server) apiMyListForwards(w http.ResponseWriter, r *http.Request) {
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	tunnelByID := buildMap(tunnels, func(t *db.Tunnel) int64 { return t.ID })
 	jsonOK(w, map[string]any{
-		"tenant": t, "forwards": filtered, "tunnels": tunnels, "grants": grants,
+		"user": apiUserFullView(u), "forwards": filtered, "tunnels": tunnels, "grants": grants,
 		"hop_info": hopInfo, "combos": combos, "nodes": nodes,
 		"node_by_id": nodeByID, "tunnel_by_id": tunnelByID,
 	})
@@ -1706,16 +1606,11 @@ func (s *Server) apiMyListForwards(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
-	if t.Disabled {
+	if u.Disabled {
 		jsonErr(w, http.StatusForbidden, "用户已被禁用")
 		return
 	}
-	if t.ExpiresAt.Valid && t.ExpiresAt.Int64 > 0 && t.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
 		jsonErr(w, http.StatusForbidden, "用户已过期")
 		return
 	}
@@ -1744,7 +1639,7 @@ func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
 		} else {
 			comboID, _ = strconv.ParseInt(tunnelStr[6:], 10, 64)
 		}
-		s.apiTenantCreateForwardFromCombo(w, r, u, t, comboID, body.Proto, body.Exit, body.ChainName)
+		s.apiUserCreateForwardFromCombo(w, r, u, comboID, body.Proto, body.Exit, body.ChainName)
 		return
 	}
 
@@ -1764,7 +1659,7 @@ func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grant, err := db.GetGrant(s.DB, t.ID, tunnelID)
+	grant, err := db.GetGrant(s.DB, u.ID, tunnelID)
 	if err != nil {
 		jsonErr(w, http.StatusForbidden, "无权使用该通道")
 		return
@@ -1801,12 +1696,12 @@ func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	totalCount, _ := db.CountForwardsForTenant(s.DB, t.ID)
-	if totalCount >= t.MaxForwards {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("已达用户最大转发数（%d）", t.MaxForwards))
+	totalCount, _ := db.CountForwardsForUser(s.DB, u.ID)
+	if totalCount >= u.MaxForwards {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("已达用户最大转发数（%d）", u.MaxForwards))
 		return
 	}
-	tunCount, _ := db.CountForwardsForTenantTunnel(s.DB, t.ID, tunnelID)
+	tunCount, _ := db.CountForwardsForUserTunnel(s.DB, u.ID, tunnelID)
 	if tunCount >= grant.MaxForwards {
 		jsonErr(w, http.StatusConflict, fmt.Sprintf("已达该通道最大转发数（%d）", grant.MaxForwards))
 		return
@@ -1817,25 +1712,25 @@ func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
 		TargetIP: targetIP, TargetPort: targetPort,
 		Comment: strings.TrimSpace(body.Comment), Mode: mode,
 	}
-	f.TenantID = sql.NullInt64{Int64: t.ID, Valid: true}
+	f.OwnerID = sql.NullInt64{Int64: u.ID, Valid: true}
 	f.TunnelID = sql.NullInt64{Int64: tunnel.ID, Valid: true}
 	id, err := db.CreateForward(s.DB, f)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "forward.tenant_create", strconv.FormatInt(id, 10),
-		fmt.Sprintf("tenant=%d tunnel=%d %s/%d→%s:%d", t.ID, tunnel.ID, proto, listenPort, targetIP, targetPort))
+	db.WriteAudit(s.DB, u.ID, "forward.user_create", strconv.FormatInt(id, 10),
+		fmt.Sprintf("user=%d tunnel=%d %s/%d→%s:%d", u.ID, tunnel.ID, proto, listenPort, targetIP, targetPort))
 	_ = s.apiDispatch(tunnel.NodeID)
 	jsonOK(w, map[string]any{"ok": true, "id": id})
 }
 
-func (s *Server) apiTenantCreateForwardFromCombo(w http.ResponseWriter, r *http.Request, u *db.User, t *db.Tenant, comboID int64, proto, exit, chainName string) {
+func (s *Server) apiUserCreateForwardFromCombo(w http.ResponseWriter, r *http.Request, u *db.User, comboID int64, proto, exit, chainName string) {
 	if comboID == 0 {
 		jsonErr(w, http.StatusBadRequest, "组合通道 ID 无效")
 		return
 	}
-	if _, err := db.GetComboGrant(s.DB, t.ID, comboID); err != nil {
+	if _, err := db.GetComboGrant(s.DB, u.ID, comboID); err != nil {
 		jsonErr(w, http.StatusForbidden, "无权使用该组合通道")
 		return
 	}
@@ -1878,7 +1773,7 @@ func (s *Server) apiTenantCreateForwardFromCombo(w http.ResponseWriter, r *http.
 		return
 	}
 	defer tx.Rollback()
-	c := &db.Chain{TenantID: nullInt64(t.ID), Name: chainName, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
+	c := &db.Chain{OwnerID: nullInt64(u.ID), Name: chainName, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
 	id, err := db.CreateChain(tx, c)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1894,18 +1789,13 @@ func (s *Server) apiTenantCreateForwardFromCombo(w http.ResponseWriter, r *http.
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.tenant_create_from_combo", strconv.FormatInt(id, 10), chainName)
+	db.WriteAudit(s.DB, u.ID, "chain.user_create_from_combo", strconv.FormatInt(id, 10), chainName)
 	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true, "chain_id": id, "entry": entry})
 }
 
 func (s *Server) apiMyDeleteForward(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
@@ -1916,7 +1806,7 @@ func (s *Server) apiMyDeleteForward(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "转发不存在")
 		return
 	}
-	if !f.TenantID.Valid || f.TenantID.Int64 != t.ID {
+	if !f.OwnerID.Valid || f.OwnerID.Int64 != u.ID {
 		jsonErr(w, http.StatusForbidden, "无权操作该转发")
 		return
 	}
@@ -1925,21 +1815,16 @@ func (s *Server) apiMyDeleteForward(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "forward.tenant_delete", strconv.FormatInt(id, 10), "")
+	db.WriteAudit(s.DB, u.ID, "forward.user_delete", strconv.FormatInt(id, 10), "")
 	_ = s.apiDispatch(nodeID)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// --- Tenant chains ---
+// --- User chains ---
 
 func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
-	chains, _ := db.ListChainsByTenant(s.DB, t.ID)
+	chains, _ := db.ListChainsByUser(s.DB, u.ID)
 	views := make([]map[string]any, 0, len(chains))
 	for _, c := range chains {
 		v := s.buildChainView(c)
@@ -1948,8 +1833,8 @@ func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
 			"path": v.Path, "entry": v.Entry, "entry_node_id": v.EntryNodeID,
 		})
 	}
-	tunnels, _, _ := db.ListTunnelsForTenant(s.DB, t.ID)
-	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
+	tunnels, _, _ := db.ListTunnelsForUser(s.DB, u.ID)
+	combos, _, _ := db.ListCombosForUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
@@ -1960,16 +1845,11 @@ func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
-	if t.Disabled {
+	if u.Disabled {
 		jsonErr(w, http.StatusForbidden, "用户已被禁用")
 		return
 	}
-	if t.ExpiresAt.Valid && t.ExpiresAt.Int64 > 0 && t.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
 		jsonErr(w, http.StatusForbidden, "用户已过期")
 		return
 	}
@@ -2007,7 +1887,7 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 	hops := make([]db.HopInput, 0, len(body.Hops))
 	var lastTunnel *db.Tunnel
 	for _, h := range body.Hops {
-		if _, err := db.GetGrant(s.DB, t.ID, h.TunnelID); err != nil {
+		if _, err := db.GetGrant(s.DB, u.ID, h.TunnelID); err != nil {
 			jsonErr(w, http.StatusForbidden, fmt.Sprintf("无权使用通道 %d", h.TunnelID))
 			return
 		}
@@ -2026,7 +1906,7 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.checkTenantChainQuota(t, hops, 0); err != nil {
+	if err := s.checkUserChainQuota(u, hops, 0); err != nil {
 		jsonErr(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -2036,7 +1916,7 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	c := &db.Chain{TenantID: nullInt64(t.ID), Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
+	c := &db.Chain{OwnerID: nullInt64(u.ID), Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
 	id, err := db.CreateChain(tx, c)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -2052,25 +1932,20 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.tenant_create", strconv.FormatInt(id, 10), name)
+	db.WriteAudit(s.DB, u.ID, "chain.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true, "chain_id": id, "entry": entry})
 }
 
 func (s *Server) apiMyDeleteChain(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	t, err := s.tenantContext(u)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, err.Error())
-		return
-	}
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
 	c, err := db.GetChain(s.DB, id)
-	if err != nil || !c.TenantID.Valid || c.TenantID.Int64 != t.ID {
+	if err != nil || !c.OwnerID.Valid || c.OwnerID.Int64 != u.ID {
 		jsonErr(w, http.StatusForbidden, "无权操作该链路")
 		return
 	}
@@ -2079,7 +1954,7 @@ func (s *Server) apiMyDeleteChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.tenant_delete", strconv.FormatInt(id, 10), "")
+	db.WriteAudit(s.DB, u.ID, "chain.user_delete", strconv.FormatInt(id, 10), "")
 	s.apiDispatchFanout(nodes)
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -2098,13 +1973,21 @@ func apiUserView(u *db.User) map[string]any {
 	}
 }
 
-// apiUserFullView includes tenant_id for /api/me.
+// apiUserFullView includes quota/traffic/expiry fields for /api/me.
 func apiUserFullView(u *db.User) map[string]any {
 	m := apiUserView(u)
-	if u.TenantID.Valid {
-		m["tenant_id"] = u.TenantID.Int64
+	m["max_forwards"] = u.MaxForwards
+	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
+	m["traffic_used_bytes"] = u.TrafficUsedBytes
+	if u.ExpiresAt.Valid {
+		m["expires_at"] = u.ExpiresAt.Int64
 	} else {
-		m["tenant_id"] = nil
+		m["expires_at"] = nil
+	}
+	if u.DisableReason.Valid {
+		m["disable_reason"] = u.DisableReason.String
+	} else {
+		m["disable_reason"] = nil
 	}
 	return m
 }

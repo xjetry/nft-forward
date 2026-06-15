@@ -73,7 +73,7 @@ func PickFreePort(start, end int, used map[int]bool) int {
 
 type Chain struct {
 	ID              int64         `json:"id"`
-	TenantID        sql.NullInt64 `json:"tenant_id"`
+	OwnerID         sql.NullInt64 `json:"owner_id"`
 	Name            string        `json:"name"`
 	Proto           string        `json:"proto"`
 	ExitHost        string        `json:"exit_host"`
@@ -93,11 +93,11 @@ type ChainHop struct {
 	Comment    string        `json:"comment"`
 }
 
-const chainCols = `id,tenant_id,name,proto,exit_host,exit_port,entry_node_id,entry_listen_port,created_at`
+const chainCols = `id,owner_id,name,proto,exit_host,exit_port,entry_node_id,entry_listen_port,created_at`
 
 func scanChain(r rowScanner) (*Chain, error) {
 	c := &Chain{}
-	if err := r.Scan(&c.ID, &c.TenantID, &c.Name, &c.Proto, &c.ExitHost, &c.ExitPort,
+	if err := r.Scan(&c.ID, &c.OwnerID, &c.Name, &c.Proto, &c.ExitHost, &c.ExitPort,
 		&c.EntryNodeID, &c.EntryListenPort, &c.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -107,8 +107,8 @@ func scanChain(r rowScanner) (*Chain, error) {
 // CreateChain inserts the chain header; hops + forwards are written by
 // RegenerateChain. entry_* start at 0/NULL until the first regeneration.
 func CreateChain(d DBTX, c *Chain) (int64, error) {
-	res, err := d.Exec(`INSERT INTO chains(tenant_id,name,proto,exit_host,exit_port,created_at) VALUES (?,?,?,?,?,?)`,
-		c.TenantID, c.Name, c.Proto, c.ExitHost, c.ExitPort, now())
+	res, err := d.Exec(`INSERT INTO chains(owner_id,name,proto,exit_host,exit_port,created_at) VALUES (?,?,?,?,?,?)`,
+		c.OwnerID, c.Name, c.Proto, c.ExitHost, c.ExitPort, now())
 	if err != nil {
 		return 0, err
 	}
@@ -136,9 +136,9 @@ func listChainsWhere(d *sql.DB, where string, args ...any) ([]*Chain, error) {
 	return queryAll(d, q, scanChain, args...)
 }
 
-// ListAdminChains returns chains with no owning tenant (admin-built, unmetered).
+// ListAdminChains returns chains with no owner (admin-built, unmetered).
 func ListAdminChains(d *sql.DB) ([]*Chain, error) {
-	return listChainsWhere(d, "tenant_id IS NULL")
+	return listChainsWhere(d, "owner_id IS NULL")
 }
 
 func ListAllChains(d *sql.DB) ([]*Chain, error) {
@@ -158,8 +158,8 @@ func ChainsByID(d *sql.DB) (map[int64]*Chain, error) {
 	return m, nil
 }
 
-func ListChainsByTenant(d *sql.DB, tenantID int64) ([]*Chain, error) {
-	return listChainsWhere(d, "tenant_id=?", tenantID)
+func ListChainsByUser(d *sql.DB, userID int64) ([]*Chain, error) {
+	return listChainsWhere(d, "owner_id=?", userID)
 }
 
 func scanChainHop(r rowScanner) (*ChainHop, error) {
@@ -440,8 +440,8 @@ func RegenerateChain(tx DBTX, c *Chain, hops []HopInput, avoid map[int64]int) (s
 			c.ID, i, h.nodeID, h.tunnelID, ports[i], h.mode, hopComment); err != nil {
 			return "", nil, err
 		}
-		if _, err := tx.Exec(`INSERT INTO forwards(node_id,tenant_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			h.nodeID, c.TenantID, h.tunnelID, c.Proto, ports[i], targetIP, targetPort, fwdComment, now(), h.mode, c.ID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO forwards(node_id,owner_id,tunnel_id,proto,listen_port,target_ip,target_port,comment,created_at,mode,chain_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			h.nodeID, c.OwnerID, h.tunnelID, c.Proto, ports[i], targetIP, targetPort, fwdComment, now(), h.mode, c.ID); err != nil {
 			return "", nil, err
 		}
 		affected[h.nodeID] = true
