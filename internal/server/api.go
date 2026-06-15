@@ -178,9 +178,11 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels, _ := db.ListTunnels(s.DB)
 	forwards, _ := db.ListForwards(s.DB)
 	tenants, _ := db.ListTenants(s.DB)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "tunnels": tunnels,
 		"forwards": forwards, "tenants": tenants,
+		"node_by_id": nodeByID,
 	})
 }
 
@@ -239,6 +241,8 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	jsonOK(w, map[string]any{
 		"node": n, "forwards": forwards, "panel_url": panelURL,
+		"panel_url_configured": panelURL != "",
+		"server_version":       serverVersion(),
 	})
 }
 
@@ -446,7 +450,8 @@ func (s *Server) apiListTunnels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodes, _ := db.ListNodes(s.DB)
-	jsonOK(w, map[string]any{"tunnels": tunnels, "nodes": nodes})
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	jsonOK(w, map[string]any{"tunnels": tunnels, "nodes": nodes, "node_by_id": nodeByID})
 }
 
 func (s *Server) apiCreateTunnel(w http.ResponseWriter, r *http.Request) {
@@ -548,9 +553,10 @@ func (s *Server) apiListForwards(w http.ResponseWriter, r *http.Request) {
 		}
 		filtered = append(filtered, f)
 	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
-		"forwards": filtered, "nodes": nodes,
-		"hop_info": hopInfo, "tenants": tenantByID, "combos": combos,
+		"forwards": filtered, "nodes": nodes, "node_by_id": nodeByID,
+		"hop_info": hopInfo, "tenant_by_id": tenantByID, "combos": combos,
 	})
 }
 
@@ -904,9 +910,10 @@ func (s *Server) apiGetChain(w http.ResponseWriter, r *http.Request) {
 		fwByNode[f.NodeID] = f
 	}
 	nodes, _ := db.ListNodes(s.DB)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"chain": c, "hops": hops,
-		"forwards_by_node": fwByNode, "nodes": nodes,
+		"fw_by_node": fwByNode, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
@@ -1088,7 +1095,7 @@ func (s *Server) apiListCombos(w http.ResponseWriter, r *http.Request) {
 			"path": strings.Join(names, " → "),
 		})
 	}
-	jsonOK(w, map[string]any{"combos": views, "tunnels": tunnels, "nodes": nodeByID})
+	jsonOK(w, map[string]any{"combos": views, "tunnels": tunnels, "node_by_id": nodeByID})
 }
 
 func (s *Server) apiCreateCombo(w http.ResponseWriter, r *http.Request) {
@@ -1524,7 +1531,7 @@ func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenants, _ := db.TenantsByID(s.DB)
-	jsonOK(w, map[string]any{"users": users, "tenants": tenants})
+	jsonOK(w, map[string]any{"users": users, "tenant_by_id": tenants})
 }
 
 func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
@@ -1638,9 +1645,10 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	tunnels, grants, _ := db.ListTunnelsForTenant(s.DB, t.ID)
 	forwards, _ := db.ListForwardsForTenant(s.DB, t.ID)
 	nodes, _ := db.ListNodes(s.DB)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"tenant": t, "tunnels": tunnels, "grants": grants,
-		"forwards": forwards, "nodes": nodes,
+		"forwards": forwards, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
@@ -1669,9 +1677,12 @@ func (s *Server) apiMyListForwards(w http.ResponseWriter, r *http.Request) {
 			filtered = append(filtered, f)
 		}
 	}
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	tunnelByID := buildMap(tunnels, func(t *db.Tunnel) int64 { return t.ID })
 	jsonOK(w, map[string]any{
-		"forwards": filtered, "tunnels": tunnels, "grants": grants,
+		"tenant": t, "forwards": filtered, "tunnels": tunnels, "grants": grants,
 		"hop_info": hopInfo, "combos": combos, "nodes": nodes,
+		"node_by_id": nodeByID, "tunnel_by_id": tunnelByID,
 	})
 }
 
@@ -1922,9 +1933,10 @@ func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
 	tunnels, _, _ := db.ListTunnelsForTenant(s.DB, t.ID)
 	combos, _, _ := db.ListCombosForTenant(s.DB, t.ID)
 	nodes, _ := db.ListNodes(s.DB)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"chains": views, "tunnels": tunnels,
-		"combos": combos, "nodes": nodes,
+		"combos": combos, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
