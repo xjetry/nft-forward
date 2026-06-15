@@ -22,7 +22,7 @@ export default function ForwardList() {
 
   const deleteForward = async (f) => {
     if (!confirm('确认删除该转发？')) return
-    try { await api.post(`/forwards/${f.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/forwards/${f.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   if (loading) return <Layout><Loading /></Layout>

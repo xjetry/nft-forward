@@ -18,7 +18,7 @@ export default function MyChains() {
 
   const deleteChain = async (c) => {
     if (!confirm('删除该链路？')) return
-    try { await api.post(`/my/chains/${c.chain.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/my/chains/${c.chain.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   if (loading) return <Layout><Loading /></Layout>

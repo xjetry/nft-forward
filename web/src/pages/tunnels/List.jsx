@@ -16,7 +16,7 @@ export default function TunnelList() {
 
   const deleteTunnel = async (t) => {
     if (!confirm('删除该通道？会同时删除其下所有转发。')) return
-    try { await api.post(`/tunnels/${t.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/tunnels/${t.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   if (loading) return <Layout><Loading /></Layout>

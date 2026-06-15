@@ -41,7 +41,7 @@ export default function NodeList() {
 
   const deleteNode = async (node) => {
     if (!confirm(`确认删除节点 ${node.name}？此操作会清空节点上的转发。`)) return
-    try { await api.post(`/nodes/${node.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/nodes/${node.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   const resyncNode = async (id) => {

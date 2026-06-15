@@ -813,8 +813,8 @@ func (s *Server) apiListChains(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		views = append(views, map[string]any{
-			"id": c.ID, "name": c.Name, "tenant_name": tname,
-			"proto": c.Proto, "path": v.Path, "entry": v.Entry,
+			"chain": c, "tenant_name": tname,
+			"path": v.Path, "entry": v.Entry,
 			"entry_node_id": v.EntryNodeID,
 		})
 	}
@@ -1084,7 +1084,7 @@ func (s *Server) apiListCombos(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		views = append(views, map[string]any{
-			"id": c.ID, "name": c.Name, "hops": hops,
+			"combo": c, "hops": hops,
 			"path": strings.Join(names, " → "),
 		})
 	}
@@ -1915,7 +1915,7 @@ func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
 	for _, c := range chains {
 		v := s.buildChainView(c)
 		views = append(views, map[string]any{
-			"id": c.ID, "name": c.Name, "proto": c.Proto,
+			"chain": c,
 			"path": v.Path, "entry": v.Entry, "entry_node_id": v.EntryNodeID,
 		})
 	}

@@ -19,7 +19,7 @@ export default function ChainList() {
 
   const deleteChain = async (c) => {
     if (!confirm('删除该链路？会删除其所有跳的转发。')) return
-    try { await api.post(`/chains/${c.chain.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/chains/${c.chain.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   if (loading) return <Layout><Loading /></Layout>

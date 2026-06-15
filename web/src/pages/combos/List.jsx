@@ -17,7 +17,7 @@ export default function ComboList() {
 
   const deleteCombo = async (c) => {
     if (!confirm('删除该组合通道？')) return
-    try { await api.post(`/combos/${c.combo.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/combos/${c.combo.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   if (loading) return <Layout><Loading /></Layout>

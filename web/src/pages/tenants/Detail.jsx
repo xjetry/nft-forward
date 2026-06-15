@@ -32,7 +32,7 @@ export default function TenantDetail() {
   }
   const deleteTenant = async () => {
     if (!confirm('删除用户？关联的转发将被一并清除。')) return
-    try { await api.post(`/tenants/${id}/delete`); toast('已删除'); navigate('/tenants') } catch (err) { toast(err.message) }
+    try { await api.del(`/tenants/${id}`); toast('已删除'); navigate('/tenants') } catch (err) { toast(err.message) }
   }
 
   const expiresAt = tenant.expires_at?.Valid && tenant.expires_at.Int64 > 0 ? tenant.expires_at.Int64 : null
@@ -201,7 +201,7 @@ function UserActions({ user, onDone }) {
   const toast = useToast()
   const toggle = async () => { try { await api.post(`/users/${user.id}/toggle`); onDone() } catch (err) { toast(err.message) } }
   const reset = async () => { if (!confirm('重置该用户密码？')) return; try { const d = await api.post(`/users/${user.id}/reset-password`); toast(d?.new_password ? `新密码：${d.new_password}` : '已重置'); onDone() } catch (err) { toast(err.message) } }
-  const del = async () => { if (!confirm('删除账号？')) return; try { await api.post(`/users/${user.id}/delete`); toast('已删除'); onDone() } catch (err) { toast(err.message) } }
+  const del = async () => { if (!confirm('删除账号？')) return; try { await api.del(`/users/${user.id}`); toast('已删除'); onDone() } catch (err) { toast(err.message) } }
   return (
     <>
       <button onClick={toggle} className="btn-secondary text-xs mr-1.5">{user.disabled ? '启用' : '禁用'}</button>

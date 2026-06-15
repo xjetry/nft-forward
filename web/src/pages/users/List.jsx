@@ -31,7 +31,7 @@ export default function UserList() {
   }
   const deleteUser = async (u) => {
     if (!confirm('删除该账号？若是用户记录账号且为其唯一账号，用户记录与转发会一并清除。')) return
-    try { await api.post(`/users/${u.id}/delete`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
   return (
