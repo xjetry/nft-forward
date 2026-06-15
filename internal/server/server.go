@@ -472,6 +472,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/my/chains/{id}/delete", s.tenantDeleteChain)
 	})
 
+	r.NotFound(spaHandler().ServeHTTP)
+
 	return r
 }
 

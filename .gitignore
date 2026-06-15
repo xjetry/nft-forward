@@ -25,3 +25,7 @@ agent.token
 *.test
 *.out
 coverage.out
+
+# frontend build artifacts
+web/node_modules/
+web/dist/
