@@ -22,10 +22,43 @@ const relayBufSize = 64 * 1024
 
 const dialTimeout = 10 * time.Second
 
+// keepAlivePeriod paces TCP keepalive probes on both the client and upstream
+// legs so a peer that dies without sending FIN/RST is detected by the kernel
+// and the relay goroutine unblocks instead of leaking.
+const keepAlivePeriod = 30 * time.Second
+
+// relayLinger bounds how long the surviving direction may run after the other
+// direction has half-closed. A peer stuck in FIN_WAIT2 is not probed by
+// keepalive (the kernel only keepalives ESTABLISHED sockets), so without this
+// the goroutine — and its per-port semaphore slot — would pin forever. It is a
+// var, not a const, so tests can shrink it. The window is generous because a
+// half-close legitimately precedes a long tail of response data.
+var relayLinger = 60 * time.Second
+
 type target struct{ addr string }
 
 func targetAddr(r nft.Rule) string {
 	return net.JoinHostPort(r.DestIP, strconv.Itoa(r.DestPort))
+}
+
+// setKeepAlive enables TCP keepalive on c when it is a TCP connection; it is a
+// no-op for any other conn type (e.g. test pipes).
+func setKeepAlive(c net.Conn) {
+	if tcp, ok := c.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(keepAlivePeriod)
+	}
+}
+
+// dialUpstream is the single entry point for opening an upstream leg, so every
+// pooled or on-demand connection gets the same dial timeout and keepalive.
+func dialUpstream(addr string) (net.Conn, error) {
+	c, err := net.DialTimeout("tcp4", addr, dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	setKeepAlive(c)
+	return c, nil
 }
 
 // makeLimiter converts a Mbps cap into a byte/sec token-bucket limiter, or nil

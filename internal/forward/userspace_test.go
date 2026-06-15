@@ -1,10 +1,13 @@
 package forward
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +25,153 @@ func freePort(t *testing.T) int {
 	p := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	return p
+}
+
+// scriptListener is a net.Listener whose Accept returns a pre-programmed
+// sequence of errors, then blocks until the test signals it (or the listener is
+// closed). It lets us drive acceptLoop through transient errors deterministically.
+type scriptListener struct {
+	mu      sync.Mutex
+	errs    []error // returned one per Accept call, in order
+	calls   int
+	release chan struct{} // unblocks Accept once the scripted errors are exhausted
+}
+
+func (s *scriptListener) Accept() (net.Conn, error) {
+	s.mu.Lock()
+	i := s.calls
+	s.calls++
+	s.mu.Unlock()
+	if i < len(s.errs) {
+		return nil, s.errs[i]
+	}
+	<-s.release
+	return nil, net.ErrClosed
+}
+
+func (s *scriptListener) Close() error   { return nil }
+func (s *scriptListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+func (s *scriptListener) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// A transient Accept error must not kill the listener: acceptLoop must back off
+// and keep accepting, only exiting on net.ErrClosed (a real shutdown).
+func TestAcceptLoop_RecoversFromTransientError(t *testing.T) {
+	sl := &scriptListener{
+		errs:    []error{errors.New("transient1"), errors.New("transient2")},
+		release: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l := &listener{ln: sl, ctx: ctx, cancel: cancel, sem: make(chan struct{}, 4)}
+	l.tgt.Store(&target{addr: "127.0.0.1:1"}) // never dialed: no real conn is returned
+
+	l.wg.Add(1)
+	go l.acceptLoop()
+
+	// After the two transient errors are consumed, Accept blocks on release.
+	deadline := time.Now().Add(2 * time.Second)
+	for sl.callCount() <= len(sl.errs) {
+		if time.Now().After(deadline) {
+			t.Fatalf("acceptLoop did not retry past transient errors (calls=%d)", sl.callCount())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Loop is alive and parked on the post-script Accept. Let it return ErrClosed.
+	close(sl.release)
+	done := make(chan struct{})
+	go func() { l.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("acceptLoop did not exit on net.ErrClosed")
+	}
+}
+
+// blackholeServer accepts connections and then ignores them: never reads,
+// writes, or closes. Accepted conns are retained so their fds are not finalized.
+func blackholeServer(t *testing.T) (addr string, stop func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	return ln.Addr().String(), func() {
+		ln.Close()
+		mu.Lock()
+		for _, c := range held {
+			c.Close()
+		}
+		mu.Unlock()
+	}
+}
+
+// After one direction half-closes, a peer that goes silent (here a blackhole
+// upstream) must not pin the relay forever: relayLinger bounds the survivor so
+// the client connection is torn down shortly after the linger window.
+func TestUserspace_HalfCloseLingerBounded(t *testing.T) {
+	t.Setenv("NFT_FORWARD_POOL_SIZE", "0") // force direct dial, no pre-connect pool
+
+	orig := relayLinger
+	relayLinger = 200 * time.Millisecond
+	defer func() { relayLinger = orig }()
+
+	bhAddr, stop := blackholeServer(t)
+	defer stop()
+	host, portStr, _ := net.SplitHostPort(bhAddr)
+	bhPort, _ := strconv.Atoi(portStr)
+
+	listen := freePort(t)
+	be := newUserspaceBackend()
+	defer be.Close()
+	if err := be.Reconcile([]nft.Rule{{ID: "x", Proto: "tcp", SrcPort: listen, DestIP: host, DestPort: bhPort, Mode: nft.ModeUserspace}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", listen), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial relay: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Half-close: client signals it's done sending. The client->upstream copy
+	// finishes, arming the linger on the upstream->client direction.
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // safety net so a hang fails loudly
+	var buf [1]byte
+	_, rerr := conn.Read(buf[:])
+	elapsed := time.Since(start)
+	if rerr == nil {
+		t.Fatal("expected the relay to close the half-closed connection")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("linger did not bound the half-closed connection: %v", elapsed)
+	}
 }
 
 // echoServer accepts connections and echoes everything back.

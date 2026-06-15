@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -76,7 +78,7 @@ func (p *connPool) Get() (net.Conn, error) {
 			tc.Close()
 			continue
 		default:
-			return net.DialTimeout("tcp4", p.addr, dialTimeout)
+			return dialUpstream(p.addr)
 		}
 	}
 }
@@ -100,7 +102,7 @@ func (p *connPool) replenish() {
 			}
 		}
 
-		c, err := net.DialTimeout("tcp4", p.addr, dialTimeout)
+		c, err := dialUpstream(p.addr)
 		if err != nil {
 			select {
 			case <-p.ctx.Done():
@@ -128,18 +130,38 @@ func (p *connPool) Close() {
 	}
 }
 
-// isConnAlive performs a zero-byte read with an immediate deadline to detect
-// connections that were closed by the peer while sitting in the pool.
+// isConnAlive reports whether a pooled connection is still usable. It peeks at
+// the socket (MSG_PEEK) so any data the peer already sent stays in the kernel
+// buffer for the real relay to read — a plain Read would consume and discard
+// the first byte, corrupting protocols where the upstream speaks first (SSH,
+// SMTP, FTP banners). MSG_DONTWAIT keeps the probe non-blocking.
 func isConnAlive(c net.Conn) bool {
-	_ = c.SetReadDeadline(time.Now())
-	var buf [1]byte
-	_, err := c.Read(buf[:])
-	_ = c.SetReadDeadline(time.Time{})
-	if err == nil {
-		return true
+	tcp, ok := c.(*net.TCPConn)
+	if !ok {
+		return true // not a TCP conn (test pipe); can't probe, assume usable
 	}
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		return true
+	rc, err := tcp.SyscallConn()
+	if err != nil {
+		return false
 	}
-	return false
+	alive := false
+	cerr := rc.Read(func(fd uintptr) bool {
+		var buf [1]byte
+		n, _, rerr := unix.Recvfrom(int(fd), buf[:], unix.MSG_PEEK|unix.MSG_DONTWAIT)
+		switch {
+		case rerr == unix.EAGAIN || rerr == unix.EWOULDBLOCK:
+			alive = true // socket open, just no data buffered
+		case rerr != nil:
+			alive = false // RST or other hard error
+		case n == 0:
+			alive = false // peer sent FIN: EOF
+		default:
+			alive = true // data waiting; peeked, not consumed
+		}
+		return true // always done — never wait for readiness
+	})
+	if cerr != nil {
+		return false
+	}
+	return alive
 }

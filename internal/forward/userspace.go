@@ -2,10 +2,12 @@ package forward
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -23,7 +25,7 @@ type listener struct {
 	tgt      atomic.Pointer[target]
 	lim      atomic.Pointer[rate.Limiter]
 	bytes    atomic.Int64
-	pool     *connPool // nil when poolSize == 0
+	pool     atomic.Pointer[connPool]
 	poolSize int
 
 	sem    chan struct{} // counting semaphore; cap == maxConnsPerPort
@@ -44,7 +46,7 @@ func openListener(r nft.Rule, poolSize int) (*listener, error) {
 	l.tgt.Store(&target{addr: addr})
 	l.lim.Store(makeLimiter(r.BandwidthMbps))
 	if poolSize > 0 {
-		l.pool = newConnPool(addr, poolSize)
+		l.pool.Store(newConnPool(addr, poolSize))
 	}
 	l.wg.Add(1)
 	go l.acceptLoop()
@@ -53,11 +55,34 @@ func openListener(r nft.Rule, poolSize int) (*listener, error) {
 
 func (l *listener) acceptLoop() {
 	defer l.wg.Done()
+	var backoff time.Duration
 	for {
 		conn, err := l.ln.Accept()
 		if err != nil {
-			return // listener closed (or fatal): stop accepting
+			if errors.Is(err, net.ErrClosed) {
+				return // listener closed: normal shutdown
+			}
+			// A transient accept error (fd exhaustion, ECONNABORTED) must not
+			// kill the port permanently. Back off (capped) and retry so the
+			// listener recovers once the condition clears, instead of silently
+			// going dead until the next Reconcile.
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else {
+				backoff *= 2
+			}
+			if backoff > time.Second {
+				backoff = time.Second
+			}
+			select {
+			case <-l.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			continue
 		}
+		backoff = 0
+		setKeepAlive(conn)
 		// Back-pressure: wait for a free slot so we never exceed
 		// maxConnsPerPort concurrent handler goroutines.
 		select {
@@ -85,10 +110,10 @@ func (l *listener) handle(client net.Conn) {
 	}
 	var upstream net.Conn
 	var err error
-	if l.pool != nil {
-		upstream, err = l.pool.Get()
+	if p := l.pool.Load(); p != nil {
+		upstream, err = p.Get()
 	} else {
-		upstream, err = net.DialTimeout("tcp4", tgt.addr, dialTimeout)
+		upstream, err = dialUpstream(tgt.addr)
 	}
 	if err != nil {
 		return
@@ -112,7 +137,17 @@ func (l *listener) handle(client net.Conn) {
 		done <- struct{}{}
 	}()
 	<-done
+	// One direction has finished (the connection is now half-closed). Bound how
+	// long the other direction may linger: a peer wedged in FIN_WAIT2 is not
+	// probed by keepalive, so without this the surviving goroutine and its
+	// semaphore slot would be pinned forever. Force-closing both ends unblocks
+	// the stuck copy — the same race-free teardown close() relies on.
+	timer := time.AfterFunc(relayLinger, func() {
+		client.Close()
+		upstream.Close()
+	})
 	<-done
+	timer.Stop()
 }
 
 // close stops accepting, force-closes in-flight connections, and waits for all
@@ -120,8 +155,8 @@ func (l *listener) handle(client net.Conn) {
 func (l *listener) close() {
 	l.cancel()
 	_ = l.ln.Close()
-	if l.pool != nil {
-		l.pool.Close()
+	if p := l.pool.Load(); p != nil {
+		p.Close()
 	}
 	l.conns.Range(func(k, _ any) bool {
 		if c, ok := k.(net.Conn); ok {
@@ -180,10 +215,10 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 		l.tgt.Store(&target{addr: newAddr})
 		l.lim.Store(makeLimiter(r.BandwidthMbps))
 		if oldTgt != nil && oldTgt.addr != newAddr && b.poolSize > 0 {
-			if l.pool != nil {
-				l.pool.Close()
+			if p := l.pool.Load(); p != nil {
+				p.Close()
 			}
-			l.pool = newConnPool(newAddr, b.poolSize)
+			l.pool.Store(newConnPool(newAddr, b.poolSize))
 		}
 	}
 
