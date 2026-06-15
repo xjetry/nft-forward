@@ -1,1 +1,103 @@
 @import "tailwindcss";
+
+/* Custom component classes built on top of Tailwind */
+
+/* Input fields */
+.input-field {
+  @apply w-full h-[38px] border border-gray-200 rounded-[7px] px-3 text-[13.5px] bg-white text-gray-900 transition-colors outline-none;
+}
+.input-field::placeholder { @apply text-gray-300; }
+.input-field:focus { @apply border-blue-600 ring-3 ring-blue-600/10; }
+
+/* Button: primary */
+.btn-primary {
+  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-60 transition-colors cursor-pointer border-0;
+}
+
+/* Button: secondary/ghost */
+.btn-secondary {
+  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-white text-gray-500 border border-gray-200 hover:border-gray-300 hover:text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer;
+}
+
+/* Button: danger */
+.btn-danger {
+  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors cursor-pointer border-0;
+}
+
+/* Small danger button */
+.btn-danger-sm {
+  @apply inline-flex items-center h-[30px] px-2.5 rounded-md text-[12px] font-semibold bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer;
+}
+
+/* Card */
+.card {
+  @apply bg-white border border-gray-200 rounded-[10px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+}
+.card + .card { @apply mt-5; }
+.card-header {
+  @apply flex items-center gap-3 px-5 py-4 border-b border-gray-100;
+}
+
+/* Table */
+.tbl { @apply w-full border-collapse text-sm; }
+.tbl th {
+  @apply text-[11.5px] font-semibold text-gray-400 uppercase tracking-wider text-left py-2.5 px-4 bg-gray-50/80 border-b border-gray-200 whitespace-nowrap;
+}
+.tbl td {
+  @apply py-3 px-4 border-b border-gray-100 align-middle whitespace-nowrap text-[13px];
+}
+.tbl tbody tr:last-child td { @apply border-b-0; }
+.tbl tbody tr { @apply transition-colors; }
+.tbl tbody tr:hover { @apply bg-gray-50/60; }
+
+/* Form label */
+.fl { @apply text-[13px] font-semibold text-gray-500; }
+
+/* Protocol tags */
+.tag-tcp {
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700;
+}
+.tag-udp {
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-violet-50 text-violet-700;
+}
+.tag-tcpudp {
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700;
+}
+
+/* Mode tags */
+.tag-kernel {
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700;
+}
+.tag-user {
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700;
+}
+
+/* Segmented control */
+.seg-label { @apply relative flex-1; }
+.seg-label .seg-span {
+  @apply block text-center py-2 px-2.5 border border-gray-200 rounded-[7px] text-[13px] font-semibold text-gray-500 cursor-pointer transition-colors;
+}
+.seg-label input:checked + .seg-span,
+.seg-label .peer:checked ~ .seg-span {
+  @apply border-blue-600 bg-blue-50 text-blue-700;
+}
+
+/* Animation */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-toast { animation: toast-in 0.2s ease-out; }
+
+@keyframes fadeout {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.animate-fadeout { animation: fadeout 1.2s forwards; }
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(-16px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-in { animation: modal-in 0.2s ease; }

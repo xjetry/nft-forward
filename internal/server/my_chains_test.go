@@ -1,12 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,18 +41,21 @@ func TestTenantCreateChainAcrossGrantedTunnels(t *testing.T) {
 	_ = db.GrantTunnel(d, tid, tunB, 5)
 
 	s, _ := New(d)
-	form := url.Values{}
-	form.Set("name", "vless")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_tunnel"] = []string{fmt.Sprint(tunA), fmt.Sprint(tunB)}
-	form["hop_mode"] = []string{"userspace", "userspace"}
-	req := httptest.NewRequest("POST", "/my/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "vless",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"tunnel_id": tunA, "mode": "userspace"},
+			{"tunnel_id": tunB, "mode": "userspace"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsTenant(t, d, tid))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	chains, _ := db.ListChainsByTenant(d, tid)
@@ -70,7 +73,6 @@ func TestTenantCreateChainAcrossGrantedTunnels(t *testing.T) {
 		if !f.TunnelID.Valid {
 			t.Fatalf("tenant chain forward must carry tunnel_id")
 		}
-		// 端口落在对应通道段内
 		if f.NodeID == g.ID && (f.ListenPort < 30000 || f.ListenPort > 30100) {
 			t.Fatalf("hop on gomami port %d out of tunnel range", f.ListenPort)
 		}
@@ -83,16 +85,18 @@ func TestTenantCreateChainRejectsUngrantedTunnel(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	tid, _ := db.CreateTenant(d, &db.Tenant{Name: "acme", MaxForwards: 10})
 	other, _ := db.CreateTunnel(d, &db.Tunnel{Name: "x", NodeID: g.ID, ProtoMask: "tcp+udp", PortStart: 30000, PortEnd: 30100, TargetCIDRAllow: "0.0.0.0/0"})
-	// 不 grant
+	// not granted
 	s, _ := New(d)
-	form := url.Values{}
-	form.Set("name", "x")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_tunnel"] = []string{fmt.Sprint(other)}
-	form["hop_mode"] = []string{"kernel"}
-	req := httptest.NewRequest("POST", "/my/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "x",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"tunnel_id": other, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsTenant(t, d, tid))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
@@ -111,14 +115,16 @@ func TestTenantCreateChainRejectsExitOutsideCIDR(t *testing.T) {
 	_ = db.GrantTunnel(d, tid, tun, 5)
 
 	s, _ := New(d)
-	form := url.Values{}
-	form.Set("name", "x")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443") // 不在 10.0.0.0/8 内
-	form["hop_tunnel"] = []string{fmt.Sprint(tun)}
-	form["hop_mode"] = []string{"kernel"}
-	req := httptest.NewRequest("POST", "/my/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "x",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"tunnel_id": tun, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsTenant(t, d, tid))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
@@ -141,14 +147,17 @@ func TestTenantCreateChainRejectsOverQuota(t *testing.T) {
 	_ = db.GrantTunnel(d, tid, tunB, 5)
 
 	s, _ := New(d)
-	form := url.Values{}
-	form.Set("name", "x")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_tunnel"] = []string{fmt.Sprint(tunA), fmt.Sprint(tunB)} // 2 跳 > MaxForwards 1
-	form["hop_mode"] = []string{"kernel", "kernel"}
-	req := httptest.NewRequest("POST", "/my/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "x",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"tunnel_id": tunA, "mode": "kernel"},
+			{"tunnel_id": tunB, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsTenant(t, d, tid))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
@@ -171,19 +180,21 @@ func TestTenantDeleteChainBlocksCrossTenant(t *testing.T) {
 	cookieA := loginAsTenant(t, d, tidA)
 	cookieB := loginAsTenant(t, d, tidB)
 
-	// Tenant A creates a chain via the HTTP path.
-	form := url.Values{}
-	form.Set("name", "a-chain")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_tunnel"] = []string{fmt.Sprint(tunA)}
-	form["hop_mode"] = []string{"kernel"}
-	req := httptest.NewRequest("POST", "/my/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Tenant A creates a chain via the JSON API.
+	body, _ := json.Marshal(map[string]any{
+		"name":  "a-chain",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"tunnel_id": tunA, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/my/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(cookieA)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("tenant A create status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	chains, _ := db.ListChainsByTenant(d, tidA)
@@ -193,7 +204,7 @@ func TestTenantDeleteChainBlocksCrossTenant(t *testing.T) {
 	chainID := chains[0].ID
 
 	// Tenant B tries to delete tenant A's chain.
-	delReq := httptest.NewRequest("POST", fmt.Sprintf("/my/chains/%d/delete", chainID), nil)
+	delReq := httptest.NewRequest("DELETE", fmt.Sprintf("/api/my/chains/%d", chainID), nil)
 	delReq.AddCookie(cookieB)
 	delRec := httptest.NewRecorder()
 	s.Router().ServeHTTP(delRec, delReq)

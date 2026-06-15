@@ -1,18 +1,16 @@
 package server
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"nft-forward/internal/db"
 )
 
-// The admin forwards page renders the node column by name (resolved via the
-// NodeByID map), falling back to #id only when the node row is absent. This
-// guards against regressing to raw #id display.
+// The admin forwards API includes a nodes list that maps node IDs to names.
+// This verifies the node name is present in the response (not just a raw ID).
 func TestForwardsPageShowsNodeName(t *testing.T) {
 	d := openDB(t)
 	n, err := db.CreateNode(d, "po0-test", "https://p", "tok")
@@ -34,19 +32,35 @@ func TestForwardsPageShowsNodeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("GET", "/forwards", nil)
+	req := httptest.NewRequest("GET", "/api/forwards", nil)
 	req.AddCookie(loginAsAdmin(t, d))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /forwards: status %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("GET /api/forwards: status %d body=%s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "po0-test") {
-		t.Fatalf("node column should show the name 'po0-test', got body:\n%s", body)
+	var resp struct {
+		Forwards []json.RawMessage `json:"forwards"`
+		Nodes    []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"nodes"`
 	}
-	if strings.Contains(body, fmt.Sprintf("#%d</td>", n.ID)) {
-		t.Fatalf("node column still renders raw #%d", n.ID)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(resp.Forwards) == 0 {
+		t.Fatalf("expected at least 1 forward, got 0")
+	}
+	found := false
+	for _, nd := range resp.Nodes {
+		if nd.ID == n.ID && nd.Name == "po0-test" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("nodes list should contain node %d with name 'po0-test', got %+v", n.ID, resp.Nodes)
 	}
 }

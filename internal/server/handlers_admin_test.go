@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -49,8 +50,12 @@ func TestDeleteTunnelInUseRejected(t *testing.T) {
 
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
-	postNode(t, s, admin, fmt.Sprintf("/tunnels/%d/delete", tunID), nil)
+	req := httptest.NewRequest("DELETE", fmt.Sprintf("/api/tunnels/%d", tunID), nil)
+	req.AddCookie(admin)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
 
+	// API returns 409 Conflict when tunnel is in use; tunnel must still exist.
 	if _, err := db.GetTunnel(d, tunID); err != nil {
 		t.Fatalf("tunnel backing a forward must not be deleted, but GetTunnel errored: %v", err)
 	}
@@ -66,7 +71,13 @@ func TestDeleteEmptyTunnelSucceeds(t *testing.T) {
 
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
-	postNode(t, s, admin, fmt.Sprintf("/tunnels/%d/delete", tunID), nil)
+	req := httptest.NewRequest("DELETE", fmt.Sprintf("/api/tunnels/%d", tunID), nil)
+	req.AddCookie(admin)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/tunnels/%d status = %d body=%s", tunID, rec.Code, rec.Body.String())
+	}
 
 	if _, err := db.GetTunnel(d, tunID); err == nil {
 		t.Fatalf("tunnel with no forwards must be deleted, but GetTunnel still succeeds")

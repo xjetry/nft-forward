@@ -1,12 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
 
 	"nft-forward/internal/db"
@@ -23,19 +23,21 @@ func TestCreateChainWiresForwardsAndShowsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{}
-	form.Set("name", "vless")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_node"] = []string{fmt.Sprint(g.ID), fmt.Sprint(h.ID)}
-	form["hop_mode"] = []string{"userspace", "kernel"}
-
-	req := httptest.NewRequest("POST", "/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "vless",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"node_id": g.ID, "mode": "userspace"},
+			{"node_id": h.ID, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsAdmin(t, d))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -47,33 +49,32 @@ func TestCreateChainWiresForwardsAndShowsEntry(t *testing.T) {
 	if len(fws) != 2 {
 		t.Fatalf("want 2 hop forwards, got %d", len(fws))
 	}
-	// 入口端口落库
 	c, _ := db.GetChain(d, chains[0].ID)
 	if !c.EntryNodeID.Valid || c.EntryListenPort == 0 {
 		t.Fatalf("entry not recorded: %+v", c)
 	}
 }
 
-// postChain drives the create-chain handler and fails the test unless it
-// redirects (success), returning the single admin chain that was persisted.
-// admin is reused across requests because loginAsAdmin inserts a fixed-username
-// user that can only exist once per DB.
-func postChain(t *testing.T, s *Server, d *sql.DB, admin *http.Cookie, name string, hopNodes []int64) *db.Chain {
+// apiPostChain drives the create-chain JSON API and fails the test unless
+// it returns 200, returning the single admin chain that was persisted.
+func apiPostChain(t *testing.T, s *Server, d *sql.DB, admin *http.Cookie, name string, hopNodes []int64) *db.Chain {
 	t.Helper()
-	form := url.Values{}
-	form.Set("name", name)
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	for _, n := range hopNodes {
-		form.Add("hop_node", fmt.Sprint(n))
-		form.Add("hop_mode", "kernel")
+	hops := make([]map[string]any, len(hopNodes))
+	for i, n := range hopNodes {
+		hops[i] = map[string]any{"node_id": n, "mode": "kernel"}
 	}
-	req := httptest.NewRequest("POST", "/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  name,
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops":  hops,
+	})
+	req := httptest.NewRequest("POST", "/api/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(admin)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("create chain status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	chains, _ := db.ListAdminChains(d)
@@ -92,21 +93,23 @@ func TestSaveChainReorderKeepsForwards(t *testing.T) {
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
 
-	c := postChain(t, s, d, admin, "vless", []int64{g.ID, h.ID})
+	c := apiPostChain(t, s, d, admin, "vless", []int64{g.ID, h.ID})
 
-	// Reorder the two hops and POST the edit; regeneration must succeed.
-	form := url.Values{}
-	form.Set("name", "vless")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_node"] = []string{fmt.Sprint(h.ID), fmt.Sprint(g.ID)}
-	form["hop_mode"] = []string{"kernel", "kernel"}
-	req := httptest.NewRequest("POST", fmt.Sprintf("/chains/%d", c.ID), strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "vless",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"node_id": h.ID, "mode": "kernel"},
+			{"node_id": g.ID, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("PUT", fmt.Sprintf("/api/chains/%d", c.ID), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(admin)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("save status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -129,9 +132,8 @@ func TestReallocateHopChangesPort(t *testing.T) {
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
 
-	c := postChain(t, s, d, admin, "vless", []int64{g.ID, h.ID})
+	c := apiPostChain(t, s, d, admin, "vless", []int64{g.ID, h.ID})
 
-	// Capture position-0 hop's forward port before reallocation.
 	hops, _ := db.ListChainHops(d, c.ID)
 	pos0Node := hops[0].NodeID
 	before, _ := db.ListForwardsByChain(d, c.ID)
@@ -140,11 +142,11 @@ func TestReallocateHopChangesPort(t *testing.T) {
 		portByNode[f.NodeID] = f.ListenPort
 	}
 
-	req := httptest.NewRequest("POST", fmt.Sprintf("/chains/%d/hops/0/reallocate", c.ID), nil)
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/chains/%d/hops/0/reallocate", c.ID), nil)
 	req.AddCookie(admin)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("reallocate status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -165,32 +167,33 @@ func TestSetNodeRelayHost(t *testing.T) {
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
 
-	post := func(val string) {
+	apiSetRelayHost := func(val string, wantOK bool) {
 		t.Helper()
-		form := url.Values{}
-		form.Set("relay_host", val)
-		req := httptest.NewRequest("POST", fmt.Sprintf("/nodes/%d/relay-host", n.ID), strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		body, _ := json.Marshal(map[string]any{"relay_host": val})
+		req := httptest.NewRequest("POST", fmt.Sprintf("/api/nodes/%d/relay-host", n.ID), bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(admin)
 		rec := httptest.NewRecorder()
 		s.Router().ServeHTTP(rec, req)
-		if rec.Code != http.StatusSeeOther {
+		if wantOK && rec.Code != http.StatusOK {
 			t.Fatalf("relay-host status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !wantOK && rec.Code == http.StatusOK {
+			t.Fatalf("relay-host should have been rejected, got 200")
 		}
 	}
 
-	// Valid IPv4 updates.
-	post("5.6.7.8")
+	apiSetRelayHost("5.6.7.8", true)
 	if got, _ := db.GetNode(d, n.ID); got.RelayHost != "5.6.7.8" {
 		t.Fatalf("relay_host = %q, want 5.6.7.8", got.RelayHost)
 	}
-	// Invalid value is rejected, leaving the prior value intact.
-	post("not a host!!")
+	// Invalid value is rejected (API returns 400).
+	apiSetRelayHost("not a host!!", false)
 	if got, _ := db.GetNode(d, n.ID); got.RelayHost != "5.6.7.8" {
 		t.Fatalf("invalid relay_host should be rejected; got %q", got.RelayHost)
 	}
 	// Empty clears it.
-	post("")
+	apiSetRelayHost("", true)
 	if got, _ := db.GetNode(d, n.ID); got.RelayHost != "" {
 		t.Fatalf("empty relay_host should clear; got %q", got.RelayHost)
 	}
@@ -203,14 +206,17 @@ func TestCreateChainRejectsNodeWithoutRelayHost(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 
 	s, _ := New(d)
-	form := url.Values{}
-	form.Set("name", "x")
-	form.Set("proto", "tcp")
-	form.Set("exit", "9.9.9.9:8443")
-	form["hop_node"] = []string{fmt.Sprint(g.ID), fmt.Sprint(bare.ID)}
-	form["hop_mode"] = []string{"kernel", "kernel"}
-	req := httptest.NewRequest("POST", "/chains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, _ := json.Marshal(map[string]any{
+		"name":  "x",
+		"proto": "tcp",
+		"exit":  "9.9.9.9:8443",
+		"hops": []map[string]any{
+			{"node_id": g.ID, "mode": "kernel"},
+			{"node_id": bare.ID, "mode": "kernel"},
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/chains", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(loginAsAdmin(t, d))
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
@@ -234,24 +240,22 @@ func forwardOnNode(t *testing.T, d *sql.DB, chainID, nodeID int64) *db.Forward {
 	return nil
 }
 
-// postNode drives a node-scoped POST (relay-host / delete) and fails unless it
-// redirects.
-func postNode(t *testing.T, s *Server, admin *http.Cookie, path string, form url.Values) {
+// apiNodeAction sends a JSON API request for a node-scoped action.
+// For DELETE, path should be the node endpoint and method "DELETE".
+// For POST with body (e.g. relay-host), pass the JSON body.
+func apiNodeAction(t *testing.T, s *Server, admin *http.Cookie, method, path string, jsonBody []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	var body *strings.Reader
-	if form == nil {
-		body = strings.NewReader("")
+	var req *http.Request
+	if jsonBody != nil {
+		req = httptest.NewRequest(method, path, bytes.NewReader(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
 	} else {
-		body = strings.NewReader(form.Encode())
+		req = httptest.NewRequest(method, path, nil)
 	}
-	req := httptest.NewRequest("POST", path, body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(admin)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST %s status = %d body=%s", path, rec.Code, rec.Body.String())
-	}
+	return rec
 }
 
 func TestSetNodeRelayHostRewiresUpstream(t *testing.T) {
@@ -263,18 +267,18 @@ func TestSetNodeRelayHostRewiresUpstream(t *testing.T) {
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
 
-	c := postChain(t, s, d, admin, "vless", []int64{a.ID, b.ID})
+	c := apiPostChain(t, s, d, admin, "vless", []int64{a.ID, b.ID})
 
-	// A's hop materializes B's relay_host as its DNAT target.
 	if got := forwardOnNode(t, d, c.ID, a.ID).TargetIP; got != "2.2.2.2" {
 		t.Fatalf("upstream hop target_ip = %q, want 2.2.2.2", got)
 	}
 
-	form := url.Values{}
-	form.Set("relay_host", "8.8.8.8")
-	postNode(t, s, admin, fmt.Sprintf("/nodes/%d/relay-host", b.ID), form)
+	body, _ := json.Marshal(map[string]any{"relay_host": "8.8.8.8"})
+	rec := apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/relay-host", b.ID), body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relay-host status = %d body=%s", rec.Code, rec.Body.String())
+	}
 
-	// Changing B's relay_host must re-materialize A's forward onto the new address.
 	if got := forwardOnNode(t, d, c.ID, a.ID).TargetIP; got != "8.8.8.8" {
 		t.Fatalf("upstream hop target_ip after relay-host change = %q, want 8.8.8.8", got)
 	}
@@ -291,16 +295,17 @@ func TestDeleteMidNodeRewiresChain(t *testing.T) {
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
 
-	chain := postChain(t, s, d, admin, "vless", []int64{a.ID, b.ID, cNode.ID})
+	chain := apiPostChain(t, s, d, admin, "vless", []int64{a.ID, b.ID, cNode.ID})
 
-	// Before deletion A hops to B (2.2.2.2).
 	if got := forwardOnNode(t, d, chain.ID, a.ID).TargetIP; got != "2.2.2.2" {
 		t.Fatalf("pre-delete upstream hop target_ip = %q, want 2.2.2.2", got)
 	}
 
-	postNode(t, s, admin, fmt.Sprintf("/nodes/%d/delete", b.ID), nil)
+	rec := apiNodeAction(t, s, admin, "DELETE", fmt.Sprintf("/api/nodes/%d", b.ID), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete node status = %d body=%s", rec.Code, rec.Body.String())
+	}
 
-	// The mid node's hop is gone; the chain re-materializes around the gap.
 	hops, _ := db.ListChainHops(d, chain.ID)
 	if len(hops) != 2 {
 		t.Fatalf("chain should have 2 hops after deleting mid node, got %d", len(hops))
@@ -346,9 +351,12 @@ func TestDeleteNodeTearsDownTenantChainOnCIDRViolation(t *testing.T) {
 
 	s, _ := New(d)
 	admin := loginAsAdmin(t, d)
-	// Deleting n2 (the last hop) shrinks the chain to [n1]; the new last tunnel A
+	// Deleting n2 shrinks the chain to [n1]; the new last tunnel A
 	// (10.0.0.0/8) does NOT contain exit 9.9.9.9, so the chain must be torn down.
-	postNode(t, s, admin, fmt.Sprintf("/nodes/%d/delete", n2.ID), nil)
+	rec := apiNodeAction(t, s, admin, "DELETE", fmt.Sprintf("/api/nodes/%d", n2.ID), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete node status = %d body=%s", rec.Code, rec.Body.String())
+	}
 
 	if chains, _ := db.ListChainsByTenant(d, tid); len(chains) != 0 {
 		t.Fatalf("tenant chain must be removed when the promoted last hop forbids the exit, got %d", len(chains))
