@@ -132,6 +132,14 @@ func RenderRuleset(rules []Rule) string {
 	b.WriteString("\tchain prerouting {\n")
 	b.WriteString("\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
 	for _, r := range rules {
+		// A rule whose DestHost failed to resolve carries an empty DestIP;
+		// rendering "dnat to :port" is invalid syntax and would make nft reject
+		// the whole table, taking every other rule down with it. Skip it here
+		// (and symmetrically in postrouting) so the rule stays inactive until
+		// DNS resolves on a later cycle.
+		if r.DestIP == "" {
+			continue
+		}
 		mark := ""
 		if r.BandwidthMbps > 0 {
 			// Mark = listen port. The tc HTB tree uses the same value as the
@@ -145,7 +153,15 @@ func RenderRuleset(rules []Rule) string {
 	b.WriteString("\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	for _, r := range rules {
-		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s masquerade\n",
+		if r.DestIP == "" {
+			continue
+		}
+		// ct status dnat limits masquerade to connections this table actually
+		// DNAT'd. Without it the daddr+dport match is a catch-all that would
+		// also SNAT unrelated forward traffic to the same backend (containers,
+		// tunnels, other paths); using conntrack state instead of an interface
+		// name keeps this correct regardless of the host's NIC layout.
+		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s ct status dnat masquerade\n",
 			r.DestIP, ProtoDportMatch(r.Proto, r.DestPort)))
 	}
 	b.WriteString("\t}\n")

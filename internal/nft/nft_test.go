@@ -95,6 +95,36 @@ func TestRenderRulesetUsesDestIP(t *testing.T) {
 	}
 }
 
+func TestRenderRulesetMasqueradeScopedToDNAT(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 8080},
+	})
+	if !contains(out, "ip daddr 10.0.0.1 tcp dport 8080 ct status dnat masquerade") {
+		t.Fatalf("masquerade must be scoped to DNAT'd conns via ct status dnat, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
+	// An unresolved DestHost leaves DestIP empty; the rule must be skipped in
+	// both chains rather than emitting invalid syntax that fails the whole table.
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8443, DestHost: "unresolved.example", DestPort: 443},
+		{Proto: "tcp", SrcPort: 9443, DestIP: "10.0.0.6", DestPort: 443},
+	})
+	if contains(out, "dport 8443") {
+		t.Fatalf("rule with empty DestIP must be skipped entirely, got:\n%s", out)
+	}
+	if contains(out, "dnat to :443") || contains(out, "ip daddr  ") {
+		t.Fatalf("must not emit invalid syntax for empty DestIP, got:\n%s", out)
+	}
+	if !contains(out, "tcp dport 9443 counter dnat to 10.0.0.6:443") {
+		t.Fatalf("sibling rule with valid DestIP must still render, got:\n%s", out)
+	}
+	if !contains(out, "ip daddr 10.0.0.6 tcp dport 443 ct status dnat masquerade") {
+		t.Fatalf("sibling masquerade must still render, got:\n%s", out)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
