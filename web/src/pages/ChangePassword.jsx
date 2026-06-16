@@ -44,9 +44,9 @@ export default function ChangePassword() {
               <label className="fl">再次输入</label>
               <input className="input-field" type="password" minLength="6" value={form.confirm} onChange={e => set('confirm', e.target.value)} required />
             </div>
-            <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+            <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
               <button type="submit" disabled={loading} className="btn-primary">更新密码</button>
-              <span className="text-xs text-gray-400">提交后其他设备/浏览器上的旧会话会被注销，仅当前页保留。</span>
+              <span className="text-xs text-ink-mut">提交后其他设备/浏览器上的旧会话会被注销，仅当前页保留。</span>
             </div>
           </form>
         </div>

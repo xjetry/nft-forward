@@ -25,7 +25,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen grid place-items-center" style={{ background: 'linear-gradient(180deg, #10151c, #0b0f15)' }}>
-      <div className="bg-white rounded-xl p-9 w-[380px] shadow-[0_16px_48px_rgba(0,0,0,0.25)]">
+      <div className="bg-surface rounded-xl p-9 w-[380px] shadow-[0_16px_48px_rgba(0,0,0,0.25)]">
         <div className="flex items-center gap-3 mb-7">
           <div className="w-[38px] h-[38px] rounded-[10px] grid place-items-center text-white shadow-[0_4px_14px_rgba(37,99,235,0.4)]"
             style={{ background: 'linear-gradient(150deg, #3b82f6, #1e40af)' }}>
@@ -33,7 +33,7 @@ export default function Login() {
           </div>
           <div>
             <div className="text-[15px] font-bold">nft-forward</div>
-            <div className="text-[11px] text-gray-400 font-mono mt-px">转发管理面板</div>
+            <div className="text-[11px] text-ink-mut font-mono mt-px">转发管理面板</div>
           </div>
         </div>
 
@@ -43,11 +43,11 @@ export default function Login() {
 
         <form onSubmit={submit} className="flex flex-col gap-3.5">
           <div>
-            <label className="block text-[13px] font-semibold text-gray-500 mb-1.5">用户名</label>
+            <label className="block text-[13px] font-semibold text-ink-soft mb-1.5">用户名</label>
             <input className="input-field" value={username} onChange={e => setUsername(e.target.value)} required autoFocus />
           </div>
           <div>
-            <label className="block text-[13px] font-semibold text-gray-500 mb-1.5">密码</label>
+            <label className="block text-[13px] font-semibold text-ink-soft mb-1.5">密码</label>
             <input className="input-field" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
           </div>
           <button type="submit" disabled={loading}

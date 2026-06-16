@@ -5,10 +5,10 @@ export function Modal({ open, onClose, title, children, wide }) {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 pt-16 px-4 overflow-y-auto" onClick={onClose}>
-      <div className={`bg-white rounded-lg shadow-xl w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} animate-in`} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
-          <h3 className="text-sm font-bold">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+      <div className={`bg-surface rounded-lg shadow-xl w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} animate-in`} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-line-soft">
+          <h3 className="text-sm font-bold text-ink">{title}</h3>
+          <button onClick={onClose} className="text-ink-mut hover:text-ink text-lg leading-none">&times;</button>
         </div>
         <div className="px-6 py-5">{children}</div>
       </div>
@@ -20,7 +20,7 @@ export function Modal({ open, onClose, title, children, wide }) {
 export function Confirm({ open, onClose, onConfirm, title, children }) {
   return (
     <Modal open={open} onClose={onClose} title={title || '确认操作'}>
-      <div className="text-sm text-gray-600 mb-5">{children}</div>
+      <div className="text-sm text-ink-soft mb-5">{children}</div>
       <div className="flex gap-3 justify-end">
         <button onClick={onClose} className="btn-secondary">取消</button>
         <button onClick={onConfirm} className="btn-danger">确认</button>
@@ -34,7 +34,7 @@ const badgeColors = {
   green: 'bg-green-50 text-green-700',
   amber: 'bg-amber-50 text-amber-700',
   red: 'bg-red-50 text-red-700',
-  gray: 'bg-gray-100 text-gray-500',
+  gray: 'bg-raised text-ink-soft',
   blue: 'bg-blue-50 text-blue-700',
   violet: 'bg-violet-50 text-violet-700',
 }
@@ -101,11 +101,11 @@ export function Table({ children }) {
 /* ---------- Empty ---------- */
 export function Empty({ title, desc, children }) {
   return (
-    <div className="py-10 text-center text-gray-400">
-      <div className="w-11 h-11 rounded-xl bg-gray-100 mx-auto mb-3 flex items-center justify-center">
+    <div className="py-10 text-center text-ink-mut">
+      <div className="w-11 h-11 rounded-xl bg-raised mx-auto mb-3 flex items-center justify-center">
         <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v4M12 16h.01"/></svg>
       </div>
-      {title && <h4 className="text-sm font-semibold text-gray-500 mb-1">{title}</h4>}
+      {title && <h4 className="text-sm font-semibold text-ink-soft mb-1">{title}</h4>}
       {desc && <p className="text-xs">{desc}</p>}
       {children}
     </div>
@@ -174,12 +174,12 @@ export function ProbeButton({ target, nodeId }) {
   return (
     <span className="inline-flex items-center gap-2">
       <button onClick={probe} disabled={state === 'loading'}
-        className="text-[11px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:border-blue-500 hover:text-blue-600 disabled:opacity-50">
+        className="text-[11px] px-2 py-0.5 rounded border border-line bg-surface text-ink-soft hover:border-blue-500 hover:text-blue-600 disabled:opacity-50">
         {state === 'loading' ? <Spinner className="w-3 h-3" /> : '测试'}
       </button>
       {state === 'ok' && <span className="text-[11px] text-green-700 font-semibold">{result}</span>}
       {state === 'fail' && <span className="text-[11px] text-red-600">{result}</span>}
-      {state === 'loading' && <span className="text-[11px] text-gray-400">测试中...</span>}
+      {state === 'loading' && <span className="text-[11px] text-ink-mut">测试中...</span>}
     </span>
   )
 }
@@ -206,12 +206,12 @@ export function ProbeChainButton({ chainId, ruleId }) {
   return (
     <span className="inline-flex items-center gap-2">
       <button onClick={probe} disabled={state === 'loading'}
-        className="text-[11px] px-2 py-0.5 rounded border border-gray-200 bg-white text-gray-500 hover:border-blue-500 hover:text-blue-600 disabled:opacity-50">
+        className="text-[11px] px-2 py-0.5 rounded border border-line bg-surface text-ink-soft hover:border-blue-500 hover:text-blue-600 disabled:opacity-50">
         {state === 'loading' ? <Spinner className="w-3 h-3" /> : '测试'}
       </button>
       {state === 'ok' && <span className="text-[11px] text-green-700 font-semibold">{result}</span>}
       {state === 'fail' && <span className="text-[11px] text-red-600">{result}</span>}
-      {state === 'loading' && <span className="text-[11px] text-gray-400">测试中...</span>}
+      {state === 'loading' && <span className="text-[11px] text-ink-mut">测试中...</span>}
     </span>
   )
 }

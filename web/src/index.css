@@ -1,12 +1,47 @@
 @import "tailwindcss";
 
+/* Dark mode is class-driven (.dark on <html>) so we can follow the OS by
+   default yet honor an explicit user toggle. See lib/theme.js. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic color tokens. Utilities like bg-surface / text-ink / border-line
+   resolve to these CSS variables, so flipping the values under .dark recolors
+   the whole app without per-element dark: variants.
+   Brand/status hues (blue/green/red/amber) keep Tailwind's palette. */
+@theme {
+  --color-app: #eef1f5;        /* page background */
+  --color-surface: #ffffff;    /* cards, inputs, menus */
+  --color-raised: #f9fafb;     /* table headers, hover, chips */
+  --color-line: #e6e9ee;       /* borders */
+  --color-line-soft: #eef0f3;  /* subtle inner borders */
+  --color-ink: #1f2733;        /* primary text */
+  --color-ink-soft: #59626e;   /* secondary text */
+  --color-ink-mut: #9aa4b2;    /* muted text / icons */
+}
+
+.dark {
+  --color-app: #0d1117;
+  --color-surface: #161b22;
+  --color-raised: #1c232e;
+  --color-line: #2a313c;
+  --color-line-soft: #222932;
+  --color-ink: #e6edf3;
+  --color-ink-soft: #adbac7;
+  --color-ink-mut: #768390;
+}
+
+html, body { background: var(--color-app); color: var(--color-ink); }
+
 /* Custom component classes built on top of Tailwind */
 
 /* Input fields */
 .input-field {
-  @apply w-full h-[38px] border border-gray-200 rounded-[7px] px-3 text-[13.5px] bg-white text-gray-900 transition-colors outline-none;
+  @apply w-full h-[38px] rounded-[7px] px-3 text-[13.5px] transition-colors outline-none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  color: var(--color-ink);
 }
-.input-field::placeholder { @apply text-gray-300; }
+.input-field::placeholder { color: var(--color-ink-mut); opacity: 0.7; }
 .input-field:focus { @apply border-blue-600 ring-3 ring-blue-600/10; }
 
 /* Button: primary */
@@ -16,8 +51,12 @@
 
 /* Button: secondary/ghost */
 .btn-secondary {
-  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-white text-gray-500 border border-gray-200 hover:border-gray-300 hover:text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer;
+  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold transition-colors cursor-pointer;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  color: var(--color-ink-soft);
 }
+.btn-secondary:hover { border-color: var(--color-ink-mut); color: var(--color-ink); background: var(--color-raised); }
 
 /* Button: danger */
 .btn-danger {
@@ -26,36 +65,46 @@
 
 /* Small danger button */
 .btn-danger-sm {
-  @apply inline-flex items-center h-[30px] px-2.5 rounded-md text-[12px] font-semibold bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer;
+  @apply inline-flex items-center h-[30px] px-2.5 rounded-md text-[12px] font-semibold bg-red-600/10 text-red-600 transition-colors cursor-pointer;
+  border: 1px solid color-mix(in srgb, var(--color-red-500) 35%, transparent);
 }
+.btn-danger-sm:hover { background: color-mix(in srgb, var(--color-red-500) 18%, transparent); }
 
 /* Card */
 .card {
-  @apply bg-white border border-gray-200 rounded-[10px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+  @apply rounded-[10px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
 }
 .card + .card { @apply mt-5; }
 .card-header {
-  @apply flex items-center gap-3 px-5 py-4 border-b border-gray-100;
+  @apply flex items-center gap-3 px-5 py-4;
+  border-bottom: 1px solid var(--color-line-soft);
 }
 
 /* Table */
 .tbl { @apply w-full border-collapse text-sm; }
 .tbl th {
-  @apply text-[11.5px] font-semibold text-gray-400 uppercase tracking-wider text-left py-2.5 px-4 bg-gray-50/80 border-b border-gray-200 whitespace-nowrap;
+  @apply text-[11.5px] font-semibold uppercase tracking-wider text-left py-2.5 px-4 whitespace-nowrap;
+  color: var(--color-ink-mut);
+  background: var(--color-raised);
+  border-bottom: 1px solid var(--color-line);
 }
 /* Header cells default to left; this lets a th opt into right alignment so its
    label lines up with right-aligned data below it (the base rule's higher
    specificity would otherwise win and pull the label left). */
 .tbl th.text-right { @apply text-right; }
 .tbl td {
-  @apply py-3 px-4 border-b border-gray-100 align-middle whitespace-nowrap text-[13px];
+  @apply py-3 px-4 align-middle whitespace-nowrap text-[13px];
+  border-bottom: 1px solid var(--color-line-soft);
+  color: var(--color-ink);
 }
-.tbl tbody tr:last-child td { @apply border-b-0; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
 .tbl tbody tr { @apply transition-colors; }
-.tbl tbody tr:hover { @apply bg-gray-50/60; }
+.tbl tbody tr:hover { background: color-mix(in srgb, var(--color-raised) 60%, transparent); }
 
 /* Form label */
-.fl { @apply text-[13px] font-semibold text-gray-500; }
+.fl { @apply text-[13px] font-semibold; color: var(--color-ink-soft); }
 
 /* Protocol tags */
 .tag-tcp {
@@ -76,10 +125,19 @@
   @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700;
 }
 
+/* In dark mode, status/protocol pills use translucent fills so the saturated
+   light-palette backgrounds don't glare against the dark surface. */
+.dark .tag-tcp, .dark .tag-udp, .dark .tag-tcpudp,
+.dark .tag-kernel, .dark .tag-user {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
 /* Segmented control */
 .seg-label { @apply relative flex-1; }
 .seg-label .seg-span {
-  @apply block text-center py-2 px-2.5 border border-gray-200 rounded-[7px] text-[13px] font-semibold text-gray-500 cursor-pointer transition-colors;
+  @apply block text-center py-2 px-2.5 rounded-[7px] text-[13px] font-semibold cursor-pointer transition-colors;
+  border: 1px solid var(--color-line);
+  color: var(--color-ink-soft);
 }
 .seg-label input:checked + .seg-span,
 .seg-label .peer:checked ~ .seg-span {

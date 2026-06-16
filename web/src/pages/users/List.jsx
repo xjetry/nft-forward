@@ -4,11 +4,13 @@ import { api } from '../../lib/api'
 import { fmtTrafficGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal } from '../../components/ui'
+import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
 
 export default function UserList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [search, setSearch] = useState('')
   const { user: currentUser } = useUser()
   const toast = useToast()
 
@@ -37,25 +39,34 @@ export default function UserList() {
     try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
+  const q = search.trim().toLowerCase()
+  const filtered = !q ? users : users.filter(u => (u.username || '').toLowerCase().includes(q))
+
   return (
     <Layout>
-      <div className="card">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">用户列表</h3>
-          <span className="text-xs text-gray-400">{users.length} 个用户</span>
-          <button onClick={() => setShowCreate(true)} className="btn-primary text-xs ml-auto">+ 新建用户</button>
-        </div>
-        {users.length ? (
+      <PageHeader title="用户列表" count={users.length} unit="个用户" />
+
+      <Panel>
+        <PanelToolbar>
+          <SearchInput value={search} onChange={setSearch} placeholder="搜索用户名…" />
+          <ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton>
+        </PanelToolbar>
+
+        {users.length === 0 ? (
+          <Empty title="暂无用户" desc="点击右上角「新建用户」创建。" />
+        ) : filtered.length === 0 ? (
+          <Empty title="无匹配用户" desc="试试别的关键词。" />
+        ) : (
           <table className="tbl">
             <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
-              {users.map(u => {
+              {filtered.map(u => {
                 const isSelf = u.id === currentUser?.id
                 return (
                   <tr key={u.id}>
-                    <td className="font-mono text-xs text-gray-400">{u.id}</td>
+                    <td className="font-mono text-xs text-ink-mut">{u.id}</td>
                     <td><Link to={`/users/${u.id}`} className="text-blue-600 font-semibold hover:underline">{u.username}</Link></td>
-                    <td><span className="inline-flex items-center font-mono text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{u.role}</span></td>
+                    <td><span className="inline-flex items-center font-mono text-xs bg-raised text-ink-soft px-1.5 py-0.5 rounded">{u.role}</span></td>
                     <td className="font-mono">{u.role === 'user' ? `${u.rule_count || 0} / ${u.max_forwards}` : '--'}</td>
                     <td className="font-mono">{u.role === 'user' ? fmtTrafficGB(u.traffic_used_bytes, u.traffic_quota_bytes) : '--'}</td>
                     <td>
@@ -65,7 +76,7 @@ export default function UserList() {
                     </td>
                     <td className="text-right whitespace-nowrap">
                       {isSelf ? (
-                        <span className="text-xs text-gray-400">(当前用户)</span>
+                        <span className="text-xs text-ink-mut">(当前用户)</span>
                       ) : (
                         <>
                           <Link to={`/users/${u.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>
@@ -80,10 +91,8 @@ export default function UserList() {
               })}
             </tbody>
           </table>
-        ) : (
-          <Empty title="暂无用户" desc="点击上方「新建用户」创建。" />
         )}
-      </div>
+      </Panel>
 
       <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
@@ -132,17 +141,17 @@ function CreateUserModal({ open, onClose, onDone }) {
             <>
               <label className="fl">最大转发数</label>
               <input className="input-field font-mono" type="number" min="1" value={form.max_forwards} onChange={e => set('max_forwards', e.target.value)} style={{ maxWidth: 160 }} />
-              <label className="fl">流量配额 <span className="text-gray-400 font-normal text-xs">(GB)</span></label>
+              <label className="fl">流量配额 <span className="text-ink-mut font-normal text-xs">(GB)</span></label>
               <input className="input-field font-mono" type="number" min="0" step="0.1" value={form.traffic_quota_gb} onChange={e => set('traffic_quota_gb', e.target.value)} style={{ maxWidth: 160 }} />
-              <label className="fl">到期时间 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
+              <label className="fl">到期时间 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
               <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
             </>
           )}
         </div>
-        <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+        <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">创建用户</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
-          {form.role === 'user' && <span className="text-xs text-gray-400">配额为 0 时不限制；超额后自动禁用。</span>}
+          {form.role === 'user' && <span className="text-xs text-ink-mut">配额为 0 时不限制；超额后自动禁用。</span>}
         </div>
       </form>
     </Modal>

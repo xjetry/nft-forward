@@ -34,7 +34,7 @@ export default function RulesDetail() {
     <Layout>
       {/* Entry info */}
       <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">入口</h3><span className="text-xs text-gray-400">复制给客户端</span></div>
+        <div className="card-header"><h3 className="text-sm font-bold">入口</h3><span className="text-xs text-ink-mut">复制给客户端</span></div>
         <div className="p-5">
           {rule.entry ? (
             <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
@@ -46,23 +46,23 @@ export default function RulesDetail() {
                 复制
               </button>
             </div>
-          ) : <span className="text-gray-400 text-sm">尚未分配入口</span>}
+          ) : <span className="text-ink-mut text-sm">尚未分配入口</span>}
           <div className="grid grid-cols-[90px_1fr] gap-4 items-center mt-5 text-sm">
-            <span className="text-gray-500 font-semibold">名称</span>
+            <span className="text-ink-soft font-semibold">名称</span>
             <span className="font-semibold">{rule.name}</span>
-            <span className="text-gray-500 font-semibold">节点</span>
+            <span className="text-ink-soft font-semibold">节点</span>
             <span className="inline-flex items-center gap-1.5 font-mono">
               {node ? <Link to={`/nodes/${node.id}`} className="text-blue-600 hover:underline">{node.name}</Link> : `#${rule.node_id}`}
             </span>
-            <span className="text-gray-500 font-semibold">协议</span>
+            <span className="text-ink-soft font-semibold">协议</span>
             <span><ProtoBadge proto={rule.proto} /></span>
-            <span className="text-gray-500 font-semibold">路径</span>
-            <span className="font-mono text-gray-500"><SensText blurred={blurred}>{rule.path || '--'}</SensText></span>
-            <span className="text-gray-500 font-semibold">出口</span>
+            <span className="text-ink-soft font-semibold">路径</span>
+            <span className="font-mono text-ink-soft"><SensText blurred={blurred}>{rule.path || '--'}</SensText></span>
+            <span className="text-ink-soft font-semibold">出口</span>
             <span className="font-mono"><SensText blurred={blurred}>{rule.exit || '--'}</SensText></span>
             {rule.comment && <>
-              <span className="text-gray-500 font-semibold">备注</span>
-              <span className="text-gray-500">{rule.comment}</span>
+              <span className="text-ink-soft font-semibold">备注</span>
+              <span className="text-ink-soft">{rule.comment}</span>
             </>}
           </div>
         </div>
@@ -72,7 +72,7 @@ export default function RulesDetail() {
       <div className="card mb-5">
         <div className="card-header">
           <h3 className="text-sm font-bold">各跳状态</h3>
-          <span className="text-xs text-gray-400">{hops.length} 跳</span>
+          <span className="text-xs text-ink-mut">{hops.length} 跳</span>
         </div>
         {hops.length ? (
           <table className="tbl">
@@ -82,12 +82,12 @@ export default function RulesDetail() {
                 const hopNode = node_by_id?.[h.node_id]
                 return (
                   <tr key={h.position}>
-                    <td className="font-mono text-xs text-gray-400">{h.position + 1}</td>
+                    <td className="font-mono text-xs text-ink-mut">{h.position + 1}</td>
                     <td className="font-semibold">{hopNode?.name || `#${h.node_id}`}</td>
                     <td className="font-mono">:{h.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{h.target || '--'}</SensText></td>
                     <td><ModeBadge mode={h.mode} /></td>
-                    <td className="font-mono text-xs text-gray-400">{fmtBytes(h.total_bytes)}</td>
+                    <td className="font-mono text-xs text-ink-mut">{fmtBytes(h.total_bytes)}</td>
                     <td className="text-right">
                       <ReallocateForm ruleId={rule.id} position={h.position} onDone={load} />
                     </td>
@@ -172,7 +172,7 @@ function EditRuleCard({ rule, onDone }) {
             <label className="fl">出口</label>
             <input className="input-field font-mono" value={exit} onChange={e => setExit(e.target.value)} required placeholder="host:port" />
           </div>
-          <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+          <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
             <button type="submit" disabled={saving} className="btn-primary">保存并重下发</button>
           </div>
         </form>

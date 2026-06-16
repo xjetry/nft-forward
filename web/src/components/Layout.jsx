@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { resolvedDark, getStoredTheme, setStoredTheme } from '../lib/theme'
 
 /* ---------- User context ---------- */
 const UserCtx = createContext(null)
@@ -48,6 +49,14 @@ export function Layout({ children }) {
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
   const [blurred, setBlurred] = useState(() => localStorage.getItem('nf-blur') === '1')
+  const [theme, setThemeState] = useState(getStoredTheme())
+  const isDark = resolvedDark(theme)
+
+  const toggleTheme = () => {
+    const next = isDark ? 'light' : 'dark'
+    setStoredTheme(next)
+    setThemeState(next)
+  }
 
   const toggleBlur = () => {
     setBlurred(v => {
@@ -67,7 +76,7 @@ export function Layout({ children }) {
 
   return (
     <BlurCtx.Provider value={blurred}>
-      <div className="flex min-h-screen bg-[#eef1f5]">
+      <div className="flex min-h-screen bg-app">
         {/* Mobile overlay */}
         {sideOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={() => setSideOpen(false)} />}
 
@@ -133,13 +142,22 @@ export function Layout({ children }) {
         {/* Content */}
         <main className="flex-1 min-w-0 flex flex-col">
           {/* Topbar */}
-          <div className="sticky top-0 z-20 bg-[#eef1f5]/85 backdrop-blur-sm border-b border-[#e3e7ec] px-4 sm:px-8 py-4 flex items-center gap-3">
-            <button onClick={() => setSideOpen(true)} className="lg:hidden p-1 text-gray-500 hover:text-gray-700">
+          <div className="sticky top-0 z-20 bg-app/85 backdrop-blur-sm border-b border-line px-4 sm:px-8 py-4 flex items-center gap-3">
+            <button onClick={() => setSideOpen(true)} className="lg:hidden p-1 text-ink-soft hover:text-ink">
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
             </button>
             <div className="flex-1" />
+            <button onClick={toggleTheme} title={isDark ? '切换到浅色' : '切换到深色'}
+              className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-transparent text-ink-mut hover:bg-raised transition-colors">
+              {isDark ? (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+              )}
+              {isDark ? '浅色' : '深色'}
+            </button>
             <button onClick={toggleBlur} title="模糊敏感信息"
-              className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${blurred ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-gray-400 border-transparent hover:bg-gray-100'}`}>
+              className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${blurred ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               脱敏
             </button>

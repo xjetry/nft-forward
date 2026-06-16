@@ -49,10 +49,10 @@ function RootRedirect() {
 
 function NotFound() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-app">
       <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">404</h1>
-        <p className="mt-2 text-gray-600">页面不存在</p>
+        <h1 className="text-2xl font-bold text-ink">404</h1>
+        <p className="mt-2 text-ink-soft">页面不存在</p>
       </div>
     </div>
   )

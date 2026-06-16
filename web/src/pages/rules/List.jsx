@@ -60,13 +60,13 @@ export default function RulesList() {
         </PanelToolbar>
 
         {users.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-[#eef0f3]">
+          <div className="flex flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
             <button
               onClick={() => { const next = new Set(); setSelectedOwners(next); load(next) }}
               className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                 selectedOwners.size === 0
                   ? 'bg-blue-500 text-white border-blue-500'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                  : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
               }`}
             >全部</button>
             {users.map(u => (
@@ -82,7 +82,7 @@ export default function RulesList() {
                 className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                   selectedOwners.has(u.id)
                     ? 'bg-blue-500 text-white border-blue-500'
-                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                    : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
                 }`}
               >{u.username}</button>
             ))}
@@ -167,10 +167,10 @@ function CreateRuleModal({ open, onClose, nodes, onDone }) {
           )}
           <label className="fl">出口</label>
           <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
-          <label className="fl">备注 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
+          <label className="fl">备注 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field" value={form.comment} onChange={e => set('comment', e.target.value)} placeholder="备注" />
         </div>
-        <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+        <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">创建规则</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
         </div>

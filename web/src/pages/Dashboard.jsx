@@ -49,7 +49,7 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
-                    <td className="font-mono text-gray-500 text-xs">{fmtTime(n.last_apply_at?.Int64)}</td>
+                    <td className="font-mono text-ink-soft text-xs">{fmtTime(n.last_apply_at?.Int64)}</td>
                     <td><NodeStatus node={n} /></td>
                   </tr>
                 ))}
@@ -75,11 +75,11 @@ export default function Dashboard() {
                       <td className="font-semibold">
                         <Link to={`/rules/${r.id}`} className="text-blue-600 hover:underline">{r.name}</Link>
                       </td>
-                      <td className="font-mono text-gray-500 text-xs">{node?.name || `#${r.node_id}`}</td>
+                      <td className="font-mono text-ink-soft text-xs">{node?.name || `#${r.node_id}`}</td>
                       <td><ProtoBadge proto={r.proto} /></td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{r.entry || '--'}</SensText></td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{r.exit || '--'}</SensText></td>
-                      <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(r.total_bytes)}</td>
+                      <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>
                     </tr>
                   )
                 })}
@@ -106,9 +106,9 @@ function StatCard({ icon, label, value, meta }) {
         {icon === 'green' && <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h12"/><path d="M13 7l5 5-5 5"/><path d="M20 5v14"/></svg>}
         {icon === 'amber' && <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/></svg>}
       </div>
-      <div className="text-xs text-gray-500 font-medium">{label}</div>
+      <div className="text-xs text-ink-soft font-medium">{label}</div>
       <div className="text-[28px] font-bold tracking-tight mt-0.5">{value}</div>
-      {meta && <div className="text-[12px] text-gray-400 mt-1.5 flex items-center gap-1.5 font-mono">{meta}</div>}
+      {meta && <div className="text-[12px] text-ink-mut mt-1.5 flex items-center gap-1.5 font-mono">{meta}</div>}
     </div>
   )
 }

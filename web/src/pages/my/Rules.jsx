@@ -122,10 +122,10 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
           )}
           <label className="fl">出口</label>
           <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
-          <label className="fl">备注 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
+          <label className="fl">备注 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field" value={form.comment} onChange={e => set('comment', e.target.value)} placeholder="备注" />
         </div>
-        <div className="flex items-center gap-3 pt-4 border-t border-gray-100">
+        <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">创建规则</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
         </div>

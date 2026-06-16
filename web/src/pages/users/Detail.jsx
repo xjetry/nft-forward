@@ -70,7 +70,7 @@ export default function UserDetail() {
                 <span className="fl">状态</span>
                 <span>
                   {user.disabled ? (
-                    <><Badge color="amber">已禁用</Badge> <span className="text-gray-500 text-xs ml-1">原因：{nullStr(user.disable_reason)}</span></>
+                    <><Badge color="amber">已禁用</Badge> <span className="text-ink-soft text-xs ml-1">原因：{nullStr(user.disable_reason)}</span></>
                   ) : <Badge color="green">正常</Badge>}
                 </span>
               </>
@@ -111,7 +111,7 @@ export default function UserDetail() {
               </tbody>
             </table>
           ) : <Empty title="尚未授权任何节点" />}
-          <div className="p-5 border-t border-gray-100">
+          <div className="p-5 border-t border-line-soft">
             <GrantNodeForm userId={id} nodes={all_nodes} onDone={load} />
           </div>
         </div>
@@ -121,7 +121,7 @@ export default function UserDetail() {
       <div className="card mb-5">
         <div className="card-header">
           <h3 className="text-sm font-bold">该用户的规则</h3>
-          <span className="text-xs text-gray-400">{rules.length} 条</span>
+          <span className="text-xs text-ink-mut">{rules.length} 条</span>
         </div>
         {rules.length ? (
           <table className="tbl">
@@ -129,11 +129,11 @@ export default function UserDetail() {
             <tbody>
               {rules.map(r => (
                 <tr key={r.id}>
-                  <td className="font-mono text-xs text-gray-400">{r.id}</td>
+                  <td className="font-mono text-xs text-ink-mut">{r.id}</td>
                   <td className="font-semibold">
                     <Link to={`/rules/${r.id}`} className="text-blue-600 hover:underline">{r.name}</Link>
                   </td>
-                  <td className="font-mono text-gray-500">{r.node_name || `#${r.node_id}`}</td>
+                  <td className="font-mono text-ink-soft">{r.node_name || `#${r.node_id}`}</td>
                   <td><ProtoBadge proto={r.proto} /></td>
                   <td className="font-mono text-xs">{r.entry || '--'}</td>
                   <td className="font-mono text-xs">{r.exit || '--'}</td>
@@ -181,7 +181,7 @@ function QuotaForm({ userId, quotaBytes, onDone }) {
   return (
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
       <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb} onChange={e => setGb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
-      <span className="text-xs text-gray-400">GB</span>
+      <span className="text-xs text-ink-mut">GB</span>
       <button type="submit" className="btn-secondary text-xs">设配额</button>
     </form>
   )
@@ -211,7 +211,7 @@ function GrantNodeForm({ userId, nodes, onDone }) {
   }
   return (
     <>
-      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">授权新节点</div>
+      <div className="text-xs font-bold text-ink-mut uppercase tracking-wider mb-3">授权新节点</div>
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>

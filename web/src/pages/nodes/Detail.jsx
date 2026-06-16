@@ -5,7 +5,7 @@ import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge } from '../../components/ui'
 
-const card = 'bg-white border border-[#e6e9ee] rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
+const card = 'bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
 export default function NodeDetail() {
   const { id } = useParams()
@@ -67,7 +67,7 @@ export default function NodeDetail() {
       <div className="mx-auto max-w-[1160px] flex flex-col gap-[18px]">
 
         {/* back link */}
-        <Link to="/nodes" className="inline-flex items-center gap-1.5 w-fit text-[13.5px] text-[#6b7685] hover:text-[#1f2733] transition-colors">
+        <Link to="/nodes" className="inline-flex items-center gap-1.5 w-fit text-[13.5px] text-ink-mut hover:text-ink transition-colors">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
           返回节点列表
         </Link>
@@ -82,16 +82,16 @@ export default function NodeDetail() {
               <NodeTypeBadge type={node.node_type} />
               <HeaderStatus node={node} />
             </div>
-            <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-[#6b7685]">
+            <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-ink-mut">
               <span>连接 IP&nbsp;&nbsp;{node.address
-                ? <b className="text-[#39424f] font-mono font-semibold"><SensText blurred={blurred}>{node.address}</SensText></b>
-                : <span className="text-gray-300">未连接</span>}</span>
+                ? <b className="text-ink-soft font-mono font-semibold"><SensText blurred={blurred}>{node.address}</SensText></b>
+                : <span className="text-ink-mut">未连接</span>}</span>
               <span className="text-[#cfd6df]">|</span>
               <span>Agent&nbsp;&nbsp;{node.agent_version
-                ? <><span className="font-mono text-[#39424f]">{node.agent_version}</span>{agentOutdated && <span className="ml-1"><Badge color="amber">非最新</Badge></span>}</>
-                : <span className="text-gray-300">未知</span>}</span>
+                ? <><span className="font-mono text-ink-soft">{node.agent_version}</span>{agentOutdated && <span className="ml-1"><Badge color="amber">非最新</Badge></span>}</>
+                : <span className="text-ink-mut">未知</span>}</span>
               <span className="text-[#cfd6df]">|</span>
-              <span>最近同步&nbsp;&nbsp;<b className="text-[#39424f] font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
+              <span>最近同步&nbsp;&nbsp;<b className="text-ink-soft font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
             </div>
           </div>
 
@@ -100,9 +100,9 @@ export default function NodeDetail() {
             {node.disabled ? (
               <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-[#eafaf1] text-[#0a8a4f] border border-[#c6ecd6] hover:brightness-95 transition cursor-pointer">启用节点</button>
             ) : (
-              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-white text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
+              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
             )}
-            <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-white text-[#39424f] border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
+            <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
             {agentOutdated && (
               <button onClick={upgrade} title={`推送升级到 ${server_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {server_version}</button>
             )}
@@ -117,10 +117,10 @@ export default function NodeDetail() {
             <h2 className="m-0 mb-[18px] text-[15px] font-bold">基本信息</h2>
             <div className="grid grid-cols-[auto_1fr]">
               <InfoRow label="连接 IP" mono>
-                {node.address ? <SensText blurred={blurred}>{node.address}</SensText> : <span className="text-gray-300">未连接</span>}
+                {node.address ? <SensText blurred={blurred}>{node.address}</SensText> : <span className="text-ink-mut">未连接</span>}
               </InfoRow>
               <InfoRow label="中继地址（数据面）" mono>
-                {node.relay_host ? <SensText blurred={blurred}>{node.relay_host}</SensText> : <span className="text-gray-300">未设置（设置后才能进链路）</span>}
+                {node.relay_host ? <SensText blurred={blurred}>{node.relay_host}</SensText> : <span className="text-ink-mut">未设置（设置后才能进链路）</span>}
               </InfoRow>
               <InfoRow label="Token" mono valueClass="text-[12.5px] break-all leading-relaxed">
                 <SensText blurred={blurred}>{node.secret}</SensText>
@@ -132,7 +132,7 @@ export default function NodeDetail() {
               <InfoRow label="Agent 版本" mono valueClass="text-[12.5px]" last>
                 {node.agent_version
                   ? <>{node.agent_version} {agentOutdated ? <Badge color="amber">非最新</Badge> : <Badge color="green">最新</Badge>}</>
-                  : <span className="text-gray-300">未知</span>}
+                  : <span className="text-ink-mut">未知</span>}
               </InfoRow>
             </div>
           </section>
@@ -171,14 +171,14 @@ export default function NodeDetail() {
           <section className={`${card} px-[26px] pt-[22px] pb-2`}>
             <div className="flex items-baseline gap-2.5 mb-1.5">
               <h2 className="m-0 text-[15px] font-bold">组合节点跳序</h2>
-              <span className="text-[12.5px] text-[#9aa4b2]">{nodeHops.length} 跳</span>
+              <span className="text-[12.5px] text-ink-mut">{nodeHops.length} 跳</span>
             </div>
             <table className="tbl">
               <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th></tr></thead>
               <tbody>
                 {nodeHops.map((h, i) => (
                   <tr key={i}>
-                    <td className="font-mono text-xs text-gray-400">{i + 1}</td>
+                    <td className="font-mono text-xs text-ink-mut">{i + 1}</td>
                     <td className="font-semibold">{h.node_name || `#${h.hop_node_id}`}</td>
                     <td><ModeBadge mode={h.mode} /></td>
                   </tr>
@@ -192,7 +192,7 @@ export default function NodeDetail() {
         <section className={`${card} px-[26px] py-[22px]`}>
           <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
             <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
-            <span className="text-[12.5px] text-[#9aa4b2]">在目标节点（已安装 nftables，root 用户）执行下列命令即可</span>
+            <span className="text-[12.5px] text-ink-mut">在目标节点（已安装 nftables，root 用户）执行下列命令即可</span>
           </div>
           {!panel_url_configured && (
             <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-[13px]">
@@ -212,7 +212,7 @@ export default function NodeDetail() {
         <section className={`${card} px-[26px] pt-[22px] pb-2`}>
           <div className="flex items-baseline gap-2.5 mb-1.5">
             <h2 className="m-0 text-[15px] font-bold">经过该节点的规则</h2>
-            <span className="text-[12.5px] text-[#9aa4b2]">{ruleHops.length} 条</span>
+            <span className="text-[12.5px] text-ink-mut">{ruleHops.length} 条</span>
           </div>
           {ruleHops.length ? (
             <table className="tbl">
@@ -227,7 +227,7 @@ export default function NodeDetail() {
                     <td><ModeBadge mode={rh.mode} /></td>
                     <td className="font-mono">{rh.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{rh.target || '--'}</SensText></td>
-                    <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(rh.total_bytes)}</td>
+                    <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(rh.total_bytes)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -241,11 +241,11 @@ export default function NodeDetail() {
 }
 
 function InfoRow({ label, mono, valueClass = '', last, children }) {
-  const bb = last ? '' : 'border-b border-[#f0f2f5]'
+  const bb = last ? '' : 'border-b border-line-soft'
   return (
     <>
-      <div className={`text-[13px] text-[#6b7685] pr-5 py-[11px] ${bb}`}>{label}</div>
-      <div className={`text-[13.5px] text-[#1f2733] py-[11px] min-w-0 ${mono ? 'font-mono' : ''} ${valueClass} ${bb}`}>{children}</div>
+      <div className={`text-[13px] text-ink-mut pr-5 py-[11px] ${bb}`}>{label}</div>
+      <div className={`text-[13.5px] text-ink py-[11px] min-w-0 ${mono ? 'font-mono' : ''} ${valueClass} ${bb}`}>{children}</div>
     </>
   )
 }
@@ -253,8 +253,8 @@ function InfoRow({ label, mono, valueClass = '', last, children }) {
 function ConfigField({ label, hint, children }) {
   return (
     <div>
-      <label className="block text-[12.5px] text-[#6b7685] mb-[7px] font-medium">{label}</label>
-      {hint && <p className="mt-[-2px] mb-[7px] text-[11.5px] text-[#9aa4b2] leading-snug">{hint}</p>}
+      <label className="block text-[12.5px] text-ink-soft mb-[7px] font-medium">{label}</label>
+      {hint && <p className="mt-[-2px] mb-[7px] text-[11.5px] text-ink-mut leading-snug">{hint}</p>}
       {children}
     </div>
   )

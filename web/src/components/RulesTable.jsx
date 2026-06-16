@@ -15,8 +15,8 @@ const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_por
 function SortArrow({ dir }) {
   return (
     <span className="inline-flex flex-col leading-[0.55] text-[9px] ml-1">
-      <span className={dir === 'asc' ? 'text-blue-600' : 'text-gray-300'}>▲</span>
-      <span className={dir === 'desc' ? 'text-blue-600' : 'text-gray-300'}>▼</span>
+      <span className={dir === 'asc' ? 'text-blue-600' : 'text-ink-mut opacity-50'}>▲</span>
+      <span className={dir === 'desc' ? 'text-blue-600' : 'text-ink-mut opacity-50'}>▼</span>
     </span>
   )
 }
@@ -76,18 +76,18 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <tr key={r.id}
               className={isAdmin ? 'cursor-pointer' : ''}
               onClick={isAdmin && onRowClick ? () => onRowClick(r) : undefined}>
-              {isAdmin && <td className="font-mono text-xs text-gray-400">#{r.id}</td>}
+              {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
               <td className="font-semibold">{r.name}</td>
-              <td><span className="font-mono text-gray-600">{node?.name || `#${r.node_id}`}</span></td>
+              <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td><ProtoBadge proto={r.proto} /></td>
               <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
                 {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
               </td>
-              <td className="font-mono text-xs text-gray-500">
+              <td className="font-mono text-xs text-ink-soft">
                 <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
               </td>
-              {isAdmin && <td className="text-gray-500">{r.owner_name || '--'}</td>}
-              {!isAdmin && <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(r.total_bytes)}</td>}
+              {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
+              {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                 {isAdmin && <Link to={`/rules/${r.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>}
                 <button onClick={() => onDelete(r)} className="btn-danger-sm text-xs">删除</button>

@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge } from '../../components/ui'
+import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
 
 export default function NodeList() {
   const [data, setData] = useState(null)
@@ -11,6 +12,7 @@ export default function NodeList() {
   const [showAdd, setShowAdd] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
+  const [search, setSearch] = useState('')
   const toast = useToast()
 
   const load = () => {
@@ -52,44 +54,52 @@ export default function NodeList() {
   if (loading) return <Layout><Loading /></Layout>
 
   const { nodes = [], server_version } = data || {}
+  const q = search.trim().toLowerCase()
+  const filtered = !q ? nodes : nodes.filter(n => (n.name || '').toLowerCase().includes(q))
 
   return (
     <Layout>
+      <PageHeader title="节点" count={nodes.length} unit="个节点" />
+
       {/* Panel URL settings */}
-      <div className="card mb-5">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">面板地址</h3>
-          <span className="text-xs text-gray-400">agent 反向连接面板用的公网地址，会写进各节点的安装命令</span>
+      <Panel className="mb-5">
+        <div className="flex items-center gap-3 px-[22px] py-4 border-b border-line-soft">
+          <h3 className="text-sm font-bold text-ink">面板地址</h3>
+          <span className="text-xs text-ink-mut">agent 反向连接面板用的公网地址，会写进各节点的安装命令</span>
         </div>
         <div className="p-5">
           <form onSubmit={savePanelUrl} className="flex items-center gap-3 max-w-xl">
-            <label className="text-[13px] font-semibold text-gray-500 whitespace-nowrap">Panel 地址</label>
+            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap">Panel 地址</label>
             <input className="input-field font-mono flex-1" value={panelUrl} onChange={e => setPanelUrl(e.target.value)} placeholder="例如 https://panel.example.com" />
             <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
           </form>
-          <p className="text-xs text-gray-400 mt-2">留空则安装命令回退使用你当前访问的域名。</p>
+          <p className="text-xs text-ink-mut mt-2">留空则安装命令回退使用你当前访问的域名。</p>
         </div>
-      </div>
+      </Panel>
 
       {/* Node list */}
-      <div className="card">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">已注册节点</h3>
-          <span className="text-xs text-gray-400">{nodes.length} 个节点 {server_version ? `· server ${server_version}` : ''}</span>
+      <Panel>
+        <PanelToolbar>
+          <SearchInput value={search} onChange={setSearch} placeholder="搜索节点名称…" />
+          {server_version && <span className="text-xs text-ink-mut whitespace-nowrap">server {server_version}</span>}
           <div className="ml-auto flex gap-2">
             <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">+ 添加节点</button>
             <button onClick={() => setShowComposite(true)} className="btn-primary text-xs">+ 组合节点</button>
             <button onClick={resyncAll} className="btn-secondary text-xs">同步所有</button>
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
-        </div>
-        {nodes.length ? (
+        </PanelToolbar>
+        {nodes.length === 0 ? (
+          <Empty title="尚未注册任何节点" desc="点击右上角「添加节点」创建。" />
+        ) : filtered.length === 0 ? (
+          <Empty title="无匹配节点" desc="试试别的关键词。" />
+        ) : (
           <table className="tbl">
             <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
-              {nodes.map(n => (
+              {filtered.map(n => (
                 <tr key={n.id}>
-                  <td className="font-mono text-xs text-gray-400">#{n.id}</td>
+                  <td className="font-mono text-xs text-ink-mut">#{n.id}</td>
                   <td>
                     <span className="inline-flex items-center gap-2 font-semibold">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
@@ -100,9 +110,9 @@ export default function NodeList() {
                   <td className="font-mono text-xs">
                     {n.agent_version ? (
                       <span className={n.agent_version !== server_version ? 'text-red-600' : ''}>{n.agent_version}</span>
-                    ) : <span className="text-gray-300">--</span>}
+                    ) : <span className="text-ink-mut">--</span>}
                   </td>
-                  <td className="font-mono text-xs text-gray-500">
+                  <td className="font-mono text-xs text-ink-soft">
                     {fmtTime(n.last_apply_at?.Valid ? n.last_apply_at.Int64 : null)}
                   </td>
                   <td><NodeStatus node={n} /></td>
@@ -114,8 +124,8 @@ export default function NodeList() {
               ))}
             </tbody>
           </table>
-        ) : <Empty title="尚未注册任何节点" desc="点击上方「添加节点」创建。" />}
-      </div>
+        )}
+      </Panel>
 
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />
       <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes.filter(n => n.node_type !== 'composite')} onDone={() => { setShowComposite(false); load() }} />
@@ -144,15 +154,15 @@ function AddNodeModal({ open, onClose, onDone }) {
     <Modal open={open} onClose={onClose} title="添加节点">
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-          <label className="text-[13px] font-semibold text-gray-500">名称</label>
+          <label className="text-[13px] font-semibold text-ink-soft">名称</label>
           <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-1" />
-          <label className="text-[13px] font-semibold text-gray-500">Token <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
+          <label className="text-[13px] font-semibold text-ink-soft">Token <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field font-mono" value={secret} onChange={e => setSecret(e.target.value)} placeholder="留空则随机生成 64 位 hex" />
         </div>
-        <div className="flex gap-3 pt-4 border-t border-gray-100">
+        <div className="flex gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">添加节点</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
-          <span className="text-xs text-gray-400 ml-auto">添加后会生成 token 与安装命令。</span>
+          <span className="text-xs text-ink-mut ml-auto">添加后会生成 token 与安装命令。</span>
         </div>
       </form>
     </Modal>
@@ -217,18 +227,18 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
     <Modal open={open} onClose={onClose} title="创建组合节点">
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-          <label className="text-[13px] font-semibold text-gray-500">名称</label>
+          <label className="text-[13px] font-semibold text-ink-soft">名称</label>
           <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-jp-chain" />
         </div>
 
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <span className="text-[13px] font-semibold text-gray-500">跳序（从入口到出口）</span>
+            <span className="text-[13px] font-semibold text-ink-soft">跳序（从入口到出口）</span>
           </div>
           <div className="space-y-2">
             {hops.map((hop, i) => (
-              <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                <span className="text-xs text-gray-400 w-5 text-center font-mono">{i + 1}</span>
+              <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
+                <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
                 <select className="input-field flex-1" value={hop.node_id} onChange={e => setHop(i, 'node_id', e.target.value)} required>
                   <option value="">-- 选择节点 --</option>
                   {nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
@@ -248,7 +258,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
           <button type="button" onClick={addHop} className="btn-secondary text-xs mt-2">+ 添加一跳</button>
         </div>
 
-        <div className="flex gap-3 pt-4 border-t border-gray-100">
+        <div className="flex gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">创建组合节点</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
         </div>
