@@ -83,7 +83,18 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
   const [loading, setLoading] = useState(false)
   const toast = useToast()
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k, v) => {
+    setForm(f => {
+      const next = { ...f, [k]: v }
+      if (k === 'node_id') {
+        const n = (nodes || []).find(nd => String(nd.id) === v)
+        if (n?.node_type === 'composite' && next.proto !== 'tcp') {
+          next.proto = 'tcp'
+        }
+      }
+      return next
+    })
+  }
 
   const selectedNode = nodes?.find(n => String(n.id) === form.node_id)
   const isComposite = selectedNode?.node_type === 'composite'
@@ -121,7 +132,7 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
           <label className="fl">协议</label>
           <select className="input-field" value={form.proto} onChange={e => set('proto', e.target.value)} style={{ maxWidth: 200 }}>
             <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
+            {!isComposite && <option value="udp">UDP</option>}
             {!isComposite && <option value="tcp+udp">TCP+UDP</option>}
           </select>
           <label className="fl">出口</label>
