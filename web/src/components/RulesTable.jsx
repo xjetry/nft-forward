@@ -10,9 +10,15 @@ import { fmtBytes } from '../lib/fmt'
 
 const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
 
-function indicator(sort, col) {
-  if (sort.col !== col) return ' ↕'
-  return sort.dir === 'asc' ? ' ↑' : ' ↓'
+/* Geometric triangles render as plain text glyphs; the arrow characters
+   (↑↓↕) get emoji-styled on some platforms, which breaks column alignment. */
+function SortArrow({ dir }) {
+  return (
+    <span className="inline-flex flex-col leading-[0.55] text-[9px] ml-1">
+      <span className={dir === 'asc' ? 'text-blue-600' : 'text-gray-300'}>▲</span>
+      <span className={dir === 'desc' ? 'text-blue-600' : 'text-gray-300'}>▼</span>
+    </span>
+  )
 }
 
 export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onRowClick }) {
@@ -44,12 +50,22 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
         <tr>
           {isAdmin && <th className="w-12">ID</th>}
           <th>名称</th>
-          <th className="cursor-pointer select-none" onClick={() => cycleSort('node')}>节点{indicator(sort, 'node')}</th>
+          <th className="cursor-pointer select-none" onClick={() => cycleSort('node')}>
+            <span className="inline-flex items-center">节点<SortArrow dir={sort.col === 'node' ? sort.dir : null} /></span>
+          </th>
           <th>协议</th>
           <th>入口</th>
           <th>出口</th>
-          {isAdmin && <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>所有者{indicator(sort, 'owner')}</th>}
-          {!isAdmin && <th className="text-right cursor-pointer select-none" onClick={() => cycleSort('traffic')}>流量{indicator(sort, 'traffic')}</th>}
+          {isAdmin && (
+            <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
+              <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
+            </th>
+          )}
+          {!isAdmin && (
+            <th className="text-right cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
+              <span className="inline-flex items-center justify-end">流量<SortArrow dir={sort.col === 'traffic' ? sort.dir : null} /></span>
+            </th>
+          )}
           <th className="text-right">操作</th>
         </tr>
       </thead>
