@@ -10,9 +10,18 @@ export default function RulesList() {
   const [showCreate, setShowCreate] = useState(false)
   const [users, setUsers] = useState([])
   const [selectedOwners, setSelectedOwners] = useState(new Set())
+  const [sort, setSort] = useState({ col: null, dir: null })
   const toast = useToast()
   const blurred = useBlur()
   const navigate = useNavigate()
+
+  const cycleSort = (col) => {
+    setSort(s => {
+      if (s.col !== col) return { col, dir: 'asc' }
+      if (s.dir === 'asc') return { col, dir: 'desc' }
+      return { col: null, dir: null }
+    })
+  }
 
   const load = (ownerIDs) => {
     const ids = ownerIDs ?? selectedOwners
@@ -33,6 +42,18 @@ export default function RulesList() {
   const { rules = [], nodes = [] } = data || {}
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
+
+  const sortedRules = sort.col
+    ? [...rules].sort((a, b) => {
+        const va = sort.col === 'node'
+          ? (nodeMap[a.node_id]?.name || '')
+          : (a.owner_name || '')
+        const vb = sort.col === 'node'
+          ? (nodeMap[b.node_id]?.name || '')
+          : (b.owner_name || '')
+        return sort.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
+      })
+    : rules
 
   const deleteRule = async (rule) => {
     if (!confirm(`确认删除规则「${rule.name}」？`)) return
@@ -82,16 +103,20 @@ export default function RulesList() {
               <tr>
                 <th className="w-12">ID</th>
                 <th>名称</th>
-                <th>节点</th>
+                <th className="cursor-pointer select-none" onClick={() => cycleSort('node')}>
+                  节点{sort.col === 'node' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+                </th>
                 <th>协议</th>
                 <th>入口</th>
                 <th>出口</th>
-                <th>所有者</th>
+                <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
+                  所有者{sort.col === 'owner' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+                </th>
                 <th className="text-right">操作</th>
               </tr>
             </thead>
             <tbody>
-              {rules.map(r => {
+              {sortedRules.map(r => {
                 const node = nodeMap[r.node_id]
                 return (
                   <tr key={r.id} className="cursor-pointer" onClick={() => navigate(`/rules/${r.id}`)}>
