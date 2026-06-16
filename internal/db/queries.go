@@ -412,9 +412,11 @@ func AddUserTraffic(d *sql.DB, id int64, delta int64) error {
 	return err
 }
 
-// ResetUserTraffic zeroes a user's traffic counter, re-enables, and clears reason.
+// ResetUserTraffic zeroes a user's traffic counter only. Enabling a user is a
+// separate action (toggle) so an admin can clear usage without lifting a
+// disable, and vice versa.
 func ResetUserTraffic(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = 0, disabled=0, disable_reason=NULL WHERE id=?`, id)
+	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, id)
 	return err
 }
 

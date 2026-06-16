@@ -29,7 +29,7 @@ export default function UserDetail() {
     try { await api.post(`/users/${id}/toggle`); toast(user.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
   }
   const resetTraffic = async () => {
-    if (!confirm('清零已用流量并重新启用？')) return
+    if (!confirm('清零该用户的已用流量？')) return
     try { await api.post(`/users/${id}/reset-traffic`); toast('已重置'); load() } catch (err) { toast(err.message) }
   }
   const deleteUser = async () => {
@@ -80,8 +80,9 @@ export default function UserDetail() {
 
           <div className="flex items-center gap-2 mt-5 flex-wrap">
             {isRegularUser && <ExpiryForm userId={id} expiresAt={expiresAt} onDone={load} />}
-            {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '重新启用' : '禁用'}</button>}
-            {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量并启用</button>}
+            {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
+            {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
+            {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
             <button onClick={resetPassword} className="btn-secondary text-xs">重置密码</button>
             <button onClick={deleteUser} className="btn-danger-sm text-xs">删除用户</button>
           </div>
@@ -164,6 +165,25 @@ function ExpiryForm({ userId, expiresAt, onDone }) {
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
       <input className="input-field font-mono" type="date" value={val} onChange={e => setVal(e.target.value)} style={{ width: 160 }} />
       <button type="submit" className="btn-secondary text-xs">设到期</button>
+    </form>
+  )
+}
+
+// Quota is stored in bytes server-side but edited in MB here, matching the
+// read-only display above. Empty/0 means unlimited.
+function QuotaForm({ userId, quotaBytes, onDone }) {
+  const [mb, setMb] = useState(String(Math.floor((quotaBytes || 0) / 1048576)))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const bytes = Math.max(0, Math.floor(Number(mb) || 0)) * 1048576
+    try { await api.post(`/users/${userId}/quota`, { traffic_quota_bytes: bytes }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" value={mb} onChange={e => setMb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
+      <span className="text-xs text-gray-400">MB</span>
+      <button type="submit" className="btn-secondary text-xs">设配额</button>
     </form>
   )
 }

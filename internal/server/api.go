@@ -1127,8 +1127,6 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_traffic", strconv.FormatInt(id, 10), "")
-	nodes, _ := db.DistinctUserNodes(s.DB, id)
-	s.apiDispatchFanout(nodes)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1157,10 +1155,10 @@ func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if willDisable {
-		if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
-			s.apiDispatchFanout(nodes)
-		}
+	// Re-dispatch either way: disabling drops this user's rules from the
+	// affected nodes, enabling restores them.
+	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
+		s.apiDispatchFanout(nodes)
 	}
 	db.WriteAudit(s.DB, u.ID, "user.toggle", strconv.FormatInt(id, 10), fmt.Sprintf("disabled=%v", willDisable))
 	jsonOK(w, map[string]any{"ok": true, "disabled": willDisable})
