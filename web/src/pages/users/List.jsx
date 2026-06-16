@@ -91,7 +91,7 @@ export default function UserList() {
 }
 
 function CreateUserModal({ open, onClose, onDone }) {
-  const [form, setForm] = useState({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_mb: '0', expires_at: '' })
+  const [form, setForm] = useState({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: '' })
   const [loading, setLoading] = useState(false)
   const toast = useToast()
 
@@ -106,11 +106,11 @@ function CreateUserModal({ open, onClose, onDone }) {
         password: form.password,
         role: form.role,
         max_forwards: Number(form.max_forwards),
-        traffic_quota_mb: Number(form.traffic_quota_mb),
+        traffic_quota_bytes: Math.max(0, Math.round((Number(form.traffic_quota_gb) || 0) * 1073741824)),
         expires_at: form.expires_at || undefined,
       })
       toast('用户已创建')
-      setForm({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_mb: '0', expires_at: '' })
+      setForm({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: '' })
       onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
@@ -132,8 +132,8 @@ function CreateUserModal({ open, onClose, onDone }) {
             <>
               <label className="fl">最大转发数</label>
               <input className="input-field font-mono" type="number" min="1" value={form.max_forwards} onChange={e => set('max_forwards', e.target.value)} style={{ maxWidth: 160 }} />
-              <label className="fl">流量配额 <span className="text-gray-400 font-normal text-xs">(MB)</span></label>
-              <input className="input-field font-mono" type="number" min="0" value={form.traffic_quota_mb} onChange={e => set('traffic_quota_mb', e.target.value)} style={{ maxWidth: 160 }} />
+              <label className="fl">流量配额 <span className="text-gray-400 font-normal text-xs">(GB)</span></label>
+              <input className="input-field font-mono" type="number" min="0" step="0.1" value={form.traffic_quota_gb} onChange={e => set('traffic_quota_gb', e.target.value)} style={{ maxWidth: 160 }} />
               <label className="fl">到期时间 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
               <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
             </>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtGB, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
+import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge } from '../../components/ui'
 
@@ -137,7 +137,7 @@ export default function UserDetail() {
                   <td><ProtoBadge proto={r.proto} /></td>
                   <td className="font-mono text-xs">{r.entry || '--'}</td>
                   <td className="font-mono text-xs">{r.exit || '--'}</td>
-                  <td className="text-right font-mono">{fmtGB(r.total_bytes)}</td>
+                  <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
                 </tr>
               ))}
             </tbody>
@@ -168,20 +168,20 @@ function ExpiryForm({ userId, expiresAt, onDone }) {
   )
 }
 
-// Quota is stored in bytes server-side but edited in MB here, matching the
+// Quota is stored in bytes server-side but edited in GB here, matching the
 // read-only display above. Empty/0 means unlimited.
 function QuotaForm({ userId, quotaBytes, onDone }) {
-  const [mb, setMb] = useState(String(Math.floor((quotaBytes || 0) / 1048576)))
+  const [gb, setGb] = useState(String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))))
   const toast = useToast()
   const submit = async (e) => {
     e.preventDefault()
-    const bytes = Math.max(0, Math.floor(Number(mb) || 0)) * 1048576
+    const bytes = Math.max(0, Math.round((Number(gb) || 0) * 1073741824))
     try { await api.post(`/users/${userId}/quota`, { traffic_quota_bytes: bytes }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
   }
   return (
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="number" min="0" value={mb} onChange={e => setMb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
-      <span className="text-xs text-gray-400">MB</span>
+      <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb} onChange={e => setGb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
+      <span className="text-xs text-gray-400">GB</span>
       <button type="submit" className="btn-secondary text-xs">设配额</button>
     </form>
   )

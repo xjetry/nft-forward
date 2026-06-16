@@ -1,8 +1,16 @@
 const GB = 1073741824
 
-/** Format a byte count as GB with one decimal, e.g. "1.5 GB". */
-export function fmtGB(bytes) {
-  return ((bytes || 0) / GB).toFixed(1) + ' GB'
+/** Format a byte count with an adaptive unit (B/KB/MB/GB/TB), one decimal. */
+export function fmtBytes(n) {
+  if (n == null || n === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i]
 }
 
 /** Format used/quota traffic as "used / total GB"; quota 0 means unlimited. */

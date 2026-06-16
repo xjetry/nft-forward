@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { fmtGB, fmtTime, nullStr } from '../lib/fmt'
+import { fmtBytes, fmtTime, nullStr } from '../lib/fmt'
 import { Layout, useBlur } from '../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, SensText, NodeTypeBadge } from '../components/ui'
 
@@ -79,7 +79,7 @@ export default function Dashboard() {
                       <td><ProtoBadge proto={r.proto} /></td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{r.entry || '--'}</SensText></td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{r.exit || '--'}</SensText></td>
-                      <td className="text-right font-mono text-xs text-gray-400">{fmtGB(r.total_bytes)}</td>
+                      <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(r.total_bytes)}</td>
                     </tr>
                   )
                 })}

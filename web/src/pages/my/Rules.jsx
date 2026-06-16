@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
-import { fmtGB } from '../../lib/fmt'
+import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, ProtoBadge, Modal, SensText, CopyText } from '../../components/ui'
 
@@ -82,7 +82,7 @@ export default function MyRules() {
                     <td className="font-mono text-xs">
                       {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                     </td>
-                    <td className="text-right font-mono text-xs text-gray-400">{fmtGB(r.total_bytes)}</td>
+                    <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(r.total_bytes)}</td>
                     <td className="text-right whitespace-nowrap">
                       <button onClick={() => deleteRule(r)} className="btn-danger-sm text-xs">删除</button>
                     </td>

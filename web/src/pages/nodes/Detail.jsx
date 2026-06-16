@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTime, fmtGB, nullStr } from '../../lib/fmt'
+import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge } from '../../components/ui'
 
@@ -227,7 +227,7 @@ export default function NodeDetail() {
                     <td><ModeBadge mode={rh.mode} /></td>
                     <td className="font-mono">{rh.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{rh.target || '--'}</SensText></td>
-                    <td className="text-right font-mono text-xs text-gray-400">{fmtGB(rh.total_bytes)}</td>
+                    <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(rh.total_bytes)}</td>
                   </tr>
                 ))}
               </tbody>
