@@ -226,7 +226,6 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <span className="text-[13px] font-semibold text-gray-500">跳序（从入口到出口）</span>
-            <button type="button" onClick={addHop} className="btn-secondary text-xs">+ 添加一跳</button>
           </div>
           <div className="space-y-2">
             {hops.map((hop, i) => (
@@ -248,6 +247,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
               </div>
             ))}
           </div>
+          <button type="button" onClick={addHop} className="btn-secondary text-xs mt-2">+ 添加一跳</button>
         </div>
 
         <div className="flex gap-3 pt-4 border-t border-gray-100">
