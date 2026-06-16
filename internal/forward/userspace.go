@@ -122,17 +122,15 @@ func (l *listener) handle(client net.Conn) {
 	defer func() { l.conns.Delete(upstream); upstream.Close() }()
 
 	done := make(chan struct{}, 2)
-	// Inbound (client->upstream): rate-limited + counted, matching nft
-	// prerouting counter semantics.
+	// Inbound (client→upstream): rate-limited + counted.
 	go func() {
 		relayCopy(l.ctx, upstream, client, &l.lim, &l.bytes)
 		halfCloseWrite(upstream)
 		done <- struct{}{}
 	}()
-	// Return path (upstream->client): unshaped + uncounted (parity: nft
-	// counts only the marked forward direction).
+	// Return path (upstream→client): counted but unshaped.
 	go func() {
-		relayCopy(l.ctx, client, upstream, nil, nil)
+		relayCopy(l.ctx, client, upstream, nil, &l.bytes)
 		halfCloseWrite(client)
 		done <- struct{}{}
 	}()
