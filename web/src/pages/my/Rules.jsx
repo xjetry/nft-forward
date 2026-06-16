@@ -131,7 +131,7 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
           {isComposite ? (
-            <span className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" style={{ maxWidth: 200 }}>TCP</span>
+            <input className="input-field" value="TCP" disabled style={{ maxWidth: 200 }} />
           ) : (
             <select className="input-field" value={form.proto} onChange={e => set('proto', e.target.value)} style={{ maxWidth: 200 }}>
               <option value="tcp">TCP</option>
