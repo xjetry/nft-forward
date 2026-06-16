@@ -632,21 +632,40 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 // --- Rules ---
 
 func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
-	rules, _ := db.ListAllRules(s.DB)
+	var rules []*db.Rule
+	if raw := r.URL.Query().Get("owner_ids"); raw != "" {
+		var ids []int64
+		for _, part := range strings.Split(raw, ",") {
+			if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		rules, _ = db.ListRulesByOwnerIDs(s.DB, ids)
+	} else {
+		rules, _ = db.ListAllRules(s.DB)
+	}
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
-	users, _ := db.UsersByID(s.DB)
+	allUsers, _ := db.ListUsers(s.DB)
+	byID := make(map[int64]*db.User, len(allUsers))
+	for _, u := range allUsers {
+		byID[u.ID] = u
+	}
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
 		oname := ""
 		if rl.OwnerID.Valid {
-			if u := users[rl.OwnerID.Int64]; u != nil {
+			if u := byID[rl.OwnerID.Int64]; u != nil {
 				oname = u.Username
 			}
 		}
 		views = append(views, s.buildRuleListItem(rl, oname))
 	}
-	jsonOK(w, map[string]any{"rules": views, "nodes": nodes})
+	userList := make([]map[string]any, 0, len(allUsers))
+	for _, u := range allUsers {
+		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
+	}
+	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
 }
 
 func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
