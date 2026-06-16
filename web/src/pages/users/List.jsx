@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtBytes, nullStr } from '../../lib/fmt'
+import { fmtTrafficGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal } from '../../components/ui'
 
@@ -47,7 +47,7 @@ export default function UserList() {
         </div>
         {users.length ? (
           <table className="tbl">
-            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>最大转发</th><th>流量配额</th><th>已用</th><th>状态</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {users.map(u => {
                 const isSelf = u.id === currentUser?.id
@@ -56,9 +56,8 @@ export default function UserList() {
                     <td className="font-mono text-xs text-gray-400">{u.id}</td>
                     <td><Link to={`/users/${u.id}`} className="text-blue-600 font-semibold hover:underline">{u.username}</Link></td>
                     <td><span className="inline-flex items-center font-mono text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{u.role}</span></td>
-                    <td className="font-mono">{u.role === 'user' ? u.max_forwards : '--'}</td>
-                    <td className="font-mono">{u.role === 'user' ? (u.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;</span> : `${Math.floor(u.traffic_quota_bytes / 1048576)} MB`) : '--'}</td>
-                    <td className="font-mono">{u.role === 'user' ? `${Math.floor((u.traffic_used_bytes || 0) / 1048576)} MB` : '--'}</td>
+                    <td className="font-mono">{u.role === 'user' ? `${u.rule_count || 0} / ${u.max_forwards}` : '--'}</td>
+                    <td className="font-mono">{u.role === 'user' ? fmtTrafficGB(u.traffic_used_bytes, u.traffic_quota_bytes) : '--'}</td>
                     <td>
                       {u.disabled ? (
                         <Badge color="amber" title={nullStr(u.disable_reason)}>已禁用</Badge>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { pct, fmtDate, isExpired, nullStr } from '../../lib/fmt'
+import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, NodeTypeBadge } from '../../components/ui'
 
@@ -16,7 +16,7 @@ export default function MyDashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { user, nodes = [], grants = [] } = data
+  const { user, nodes = [], grants = [], rules = [] } = data
 
   const expiresAt = user.expires_at?.Valid && user.expires_at.Int64 > 0 ? user.expires_at.Int64 : null
 
@@ -33,11 +33,10 @@ export default function MyDashboard() {
         <div className="card-header"><h3 className="text-sm font-bold">我的配额</h3></div>
         <div className="p-5">
           <div className="grid grid-cols-[140px_1fr] gap-4 items-center text-sm">
-            <span className="fl">最大转发数</span><span className="font-mono">{user.max_forwards}</span>
-            <span className="fl">流量配额</span><span className="font-mono">{user.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;（不限）</span> : `${Math.floor(user.traffic_quota_bytes / 1048576)} MB`}</span>
-            <span className="fl">已用流量</span>
+            <span className="fl">规则配额</span><span className="font-mono">{rules.length} / {user.max_forwards}</span>
+            <span className="fl">流量</span>
             <span className="font-mono">
-              {Math.floor(user.traffic_used_bytes / 1048576)} MB
+              {fmtTrafficGB(user.traffic_used_bytes, user.traffic_quota_bytes)}
               {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
             </span>
             <span className="fl">到期时间</span>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
+import { fmtTime, fmtGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge } from '../../components/ui'
 
@@ -66,8 +66,14 @@ export default function NodeDetail() {
     <Layout>
       <div className="mx-auto max-w-[1160px] flex flex-col gap-[18px]">
 
+        {/* back link */}
+        <Link to="/nodes" className="inline-flex items-center gap-1.5 w-fit text-[13.5px] text-[#6b7685] hover:text-[#1f2733] transition-colors">
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+          返回节点列表
+        </Link>
+
         {/* ===== HEADER ===== */}
-        <header className={`${card} flex items-center gap-5 px-[26px] py-[22px]`}>
+        <header className={`${card} flex items-start gap-5 px-[26px] py-[22px]`}>
           <div className="w-[52px] h-[52px] flex-none rounded-[14px] grid place-items-center text-blue-600 text-[22px] font-bold"
             style={{ background: 'linear-gradient(135deg,#eef3ff,#dbe6ff)' }}>⬡</div>
           <div className="flex-1 min-w-0">
@@ -87,6 +93,19 @@ export default function NodeDetail() {
               <span className="text-[#cfd6df]">|</span>
               <span>最近同步&nbsp;&nbsp;<b className="text-[#39424f] font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
             </div>
+          </div>
+
+          {/* header actions */}
+          <div className="flex-none flex flex-wrap justify-end gap-2.5 max-w-[520px]">
+            {node.disabled ? (
+              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-[#eafaf1] text-[#0a8a4f] border border-[#c6ecd6] hover:brightness-95 transition cursor-pointer">启用节点</button>
+            ) : (
+              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-white text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
+            )}
+            <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-white text-[#39424f] border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
+            {agentOutdated && (
+              <button onClick={upgrade} title={`推送升级到 ${server_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {server_version}</button>
+            )}
           </div>
         </header>
 
@@ -208,7 +227,7 @@ export default function NodeDetail() {
                     <td><ModeBadge mode={rh.mode} /></td>
                     <td className="font-mono">{rh.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{rh.target || '--'}</SensText></td>
-                    <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(rh.total_bytes)}</td>
+                    <td className="text-right font-mono text-xs text-gray-400">{fmtGB(rh.total_bytes)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -216,24 +235,6 @@ export default function NodeDetail() {
           ) : <div className="pb-4"><Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty></div>}
         </section>
 
-        {/* ===== STICKY ACTION BAR ===== */}
-        <div className="sticky bottom-0 z-10 mt-1 bg-white/85 backdrop-blur-md border border-[#e6e9ee] rounded-2xl shadow-[0_-1px_3px_rgba(16,24,40,0.05)] px-5 py-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <Link to="/nodes" className="mr-auto inline-flex items-center gap-1.5 text-[13.5px] text-[#6b7685] hover:text-[#1f2733] transition-colors">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-              返回节点列表
-            </Link>
-            {node.disabled ? (
-              <button onClick={toggle} className="inline-flex items-center h-9 px-[18px] rounded-[10px] text-[13.5px] font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer border-0">启用节点</button>
-            ) : (
-              <button onClick={toggle} className="inline-flex items-center h-9 px-4 rounded-[10px] text-[13.5px] font-semibold bg-white text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
-            )}
-            <button onClick={resync} className="inline-flex items-center h-9 px-4 rounded-[10px] text-[13.5px] font-semibold bg-white text-[#39424f] border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
-            {agentOutdated && (
-              <button onClick={upgrade} className="inline-flex items-center gap-1.5 h-9 px-[18px] rounded-[10px] text-[13.5px] font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer border-0 max-w-[420px] truncate">⤴ 推送升级到 {server_version}</button>
-            )}
-          </div>
-        </div>
       </div>
     </Layout>
   )

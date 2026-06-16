@@ -229,6 +229,36 @@ func ListAllRules(d *sql.DB) ([]*Rule, error) {
 	return listRulesWhere(d, "")
 }
 
+// FillRuleTraffic sets each rule's TotalBytes from its entry hop (position=0).
+// A composite chain carries the same bytes through every hop but is billed
+// once at the entrance, so the entry hop's counter is the rule's traffic;
+// summing all hops would multiply it by the hop count.
+func FillRuleTraffic(d DBTX, rules []*Rule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT rule_id, total_bytes FROM rule_hops WHERE position=0`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	bytesByRule := map[int64]int64{}
+	for rows.Next() {
+		var ruleID, bytes int64
+		if err := rows.Scan(&ruleID, &bytes); err != nil {
+			return err
+		}
+		bytesByRule[ruleID] = bytes
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range rules {
+		r.TotalBytes = bytesByRule[r.ID]
+	}
+	return nil
+}
+
 func ListRulesByUser(d *sql.DB, userID int64) ([]*Rule, error) {
 	return listRulesWhere(d, "owner_id=?", userID)
 }
@@ -305,6 +335,35 @@ func EntryRuleHopIDs(d DBTX, nodeID int64) (map[int64]bool, error) {
 		m[id] = true
 	}
 	return m, rows.Err()
+}
+
+// FillUserRuleCounts sets each user's RuleCount to the number of rules they own,
+// for showing used/total rule quota against MaxForwards.
+func FillUserRuleCounts(d DBTX, users []*User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT owner_id, COUNT(*) FROM rules WHERE owner_id IS NOT NULL GROUP BY owner_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	countByUser := map[int64]int{}
+	for rows.Next() {
+		var ownerID int64
+		var n int
+		if err := rows.Scan(&ownerID, &n); err != nil {
+			return err
+		}
+		countByUser[ownerID] = n
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, u := range users {
+		u.RuleCount = countByUser[u.ID]
+	}
+	return nil
 }
 
 // RegenerateRule rewrites rule r's hops for the given ordered hops and returns

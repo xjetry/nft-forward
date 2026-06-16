@@ -19,6 +19,9 @@ type User struct {
 	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
 	ExpiresAt         sql.NullInt64  `json:"expires_at"`
+	// RuleCount is not a users-table column; it is filled by FillUserRuleCounts
+	// so the user list can show used/total rule quota.
+	RuleCount int `json:"rule_count"`
 }
 
 type Node struct {
@@ -52,6 +55,9 @@ type Rule struct {
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
 	CreatedAt       int64         `json:"created_at"`
+	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
+	// from the entry hop so list/detail responses can show per-rule traffic.
+	TotalBytes int64 `json:"total_bytes"`
 }
 
 type RuleHop struct {

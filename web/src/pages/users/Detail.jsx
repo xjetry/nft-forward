@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtBytes, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
+import { fmtGB, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge } from '../../components/ui'
 
@@ -57,11 +57,10 @@ export default function UserDetail() {
             <span className="fl">角色</span><span className="font-mono">{user.role}</span>
             {isRegularUser && (
               <>
-                <span className="fl">最大转发数</span><span className="font-mono">{user.max_forwards}</span>
-                <span className="fl">流量配额</span><span className="font-mono">{user.traffic_quota_bytes === 0 ? <span className="text-xl">&#x221e;（不限）</span> : `${Math.floor(user.traffic_quota_bytes / 1048576)} MB`}</span>
-                <span className="fl">已用流量</span>
+                <span className="fl">规则配额</span><span className="font-mono">{rules.length} / {user.max_forwards}</span>
+                <span className="fl">流量</span>
                 <span className="font-mono">
-                  {Math.floor(user.traffic_used_bytes / 1048576)} MB
+                  {fmtTrafficGB(user.traffic_used_bytes, user.traffic_quota_bytes)}
                   {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
                 </span>
                 <span className="fl">到期时间</span>
@@ -138,7 +137,7 @@ export default function UserDetail() {
                   <td><ProtoBadge proto={r.proto} /></td>
                   <td className="font-mono text-xs">{r.entry || '--'}</td>
                   <td className="font-mono text-xs">{r.exit || '--'}</td>
-                  <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
+                  <td className="text-right font-mono">{fmtGB(r.total_bytes)}</td>
                 </tr>
               ))}
             </tbody>

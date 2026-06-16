@@ -193,6 +193,7 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeOnline(s.DB, nodes)
 	rules, _ := db.ListAllRules(s.DB)
+	db.FillRuleTraffic(s.DB, rules)
 	users, _ := db.ListUsers(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{"nodes": nodes, "rules": rules, "users": users, "node_by_id": nodeByID})
@@ -632,6 +633,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	rules, _ := db.ListAllRules(s.DB)
+	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	users, _ := db.UsersByID(s.DB)
 	views := make([]ruleListItem, 0, len(rules))
@@ -938,6 +940,7 @@ func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	db.FillUserRuleCounts(s.DB, users)
 	jsonOK(w, map[string]any{"users": users})
 }
 
@@ -955,6 +958,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
 	allNodes, _ := db.ListNodes(s.DB)
 	rules, _ := db.ListRulesByUser(s.DB, id)
+	db.FillRuleTraffic(s.DB, rules)
 	jsonOK(w, map[string]any{
 		"user": target, "nodes": grantedNodes,
 		"grants": grants, "all_nodes": allNodes,
@@ -1243,6 +1247,7 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
+	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	views := make([]ruleListItem, 0, len(rules))

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtBytes } from '../../lib/fmt'
+import { fmtGB } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText } from '../../components/ui'
 
@@ -87,7 +87,7 @@ export default function RulesDetail() {
                     <td className="font-mono">:{h.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{h.target || '--'}</SensText></td>
                     <td><ModeBadge mode={h.mode} /></td>
-                    <td className="font-mono text-xs text-gray-400">{fmtBytes(h.total_bytes)}</td>
+                    <td className="font-mono text-xs text-gray-400">{fmtGB(h.total_bytes)}</td>
                     <td className="text-right">
                       <ReallocateForm ruleId={rule.id} position={h.position} onDone={load} />
                     </td>
