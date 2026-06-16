@@ -130,11 +130,15 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
-          <select className="input-field" value={form.proto} onChange={e => set('proto', e.target.value)} style={{ maxWidth: 200 }}>
-            <option value="tcp">TCP</option>
-            {!isComposite && <option value="udp">UDP</option>}
-            {!isComposite && <option value="tcp+udp">TCP+UDP</option>}
-          </select>
+          {isComposite ? (
+            <span className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" style={{ maxWidth: 200 }}>TCP</span>
+          ) : (
+            <select className="input-field" value={form.proto} onChange={e => set('proto', e.target.value)} style={{ maxWidth: 200 }}>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+              <option value="tcp+udp">TCP+UDP</option>
+            </select>
+          )}
           <label className="fl">出口</label>
           <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
           <label className="fl">备注 <span className="text-gray-400 font-normal text-xs">(可选)</span></label>
