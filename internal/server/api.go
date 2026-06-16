@@ -301,19 +301,26 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		"server_version":       serverVersion(),
 	}
 
-	// Include node_hops if composite
+	// Include node_hops if composite, enriched with each child's name.
 	if n.NodeType == "composite" {
 		nodeHops, _ := db.ListNodeHops(s.DB, n.ID)
-		resp["node_hops"] = nodeHops
-		// Online is aggregated from children, which requires their status; the
-		// single fetched row alone cannot determine it.
-		if all, err := db.ListNodes(s.DB); err == nil {
-			db.ResolveCompositeOnline(s.DB, all)
-			for _, c := range all {
-				if c.ID == n.ID {
-					n.Online = c.Online
-					break
-				}
+		all, _ := db.ListNodes(s.DB)
+		byID := buildMap(all, func(nd *db.Node) int64 { return nd.ID })
+		views := make([]nodeHopView, len(nodeHops))
+		for i, h := range nodeHops {
+			nm := ""
+			if nd := byID[h.HopNodeID]; nd != nil {
+				nm = nd.Name
+			}
+			views[i] = nodeHopView{NodeHop: h, NodeName: nm}
+		}
+		resp["node_hops"] = views
+		// Online is aggregated from children; reuse the same node list.
+		db.ResolveCompositeOnline(s.DB, all)
+		for _, c := range all {
+			if c.ID == n.ID {
+				n.Online = c.Online
+				break
 			}
 		}
 	}

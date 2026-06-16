@@ -54,6 +54,14 @@ type ruleListItem struct {
 	EntryNodeID int64  `json:"entry_node_id"`
 }
 
+// nodeHopView adds the resolved child node name to a composite node's hop so
+// the UI shows names instead of bare ids. The embedded *db.NodeHop promotes its
+// own fields (node_id, position, hop_node_id, mode) to the top level.
+type nodeHopView struct {
+	*db.NodeHop
+	NodeName string `json:"node_name"`
+}
+
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
 	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, EntryNodeID: v.EntryNodeID}
