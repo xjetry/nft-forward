@@ -263,6 +263,21 @@ func ListRulesByUser(d *sql.DB, userID int64) ([]*Rule, error) {
 	return listRulesWhere(d, "owner_id=?", userID)
 }
 
+// ListRulesByOwnerIDs returns rules whose owner_id matches any of the given IDs.
+// If ids is empty it falls back to returning all rules.
+func ListRulesByOwnerIDs(d *sql.DB, ids []int64) ([]*Rule, error) {
+	if len(ids) == 0 {
+		return ListAllRules(d)
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return listRulesWhere(d, "owner_id IN ("+strings.Join(placeholders, ",")+")", args...)
+}
+
 // RulesByID returns all rules keyed by ID in a single query.
 func RulesByID(d *sql.DB) (map[int64]*Rule, error) {
 	all, err := listRulesWhere(d, "")
