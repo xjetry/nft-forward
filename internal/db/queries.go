@@ -254,6 +254,60 @@ func ListNodes(d *sql.DB) ([]*Node, error) {
 	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY id`, scanNode)
 }
 
+// ResolveCompositeOnline derives the Online field of composite nodes from their
+// children: a composite is online only when every child is reachable (online
+// and not disabled), and offline if any child is offline or it has no children.
+// Composite nodes have no agent of their own, so their stored online column is
+// always 0 — this aggregation is the only source of truth for their status.
+func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
+	hasComposite := false
+	for _, n := range nodes {
+		if n.NodeType == "composite" {
+			hasComposite = true
+			break
+		}
+	}
+	if !hasComposite {
+		return
+	}
+	hops, err := ListAllNodeHops(d)
+	if err != nil {
+		return
+	}
+	resolveCompositeOnline(nodes, hops)
+}
+
+// resolveCompositeOnline is the pure aggregation: a composite is online only
+// when it has children and every child is reachable (online and not disabled).
+func resolveCompositeOnline(nodes []*Node, hops []*NodeHop) {
+	effective := make(map[int64]bool, len(nodes))
+	for _, n := range nodes {
+		effective[n.ID] = n.Online == 1 && !n.Disabled
+	}
+	children := make(map[int64][]int64)
+	for _, h := range hops {
+		children[h.NodeID] = append(children[h.NodeID], h.HopNodeID)
+	}
+	for _, n := range nodes {
+		if n.NodeType != "composite" {
+			continue
+		}
+		kids := children[n.ID]
+		online := len(kids) > 0
+		for _, id := range kids {
+			if !effective[id] {
+				online = false
+				break
+			}
+		}
+		if online {
+			n.Online = 1
+		} else {
+			n.Online = 0
+		}
+	}
+}
+
 func RenameNode(d *sql.DB, id int64, name string) error {
 	_, err := d.Exec(`UPDATE nodes SET name=? WHERE id=?`, name, id)
 	return err

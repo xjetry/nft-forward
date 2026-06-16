@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText, Modal } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText, Modal, NodeTypeBadge } from '../../components/ui'
 
 export default function NodeDetail() {
   const { id } = useParams()
@@ -229,12 +229,6 @@ export default function NodeDetail() {
       </div>
     </Layout>
   )
-}
-
-function NodeTypeBadge({ type }) {
-  if (type === 'composite') return <Badge color="violet">组合</Badge>
-  if (type === 'self') return <Badge color="blue">自身</Badge>
-  return <Badge color="green">单点</Badge>
 }
 
 function NodeStatusDetail({ node }) {

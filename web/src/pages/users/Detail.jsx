@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge } from '../../components/ui'
 
 export default function UserDetail() {
   const { id } = useParams()
@@ -151,12 +151,6 @@ export default function UserDetail() {
       </Link>
     </Layout>
   )
-}
-
-function NodeTypeBadge({ type }) {
-  if (type === 'composite') return <Badge color="violet">组合</Badge>
-  if (type === 'self') return <Badge color="blue">自身</Badge>
-  return <Badge color="green">单点</Badge>
 }
 
 function ExpiryForm({ userId, expiresAt, onDone }) {

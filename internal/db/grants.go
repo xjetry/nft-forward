@@ -39,6 +39,12 @@ func ListNodeHops(d *sql.DB, nodeID int64) ([]*NodeHop, error) {
 	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops WHERE node_id=? ORDER BY position`, scanNodeHop, nodeID)
 }
 
+// ListAllNodeHops returns every composite node's hops in one query, ordered so
+// callers can group by node_id without an N+1 fan-out.
+func ListAllNodeHops(d *sql.DB) ([]*NodeHop, error) {
+	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops ORDER BY node_id, position`, scanNodeHop)
+}
+
 func DeleteNodeHops(d DBTX, nodeID int64) error {
 	_, err := d.Exec(`DELETE FROM node_hops WHERE node_id=?`, nodeID)
 	return err

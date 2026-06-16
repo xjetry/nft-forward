@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, Modal, SensText, CopyText } from '../../components/ui'
+import { Loading, Empty, ProtoBadge, Modal, SensText, CopyText, NodeTypeBadge } from '../../components/ui'
 
 export default function RulesList() {
   const [data, setData] = useState(null)
@@ -83,12 +83,6 @@ export default function RulesList() {
       <CreateRuleModal open={showCreate} onClose={() => setShowCreate(false)} nodes={nodes} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
   )
-}
-
-export function NodeTypeBadge({ type }) {
-  if (type === 'composite') return <Badge color="violet">组合</Badge>
-  if (type === 'self') return <Badge color="blue">自身</Badge>
-  return <Badge color="green">单点</Badge>
 }
 
 function CreateRuleModal({ open, onClose, nodes, onDone }) {

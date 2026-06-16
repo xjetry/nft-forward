@@ -42,6 +42,35 @@ export function Badge({ color = 'gray', children }) {
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${badgeColors[color] || badgeColors.gray}`}>{children}</span>
 }
 
+/* ---------- NodeTypeBadge ---------- */
+// Single = a solid node dot; composite = interlocking chain links (a multi-hop
+// chain); self = the panel host itself.
+const nodeTypeIcon = {
+  single: (
+    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  composite: (
+    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  ),
+  self: (
+    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M9 22V12h6v10" />
+    </svg>
+  ),
+}
+export function NodeTypeBadge({ type }) {
+  if (type === 'composite') return <Badge color="violet">{nodeTypeIcon.composite}组合</Badge>
+  if (type === 'self') return <Badge color="blue">{nodeTypeIcon.self}自身</Badge>
+  return <Badge color="green">{nodeTypeIcon.single}单点</Badge>
+}
+
 /* ---------- ProtoBadge ---------- */
 export function ProtoBadge({ proto }) {
   if (!proto) return null

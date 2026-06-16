@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, Modal, Confirm } from '../../components/ui'
+import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge } from '../../components/ui'
 
 export default function NodeList() {
   const [data, setData] = useState(null)
@@ -92,9 +92,7 @@ export default function NodeList() {
                   <td className="font-mono text-xs text-gray-400">#{n.id}</td>
                   <td>
                     <span className="inline-flex items-center gap-2 font-semibold">
-                      {n.node_type !== 'composite' && (
-                        <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
-                      )}
+                      <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
                       <Link to={`/nodes/${n.id}`} className="text-blue-600 font-semibold hover:underline">{n.name}</Link>
                     </span>
                   </td>
@@ -167,12 +165,6 @@ function NodeStatus({ node }) {
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
   return <Badge color="amber">待同步</Badge>
-}
-
-function NodeTypeBadge({ type }) {
-  if (type === 'composite') return <Badge color="violet">组合</Badge>
-  if (type === 'self') return <Badge color="blue">自身</Badge>
-  return <Badge color="green">单点</Badge>
 }
 
 function CompositeNodeModal({ open, onClose, nodes, onDone }) {

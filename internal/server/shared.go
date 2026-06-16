@@ -42,6 +42,23 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	return ruleView{Rule: r, Path: strings.Join(names, " → "), Entry: entry, EntryNodeID: entryNodeID}
 }
 
+// ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
+// promotes the rule's own fields (id, node_id, name, proto, ...) to the top
+// level so React list rows can read them flat alongside the computed view
+// fields. A wrapped {"rule":{...}} shape would leave r.id undefined in the UI.
+type ruleListItem struct {
+	*db.Rule
+	OwnerName   string `json:"owner_name"`
+	Path        string `json:"path"`
+	Entry       string `json:"entry"`
+	EntryNodeID int64  `json:"entry_node_id"`
+}
+
+func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
+	v := s.buildRuleView(r)
+	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, EntryNodeID: v.EntryNodeID}
+}
+
 func parseExit(raw string) (string, int, error) {
 	raw = strings.TrimSpace(raw)
 	host, portStr, err := net.SplitHostPort(raw)

@@ -191,6 +191,7 @@ func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeOnline(s.DB, nodes)
 	rules, _ := db.ListAllRules(s.DB)
 	users, _ := db.ListUsers(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
@@ -205,6 +206,7 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	db.ResolveCompositeOnline(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL,
@@ -303,6 +305,17 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	if n.NodeType == "composite" {
 		nodeHops, _ := db.ListNodeHops(s.DB, n.ID)
 		resp["node_hops"] = nodeHops
+		// Online is aggregated from children, which requires their status; the
+		// single fetched row alone cannot determine it.
+		if all, err := db.ListNodes(s.DB); err == nil {
+			db.ResolveCompositeOnline(s.DB, all)
+			for _, c := range all {
+				if c.ID == n.ID {
+					n.Online = c.Online
+					break
+				}
+			}
+		}
 	}
 
 	jsonOK(w, resp)
@@ -614,20 +627,15 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	rules, _ := db.ListAllRules(s.DB)
 	nodes, _ := db.ListNodes(s.DB)
 	users, _ := db.UsersByID(s.DB)
-	views := make([]map[string]any, 0, len(rules))
+	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
-		v := s.buildRuleView(rl)
 		oname := ""
 		if rl.OwnerID.Valid {
 			if u := users[rl.OwnerID.Int64]; u != nil {
 				oname = u.Username
 			}
 		}
-		views = append(views, map[string]any{
-			"rule": rl, "owner_name": oname,
-			"path": v.Path, "entry": v.Entry,
-			"entry_node_id": v.EntryNodeID,
-		})
+		views = append(views, s.buildRuleListItem(rl, oname))
 	}
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes})
 }
@@ -1232,13 +1240,9 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	views := make([]map[string]any, 0, len(rules))
+	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
-		v := s.buildRuleView(rl)
-		views = append(views, map[string]any{
-			"rule": rl,
-			"path": v.Path, "entry": v.Entry, "entry_node_id": v.EntryNodeID,
-		})
+		views = append(views, s.buildRuleListItem(rl, ""))
 	}
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	jsonOK(w, map[string]any{
@@ -1294,6 +1298,13 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	var hops []db.HopInput
 	if node.NodeType == "composite" {
+		// A composite node is the unit of authorization: granting it authorizes
+		// the whole chain. The sub-nodes are an internal detail and are not
+		// granted to the user individually, so the check is on the composite.
+		if _, gerr := db.GetNodeGrant(s.DB, u.ID, body.NodeID); gerr != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用该节点")
+			return
+		}
 		nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
 		if len(nodeHops) == 0 {
 			jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
@@ -1301,11 +1312,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		hops = make([]db.HopInput, len(nodeHops))
 		for i, nh := range nodeHops {
-			// Verify grant for each sub-node
-			if _, gerr := db.GetNodeGrant(s.DB, u.ID, nh.HopNodeID); gerr != nil {
-				jsonErr(w, http.StatusForbidden, fmt.Sprintf("无权使用节点 %d", nh.HopNodeID))
-				return
-			}
 			hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
 		}
 	} else {
