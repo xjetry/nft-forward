@@ -45,8 +45,8 @@ export default function RulesList() {
                 <th>名称</th>
                 <th>节点</th>
                 <th>协议</th>
-                <th>路径</th>
                 <th>入口</th>
+                <th>出口</th>
                 <th>所有者</th>
                 <th className="text-right">操作</th>
               </tr>
@@ -62,9 +62,11 @@ export default function RulesList() {
                       <span className="font-mono text-gray-600">{node?.name || `#${r.node_id}`}</span>
                     </td>
                     <td><ProtoBadge proto={r.proto} /></td>
-                    <td className="font-mono text-xs text-gray-500 max-w-[200px] truncate"><SensText blurred={blurred}>{r.path || '--'}</SensText></td>
                     <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
                       {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
+                    </td>
+                    <td className="font-mono text-xs text-gray-500">
+                      <SensText blurred={blurred}>{r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '--'}</SensText>
                     </td>
                     <td className="text-gray-500">{r.owner_name || '--'}</td>
                     <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
