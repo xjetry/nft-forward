@@ -648,8 +648,10 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	allUsers, _ := db.ListUsers(s.DB)
 	byID := make(map[int64]*db.User, len(allUsers))
+	userList := make([]map[string]any, 0, len(allUsers))
 	for _, u := range allUsers {
 		byID[u.ID] = u
+		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
 	}
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
@@ -660,10 +662,6 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		views = append(views, s.buildRuleListItem(rl, oname))
-	}
-	userList := make([]map[string]any, 0, len(allUsers))
-	for _, u := range allUsers {
-		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
 	}
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
 }
