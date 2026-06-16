@@ -1294,15 +1294,18 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The grant on the selected node both authorizes the request and carries
+	// the per-node forward cap. A composite node is the unit of authorization:
+	// granting it authorizes the whole chain, so the check is on the composite
+	// itself, not its sub-nodes.
+	grant, gerr := db.GetNodeGrant(s.DB, u.ID, body.NodeID)
+	if gerr != nil {
+		jsonErr(w, http.StatusForbidden, "无权使用该节点")
+		return
+	}
+
 	var hops []db.HopInput
 	if node.NodeType == "composite" {
-		// A composite node is the unit of authorization: granting it authorizes
-		// the whole chain. The sub-nodes are an internal detail and are not
-		// granted to the user individually, so the check is on the composite.
-		if _, gerr := db.GetNodeGrant(s.DB, u.ID, body.NodeID); gerr != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用该节点")
-			return
-		}
 		nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
 		if len(nodeHops) == 0 {
 			jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
@@ -1313,11 +1316,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 			hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
 		}
 	} else {
-		// Verify grant for the single node
-		if _, err := db.GetNodeGrant(s.DB, u.ID, body.NodeID); err != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用该节点")
-			return
-		}
 		hops = []db.HopInput{{NodeID: body.NodeID}}
 	}
 
@@ -1325,7 +1323,14 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		hops[0].DesiredPort = body.EntryPort
 	}
 
-	// Check quota
+	// Per-node cap: counted by rule, so a composite rule counts once against
+	// the composite node's grant.
+	if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, body.NodeID); cnt+1 > grant.MaxForwards {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
+		return
+	}
+
+	// Global per-user quota.
 	if err := s.checkUserRuleQuota(u, len(hops), 0); err != nil {
 		jsonErr(w, http.StatusConflict, err.Error())
 		return
