@@ -8,13 +8,23 @@ export default function RulesList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [users, setUsers] = useState([])
+  const [selectedOwners, setSelectedOwners] = useState(new Set())
   const toast = useToast()
   const blurred = useBlur()
   const navigate = useNavigate()
 
-  const load = () => {
+  const load = (ownerIDs) => {
+    const ids = ownerIDs ?? selectedOwners
     setLoading(true)
-    api.get('/rules').then(setData).catch(console.error).finally(() => setLoading(false))
+    const params = ids.size > 0 ? `?owner_ids=${[...ids].join(',')}` : ''
+    api.get(`/rules${params}`)
+      .then(d => {
+        setData(d)
+        if (d.users?.length) setUsers(d.users)
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }
   useEffect(load, [])
 
@@ -37,6 +47,35 @@ export default function RulesList() {
           <span className="text-xs text-gray-400">{rules.length} 条</span>
           <button onClick={() => setShowCreate(true)} className="btn-primary text-xs ml-auto">+ 创建规则</button>
         </div>
+        {users.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-gray-100">
+            <button
+              onClick={() => { const next = new Set(); setSelectedOwners(next); load(next) }}
+              className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                selectedOwners.size === 0
+                  ? 'bg-blue-500 text-white border-blue-500'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+              }`}
+            >全部</button>
+            {users.map(u => (
+              <button
+                key={u.id}
+                onClick={() => {
+                  const next = new Set(selectedOwners)
+                  if (next.has(u.id)) next.delete(u.id)
+                  else next.add(u.id)
+                  setSelectedOwners(next)
+                  load(next)
+                }}
+                className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                  selectedOwners.has(u.id)
+                    ? 'bg-blue-500 text-white border-blue-500'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                }`}
+              >{u.username}</button>
+            ))}
+          </div>
+        )}
         {rules.length ? (
           <table className="tbl">
             <thead>
