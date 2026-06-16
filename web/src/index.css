@@ -43,6 +43,10 @@
 .tbl th {
   @apply text-[11.5px] font-semibold text-gray-400 uppercase tracking-wider text-left py-2.5 px-4 bg-gray-50/80 border-b border-gray-200 whitespace-nowrap;
 }
+/* Header cells default to left; this lets a th opt into right alignment so its
+   label lines up with right-aligned data below it (the base rule's higher
+   specificity would otherwise win and pull the label left). */
+.tbl th.text-right { @apply text-right; }
 .tbl td {
   @apply py-3 px-4 border-b border-gray-100 align-middle whitespace-nowrap text-[13px];
 }

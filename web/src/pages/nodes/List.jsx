@@ -107,7 +107,7 @@ export default function NodeList() {
                   </td>
                   <td><NodeStatus node={n} /></td>
                   <td className="text-right whitespace-nowrap">
-                    <button onClick={() => resyncNode(n.id)} className="btn-secondary text-xs mr-1.5">重新同步</button>
+                    {n.node_type !== 'composite' && <button onClick={() => resyncNode(n.id)} className="btn-secondary text-xs mr-1.5">重新同步</button>}
                     <button onClick={() => deleteNode(n)} className="btn-danger-sm text-xs">删除</button>
                   </td>
                 </tr>
@@ -161,6 +161,12 @@ function AddNodeModal({ open, onClose, onDone }) {
 
 function NodeStatus({ node }) {
   if (node.disabled) return <Badge color="amber">禁用</Badge>
+  // A composite node has no agent of its own to sync; its health is the
+  // aggregate of its child hops, so show online/offline rather than a sync
+  // state that would always read as "pending" or surface a spurious error.
+  if (node.node_type === 'composite') {
+    return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
+  }
   const lastErr = nullStr(node.last_error)
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
