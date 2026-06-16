@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
-import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, Modal, SensText, CopyText } from '../../components/ui'
+import { Loading, Empty, Modal } from '../../components/ui'
+import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
+import { RulesTable } from '../../components/RulesTable'
 
 export default function MyRules() {
   const [data, setData] = useState(null)
@@ -30,69 +31,28 @@ export default function MyRules() {
   const q = search.trim().toLowerCase()
   const filtered = !q ? rules : rules.filter(r => {
     const node = node_by_id?.[r.node_id]
-    return [r.name, node?.name, r.path, r.entry].some(v => (v || '').toLowerCase().includes(q))
+    const exit = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : ''
+    return [r.name, node?.name, r.entry, exit].some(v => (v || '').toLowerCase().includes(q))
   })
 
   return (
     <Layout>
-      {/* Page header */}
-      <div className="flex items-baseline gap-2.5 mb-4">
-        <h1 className="m-0 text-lg font-bold tracking-[-0.01em]">我的规则</h1>
-        <span className="text-[13px] text-[#9aa4b2]">共 {rules.length} 条</span>
-      </div>
+      <PageHeader title="我的规则" count={rules.length} />
 
-      <section className="max-w-[1320px] bg-white border border-[#e6e9ee] rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden">
-        {/* Toolbar */}
-        <div className="flex items-center gap-3.5 px-[22px] py-4 border-b border-[#eef0f3]">
-          <div className="relative flex-1 max-w-[360px]">
-            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa4b2] pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索规则名称、节点、目标…"
-              className="w-full text-[13.5px] pl-9 pr-3 py-[9px] border border-[#d7dce3] rounded-[10px] outline-none text-[#1f2733] focus:border-blue-600 focus:ring-3 focus:ring-blue-600/10 transition-colors" />
-          </div>
-          <button onClick={() => setShowCreate(true)} className="ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-white bg-blue-600 hover:bg-blue-700 border-0 px-[18px] py-[9px] rounded-[10px] cursor-pointer transition-colors">＋ 创建规则</button>
-        </div>
+      <Panel>
+        <PanelToolbar>
+          <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
+          <ToolbarButton onClick={() => setShowCreate(true)}>＋ 创建规则</ToolbarButton>
+        </PanelToolbar>
 
-        {/* Table */}
         {rules.length === 0 ? (
           <Empty title="暂无规则" desc="点击右上角「创建规则」开始。" />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配规则" desc="试试别的关键词。" />
         ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>节点</th>
-                <th>协议</th>
-                <th>路径</th>
-                <th>入口</th>
-                <th className="text-right">流量</th>
-                <th className="text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(r => {
-                const node = node_by_id?.[r.node_id]
-                return (
-                  <tr key={r.id}>
-                    <td className="font-bold text-[#1f2733]">{r.name}</td>
-                    <td className="text-[#39424f]">{node?.name || `#${r.node_id}`}</td>
-                    <td><ProtoBadge proto={r.proto} /></td>
-                    <td className="font-mono text-xs text-[#39424f] max-w-[280px] truncate"><SensText blurred={blurred}>{r.path || '--'}</SensText></td>
-                    <td className="font-mono text-xs">
-                      {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
-                    </td>
-                    <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(r.total_bytes)}</td>
-                    <td className="text-right whitespace-nowrap">
-                      <button onClick={() => deleteRule(r)} className="btn-danger-sm text-xs">删除</button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <RulesTable variant="my" rules={filtered} nodeMap={node_by_id} blurred={blurred} onDelete={deleteRule} />
         )}
-      </section>
+      </Panel>
 
       <CreateMyRuleModal open={showCreate} onClose={() => setShowCreate(false)} nodes={nodes} onDone={() => { setShowCreate(false); load() }} />
     </Layout>

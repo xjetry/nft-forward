@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, Modal, SensText, CopyText, NodeTypeBadge } from '../../components/ui'
+import { Loading, Empty, Modal } from '../../components/ui'
+import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
+import { RulesTable } from '../../components/RulesTable'
 
 export default function RulesList() {
   const [data, setData] = useState(null)
@@ -10,18 +12,10 @@ export default function RulesList() {
   const [showCreate, setShowCreate] = useState(false)
   const [users, setUsers] = useState([])
   const [selectedOwners, setSelectedOwners] = useState(new Set())
-  const [sort, setSort] = useState({ col: null, dir: null })
+  const [search, setSearch] = useState('')
   const toast = useToast()
   const blurred = useBlur()
   const navigate = useNavigate()
-
-  const cycleSort = (col) => {
-    setSort(s => {
-      if (s.col !== col) return { col, dir: 'asc' }
-      if (s.dir === 'asc') return { col, dir: 'desc' }
-      return { col: null, dir: null }
-    })
-  }
 
   const load = (ownerIDs) => {
     const ids = ownerIDs ?? selectedOwners
@@ -43,33 +37,30 @@ export default function RulesList() {
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
 
-  const sortedRules = sort.col
-    ? [...rules].sort((a, b) => {
-        const va = sort.col === 'node'
-          ? (nodeMap[a.node_id]?.name || '')
-          : (a.owner_name || '')
-        const vb = sort.col === 'node'
-          ? (nodeMap[b.node_id]?.name || '')
-          : (b.owner_name || '')
-        return sort.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
-      })
-    : rules
-
   const deleteRule = async (rule) => {
     if (!confirm(`确认删除规则「${rule.name}」？`)) return
     try { await api.del(`/rules/${rule.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
+  const q = search.trim().toLowerCase()
+  const filtered = !q ? rules : rules.filter(r => {
+    const node = nodeMap[r.node_id]
+    const exit = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : ''
+    return [r.name, node?.name, r.entry, exit, r.owner_name].some(v => (v || '').toLowerCase().includes(q))
+  })
+
   return (
     <Layout>
-      <div className="card">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">转发规则</h3>
-          <span className="text-xs text-gray-400">{rules.length} 条</span>
-          <button onClick={() => setShowCreate(true)} className="btn-primary text-xs ml-auto">+ 创建规则</button>
-        </div>
+      <PageHeader title="转发规则" count={rules.length} />
+
+      <Panel>
+        <PanelToolbar>
+          <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
+          <ToolbarButton onClick={() => setShowCreate(true)}>＋ 创建规则</ToolbarButton>
+        </PanelToolbar>
+
         {users.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-gray-100">
+          <div className="flex flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-[#eef0f3]">
             <button
               onClick={() => { const next = new Set(); setSelectedOwners(next); load(next) }}
               className={`px-2 py-0.5 rounded text-xs border transition-colors ${
@@ -97,53 +88,16 @@ export default function RulesList() {
             ))}
           </div>
         )}
-        {rules.length ? (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th className="w-12">ID</th>
-                <th>名称</th>
-                <th className="cursor-pointer select-none" onClick={() => cycleSort('node')}>
-                  节点{sort.col === 'node' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
-                </th>
-                <th>协议</th>
-                <th>入口</th>
-                <th>出口</th>
-                <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
-                  所有者{sort.col === 'owner' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
-                </th>
-                <th className="text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRules.map(r => {
-                const node = nodeMap[r.node_id]
-                return (
-                  <tr key={r.id} className="cursor-pointer" onClick={() => navigate(`/rules/${r.id}`)}>
-                    <td className="font-mono text-xs text-gray-400">#{r.id}</td>
-                    <td className="font-semibold">{r.name}</td>
-                    <td>
-                      <span className="font-mono text-gray-600">{node?.name || `#${r.node_id}`}</span>
-                    </td>
-                    <td><ProtoBadge proto={r.proto} /></td>
-                    <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
-                      {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
-                    </td>
-                    <td className="font-mono text-xs text-gray-500">
-                      <SensText blurred={blurred}>{r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '--'}</SensText>
-                    </td>
-                    <td className="text-gray-500">{r.owner_name || '--'}</td>
-                    <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <Link to={`/rules/${r.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>
-                      <button onClick={() => deleteRule(r)} className="btn-danger-sm text-xs">删除</button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        ) : <Empty title="暂无规则" desc="点击上方「创建规则」添加。" />}
-      </div>
+
+        {rules.length === 0 ? (
+          <Empty title="暂无规则" desc="点击右上角「创建规则」添加。" />
+        ) : filtered.length === 0 ? (
+          <Empty title="无匹配规则" desc="试试别的关键词。" />
+        ) : (
+          <RulesTable variant="admin" rules={filtered} nodeMap={nodeMap} blurred={blurred}
+            onDelete={deleteRule} onRowClick={r => navigate(`/rules/${r.id}`)} />
+        )}
+      </Panel>
 
       <CreateRuleModal open={showCreate} onClose={() => setShowCreate(false)} nodes={nodes} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
