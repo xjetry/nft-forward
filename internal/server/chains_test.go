@@ -82,6 +82,45 @@ func apiPostRule(t *testing.T, s *Server, d *sql.DB, admin *http.Cookie, name st
 	return rules[0]
 }
 
+func TestGetRuleIncludesComputedFields(t *testing.T) {
+	d := openDB(t)
+	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
+	h, _ := db.CreateNode(d, "nnc-hk", "https://p", "t2")
+	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
+	_ = db.UpdateNodeRelayHost(d, h.ID, "2.2.2.2")
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	rl := apiPostRule(t, s, d, admin, "vless", []int64{g.ID, h.ID})
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/rules/%d", rl.ID), nil)
+	req.AddCookie(admin)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Rule struct {
+			Entry string `json:"entry"`
+			Path  string `json:"path"`
+			Exit  string `json:"exit"`
+		} `json:"rule"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Rule.Exit != "9.9.9.9:8443" {
+		t.Errorf("exit = %q, want 9.9.9.9:8443", resp.Rule.Exit)
+	}
+	if resp.Rule.Entry == "" {
+		t.Error("entry should be populated by the detail endpoint, got empty")
+	}
+	if resp.Rule.Path == "" {
+		t.Error("path should be populated by the detail endpoint, got empty")
+	}
+}
+
 func TestSaveRuleReorderKeepsHops(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")

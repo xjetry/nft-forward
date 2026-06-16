@@ -795,8 +795,14 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	ownerName := ""
+	if rl.OwnerID.Valid {
+		if u, e := db.GetUserByID(s.DB, rl.OwnerID.Int64); e == nil {
+			ownerName = u.Username
+		}
+	}
 	jsonOK(w, map[string]any{
-		"rule": rl, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
+		"rule": s.buildRuleListItem(rl, ownerName), "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 

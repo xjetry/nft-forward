@@ -15,6 +15,7 @@ type ruleView struct {
 	Rule        *db.Rule
 	Path        string
 	Entry       string
+	Exit        string
 	EntryNodeID int64
 	OwnerName   string
 }
@@ -30,7 +31,8 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 			names = append(names, fmt.Sprintf("#%d", h.NodeID))
 		}
 	}
-	names = append(names, net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort)))
+	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
+	names = append(names, exit)
 	entry := "—"
 	var entryNodeID int64
 	if len(hops) > 0 && r.EntryListenPort > 0 {
@@ -39,7 +41,7 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 			entry = net.JoinHostPort(n.RelayHost, strconv.Itoa(r.EntryListenPort))
 		}
 	}
-	return ruleView{Rule: r, Path: strings.Join(names, " → "), Entry: entry, EntryNodeID: entryNodeID}
+	return ruleView{Rule: r, Path: strings.Join(names, " → "), Entry: entry, Exit: exit, EntryNodeID: entryNodeID}
 }
 
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
@@ -51,6 +53,7 @@ type ruleListItem struct {
 	OwnerName   string `json:"owner_name"`
 	Path        string `json:"path"`
 	Entry       string `json:"entry"`
+	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
 }
 
@@ -64,7 +67,7 @@ type nodeHopView struct {
 
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, EntryNodeID: v.EntryNodeID}
+	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
 }
 
 func parseExit(raw string) (string, int, error) {
