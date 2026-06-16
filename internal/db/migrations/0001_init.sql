@@ -35,6 +35,7 @@ CREATE TABLE nodes (
   last_error TEXT,
   disabled INTEGER NOT NULL DEFAULT 0,
   local_migrated_at INTEGER,
+  port_range TEXT NOT NULL DEFAULT '10001-20000',
   created_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX idx_nodes_self ON nodes(node_type) WHERE node_type = 'self';
@@ -107,3 +108,4 @@ CREATE TABLE audit_logs (
 -- Mark prior migrations as already applied so adding them as separate files
 -- later won't re-run on DBs created from this consolidated init.
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0004_simplify_schema.sql', strftime('%s','now'));
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0005_node_port_range.sql', strftime('%s','now'));

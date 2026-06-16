@@ -17,11 +17,109 @@ type DBTX interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// Rule port allocation range for chain hops.
+// Rule port allocation range for chain hops (used as fallback when a node has
+// no explicit port_range).
 const (
-	ChainPortMin = 10001
-	ChainPortMax = 20000
+	ChainPortMin     = 10001
+	ChainPortMax     = 20000
+	DefaultPortRange = "10001-20000"
 )
+
+// ParsePortRange parses a composite port spec like "10001-19999,23333,40000-42000"
+// into individual (start, end) segments. A single port becomes (p, p).
+// An empty string is treated as DefaultPortRange.
+func ParsePortRange(spec string) ([][2]int, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		spec = DefaultPortRange
+	}
+	parts := strings.Split(spec, ",")
+	segments := make([][2]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if idx := strings.Index(part, "-"); idx >= 0 {
+			lo, err := strconv.Atoi(strings.TrimSpace(part[:idx]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q in range", part[:idx])
+			}
+			hi, err := strconv.Atoi(strings.TrimSpace(part[idx+1:]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q in range", part[idx+1:])
+			}
+			if lo < 1 || lo > 65535 || hi < 1 || hi > 65535 {
+				return nil, fmt.Errorf("port out of 1-65535: %s", part)
+			}
+			if lo > hi {
+				return nil, fmt.Errorf("range start %d > end %d", lo, hi)
+			}
+			segments = append(segments, [2]int{lo, hi})
+		} else {
+			p, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q", part)
+			}
+			if p < 1 || p > 65535 {
+				return nil, fmt.Errorf("port out of 1-65535: %d", p)
+			}
+			segments = append(segments, [2]int{p, p})
+		}
+	}
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("empty port range")
+	}
+	return segments, nil
+}
+
+// ValidatePortRange checks format validity and returns a human-readable error.
+func ValidatePortRange(spec string) error {
+	_, err := ParsePortRange(spec)
+	return err
+}
+
+// PortInRange returns true if port falls within any of the parsed segments.
+func PortInRange(port int, segments [][2]int) bool {
+	for _, seg := range segments {
+		if port >= seg[0] && port <= seg[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// PickFreePortFromRange picks a random free port from the given segments.
+// Returns 0 when every port is occupied.
+func PickFreePortFromRange(segments [][2]int, used map[int]bool) int {
+	// Calculate total capacity across all segments
+	total := 0
+	for _, seg := range segments {
+		total += seg[1] - seg[0] + 1
+	}
+	if total <= 0 {
+		return 0
+	}
+
+	offset := rand.Intn(total)
+	for i := 0; i < total; i++ {
+		idx := (offset + i) % total
+		// Map linear index to a port within segments
+		cur := 0
+		for _, seg := range segments {
+			span := seg[1] - seg[0] + 1
+			if idx < cur+span {
+				p := seg[0] + (idx - cur)
+				if !used[p] {
+					return p
+				}
+				break
+			}
+			cur += span
+		}
+	}
+	return 0
+}
 
 // NormalizeForwardMode keeps the NOT NULL mode column valid: empty or any
 // unknown value means kernel. Centralizing it means the kernel default is
@@ -229,6 +327,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		mode        string
 		desiredPort int
 		comment     string
+		portSegs    [][2]int // parsed from the node's port_range column
 	}
 	rs := make([]resolved, len(hops))
 	seen := map[int64]bool{}
@@ -238,18 +337,22 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		}
 		seen[hop.NodeID] = true
 
-		var name, relay string
-		if err := tx.QueryRow(`SELECT name, relay_host FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay); err != nil {
+		var name, relay, portRange string
+		if err := tx.QueryRow(`SELECT name, relay_host, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &portRange); err != nil {
 			return "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
 		}
 		if relay == "" {
 			return "", nil, fmt.Errorf("节点 %s 未设置中继地址", name)
 		}
+		segs, err := ParsePortRange(portRange)
+		if err != nil {
+			return "", nil, fmt.Errorf("节点 %s 端口范围格式错误: %v", name, err)
+		}
 		mode := NormalizeForwardMode(hop.Mode)
 		if r.Proto == "udp" {
 			mode = "kernel" // userspace relay is TCP-only
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs}
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
@@ -284,8 +387,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if h.desiredPort > 0 {
 			var name string
 			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
-			if h.desiredPort < ChainPortMin || h.desiredPort > ChainPortMax {
-				return "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围(%d-%d)", h.desiredPort, name, ChainPortMin, ChainPortMax)
+			if !PortInRange(h.desiredPort, h.portSegs) {
+				return "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, name)
 			}
 			if occ[h.desiredPort] {
 				return "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, name)
@@ -293,12 +396,12 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 			p = h.desiredPort
 		} else {
 			p = prevPort[h.nodeID]
-			if !(p >= ChainPortMin && p <= ChainPortMax && !occ[p]) {
-				p = PickFreePort(ChainPortMin, ChainPortMax, occ)
+			if !(PortInRange(p, h.portSegs) && !occ[p]) {
+				p = PickFreePortFromRange(h.portSegs, occ)
 				if p == 0 {
 					var name string
 					_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
-					return "", nil, fmt.Errorf("节点 %s 端口段(%d-%d)无可用端口", name, ChainPortMin, ChainPortMax)
+					return "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", name)
 				}
 			}
 		}

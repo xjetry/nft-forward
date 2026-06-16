@@ -384,6 +384,42 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.NodeType == "composite" {
+		jsonErr(w, http.StatusBadRequest, "组合节点不支持设置端口范围")
+		return
+	}
+	var body struct {
+		PortRange string `json:"port_range"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	spec := strings.TrimSpace(body.PortRange)
+	if err := db.ValidatePortRange(spec); err != nil {
+		jsonErr(w, http.StatusBadRequest, "端口范围格式错误: "+err.Error())
+		return
+	}
+	if err := db.UpdateNodePortRange(s.DB, id, spec); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_port_range", strconv.FormatInt(id, 10), spec)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResyncNode(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {

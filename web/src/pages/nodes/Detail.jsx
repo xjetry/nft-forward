@@ -11,6 +11,7 @@ export default function NodeDetail() {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
   const [relayHost, setRelayHost] = useState('')
+  const [portRange, setPortRange] = useState('')
   const [showComposite, setShowComposite] = useState(false)
   const toast = useToast()
   const blurred = useBlur()
@@ -21,6 +22,7 @@ export default function NodeDetail() {
       setData(d)
       setName(d.node?.name || '')
       setRelayHost(d.node?.relay_host || '')
+      setPortRange(d.node?.port_range || '')
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [id])
@@ -40,6 +42,11 @@ export default function NodeDetail() {
   const saveRelay = async (e) => {
     e.preventDefault()
     try { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); load() } catch (err) { toast(err.message) }
+  }
+
+  const savePortRange = async (e) => {
+    e.preventDefault()
+    try { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); load() } catch (err) { toast(err.message) }
   }
 
   const resync = async () => {
@@ -117,6 +124,23 @@ export default function NodeDetail() {
           </form>
         </div>
       </div>
+
+      {/* Port range — only for non-composite nodes */}
+      {node.node_type !== 'composite' && (
+        <div className="card mb-5">
+          <div className="card-header">
+            <h3 className="text-sm font-bold">端口范围</h3>
+            <span className="text-xs text-gray-400">规则自动分配监听端口时从该范围中选取</span>
+          </div>
+          <div className="p-5">
+            <form onSubmit={savePortRange} className="flex items-center gap-3 max-w-xl">
+              <label className="text-[13px] font-semibold text-gray-500">端口范围</label>
+              <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
+              <button type="submit" className="btn-primary">保存端口范围</button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Install command */}
       <div className="card mb-5">

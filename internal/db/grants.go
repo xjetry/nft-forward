@@ -100,7 +100,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 			&n.RelayHost, &n.Online, &agentVersion,
 			&lastSeen, &n.LastApplyAt, &n.LastError,
-			&disabled, &localMigratedAt, &n.CreatedAt,
+			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&g.MaxForwards, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err

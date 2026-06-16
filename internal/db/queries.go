@@ -36,6 +36,7 @@ type Node struct {
 	LastError    sql.NullString `json:"last_error"`
 	Disabled     bool         `json:"disabled"`
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
+	PortRange    string       `json:"port_range"`
 	CreatedAt    int64        `json:"created_at"`
 }
 
@@ -207,7 +208,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,created_at`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -226,7 +227,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.Online, &agentVersion,
 		&lastSeen, &n.LastApplyAt, &n.LastError,
-		&disabled, &localMigratedAt, &n.CreatedAt,
+		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -267,6 +268,16 @@ func DeleteNode(d *sql.DB, id int64) error {
 // it). Validation of the value (IPv4 / hostname) is the caller's job.
 func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
 	_, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, relayHost, id)
+	return err
+}
+
+// UpdateNodePortRange sets a node's port_range spec. An empty string resets to
+// the default range. Callers must validate with ValidatePortRange first.
+func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
+	if portRange == "" {
+		portRange = DefaultPortRange
+	}
+	_, err := d.Exec(`UPDATE nodes SET port_range=? WHERE id=?`, portRange, id)
 	return err
 }
 
