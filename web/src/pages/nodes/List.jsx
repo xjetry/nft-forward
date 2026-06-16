@@ -9,6 +9,7 @@ export default function NodeList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
   const toast = useToast()
 
@@ -77,23 +78,27 @@ export default function NodeList() {
           <span className="text-xs text-gray-400">{nodes.length} 个节点 {server_version ? `· server ${server_version}` : ''}</span>
           <div className="ml-auto flex gap-2">
             <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">+ 添加节点</button>
+            <button onClick={() => setShowComposite(true)} className="btn-primary text-xs">+ 组合节点</button>
             <button onClick={resyncAll} className="btn-secondary text-xs">同步所有</button>
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
         </div>
         {nodes.length ? (
           <table className="tbl">
-            <thead><tr><th className="w-14">ID</th><th>名称</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {nodes.map(n => (
                 <tr key={n.id}>
                   <td className="font-mono text-xs text-gray-400">#{n.id}</td>
                   <td>
                     <span className="inline-flex items-center gap-2 font-semibold">
-                      <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
+                      {n.node_type !== 'composite' && (
+                        <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
+                      )}
                       <Link to={`/nodes/${n.id}`} className="text-blue-600 font-semibold hover:underline">{n.name}</Link>
                     </span>
                   </td>
+                  <td><NodeTypeBadge type={n.node_type} /></td>
                   <td className="font-mono text-xs">
                     {n.agent_version ? (
                       <span className={n.agent_version !== server_version ? 'text-red-600' : ''}>{n.agent_version}</span>
@@ -115,6 +120,7 @@ export default function NodeList() {
       </div>
 
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />
+      <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes.filter(n => n.node_type !== 'composite')} onDone={() => { setShowComposite(false); load() }} />
     </Layout>
   )
 }
@@ -161,4 +167,94 @@ function NodeStatus({ node }) {
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
   return <Badge color="amber">待同步</Badge>
+}
+
+function NodeTypeBadge({ type }) {
+  if (type === 'composite') return <Badge color="violet">组合</Badge>
+  if (type === 'self') return <Badge color="blue">自身</Badge>
+  return <Badge color="green">单点</Badge>
+}
+
+function CompositeNodeModal({ open, onClose, nodes, onDone }) {
+  const [name, setName] = useState('')
+  const [hops, setHops] = useState([{ node_id: '', mode: 'userspace' }])
+  const [loading, setLoading] = useState(false)
+  const toast = useToast()
+
+  const addHop = () => setHops(h => [...h, { node_id: '', mode: 'userspace' }])
+  const removeHop = (i) => setHops(h => h.filter((_, j) => j !== i))
+  const setHop = (i, k, v) => setHops(h => h.map((hop, j) => j === i ? { ...hop, [k]: v } : hop))
+  const moveHop = (i, dir) => {
+    setHops(h => {
+      const arr = [...h]
+      const j = i + dir
+      if (j < 0 || j >= arr.length) return arr
+      ;[arr[i], arr[j]] = [arr[j], arr[i]]
+      return arr
+    })
+  }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    const validHops = hops.filter(h => h.node_id)
+    if (validHops.length < 2) {
+      toast('组合节点至少需要 2 个子节点')
+      return
+    }
+    setLoading(true)
+    try {
+      await api.post('/nodes', {
+        name,
+        node_type: 'composite',
+        hops: validHops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
+      })
+      toast('组合节点已创建')
+      setName('')
+      setHops([{ node_id: '', mode: 'userspace' }])
+      onDone()
+    } catch (err) { toast(err.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="创建组合节点">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
+          <label className="text-[13px] font-semibold text-gray-500">名称</label>
+          <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-jp-chain" />
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[13px] font-semibold text-gray-500">跳序（从入口到出口）</span>
+            <button type="button" onClick={addHop} className="btn-secondary text-xs">+ 添加一跳</button>
+          </div>
+          <div className="space-y-2">
+            {hops.map((hop, i) => (
+              <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                <span className="text-xs text-gray-400 w-5 text-center font-mono">{i + 1}</span>
+                <select className="input-field flex-1" value={hop.node_id} onChange={e => setHop(i, 'node_id', e.target.value)} required>
+                  <option value="">-- 选择节点 --</option>
+                  {nodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                </select>
+                <select className="input-field" value={hop.mode} onChange={e => setHop(i, 'mode', e.target.value)} style={{ width: 110 }}>
+                  <option value="kernel">kernel</option>
+                  <option value="userspace">userspace</option>
+                </select>
+                <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
+                <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>
+                {hops.length > 1 && (
+                  <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-4 border-t border-gray-100">
+          <button type="submit" disabled={loading} className="btn-primary">创建组合节点</button>
+          <button type="button" onClick={onClose} className="btn-secondary">取消</button>
+        </div>
+      </form>
+    </Modal>
+  )
 }
