@@ -21,7 +21,7 @@ import (
 type fakeHub struct {
 	mu       sync.Mutex
 	frames   []wsproto.Envelope
-	ackHooks map[string]func(env wsproto.Envelope) wsproto.Envelope // id-template → response
+	ackHooks map[string]func(env wsproto.Envelope) wsproto.Envelope // id-template -> response
 	conn     *websocket.Conn                                        // most-recent accepted connection, for tests that drop it
 }
 
@@ -136,31 +136,10 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 	}
 }
 
-func TestRulesToForwardsCarriesMode(t *testing.T) {
-	rules := []nft.Rule{
-		{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, Mode: nft.ModeUserspace},
-		{Proto: "tcp", SrcPort: 81, DestIP: "10.0.0.2", DestPort: 81, Mode: nft.ModeKernel},
-		{Proto: "tcp", SrcPort: 82, DestIP: "10.0.0.3", DestPort: 82}, // empty mode
-	}
-	fwds := rulesToForwards(rules)
-	if len(fwds) != 3 {
-		t.Fatalf("want 3 forwards, got %d", len(fwds))
-	}
-	if fwds[0].Mode != nft.ModeUserspace {
-		t.Errorf("userspace rule lost mode: got %q want %q", fwds[0].Mode, nft.ModeUserspace)
-	}
-	if fwds[1].Mode != nft.ModeKernel {
-		t.Errorf("kernel rule lost mode: got %q want %q", fwds[1].Mode, nft.ModeKernel)
-	}
-	if fwds[2].Mode != "" {
-		t.Errorf("empty-mode rule should round-trip empty, got %q", fwds[2].Mode)
-	}
-}
-
-func TestDialerSendsPanelSegmentEditOnNotify(t *testing.T) {
+func TestDialerStoresNodeIdentityFromHelloAck(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
-		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 42, Name: "relay-1"})
 		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
 	})
 	srv := httptest.NewServer(fh.handler(t))
@@ -170,52 +149,34 @@ func TestDialerSendsPanelSegmentEditOnNotify(t *testing.T) {
 		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
 		Token:        "tok",
 		AgentVersion: "v1",
-		GetState: func() (OwnerRuleset, AgentMeta) {
-			return OwnerRuleset{}, AgentMeta{}
-		},
-		OnApply:       func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
-		OnPanelNotice: func(_ []wsproto.Forward) {},
+		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go func() { _, _ = dl.runOnce(ctx) }()
+	waitConnected(t, dl)
 
-	dl.NotifyPanelEdited([]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}})
-
-	tick := time.NewTicker(20 * time.Millisecond)
-	defer tick.Stop()
-	deadline := time.After(2 * time.Second)
-	for {
-		select {
-		case <-deadline:
-			t.Fatalf("never received panel_segment_edit frame; frames=%+v", fh.Frames())
-		case <-tick.C:
-			for _, f := range fh.Frames() {
-				if f.Type != wsproto.TypePanelSegmentEdit {
-					continue
-				}
-				var pse wsproto.PanelSegmentEdit
-				if err := json.Unmarshal(f.Payload, &pse); err != nil {
-					t.Fatalf("unmarshal panel_segment_edit: %v", err)
-				}
-				if len(pse.Forwards) == 1 && pse.Forwards[0].ListenPort == 30000 && pse.Forwards[0].TargetIP == "10.0.0.9" {
-					return
-				}
-				t.Fatalf("unexpected panel_segment_edit payload: %+v", pse)
-			}
-		}
+	if dl.NodeName() != "relay-1" {
+		t.Errorf("NodeName() = %q, want relay-1", dl.NodeName())
+	}
+	if dl.NodeID() != 42 {
+		t.Errorf("NodeID() = %d, want 42", dl.NodeID())
+	}
+	if !dl.IsConnected() {
+		t.Error("IsConnected() = false, want true")
 	}
 }
 
-func TestDialerEditChainHopRoundtripsAck(t *testing.T) {
+func TestDialerEditRuleHopRoundtripsAck(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
 		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
 		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
 	})
-	fh.onAck(wsproto.TypeChainHopEdit, func(env wsproto.Envelope) wsproto.Envelope {
-		ack, _ := json.Marshal(wsproto.ChainCmdAck{OK: true, Entry: "10.0.0.10:21000"})
-		return wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ack}
+	fh.onAck(wsproto.TypeRuleHopEdit, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: "10.0.0.10:21000"})
+		return wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ack}
 	})
 	srv := httptest.NewServer(fh.handler(t))
 	defer srv.Close()
@@ -232,7 +193,7 @@ func TestDialerEditChainHopRoundtripsAck(t *testing.T) {
 	go func() { _, _ = dl.runOnce(ctx) }()
 
 	waitConnected(t, dl)
-	ack, err := dl.EditChainHop(ctx, wsproto.ChainHopEdit{ChainID: 5, ListenPort: 21000})
+	ack, err := dl.EditRuleHop(ctx, wsproto.RuleHopEdit{RuleID: 5, ListenPort: 21000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,19 +202,87 @@ func TestDialerEditChainHopRoundtripsAck(t *testing.T) {
 	}
 }
 
+func TestDialerCreateRuleRoundtripsAck(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	fh.onAck(wsproto.TypeRuleCreate, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: "10.0.0.1:15000"})
+		return wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ack}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	dl := NewDialer(DialerConfig{
+		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
+		Token:        "tok",
+		AgentVersion: "v1",
+		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _, _ = dl.runOnce(ctx) }()
+
+	waitConnected(t, dl)
+	ack, err := dl.CreateRule(ctx, wsproto.RuleCreate{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ack.OK || ack.Entry != "10.0.0.1:15000" {
+		t.Fatalf("unexpected ack: %+v", ack)
+	}
+}
+
+func TestDialerUpdateRuleRoundtripsAck(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	fh.onAck(wsproto.TypeRuleUpdate, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: "10.0.0.1:16000"})
+		return wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ack}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	dl := NewDialer(DialerConfig{
+		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
+		Token:        "tok",
+		AgentVersion: "v1",
+		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _, _ = dl.runOnce(ctx) }()
+
+	waitConnected(t, dl)
+	ack, err := dl.UpdateRule(ctx, wsproto.RuleUpdate{RuleID: 5, ListenPort: 16000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ack.OK || ack.Entry != "10.0.0.1:16000" {
+		t.Fatalf("unexpected ack: %+v", ack)
+	}
+}
+
 func TestDialerSendCommandFailsWhenDisconnected(t *testing.T) {
 	dl := NewDialer(DialerConfig{URL: "ws://127.0.0.1:1/"})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := dl.DeleteChain(ctx, 9); err == nil {
+	if _, err := dl.DeleteRule(ctx, 9); err == nil {
 		t.Fatal("expected error when not connected")
 	}
 }
 
 // A command waiting on its ack when the connection drops must be woken by
 // runOnce's pending-drain, not left to spin until its own context deadline.
-// The fakeHub here deliberately never replies to chain_hop_edit, so the only
-// thing that can unblock EditChainHop is the disconnect cleanup.
+// The fakeHub here deliberately never replies to rule_hop_edit, so the only
+// thing that can unblock EditRuleHop is the disconnect cleanup.
 func TestDialerCommandWokenOnDisconnect(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
@@ -278,12 +307,12 @@ func TestDialerCommandWokenOnDisconnect(t *testing.T) {
 	waitConnected(t, dl)
 
 	type result struct {
-		ack wsproto.ChainCmdAck
+		ack wsproto.RuleCmdAck
 		err error
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		ack, err := dl.EditChainHop(ctx, wsproto.ChainHopEdit{ChainID: 5, ListenPort: 21000})
+		ack, err := dl.EditRuleHop(ctx, wsproto.RuleHopEdit{RuleID: 5, ListenPort: 21000})
 		resCh <- result{ack, err}
 	}()
 
@@ -296,10 +325,10 @@ sendWait:
 	for {
 		select {
 		case <-sent:
-			t.Fatal("server never received chain_hop_edit")
+			t.Fatal("server never received rule_hop_edit")
 		case <-tick.C:
 			for _, f := range fh.Frames() {
-				if f.Type == wsproto.TypeChainHopEdit {
+				if f.Type == wsproto.TypeRuleHopEdit {
 					break sendWait
 				}
 			}
@@ -316,7 +345,61 @@ sendWait:
 			t.Fatalf("expected disconnect signaled via err or ack.Error containing 断开, got ack=%+v err=%v", r.ack, r.err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("EditChainHop was not woken by disconnect cleanup (would have hung to ctx deadline)")
+		t.Fatal("EditRuleHop was not woken by disconnect cleanup (would have hung to ctx deadline)")
 	}
 }
 
+func TestDialerMigratesTuiRulesOnConnect(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	fh.onAck(wsproto.TypeMigrateRules, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
+		return wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ack}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	migrated := make(chan struct{}, 1)
+	tuiRules := []nft.Rule{{ID: "t1", Proto: "tcp", SrcPort: 12000, DestHost: "1.2.3.4", DestPort: 80}}
+	dl := NewDialer(DialerConfig{
+		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
+		Token:        "tok",
+		AgentVersion: "v1",
+		GetState: func() (OwnerRuleset, AgentMeta) {
+			return OwnerRuleset{"tui": tuiRules}, AgentMeta{}
+		},
+		OnApply:    func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnMigrated: func() { migrated <- struct{}{} },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _, _ = dl.runOnce(ctx) }()
+
+	select {
+	case <-migrated:
+		// Migration callback fired -- success.
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnMigrated callback never called")
+	}
+
+	// Verify the migrate_rules frame was sent.
+	found := false
+	for _, f := range fh.Frames() {
+		if f.Type == wsproto.TypeMigrateRules {
+			found = true
+			var mr wsproto.MigrateRules
+			if err := json.Unmarshal(f.Payload, &mr); err != nil {
+				t.Fatalf("unmarshal migrate_rules: %v", err)
+			}
+			if len(mr.Rules) != 1 || mr.Rules[0].ID != "t1" {
+				t.Fatalf("unexpected migrate payload: %+v", mr.Rules)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("migrate_rules frame not found in server frames")
+	}
+}

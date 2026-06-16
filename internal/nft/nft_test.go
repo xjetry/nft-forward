@@ -234,43 +234,43 @@ func TestValidateModeMatrix(t *testing.T) {
 	}
 }
 
-func TestRuleChainMetaIsInert(t *testing.T) {
-	// Chain metadata is panel-side only; it must never change data-plane behavior.
+func TestRuleMetaIsInert(t *testing.T) {
+	// Rule metadata is panel-side only; it must never change data-plane behavior.
 	r := Rule{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 200,
-		ChainID: 7, ChainName: "seednet-vless"}
+		RuleID: 7, RuleName: "seednet-vless"}
 	if r.EffectiveMode() != ModeKernel {
-		t.Fatalf("chain meta must not affect EffectiveMode, got %q", r.EffectiveMode())
+		t.Fatalf("rule meta must not affect EffectiveMode, got %q", r.EffectiveMode())
 	}
-	// A rule without chain metadata must not serialize the fields.
+	// A rule without rule metadata must not serialize the fields.
 	b, err := json.Marshal(Rule{Proto: "tcp", SrcPort: 100, DestPort: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "chain_id") || strings.Contains(string(b), "chain_name") {
-		t.Fatalf("empty chain meta must be omitted, got %s", b)
+	if strings.Contains(string(b), "rule_id") || strings.Contains(string(b), "rule_name") {
+		t.Fatalf("empty rule meta must be omitted, got %s", b)
 	}
 }
 
-func TestRule_TenantNameRoundTripAndOmitempty(t *testing.T) {
-	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "qqpw"}
+func TestRule_OwnerNameRoundTripAndOmitempty(t *testing.T) {
+	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, OwnerName: "qqpw"}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"tenant_name":"qqpw"`) {
-		t.Fatalf("tenant_name not marshaled: %s", b)
+	if !strings.Contains(string(b), `"owner_name":"qqpw"`) {
+		t.Fatalf("owner_name not marshaled: %s", b)
 	}
 	var got Rule
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.TenantName != "qqpw" {
-		t.Fatalf("tenant_name round-trip mismatch: %q", got.TenantName)
+	if got.OwnerName != "qqpw" {
+		t.Fatalf("owner_name round-trip mismatch: %q", got.OwnerName)
 	}
 
-	// Empty tenant must be omitted from the wire (display-only metadata).
+	// Empty owner must be omitted from the wire (display-only metadata).
 	bare, _ := json.Marshal(Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80})
-	if strings.Contains(string(bare), "tenant_name") {
-		t.Fatalf("empty tenant_name should be omitted, got: %s", bare)
+	if strings.Contains(string(bare), "owner_name") {
+		t.Fatalf("empty owner_name should be omitted, got: %s", bare)
 	}
 }

@@ -34,14 +34,15 @@ type Rule struct {
 	// Mode selects the data plane for this forward: "" / "kernel" = nftables
 	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
 	Mode string `json:"mode,omitempty"`
-	// ChainID/ChainName/TenantName are panel-side metadata: when a rule
-	// belongs to a relay chain they identify it so the TUI can show the
-	// owning chain and gate which fields are locally editable; TenantName
-	// names the owning tenant for display. The data plane (DNAT / userspace /
+	// RuleID/RuleName/OwnerName are panel-side metadata: when a rule
+	// belongs to a relay rule they identify it so the TUI can show the
+	// owning rule and gate which fields are locally editable; OwnerName
+	// names the owning user for display. The data plane (DNAT / userspace /
 	// MergedRuleset / DNS) never reads them.
-	ChainID    int64  `json:"chain_id,omitempty"`
-	ChainName  string `json:"chain_name,omitempty"`
-	TenantName string `json:"tenant_name,omitempty"`
+	RuleID    int64  `json:"rule_id,omitempty"`
+	RuleName  string `json:"rule_name,omitempty"`
+	OwnerName string `json:"owner_name,omitempty"`
+	HopCount  int    `json:"hop_count,omitempty"`
 }
 
 // EffectiveMode normalizes the mode: an empty or unrecognized value means
@@ -83,8 +84,8 @@ func Validate(r Rule) error {
 	default:
 		return fmt.Errorf("协议必须为 tcp、udp 或 tcp+udp")
 	}
-	if r.SrcPort < 1 || r.SrcPort > 65535 {
-		return fmt.Errorf("监听端口必须在 1-65535 之间")
+	if r.SrcPort < 0 || r.SrcPort > 65535 {
+		return fmt.Errorf("监听端口必须在 0-65535 之间")
 	}
 	if r.DestPort < 1 || r.DestPort > 65535 {
 		return fmt.Errorf("目标端口必须在 1-65535 之间")

@@ -8,100 +8,140 @@ import (
 	"nft-forward/internal/nft"
 )
 
-func TestBuildRulesStampsChainMeta(t *testing.T) {
+func TestBuildRulesStampsRuleMeta(t *testing.T) {
 	d := openDB(t)
 	n, err := db.CreateNode(d, "hop1", "https://p", "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	chainID, err := db.CreateChain(d, &db.Chain{
-		Name: "seednet-vless", Proto: "tcp", ExitHost: "exit.example", ExitPort: 8443,
-	})
+	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
+
+	tx, err := d.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One chain-owned forward and one standalone forward on the same node.
-	if _, err := db.CreateForward(d, &db.Forward{
-		NodeID: n.ID, Proto: "tcp", ListenPort: 20000, TargetIP: "10.0.0.2", TargetPort: 20001,
-		ChainID: sql.NullInt64{Int64: chainID, Valid: true},
-	}); err != nil {
+	rl := &db.Rule{NodeID: n.ID, Name: "seednet-vless", Proto: "tcp", ExitHost: "exit.example", ExitPort: 8443}
+	ruleID, err := db.CreateRule(tx, rl)
+	if err != nil {
+		tx.Rollback()
 		t.Fatal(err)
 	}
-	if _, err := db.CreateForward(d, &db.Forward{
-		NodeID: n.ID, Proto: "tcp", ListenPort: 30000, TargetIP: "10.0.0.9", TargetPort: 443,
-	}); err != nil {
+	rl.ID = ruleID
+	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
+	if err != nil {
+		tx.Rollback()
 		t.Fatal(err)
 	}
+	tx.Commit()
 
-	forwards, err := db.ActiveForwardsForPush(d, n.ID)
+	ruleHops, err := db.ActiveRuleHopsForPush(d, n.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := buildRules(d, forwards)
+	rules := buildRules(d, ruleHops)
 
-	var chained, standalone *nft.Rule
-	for i := range rules {
-		switch rules[i].SrcPort {
-		case 20000:
-			chained = &rules[i]
-		case 30000:
-			standalone = &rules[i]
+	if len(rules) == 0 {
+		t.Fatal("expected at least 1 rule")
+	}
+	found := false
+	for _, r := range rules {
+		if r.RuleID == ruleID {
+			found = true
+			if r.RuleName != "seednet-vless" {
+				t.Fatalf("rule should carry name, got RuleName=%q", r.RuleName)
+			}
 		}
 	}
-	if chained == nil || standalone == nil {
-		t.Fatalf("expected both forwards in rules, got %+v", rules)
-	}
-	if chained.ChainID != chainID || chained.ChainName != "seednet-vless" {
-		t.Fatalf("chain forward should carry meta, got ChainID=%d ChainName=%q",
-			chained.ChainID, chained.ChainName)
-	}
-	if standalone.ChainID != 0 || standalone.ChainName != "" {
-		t.Fatalf("standalone forward must have no chain meta, got ChainID=%d ChainName=%q",
-			standalone.ChainID, standalone.ChainName)
+	if !found {
+		t.Fatalf("expected rule with RuleID=%d in results", ruleID)
 	}
 }
 
-func TestComputeRevIgnoresChainMeta(t *testing.T) {
-	// Chain metadata must not change the revision hash: a chain rename must not
-	// trigger a redundant re-apply when the data plane is unchanged.
+func TestComputeRevIgnoresRuleMeta(t *testing.T) {
 	base := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001}}
 	withMeta := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001,
-		ChainID: 5, ChainName: "seednet-vless"}}
+		RuleID: 5, RuleName: "seednet-vless"}}
 	if computeRev(base) != computeRev(withMeta) {
-		t.Fatalf("chain metadata must not affect rev: %q vs %q", computeRev(base), computeRev(withMeta))
+		t.Fatalf("rule metadata must not affect rev: %q vs %q", computeRev(base), computeRev(withMeta))
 	}
 }
 
-func TestBuildRules_FillsTenantName(t *testing.T) {
+func TestBuildRules_FillsOwnerName(t *testing.T) {
 	d := openDB(t)
 	n, err := db.CreateNode(d, "edge-1", "https://p", "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
 	hash, _ := HashPassword("pw")
 	uid, err := db.CreateUser(d, "qqpw", hash, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	withOwner := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 17171, TargetIP: "72.234.229.145", TargetPort: 17171, OwnerID: sql.NullInt64{Int64: uid, Valid: true}}
-	noOwner := &db.Forward{NodeID: n.ID, Proto: "tcp", ListenPort: 18000, TargetIP: "10.0.0.1", TargetPort: 18000}
 
-	rules := buildRules(d, []*db.Forward{withOwner, noOwner})
-	if len(rules) != 2 {
-		t.Fatalf("want 2 rules, got %d", len(rules))
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if rules[0].TenantName != "qqpw" {
-		t.Fatalf("owner forward should carry tenant name (from username), got %q", rules[0].TenantName)
+	rl := &db.Rule{NodeID: n.ID, OwnerID: sql.NullInt64{Int64: uid, Valid: true}, Name: "owned", Proto: "tcp", ExitHost: "72.234.229.145", ExitPort: 17171}
+	ruleID, err := db.CreateRule(tx, rl)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
 	}
-	if rules[1].TenantName != "" {
-		t.Fatalf("ownerless forward should leave TenantName empty, got %q", rules[1].TenantName)
+	rl.ID = ruleID
+	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	tx2, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl2 := &db.Rule{NodeID: n.ID, Name: "no-owner", Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 18000}
+	ruleID2, err := db.CreateRule(tx2, rl2)
+	if err != nil {
+		tx2.Rollback()
+		t.Fatal(err)
+	}
+	rl2.ID = ruleID2
+	_, _, err = db.RegenerateRule(tx2, rl2, []db.HopInput{{NodeID: n.ID}}, nil)
+	if err != nil {
+		tx2.Rollback()
+		t.Fatal(err)
+	}
+	tx2.Commit()
+
+	ruleHops, _ := db.ActiveRuleHopsForPush(d, n.ID)
+	rules := buildRules(d, ruleHops)
+
+	var owned, unowned *nft.Rule
+	for i := range rules {
+		if rules[i].RuleID == ruleID {
+			owned = &rules[i]
+		}
+		if rules[i].RuleID == ruleID2 {
+			unowned = &rules[i]
+		}
+	}
+	if owned == nil || unowned == nil {
+		t.Fatalf("expected both rules, got %+v", rules)
+	}
+	if owned.OwnerName != "qqpw" {
+		t.Fatalf("owner rule should carry owner name, got %q", owned.OwnerName)
+	}
+	if unowned.OwnerName != "" {
+		t.Fatalf("ownerless rule should leave OwnerName empty, got %q", unowned.OwnerName)
 	}
 }
 
-func TestComputeRev_ExcludesTenantName(t *testing.T) {
-	base := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "alpha"}}
-	renamed := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, TenantName: "beta"}}
+func TestComputeRev_ExcludesOwnerName(t *testing.T) {
+	base := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, OwnerName: "alpha"}}
+	renamed := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, OwnerName: "beta"}}
 	if computeRev(base) != computeRev(renamed) {
-		t.Fatal("tenant rename must not change rev (display-only metadata)")
+		t.Fatal("owner rename must not change rev (display-only metadata)")
 	}
 }

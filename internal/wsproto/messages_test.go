@@ -71,85 +71,115 @@ func TestPingPongCarriesTS(t *testing.T) {
 	}
 }
 
-func TestPanelSegmentEditRoundtrip(t *testing.T) {
-	p := PanelSegmentEdit{Forwards: []Forward{
-		{Proto: "tcp", ListenPort: 30000, TargetIP: "10.0.0.9", TargetPort: 443, Comment: "edge", Mode: nft.ModeKernel},
-	}}
-	b, err := json.Marshal(p)
+func TestRuleCreateRoundtrip(t *testing.T) {
+	rc := RuleCreate{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 80, ListenPort: 12000, Mode: nft.ModeKernel, Comment: "test", Name: "r1"}
+	b, err := json.Marshal(rc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got PanelSegmentEdit
+	var got RuleCreate
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Forwards) != 1 || got.Forwards[0].ListenPort != 30000 || got.Forwards[0].TargetIP != "10.0.0.9" {
-		t.Fatalf("panel_segment_edit roundtrip mismatch: %+v", got)
+	if got.Proto != "tcp" || got.ExitHost != "10.0.0.1" || got.ListenPort != 12000 || got.Name != "r1" {
+		t.Fatalf("rule_create roundtrip mismatch: %+v", got)
 	}
 }
 
-func TestPanelSegmentEditTypeConstant(t *testing.T) {
-	if TypePanelSegmentEdit != "panel_segment_edit" {
-		t.Fatalf("unexpected type constant %q", TypePanelSegmentEdit)
+func TestRuleUpdateRoundtrip(t *testing.T) {
+	ru := RuleUpdate{RuleID: 5, Proto: "tcp", ExitHost: "10.0.0.2", ExitPort: 443, ListenPort: 15000}
+	b, err := json.Marshal(ru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got RuleUpdate
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RuleID != 5 || got.ExitHost != "10.0.0.2" || got.ListenPort != 15000 {
+		t.Fatalf("rule_update roundtrip mismatch: %+v", got)
 	}
 }
 
-func TestChainCommandFramesRoundtrip(t *testing.T) {
-	e := ChainHopEdit{ChainID: 7, ListenPort: 21000, Mode: nft.ModeUserspace, Comment: "edge hop"}
+func TestMigrateRulesRoundtrip(t *testing.T) {
+	mr := MigrateRules{Rules: []nft.Rule{
+		{Proto: "tcp", SrcPort: 12000, DestHost: "1.2.3.4", DestPort: 80},
+	}}
+	b, err := json.Marshal(mr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got MigrateRules
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) != 1 || got.Rules[0].SrcPort != 12000 {
+		t.Fatalf("migrate_rules roundtrip mismatch: %+v", got)
+	}
+}
+
+func TestNewTypeConstants(t *testing.T) {
+	if TypeRuleCreate != "rule_create" || TypeRuleUpdate != "rule_update" || TypeMigrateRules != "migrate_rules" {
+		t.Fatalf("unexpected new type constants: %q %q %q", TypeRuleCreate, TypeRuleUpdate, TypeMigrateRules)
+	}
+}
+
+func TestRuleCommandFramesRoundtrip(t *testing.T) {
+	e := RuleHopEdit{RuleID: 7, ListenPort: 21000, Mode: nft.ModeUserspace, Comment: "edge hop"}
 	b, err := json.Marshal(e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ge ChainHopEdit
+	var ge RuleHopEdit
 	if err := json.Unmarshal(b, &ge); err != nil {
 		t.Fatal(err)
 	}
-	if ge.ChainID != 7 || ge.ListenPort != 21000 || ge.Mode != nft.ModeUserspace || ge.Comment != "edge hop" {
-		t.Fatalf("chain_hop_edit roundtrip mismatch: %+v", ge)
+	if ge.RuleID != 7 || ge.ListenPort != 21000 || ge.Mode != nft.ModeUserspace || ge.Comment != "edge hop" {
+		t.Fatalf("rule_hop_edit roundtrip mismatch: %+v", ge)
 	}
 
-	d := ChainDelete{ChainID: 9}
+	d := RuleDelete{RuleID: 9}
 	b, err = json.Marshal(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gd ChainDelete
+	var gd RuleDelete
 	if err := json.Unmarshal(b, &gd); err != nil {
 		t.Fatal(err)
 	}
-	if gd.ChainID != 9 {
-		t.Fatalf("chain_delete roundtrip mismatch: %+v", gd)
+	if gd.RuleID != 9 {
+		t.Fatalf("rule_delete roundtrip mismatch: %+v", gd)
 	}
 
-	a := ChainCmdAck{OK: false, Error: "端口被占用", Entry: ""}
+	a := RuleCmdAck{OK: false, Error: "端口被占用", Entry: ""}
 	b, err = json.Marshal(a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ga ChainCmdAck
+	var ga RuleCmdAck
 	if err := json.Unmarshal(b, &ga); err != nil {
 		t.Fatal(err)
 	}
 	if ga.OK || ga.Error != "端口被占用" {
-		t.Fatalf("chain_cmd_ack roundtrip mismatch: %+v", ga)
+		t.Fatalf("rule_cmd_ack roundtrip mismatch: %+v", ga)
 	}
 
-	ok := ChainCmdAck{OK: true, Entry: "1.2.3.4:21000"}
+	ok := RuleCmdAck{OK: true, Entry: "1.2.3.4:21000"}
 	b, err = json.Marshal(ok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gok ChainCmdAck
+	var gok RuleCmdAck
 	if err := json.Unmarshal(b, &gok); err != nil {
 		t.Fatal(err)
 	}
 	if !gok.OK || gok.Entry != "1.2.3.4:21000" {
-		t.Fatalf("chain_cmd_ack success roundtrip mismatch: %+v", gok)
+		t.Fatalf("rule_cmd_ack success roundtrip mismatch: %+v", gok)
 	}
 }
 
-func TestChainCommandTypeConstants(t *testing.T) {
-	if TypeChainHopEdit != "chain_hop_edit" || TypeChainDelete != "chain_delete" || TypeChainCmdAck != "chain_cmd_ack" {
-		t.Fatalf("unexpected chain type constants: %q %q %q", TypeChainHopEdit, TypeChainDelete, TypeChainCmdAck)
+func TestRuleCommandTypeConstants(t *testing.T) {
+	if TypeRuleHopEdit != "rule_hop_edit" || TypeRuleDelete != "rule_delete" || TypeRuleCmdAck != "rule_cmd_ack" {
+		t.Fatalf("unexpected rule type constants: %q %q %q", TypeRuleHopEdit, TypeRuleDelete, TypeRuleCmdAck)
 	}
 }

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,7 +16,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"nft-forward/internal/db"
-	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/wsproto"
 )
@@ -193,15 +191,10 @@ func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
-	tunnels, _ := db.ListTunnels(s.DB)
-	forwards, _ := db.ListForwards(s.DB)
+	rules, _ := db.ListAllRules(s.DB)
 	users, _ := db.ListUsers(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	jsonOK(w, map[string]any{
-		"nodes": nodes, "tunnels": tunnels,
-		"forwards": forwards, "users": users,
-		"node_by_id": nodeByID,
-	})
+	jsonOK(w, map[string]any{"nodes": nodes, "rules": rules, "users": users, "node_by_id": nodeByID})
 }
 
 // --- Nodes ---
@@ -222,8 +215,13 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		Name   string `json:"name"`
-		Secret string `json:"secret"`
+		Name     string `json:"name"`
+		Secret   string `json:"secret"`
+		NodeType string `json:"node_type"`
+		Hops     []struct {
+			NodeID int64  `json:"node_id"`
+			Mode   string `json:"mode"`
+		} `json:"hops"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -234,6 +232,43 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "name 不能为空")
 		return
 	}
+
+	nodeType := strings.TrimSpace(body.NodeType)
+	if nodeType == "composite" {
+		// Create a composite node with hops
+		if len(body.Hops) < 2 {
+			jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
+			return
+		}
+		n, err := db.CreateNode(s.DB, body.Name, "", "")
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Set node_type to composite
+		if _, err := s.DB.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, n.ID); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		nodeHops := make([]db.NodeHop, len(body.Hops))
+		for i, h := range body.Hops {
+			mode := h.Mode
+			if mode == "" {
+				mode = "userspace"
+			}
+			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode}
+		}
+		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ = db.GetNode(s.DB, n.ID)
+		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
+		jsonOK(w, map[string]any{"node": n})
+		return
+	}
+
+	// Default: create a remote node
 	n, err := db.CreateNode(s.DB, body.Name, "", strings.TrimSpace(body.Secret))
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -255,13 +290,36 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
-	forwards, _ := db.ListForwardsByNode(s.DB, n.ID)
+	ruleHops, _ := db.ListRuleHopsByNode(s.DB, n.ID)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
-	jsonOK(w, map[string]any{
-		"node": n, "forwards": forwards, "panel_url": panelURL,
+
+	resp := map[string]any{
+		"node": n, "rule_hops": ruleHops, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"server_version":       serverVersion(),
-	})
+	}
+
+	// Include node_hops if composite
+	if n.NodeType == "composite" {
+		nodeHops, _ := db.ListNodeHops(s.DB, n.ID)
+		resp["node_hops"] = nodeHops
+	}
+
+	jsonOK(w, resp)
+}
+
+func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeHops, err := db.ListNodeHops(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"node_hops": nodeHops})
 }
 
 func (s *Server) apiRenameNode(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +368,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := strings.TrimSpace(body.RelayHost)
-	if host != "" && net.ParseIP(host) == nil && !resolver.IsHostname(host) {
+	if host != "" && !isValidRelayHost(host) {
 		jsonErr(w, http.StatusBadRequest, "中继地址须为 IPv4 或域名")
 		return
 	}
@@ -319,9 +377,9 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
-	chains, _ := db.ChainsReferencingNode(s.DB, id)
-	if len(chains) > 0 {
-		s.apiRewireChains(chains)
+	ruleIDs, _ := db.RulesReferencingNode(s.DB, id)
+	if len(ruleIDs) > 0 {
+		s.apiRewireRules(ruleIDs)
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -373,13 +431,68 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	affectedChains, _ := db.ChainsReferencingNode(s.DB, id)
+	affectedRules, _ := db.RulesReferencingNode(s.DB, id)
 	if err := db.DeleteNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
-	s.apiRewireChains(affectedChains)
+	s.apiRewireRules(affectedRules)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiToggleNode(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if err := db.ToggleNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.toggle", strconv.FormatInt(id, 10), "")
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	var body struct {
+		OwnerID *int64 `json:"owner_id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.OwnerID != nil {
+		if _, err := db.GetUserByID(s.DB, *body.OwnerID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "用户不存在")
+			return
+		}
+	}
+	if err := db.UpdateNodeOwner(s.DB, id, body.OwnerID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ownerStr := "nil"
+	if body.OwnerID != nil {
+		ownerStr = strconv.FormatInt(*body.OwnerID, 10)
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_owner", strconv.FormatInt(id, 10), ownerStr)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -459,399 +572,39 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// --- Tunnels ---
+// --- Rules ---
 
-func (s *Server) apiListTunnels(w http.ResponseWriter, r *http.Request) {
-	tunnels, err := db.ListTunnels(s.DB)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	jsonOK(w, map[string]any{"tunnels": tunnels, "nodes": nodes, "node_by_id": nodeByID})
-}
-
-func (s *Server) apiCreateTunnel(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	var body struct {
-		Name            string `json:"name"`
-		NodeID          int64  `json:"node_id"`
-		ProtoMask       string `json:"proto_mask"`
-		PortStart       int    `json:"port_start"`
-		PortEnd         int    `json:"port_end"`
-		TargetCIDRAllow string `json:"target_cidr_allow"`
-		BandwidthMbps   int    `json:"bandwidth_mbps"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || body.NodeID == 0 || body.PortStart < 1 || body.PortEnd < body.PortStart || body.PortEnd > 65535 {
-		jsonErr(w, http.StatusBadRequest, "字段不完整或端口段无效")
-		return
-	}
-	if body.ProtoMask != "tcp" && body.ProtoMask != "udp" && body.ProtoMask != "tcp+udp" {
-		jsonErr(w, http.StatusBadRequest, "协议必须为 tcp、udp 或 tcp+udp")
-		return
-	}
-	cidr := strings.TrimSpace(body.TargetCIDRAllow)
-	if cidr == "" {
-		cidr = "0.0.0.0/0"
-	}
-	if err := validateCIDRList(cidr); err != nil {
-		jsonErr(w, http.StatusBadRequest, "CIDR 无效: "+err.Error())
-		return
-	}
-	id, err := db.CreateTunnel(s.DB, &db.Tunnel{
-		Name: body.Name, NodeID: body.NodeID, ProtoMask: body.ProtoMask,
-		PortStart: body.PortStart, PortEnd: body.PortEnd,
-		TargetCIDRAllow: cidr, BandwidthMbps: body.BandwidthMbps,
-	})
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tunnel.create", strconv.FormatInt(id, 10), body.Name)
-	t, _ := db.GetTunnel(s.DB, id)
-	jsonOK(w, map[string]any{"tunnel": t})
-}
-
-func (s *Server) apiDeleteTunnel(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	t, _ := db.GetTunnel(s.DB, id)
-	if n, err := db.CountForwardsByTunnel(s.DB, id); err == nil && n > 0 {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("通道仍被 %d 条转发占用", n))
-		return
-	}
-	if err := db.DeleteTunnel(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "tunnel.delete", strconv.FormatInt(id, 10), "")
-	if t != nil {
-		_ = s.apiDispatch(t.NodeID)
-	}
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-// --- Forwards ---
-
-func (s *Server) apiListForwards(w http.ResponseWriter, r *http.Request) {
-	allForwards, _ := db.ListForwards(s.DB)
-	nodes, _ := db.ListNodes(s.DB)
-	hopInfo, _ := db.ChainHopInfoMap(s.DB)
-	ownerByID, _ := db.UsersByID(s.DB)
-	combos, _ := db.ListTunnelCombos(s.DB)
-
-	tab := r.URL.Query().Get("tab")
-	if tab != "chain" {
-		tab = "normal"
-	}
-	owner := r.URL.Query().Get("owner")
-	if owner != "all" {
-		owner = "admin"
-	}
-	var filtered []*db.Forward
-	for _, f := range allForwards {
-		if tab == "chain" && !f.ChainID.Valid {
-			continue
-		}
-		if tab == "normal" && f.ChainID.Valid {
-			continue
-		}
-		if owner == "admin" && f.OwnerID.Valid {
-			continue
-		}
-		filtered = append(filtered, f)
-	}
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	jsonOK(w, map[string]any{
-		"forwards": filtered, "nodes": nodes, "node_by_id": nodeByID,
-		"hop_info": hopInfo, "owner_by_id": ownerByID, "combos": combos,
-	})
-}
-
-func (s *Server) apiCreateForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	var body struct {
-		NodeID    any    `json:"node_id"`
-		ComboID   int64  `json:"combo_id"`
-		Proto     string `json:"proto"`
-		Mode      string `json:"mode"`
-		ListenPort int   `json:"listen_port"`
-		Exit      string `json:"exit"`
-		Comment   string `json:"comment"`
-		ChainName string `json:"chain_name"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-
-	// combo path
-	nodeStr := fmt.Sprintf("%v", body.NodeID)
-	if strings.HasPrefix(nodeStr, "combo:") || body.ComboID > 0 {
-		var comboID int64
-		if body.ComboID > 0 {
-			comboID = body.ComboID
-		} else {
-			comboID, _ = strconv.ParseInt(nodeStr[6:], 10, 64)
-		}
-		s.apiCreateForwardFromCombo(w, r, u, comboID, body.Proto, body.Exit, body.ChainName)
-		return
-	}
-
-	nodeID, _ := toInt64(body.NodeID)
-	if nodeID == 0 {
-		jsonErr(w, http.StatusBadRequest, "node_id 无效")
-		return
-	}
-	targetIP, targetPort, err := parseExit(body.Exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	mode := strings.TrimSpace(body.Mode)
-	if !validMode(mode) {
-		jsonErr(w, http.StatusBadRequest, "无效的转发模式")
-		return
-	}
-	occupied, err := db.OccupiedPortsOnNode(s.DB, nodeID, proto, 0)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	listenPort := body.ListenPort
-	if listenPort == 0 {
-		listenPort = db.PickFreePort(db.ChainPortMin, db.ChainPortMax, occupied)
-		if listenPort == 0 {
-			jsonErr(w, http.StatusConflict, fmt.Sprintf("端口段 %d-%d 内已无可用端口", db.ChainPortMin, db.ChainPortMax))
-			return
-		}
-	} else {
-		if listenPort < 1 || listenPort > 65535 {
-			jsonErr(w, http.StatusBadRequest, "监听端口非法")
-			return
-		}
-		if occupied[listenPort] {
-			jsonErr(w, http.StatusConflict, fmt.Sprintf("端口 %d 已被占用", listenPort))
-			return
-		}
-	}
-	f := &db.Forward{
-		NodeID: nodeID, Proto: proto, ListenPort: listenPort,
-		TargetIP: targetIP, TargetPort: targetPort,
-		Comment: strings.TrimSpace(body.Comment), Mode: mode,
-	}
-	testRule := nft.Rule{Proto: proto, SrcPort: listenPort, DestPort: targetPort, Mode: mode}
-	if resolver.IsHostname(targetIP) {
-		testRule.DestHost = targetIP
-	} else {
-		testRule.DestIP = targetIP
-	}
-	if err := nft.Validate(testRule); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	id, err := db.CreateForward(s.DB, f)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.create", strconv.FormatInt(id, 10),
-		fmt.Sprintf("node=%d %s/%d→%s:%d", nodeID, proto, listenPort, targetIP, targetPort))
-	_ = s.apiDispatch(nodeID)
-	jsonOK(w, map[string]any{"ok": true, "id": id})
-}
-
-func (s *Server) apiCreateForwardFromCombo(w http.ResponseWriter, r *http.Request, u *db.User, comboID int64, proto, exit, chainName string) {
-	if comboID == 0 {
-		jsonErr(w, http.StatusBadRequest, "组合通道 ID 无效")
-		return
-	}
-	combo, err := db.GetTunnelCombo(s.DB, comboID)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "组合通道不存在")
-		return
-	}
-	comboHops, err := db.ListComboHops(s.DB, comboID)
-	if err != nil || len(comboHops) == 0 {
-		jsonErr(w, http.StatusBadRequest, "组合通道为空")
-		return
-	}
-	proto = strings.ToLower(strings.TrimSpace(proto))
-	if proto != "tcp" && proto != "udp" {
-		jsonErr(w, http.StatusBadRequest, "协议须为 tcp 或 udp")
-		return
-	}
-	exitHost, exitPort, err := parseExit(exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	chainName = strings.TrimSpace(chainName)
-	if chainName == "" {
-		chainName = combo.Name + "-" + exitHost
-	}
-	hops := make([]db.HopInput, 0, len(comboHops))
-	for _, ch := range comboHops {
-		tun, err := db.GetTunnel(s.DB, ch.TunnelID)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("组合通道内的通道 %d 不存在", ch.TunnelID))
-			return
-		}
-		hops = append(hops, db.HopInput{NodeID: tun.NodeID, Mode: ch.Mode})
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer tx.Rollback()
-	c := &db.Chain{Name: chainName, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
-	id, err := db.CreateChain(tx, c)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.ID = id
-	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "chain.create_from_combo", strconv.FormatInt(id, 10), chainName)
-	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "chain_id": id, "entry": entry})
-}
-
-func (s *Server) apiGetForward(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	f, err := db.GetForward(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "转发不存在")
-		return
-	}
-	nodes, _ := db.ListNodes(s.DB)
-	jsonOK(w, map[string]any{"forward": f, "nodes": nodes})
-}
-
-func (s *Server) apiUpdateForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		NodeID     int64  `json:"node_id"`
-		Proto      string `json:"proto"`
-		Mode       string `json:"mode"`
-		ListenPort int    `json:"listen_port"`
-		TargetIP   string `json:"target_ip"`
-		TargetPort int    `json:"target_port"`
-		Comment    string `json:"comment"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	mode := strings.TrimSpace(body.Mode)
-	targetIP := strings.TrimSpace(body.TargetIP)
-	comment := strings.TrimSpace(body.Comment)
-	if !validMode(mode) {
-		jsonErr(w, http.StatusBadRequest, "无效的转发模式")
-		return
-	}
-	testRule := nft.Rule{Proto: proto, SrcPort: body.ListenPort, DestPort: body.TargetPort, Mode: mode}
-	if resolver.IsHostname(targetIP) {
-		testRule.DestHost = targetIP
-	} else {
-		testRule.DestIP = targetIP
-	}
-	if err := nft.Validate(testRule); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	oldNodeID, err := db.UpdateForwardByID(s.DB, id, body.NodeID, proto, body.ListenPort, targetIP, body.TargetPort, comment, mode)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.edit", strconv.FormatInt(id, 10),
-		fmt.Sprintf("node=%d %s/%d→%s:%d", body.NodeID, proto, body.ListenPort, targetIP, body.TargetPort))
-	_ = s.apiDispatch(body.NodeID)
-	if oldNodeID != body.NodeID {
-		_ = s.apiDispatch(oldNodeID)
-	}
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiDeleteForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	nodeID, err := db.DeleteForward(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.delete", strconv.FormatInt(id, 10), "")
-	_ = s.apiDispatch(nodeID)
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-// --- Chains ---
-
-func (s *Server) apiListChains(w http.ResponseWriter, r *http.Request) {
-	chains, _ := db.ListAllChains(s.DB)
+func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
+	rules, _ := db.ListAllRules(s.DB)
 	nodes, _ := db.ListNodes(s.DB)
 	users, _ := db.UsersByID(s.DB)
-	views := make([]map[string]any, 0, len(chains))
-	for _, c := range chains {
-		v := s.buildChainView(c)
+	views := make([]map[string]any, 0, len(rules))
+	for _, rl := range rules {
+		v := s.buildRuleView(rl)
 		oname := ""
-		if c.OwnerID.Valid {
-			if u := users[c.OwnerID.Int64]; u != nil {
+		if rl.OwnerID.Valid {
+			if u := users[rl.OwnerID.Int64]; u != nil {
 				oname = u.Username
 			}
 		}
 		views = append(views, map[string]any{
-			"chain": c, "owner_name": oname,
+			"rule": rl, "owner_name": oname,
 			"path": v.Path, "entry": v.Entry,
 			"entry_node_id": v.EntryNodeID,
 		})
 	}
-	jsonOK(w, map[string]any{"chains": views, "nodes": nodes})
+	jsonOK(w, map[string]any{"rules": views, "nodes": nodes})
 }
 
-func (s *Server) apiCreateChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
+		NodeID    int64  `json:"node_id"`
 		Name      string `json:"name"`
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
+		Comment   string `json:"comment"`
 		Hops      []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
@@ -872,31 +625,79 @@ func (s *Server) apiCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(body.Hops) == 0 {
-		jsonErr(w, http.StatusBadRequest, "至少添加一个节点")
+
+	var hops []db.HopInput
+
+	if len(body.Hops) > 0 {
+		// Explicit hops provided
+		hops = make([]db.HopInput, len(body.Hops))
+		for i, h := range body.Hops {
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		}
+	} else if body.NodeID > 0 {
+		// Check if node is composite => expand node_hops
+		node, err := db.GetNode(s.DB, body.NodeID)
+		if err != nil {
+			jsonErr(w, http.StatusNotFound, "节点不存在")
+			return
+		}
+		if node.NodeType == "composite" {
+			nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
+			if len(nodeHops) == 0 {
+				jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
+				return
+			}
+			hops = make([]db.HopInput, len(nodeHops))
+			for i, nh := range nodeHops {
+				hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
+			}
+		} else {
+			// Single-node rule: 1 hop
+			hops = []db.HopInput{{NodeID: body.NodeID}}
+		}
+	} else {
+		jsonErr(w, http.StatusBadRequest, "需指定 node_id 或 hops")
 		return
 	}
-	hops := make([]db.HopInput, len(body.Hops))
-	for i, h := range body.Hops {
-		hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+
+	if len(hops) == 0 {
+		jsonErr(w, http.StatusBadRequest, "至少需要一跳")
+		return
 	}
 	if body.EntryPort > 0 {
 		hops[0].DesiredPort = body.EntryPort
 	}
+
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer tx.Rollback()
-	c := &db.Chain{Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
-	id, err := db.CreateChain(tx, c)
+
+	// Determine the rule header's node_id: use the entry hop's node when the
+	// caller didn't supply an explicit node_id (e.g. when hops are given directly).
+	ruleNodeID := body.NodeID
+	if ruleNodeID == 0 && len(hops) > 0 {
+		ruleNodeID = hops[0].NodeID
+	}
+
+	rl := &db.Rule{
+		NodeID:   ruleNodeID,
+		Name:     name,
+		Proto:    proto,
+		ExitHost: exitHost,
+		ExitPort: exitPort,
+		Comment:  strings.TrimSpace(body.Comment),
+	}
+	id, err := db.CreateRule(tx, rl)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.ID = id
-	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
+	rl.ID = id
+
+	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -905,46 +706,40 @@ func (s *Server) apiCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.create", strconv.FormatInt(id, 10), name)
+	db.WriteAudit(s.DB, u.ID, "rule.create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"chain": c, "entry": entry})
+	jsonOK(w, map[string]any{"rule": rl, "entry": entry})
 }
 
-func (s *Server) apiGetChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	c, err := db.GetChain(s.DB, id)
+	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "链路不存在")
+		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	hops, _ := db.ListChainHops(s.DB, id)
-	forwards, _ := db.ListForwardsByChain(s.DB, id)
-	fwByNode := make(map[int64]*db.Forward, len(forwards))
-	for _, f := range forwards {
-		fwByNode[f.NodeID] = f
-	}
+	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
-		"chain": c, "hops": hops,
-		"fw_by_node": fwByNode, "nodes": nodes, "node_by_id": nodeByID,
+		"rule": rl, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
-func (s *Server) apiUpdateChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	c, err := db.GetChain(s.DB, id)
+	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "链路不存在")
+		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
 	var body struct {
@@ -952,6 +747,7 @@ func (s *Server) apiUpdateChain(w http.ResponseWriter, r *http.Request) {
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
+		Comment   string `json:"comment"`
 		Hops      []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
@@ -983,18 +779,19 @@ func (s *Server) apiUpdateChain(w http.ResponseWriter, r *http.Request) {
 	if body.EntryPort > 0 {
 		hops[0].DesiredPort = body.EntryPort
 	}
-	c.Name, c.Proto, c.ExitHost, c.ExitPort = name, proto, exitHost, exitPort
+	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
+	rl.Comment = strings.TrimSpace(body.Comment)
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer tx.Rollback()
-	if err := db.UpdateChainHeader(tx, c); err != nil {
+	if err := db.UpdateRuleHeader(tx, rl); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
+	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1003,29 +800,29 @@ func (s *Server) apiUpdateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.save", strconv.FormatInt(id, 10), name)
+	db.WriteAudit(s.DB, u.ID, "rule.save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true, "entry": entry})
 }
 
-func (s *Server) apiDeleteChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	nodes, err := db.DeleteChain(s.DB, id)
+	nodes, err := db.DeleteRule(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.delete", strconv.FormatInt(id, 10), "")
+	db.WriteAudit(s.DB, u.ID, "rule.delete", strconv.FormatInt(id, 10), "")
 	s.apiDispatchFanout(nodes)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiReallocateHop(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -1033,12 +830,12 @@ func (s *Server) apiReallocateHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pos, _ := strconv.Atoi(chi.URLParam(r, "pos"))
-	c, err := db.GetChain(s.DB, id)
+	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "链路不存在")
+		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	hops, err := db.ListChainHops(s.DB, id)
+	hops, err := db.ListRuleHops(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1054,7 +851,7 @@ func (s *Server) apiReallocateHop(w http.ResponseWriter, r *http.Request) {
 
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, TunnelID: h.TunnelID, Mode: h.Mode}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 	}
 	var avoid map[int64]int
 	if body.Port > 0 {
@@ -1068,7 +865,7 @@ func (s *Server) apiReallocateHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	_, affected, err := db.RegenerateChain(tx, c, inputs, avoid)
+	_, affected, err := db.RegenerateRule(tx, rl, inputs, avoid)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1077,139 +874,8 @@ func (s *Server) apiReallocateHop(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.reallocate", strconv.FormatInt(id, 10), strconv.Itoa(pos))
+	db.WriteAudit(s.DB, u.ID, "rule.reallocate", strconv.FormatInt(id, 10), strconv.Itoa(pos))
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-// --- Combos ---
-
-func (s *Server) apiListCombos(w http.ResponseWriter, r *http.Request) {
-	combos, _ := db.ListTunnelCombos(s.DB)
-	tunnels, _ := db.ListTunnels(s.DB)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	tunnelByID := buildMap(tunnels, func(t *db.Tunnel) int64 { return t.ID })
-
-	views := make([]map[string]any, 0, len(combos))
-	for _, c := range combos {
-		hops, _ := db.ListComboHops(s.DB, c.ID)
-		names := make([]string, 0, len(hops))
-		for _, h := range hops {
-			t := tunnelByID[h.TunnelID]
-			if t == nil {
-				names = append(names, fmt.Sprintf("#%d", h.TunnelID))
-				continue
-			}
-			n := nodeByID[t.NodeID]
-			if n != nil {
-				names = append(names, n.Name)
-			} else {
-				names = append(names, t.Name)
-			}
-		}
-		views = append(views, map[string]any{
-			"combo": c, "hops": hops,
-			"path": strings.Join(names, " → "),
-		})
-	}
-	jsonOK(w, map[string]any{"combos": views, "tunnels": tunnels, "node_by_id": nodeByID})
-}
-
-func (s *Server) apiCreateCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	var body struct {
-		Name string `json:"name"`
-		Hops []struct {
-			TunnelID int64  `json:"tunnel_id"`
-			Mode     string `json:"mode"`
-		} `json:"hops"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		jsonErr(w, http.StatusBadRequest, "名称必填")
-		return
-	}
-	if len(body.Hops) < 2 {
-		jsonErr(w, http.StatusBadRequest, "组合通道至少需要 2 个通道")
-		return
-	}
-	hops := make([]db.TunnelComboHop, len(body.Hops))
-	for i, h := range body.Hops {
-		mode := h.Mode
-		if mode == "" {
-			mode = "userspace"
-		}
-		hops[i] = db.TunnelComboHop{TunnelID: h.TunnelID, Mode: mode}
-	}
-	id, err := db.CreateTunnelCombo(s.DB, name, hops)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "combo.create", strconv.FormatInt(id, 10), name)
-	jsonOK(w, map[string]any{"ok": true, "id": id})
-}
-
-func (s *Server) apiUpdateCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		Name string `json:"name"`
-		Hops []struct {
-			TunnelID int64  `json:"tunnel_id"`
-			Mode     string `json:"mode"`
-		} `json:"hops"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		jsonErr(w, http.StatusBadRequest, "名称必填")
-		return
-	}
-	if len(body.Hops) < 2 {
-		jsonErr(w, http.StatusBadRequest, "组合通道至少需要 2 个通道")
-		return
-	}
-	hops := make([]db.TunnelComboHop, len(body.Hops))
-	for i, h := range body.Hops {
-		mode := h.Mode
-		if mode == "" {
-			mode = "userspace"
-		}
-		hops[i] = db.TunnelComboHop{TunnelID: h.TunnelID, Mode: mode}
-	}
-	if err := db.UpdateTunnelCombo(s.DB, id, name, hops); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "combo.save", strconv.FormatInt(id, 10), name)
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiDeleteCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	if err := db.DeleteTunnelCombo(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "combo.delete", strconv.FormatInt(id, 10), "")
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1235,16 +901,13 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, id)
-	allTunnels, _ := db.ListTunnels(s.DB)
-	forwards, _ := db.ListForwardsForUser(s.DB, id)
-	combos, comboGrants, _ := db.ListCombosForUser(s.DB, id)
-	allCombos, _ := db.ListTunnelCombos(s.DB)
+	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
+	allNodes, _ := db.ListNodes(s.DB)
+	rules, _ := db.ListRulesByUser(s.DB, id)
 	jsonOK(w, map[string]any{
-		"user": target, "tunnels": tunnels,
-		"grants": grants, "all_tunnels": allTunnels,
-		"combos": combos, "combo_grants": comboGrants,
-		"all_combos": allCombos, "forwards": forwards,
+		"user": target, "nodes": grantedNodes,
+		"grants": grants, "all_nodes": allNodes,
+		"rules": rules,
 	})
 }
 
@@ -1285,7 +948,6 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Set quota fields if provided
 	maxFwd := body.MaxForwards
 	if maxFwd <= 0 {
 		maxFwd = 100
@@ -1305,7 +967,7 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"user": created})
 }
 
-func (s *Server) apiGrantTunnel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -1313,7 +975,7 @@ func (s *Server) apiGrantTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		TunnelID    int64 `json:"tunnel_id"`
+		NodeID      int64 `json:"node_id"`
 		MaxForwards int   `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -1323,77 +985,31 @@ func (s *Server) apiGrantTunnel(w http.ResponseWriter, r *http.Request) {
 	if body.MaxForwards <= 0 {
 		body.MaxForwards = 10
 	}
-	if err := db.GrantTunnel(s.DB, userID, body.TunnelID, body.MaxForwards); err != nil {
+	if err := db.GrantNode(s.DB, userID, body.NodeID, body.MaxForwards); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "user.grant", strconv.FormatInt(userID, 10), strconv.FormatInt(body.TunnelID, 10))
+	db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(body.NodeID, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiRevokeTunnel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	tunnelID, err := urlParamInt64(r, "tunnelID")
+	nodeID, err := urlParamInt64(r, "nodeID")
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad tunnel id")
+		jsonErr(w, http.StatusBadRequest, "bad node id")
 		return
 	}
-	if err := db.RevokeTunnel(s.DB, userID, tunnelID); err != nil {
+	if err := db.RevokeNode(s.DB, userID, nodeID); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "user.revoke", strconv.FormatInt(userID, 10), strconv.FormatInt(tunnelID, 10))
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiGrantCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	userID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		ComboID     int64 `json:"combo_id"`
-		MaxForwards int   `json:"max_forwards"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	if body.MaxForwards <= 0 {
-		body.MaxForwards = 10
-	}
-	if err := db.GrantCombo(s.DB, userID, body.ComboID, body.MaxForwards); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.grant_combo", strconv.FormatInt(userID, 10), strconv.FormatInt(body.ComboID, 10))
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-func (s *Server) apiRevokeCombo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	userID, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	comboID, err := urlParamInt64(r, "comboID")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad combo id")
-		return
-	}
-	if err := db.RevokeCombo(s.DB, userID, comboID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.revoke_combo", strconv.FormatInt(userID, 10), strconv.FormatInt(comboID, 10))
+	db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1547,7 +1163,7 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	affected, err := db.DeleteForwardsForUser(s.DB, id)
+	affected, err := db.DeleteRulesForUser(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1565,285 +1181,37 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, u.ID)
-	forwards, _ := db.ListForwardsForUser(s.DB, u.ID)
+	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
-		"user": apiUserFullView(u), "tunnels": tunnels, "grants": grants,
-		"forwards": forwards, "nodes": nodes, "node_by_id": nodeByID,
+		"user": apiUserFullView(u), "nodes": grantedNodes, "grants": grants,
+		"rules": rules, "all_nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
-func (s *Server) apiMyListForwards(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	tunnels, grants, _ := db.ListTunnelsForUser(s.DB, u.ID)
-	forwards, _ := db.ListForwardsForUser(s.DB, u.ID)
+	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
-	hopInfo, _ := db.ChainHopInfoMap(s.DB)
-	combos, _, _ := db.ListCombosForUser(s.DB, u.ID)
-
-	tab := r.URL.Query().Get("tab")
-	if tab != "chain" {
-		tab = "normal"
-	}
-	var filtered []*db.Forward
-	for _, f := range forwards {
-		if tab == "chain" && f.ChainID.Valid {
-			filtered = append(filtered, f)
-		} else if tab == "normal" && !f.ChainID.Valid {
-			filtered = append(filtered, f)
-		}
-	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	tunnelByID := buildMap(tunnels, func(t *db.Tunnel) int64 { return t.ID })
-	jsonOK(w, map[string]any{
-		"user": apiUserFullView(u), "forwards": filtered, "tunnels": tunnels, "grants": grants,
-		"hop_info": hopInfo, "combos": combos, "nodes": nodes,
-		"node_by_id": nodeByID, "tunnel_by_id": tunnelByID,
-	})
-}
-
-func (s *Server) apiMyCreateForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	if u.Disabled {
-		jsonErr(w, http.StatusForbidden, "用户已被禁用")
-		return
-	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
-		jsonErr(w, http.StatusForbidden, "用户已过期")
-		return
-	}
-
-	var body struct {
-		TunnelID   any    `json:"tunnel_id"`
-		ComboID    int64  `json:"combo_id"`
-		Proto      string `json:"proto"`
-		Mode       string `json:"mode"`
-		ListenPort int    `json:"listen_port"`
-		Exit       string `json:"exit"`
-		Comment    string `json:"comment"`
-		ChainName  string `json:"chain_name"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-
-	// combo path
-	tunnelStr := fmt.Sprintf("%v", body.TunnelID)
-	if strings.HasPrefix(tunnelStr, "combo:") || body.ComboID > 0 {
-		var comboID int64
-		if body.ComboID > 0 {
-			comboID = body.ComboID
-		} else {
-			comboID, _ = strconv.ParseInt(tunnelStr[6:], 10, 64)
-		}
-		s.apiUserCreateForwardFromCombo(w, r, u, comboID, body.Proto, body.Exit, body.ChainName)
-		return
-	}
-
-	tunnelID, _ := toInt64(body.TunnelID)
-	if tunnelID == 0 {
-		jsonErr(w, http.StatusBadRequest, "tunnel_id 无效")
-		return
-	}
-	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	mode := strings.TrimSpace(body.Mode)
-	if !validMode(mode) {
-		jsonErr(w, http.StatusBadRequest, "无效的转发模式")
-		return
-	}
-	if mode == "userspace" && proto == "udp" {
-		jsonErr(w, http.StatusBadRequest, "UDP 不支持用户态转发")
-		return
-	}
-
-	grant, err := db.GetGrant(s.DB, u.ID, tunnelID)
-	if err != nil {
-		jsonErr(w, http.StatusForbidden, "无权使用该通道")
-		return
-	}
-	tunnel, err := db.GetTunnel(s.DB, tunnelID)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "通道不存在")
-		return
-	}
-
-	targetIP, targetPort, err := parseExit(body.Exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	occupied, err := db.OccupiedPortsOnNode(s.DB, tunnel.NodeID, proto, 0)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	listenPort := body.ListenPort
-	if listenPort == 0 {
-		listenPort = db.PickFreePort(tunnel.PortStart, tunnel.PortEnd, occupied)
-		if listenPort == 0 {
-			jsonErr(w, http.StatusConflict, fmt.Sprintf("通道 %d-%d 内已无可用端口", tunnel.PortStart, tunnel.PortEnd))
-			return
-		}
-	} else if occupied[listenPort] {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("端口 %d 已被占用", listenPort))
-		return
-	}
-	if err := validateAgainstTunnel(tunnel, proto, listenPort, targetIP, targetPort); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	totalCount, _ := db.CountForwardsForUser(s.DB, u.ID)
-	if totalCount >= u.MaxForwards {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("已达用户最大转发数（%d）", u.MaxForwards))
-		return
-	}
-	tunCount, _ := db.CountForwardsForUserTunnel(s.DB, u.ID, tunnelID)
-	if tunCount >= grant.MaxForwards {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("已达该通道最大转发数（%d）", grant.MaxForwards))
-		return
-	}
-
-	f := &db.Forward{
-		NodeID: tunnel.NodeID, Proto: proto, ListenPort: listenPort,
-		TargetIP: targetIP, TargetPort: targetPort,
-		Comment: strings.TrimSpace(body.Comment), Mode: mode,
-	}
-	f.OwnerID = sql.NullInt64{Int64: u.ID, Valid: true}
-	f.TunnelID = sql.NullInt64{Int64: tunnel.ID, Valid: true}
-	id, err := db.CreateForward(s.DB, f)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.user_create", strconv.FormatInt(id, 10),
-		fmt.Sprintf("user=%d tunnel=%d %s/%d→%s:%d", u.ID, tunnel.ID, proto, listenPort, targetIP, targetPort))
-	_ = s.apiDispatch(tunnel.NodeID)
-	jsonOK(w, map[string]any{"ok": true, "id": id})
-}
-
-func (s *Server) apiUserCreateForwardFromCombo(w http.ResponseWriter, r *http.Request, u *db.User, comboID int64, proto, exit, chainName string) {
-	if comboID == 0 {
-		jsonErr(w, http.StatusBadRequest, "组合通道 ID 无效")
-		return
-	}
-	if _, err := db.GetComboGrant(s.DB, u.ID, comboID); err != nil {
-		jsonErr(w, http.StatusForbidden, "无权使用该组合通道")
-		return
-	}
-	combo, err := db.GetTunnelCombo(s.DB, comboID)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "组合通道不存在")
-		return
-	}
-	comboHops, err := db.ListComboHops(s.DB, comboID)
-	if err != nil || len(comboHops) == 0 {
-		jsonErr(w, http.StatusBadRequest, "组合通道为空")
-		return
-	}
-	proto = strings.ToLower(strings.TrimSpace(proto))
-	if proto != "tcp" && proto != "udp" {
-		jsonErr(w, http.StatusBadRequest, "协议须为 tcp 或 udp")
-		return
-	}
-	exitHost, exitPort, err := parseExit(exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	chainName = strings.TrimSpace(chainName)
-	if chainName == "" {
-		chainName = combo.Name + "-" + exitHost
-	}
-	hops := make([]db.HopInput, 0, len(comboHops))
-	for _, ch := range comboHops {
-		tun, err := db.GetTunnel(s.DB, ch.TunnelID)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("组合通道内的通道 %d 不存在", ch.TunnelID))
-			return
-		}
-		hops = append(hops, db.HopInput{NodeID: tun.NodeID, TunnelID: nullInt64(ch.TunnelID), Mode: ch.Mode})
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer tx.Rollback()
-	c := &db.Chain{OwnerID: nullInt64(u.ID), Name: chainName, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
-	id, err := db.CreateChain(tx, c)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	c.ID = id
-	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "chain.user_create_from_combo", strconv.FormatInt(id, 10), chainName)
-	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "chain_id": id, "entry": entry})
-}
-
-func (s *Server) apiMyDeleteForward(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	f, err := db.GetForward(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "转发不存在")
-		return
-	}
-	if !f.OwnerID.Valid || f.OwnerID.Int64 != u.ID {
-		jsonErr(w, http.StatusForbidden, "无权操作该转发")
-		return
-	}
-	nodeID, err := db.DeleteForward(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "forward.user_delete", strconv.FormatInt(id, 10), "")
-	_ = s.apiDispatch(nodeID)
-	jsonOK(w, map[string]any{"ok": true})
-}
-
-// --- User chains ---
-
-func (s *Server) apiMyListChains(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	chains, _ := db.ListChainsByUser(s.DB, u.ID)
-	views := make([]map[string]any, 0, len(chains))
-	for _, c := range chains {
-		v := s.buildChainView(c)
+	views := make([]map[string]any, 0, len(rules))
+	for _, rl := range rules {
+		v := s.buildRuleView(rl)
 		views = append(views, map[string]any{
-			"chain": c,
+			"rule": rl,
 			"path": v.Path, "entry": v.Entry, "entry_node_id": v.EntryNodeID,
 		})
 	}
-	tunnels, _, _ := db.ListTunnelsForUser(s.DB, u.ID)
-	combos, _, _ := db.ListCombosForUser(s.DB, u.ID)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	jsonOK(w, map[string]any{
-		"chains": views, "tunnels": tunnels,
-		"combos": combos, "nodes": nodes, "node_by_id": nodeByID,
+		"rules": views, "nodes": grantedNodes,
+		"all_nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
-func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	if u.Disabled {
 		jsonErr(w, http.StatusForbidden, "用户已被禁用")
@@ -1854,14 +1222,12 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		NodeID    int64  `json:"node_id"`
 		Name      string `json:"name"`
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
-		Hops      []struct {
-			TunnelID int64  `json:"tunnel_id"`
-			Mode     string `json:"mode"`
-		} `json:"hops"`
+		Comment   string `json:"comment"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1878,52 +1244,77 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(body.Hops) == 0 {
-		jsonErr(w, http.StatusBadRequest, "至少添加一个通道")
+	if body.NodeID == 0 {
+		jsonErr(w, http.StatusBadRequest, "node_id 不能为空")
 		return
 	}
 
-	// Build hop inputs, verifying tunnel grants
-	hops := make([]db.HopInput, 0, len(body.Hops))
-	var lastTunnel *db.Tunnel
-	for _, h := range body.Hops {
-		if _, err := db.GetGrant(s.DB, u.ID, h.TunnelID); err != nil {
-			jsonErr(w, http.StatusForbidden, fmt.Sprintf("无权使用通道 %d", h.TunnelID))
-			return
-		}
-		tun, err := db.GetTunnel(s.DB, h.TunnelID)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("通道 %d 不存在", h.TunnelID))
-			return
-		}
-		hops = append(hops, db.HopInput{NodeID: tun.NodeID, TunnelID: nullInt64(h.TunnelID), Mode: h.Mode})
-		lastTunnel = tun
+	// Check node grant
+	node, err := db.GetNode(s.DB, body.NodeID)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
 	}
+
+	var hops []db.HopInput
+	if node.NodeType == "composite" {
+		nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
+		if len(nodeHops) == 0 {
+			jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
+			return
+		}
+		hops = make([]db.HopInput, len(nodeHops))
+		for i, nh := range nodeHops {
+			// Verify grant for each sub-node
+			if _, gerr := db.GetNodeGrant(s.DB, u.ID, nh.HopNodeID); gerr != nil {
+				jsonErr(w, http.StatusForbidden, fmt.Sprintf("无权使用节点 %d", nh.HopNodeID))
+				return
+			}
+			hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
+		}
+	} else {
+		// Verify grant for the single node
+		if _, err := db.GetNodeGrant(s.DB, u.ID, body.NodeID); err != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用该节点")
+			return
+		}
+		hops = []db.HopInput{{NodeID: body.NodeID}}
+	}
+
 	if body.EntryPort > 0 {
 		hops[0].DesiredPort = body.EntryPort
 	}
-	if err := exitAllowedByTunnel(lastTunnel, exitHost); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.checkUserChainQuota(u, hops, 0); err != nil {
+
+	// Check quota
+	if err := s.checkUserRuleQuota(u, len(hops), 0); err != nil {
 		jsonErr(w, http.StatusConflict, err.Error())
 		return
 	}
+
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer tx.Rollback()
-	c := &db.Chain{OwnerID: nullInt64(u.ID), Name: name, Proto: proto, ExitHost: exitHost, ExitPort: exitPort}
-	id, err := db.CreateChain(tx, c)
+
+	rl := &db.Rule{
+		NodeID:   body.NodeID,
+		OwnerID:  nullInt64(u.ID),
+		Name:     name,
+		Proto:    proto,
+		ExitHost: exitHost,
+		ExitPort: exitPort,
+		Comment:  strings.TrimSpace(body.Comment),
+	}
+	id, err := db.CreateRule(tx, rl)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.ID = id
-	entry, affected, err := db.RegenerateChain(tx, c, hops, nil)
+	rl.ID = id
+
+	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1932,29 +1323,33 @@ func (s *Server) apiMyCreateChain(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.user_create", strconv.FormatInt(id, 10), name)
+	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "chain_id": id, "entry": entry})
+	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry})
 }
 
-func (s *Server) apiMyDeleteChain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	c, err := db.GetChain(s.DB, id)
-	if err != nil || !c.OwnerID.Valid || c.OwnerID.Int64 != u.ID {
-		jsonErr(w, http.StatusForbidden, "无权操作该链路")
+	rl, err := db.GetRule(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	nodes, err := db.DeleteChain(s.DB, id)
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+		jsonErr(w, http.StatusForbidden, "无权操作该规则")
+		return
+	}
+	nodes, err := db.DeleteRule(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "chain.user_delete", strconv.FormatInt(id, 10), "")
+	db.WriteAudit(s.DB, u.ID, "rule.user_delete", strconv.FormatInt(id, 10), "")
 	s.apiDispatchFanout(nodes)
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -1992,14 +1387,14 @@ func apiUserFullView(u *db.User) map[string]any {
 	return m
 }
 
-// apiRewireChains regenerates affected chains and dispatches (no flash cookies).
-func (s *Server) apiRewireChains(chainIDs []int64) {
+// apiRewireRules regenerates affected rules and dispatches.
+func (s *Server) apiRewireRules(ruleIDs []int64) {
 	seen := map[int64]bool{}
 	var affected []int64
-	for _, cid := range chainIDs {
-		aff, err := s.regenerateChainByID(cid)
+	for _, rid := range ruleIDs {
+		aff, err := s.regenerateRuleByID(rid)
 		if err != nil {
-			log.Printf("api rewire chain %d: %v", cid, err)
+			log.Printf("api rewire rule %d: %v", rid, err)
 			continue
 		}
 		for _, n := range aff {
@@ -2026,4 +1421,12 @@ func toInt64(v any) (int64, error) {
 	default:
 		return 0, fmt.Errorf("cannot convert %T to int64", v)
 	}
+}
+
+// isValidRelayHost checks that a string is a valid IPv4 or hostname.
+func isValidRelayHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return true
+	}
+	return resolver.IsHostname(host)
 }

@@ -25,7 +25,7 @@ func TestEnsureSelfNodeCreatesOneRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n.NodeKind != "self" || n.Name != "self" {
+	if n.NodeType != "self" || n.Name != "self" {
 		t.Fatalf("unexpected self node: %+v", n)
 	}
 	// Second call must not create a duplicate.

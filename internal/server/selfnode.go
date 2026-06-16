@@ -32,7 +32,7 @@ func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) error 
 	if err != nil {
 		return err
 	}
-	if n.NodeKind == "self" {
+	if n.NodeType == "self" {
 		send := d.SendLocal
 		if send == nil {
 			send = sendLocalDefault
@@ -50,5 +50,5 @@ func sendLocalDefault(rules []nft.Rule) error {
 	if err != nil {
 		return err
 	}
-	return c.PostRuleset("panel", rules)
+	return c.ApplyRuleset(rules)
 }

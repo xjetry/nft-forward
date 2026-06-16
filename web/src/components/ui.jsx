@@ -156,12 +156,13 @@ export function ProbeButton({ target, nodeId }) {
 }
 
 /* ---------- ProbeChainButton ---------- */
-export function ProbeChainButton({ chainId }) {
+export function ProbeChainButton({ chainId, ruleId }) {
   const [state, setState] = useState('idle')
   const [result, setResult] = useState('')
   const probe = () => {
     setState('loading')
-    fetch(`/api/probe-chain?chain=${chainId}`).then(r => r.json()).then(d => {
+    const param = ruleId ? `rule_id=${ruleId}` : `chain=${chainId}`
+    fetch(`/api/probe-chain?${param}`).then(r => r.json()).then(d => {
       if (d.hops && d.hops.length) {
         const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
         setState(d.ok ? 'ok' : 'fail')

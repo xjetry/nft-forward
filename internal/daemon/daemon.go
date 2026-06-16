@@ -18,7 +18,6 @@ import (
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
-	"nft-forward/internal/wsproto"
 )
 
 const (
@@ -122,6 +121,28 @@ func (d *Daemon) Bootstrap() error {
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
+
+	// Downgrade: when the daemon starts without a --connect config but has
+	// rules in the "panel" segment (left from a previous connected session),
+	// copy them to "tui" with server metadata cleared, then drop "panel".
+	// This keeps the rules functional in standalone mode.
+	if d.connectURL == "" && len(owners["panel"]) > 0 {
+		downgraded := make([]nft.Rule, len(owners["panel"]))
+		for i, r := range owners["panel"] {
+			downgraded[i] = r
+			downgraded[i].RuleID = 0
+			downgraded[i].RuleName = ""
+			downgraded[i].OwnerName = ""
+			downgraded[i].HopCount = 0
+		}
+		owners["tui"] = append(owners["tui"], downgraded...)
+		delete(owners, "panel")
+		meta.LastAppliedRev = ""
+		if err := SaveState(d.statePath, owners, meta); err != nil {
+			return fmt.Errorf("save downgraded state: %w", err)
+		}
+	}
+
 	merged, err := MergedRuleset(owners)
 	if err != nil {
 		return fmt.Errorf("persisted state has conflict: %w", err)
@@ -152,7 +173,7 @@ func (d *Daemon) Bootstrap() error {
 	return nil
 }
 
-// Run is the main lifecycle: bootstrap → listen → serve → block until ctx is
+// Run is the main lifecycle: bootstrap -> listen -> serve -> block until ctx is
 // cancelled. The socket file is removed on exit so subsequent runs do not
 // hit a stale file. Returns nil on clean shutdown.
 func (d *Daemon) Run(ctx context.Context) error {
@@ -179,25 +200,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			AgentVersion: agentVersion(),
 			GetState:     d.SnapshotForDialer,
 			OnApply:      d.SetPanelRuleset,
-			// Non-nil marker so the dialer emits panel_segment_edit frames;
-			// payloads are built inside the dialer from its panelCh, so this
-			// callback itself is a no-op.
-			OnPanelNotice: func(_ []wsproto.Forward) {},
-			CountersFn:    d.counterSamples,
+			OnMigrated:   d.clearTuiSegment,
+			CountersFn:   d.counterSamples,
 		})
 		d.dialer.Store(dl)
-		// Forward local panel-segment writes into the dialer so the server
-		// learns about edits performed via the unix socket without
-		// having to poll. Read dialer through the atomic accessor so
-		// the closure stays correct even if Run is restructured later
-		// (defensive — Run only ever stores once today).
-		d.mu.Lock()
-		d.panelHook = func(rules []nft.Rule) {
-			if dl := d.Dialer(); dl != nil {
-				dl.NotifyPanelEdited(rules)
-			}
-		}
-		d.mu.Unlock()
 		go dl.Run(ctx)
 	}
 
@@ -296,11 +302,43 @@ func (d *Daemon) RunWithSignals() error {
 
 // SetPanelRuleset is invoked by the dialer when an apply_ruleset frame
 // arrives. Thin wrapper over the unified write path so every panel-
-// segment mutation funnels through setOwnerRuleset; rev is recorded in
+// segment mutation funnels through reconcileOwners; rev is recorded in
 // agent_meta.LastAppliedRev as part of the same SaveState transaction
 // so a reconnect won't replay the same payload.
 func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) error {
-	return d.setOwnerRuleset(ctx, "panel", rules, rev)
+	_, _, err := d.reconcileOwners(ctx,
+		func(candidate OwnerRuleset) {
+			if len(rules) == 0 {
+				delete(candidate, "panel")
+			} else {
+				candidate["panel"] = append([]nft.Rule(nil), rules...)
+			}
+		},
+		func(meta *AgentMeta) {
+			if rev != "" {
+				meta.LastAppliedRev = rev
+			}
+		},
+		true,
+	)
+	if err != nil {
+		return d.classifyWriteError(err)
+	}
+	return nil
+}
+
+// clearTuiSegment removes the "tui" segment after a successful migration
+// to the server. Called from the dialer's OnMigrated callback.
+func (d *Daemon) clearTuiSegment() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := d.reconcileOwners(ctx,
+		func(candidate OwnerRuleset) {
+			delete(candidate, "tui")
+		}, nil, true)
+	if err != nil {
+		log.Printf("daemon: clear tui segment after migration: %v", err)
+	}
 }
 
 // Dialer returns the currently-active Dialer, or nil when --connect

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,40 +10,46 @@ import (
 	"nft-forward/internal/db"
 )
 
-// The admin forwards API includes a nodes list that maps node IDs to names.
-// This verifies the node name is present in the response (not just a raw ID).
-func TestForwardsPageShowsNodeName(t *testing.T) {
+func TestRulesListShowsNodeName(t *testing.T) {
 	d := openDB(t)
 	n, err := db.CreateNode(d, "po0-test", "https://p", "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateForward(d, &db.Forward{
-		NodeID:     n.ID,
-		Proto:      "tcp",
-		ListenPort: 12345,
-		TargetIP:   "10.0.0.9",
-		TargetPort: 443,
-		Mode:       "userspace",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
 
 	s, err := New(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("GET", "/api/forwards", nil)
-	req.AddCookie(loginAsAdmin(t, d))
+
+	admin := loginAsAdmin(t, d)
+	body, _ := json.Marshal(map[string]any{
+		"node_id": n.ID,
+		"name":    "test-rule",
+		"proto":   "tcp",
+		"exit":    "10.0.0.9:443",
+	})
+	createReq := httptest.NewRequest("POST", "/api/rules", bytes.NewReader(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.AddCookie(admin)
+	createRec := httptest.NewRecorder()
+	s.Router().ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/rules: status %d body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	req := httptest.NewRequest("GET", "/api/rules", nil)
+	req.AddCookie(admin)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/forwards: status %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("GET /api/rules: status %d body=%s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		Forwards []json.RawMessage `json:"forwards"`
-		Nodes    []struct {
+		Rules []json.RawMessage `json:"rules"`
+		Nodes []struct {
 			ID   int64  `json:"id"`
 			Name string `json:"name"`
 		} `json:"nodes"`
@@ -50,8 +57,8 @@ func TestForwardsPageShowsNodeName(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode JSON: %v", err)
 	}
-	if len(resp.Forwards) == 0 {
-		t.Fatalf("expected at least 1 forward, got 0")
+	if len(resp.Rules) == 0 {
+		t.Fatalf("expected at least 1 rule, got 0")
 	}
 	found := false
 	for _, nd := range resp.Nodes {

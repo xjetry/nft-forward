@@ -21,7 +21,7 @@ export default function UserDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="用户不存在" /></Layout>
 
-  const { user, tunnels = [], grants = [], combos = [], combo_grants = [], all_tunnels = [], all_combos = [], forwards = [] } = data
+  const { user, nodes = [], grants = [], all_nodes = [], rules = [] } = data
 
   const isRegularUser = user.role === 'user'
 
@@ -33,7 +33,7 @@ export default function UserDetail() {
     try { await api.post(`/users/${id}/reset-traffic`); toast('已重置'); load() } catch (err) { toast(err.message) }
   }
   const deleteUser = async () => {
-    if (!confirm('删除用户？关联的转发将被一并清除。')) return
+    if (!confirm('删除用户？关联的规则将被一并清除。')) return
     try { await api.del(`/users/${id}`); toast('已删除'); navigate('/users') } catch (err) { toast(err.message) }
   }
   const resetPassword = async () => {
@@ -88,85 +88,61 @@ export default function UserDetail() {
         </div>
       </div>
 
-      {/* Tunnel grants (regular users only) */}
+      {/* Node grants (regular users only) */}
       {isRegularUser && (
         <div className="card mb-5">
-          <div className="card-header"><h3 className="text-sm font-bold">已授权通道</h3></div>
-          {tunnels.length ? (
+          <div className="card-header"><h3 className="text-sm font-bold">已授权节点</h3></div>
+          {nodes.length ? (
             <table className="tbl">
-              <thead><tr><th>通道</th><th>节点</th><th>协议</th><th>端口段</th><th>本用户上限</th><th className="text-right">操作</th></tr></thead>
+              <thead><tr><th>节点</th><th>类型</th><th>本用户上限</th><th className="text-right">操作</th></tr></thead>
               <tbody>
-                {tunnels.map((t, i) => (
-                  <tr key={t.id}>
-                    <td className="font-semibold">{t.name}</td>
-                    <td className="font-mono text-gray-500">#{t.node_id}</td>
-                    <td>{t.proto_mask}</td>
-                    <td className="font-mono">{t.port_start}-{t.port_end}</td>
-                    <td className="font-mono">{grants[i]?.max_forwards}</td>
+                {nodes.map((n, i) => (
+                  <tr key={n.id}>
+                    <td className="font-semibold">
+                      <Link to={`/nodes/${n.id}`} className="text-blue-600 hover:underline">{n.name}</Link>
+                    </td>
+                    <td><NodeTypeBadge type={n.node_type} /></td>
+                    <td className="font-mono">{grants[i]?.max_forwards ?? '--'}</td>
                     <td className="text-right">
-                      <RevokeBtn url={`/users/${id}/grants/${t.id}`} onDone={load} />
+                      <RevokeBtn url={`/users/${id}/grants/${n.id}`} onDone={load} />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          ) : <Empty title="尚未授权任何通道" />}
+          ) : <Empty title="尚未授权任何节点" />}
           <div className="p-5 border-t border-gray-100">
-            <GrantTunnelForm userId={id} tunnels={all_tunnels} onDone={load} />
+            <GrantNodeForm userId={id} nodes={all_nodes} onDone={load} />
           </div>
         </div>
       )}
 
-      {/* Combo grants (regular users only) */}
-      {isRegularUser && (
-        <div className="card mb-5">
-          <div className="card-header"><h3 className="text-sm font-bold">已授权组合通道</h3></div>
-          {combos.length ? (
-            <table className="tbl">
-              <thead><tr><th>组合</th><th>本用户上限</th><th className="text-right">操作</th></tr></thead>
-              <tbody>
-                {combos.map((c, i) => (
-                  <tr key={c.id}>
-                    <td className="font-semibold">{c.name}</td>
-                    <td className="font-mono">{combo_grants[i]?.max_forwards}</td>
-                    <td className="text-right">
-                      <RevokeBtn url={`/users/${id}/combo-grants/${c.id}`} onDone={load} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <Empty title="尚未授权任何组合通道" />}
-          <div className="p-5 border-t border-gray-100">
-            <GrantComboForm userId={id} combos={all_combos} onDone={load} />
-          </div>
-        </div>
-      )}
-
-      {/* Forwards */}
+      {/* Rules */}
       <div className="card mb-5">
         <div className="card-header">
-          <h3 className="text-sm font-bold">该用户的转发</h3>
-          <span className="text-xs text-gray-400">{forwards.length} 条</span>
+          <h3 className="text-sm font-bold">该用户的规则</h3>
+          <span className="text-xs text-gray-400">{rules.length} 条</span>
         </div>
-        {forwards.length ? (
+        {rules.length ? (
           <table className="tbl">
-            <thead><tr><th>ID</th><th>节点</th><th>通道</th><th>协议</th><th>监听</th><th>目标</th><th className="text-right">累计流量</th></tr></thead>
+            <thead><tr><th>ID</th><th>名称</th><th>节点</th><th>协议</th><th>入口</th><th>出口</th><th className="text-right">流量</th></tr></thead>
             <tbody>
-              {forwards.map(f => (
-                <tr key={f.id}>
-                  <td className="font-mono text-xs text-gray-400">{f.id}</td>
-                  <td className="font-mono">#{f.node_id}</td>
-                  <td className="font-mono">{nullInt(f.tunnel_id) ? `#${nullInt(f.tunnel_id)}` : '--'}</td>
-                  <td><ProtoBadge proto={f.proto} /></td>
-                  <td className="font-mono">{f.listen_port}</td>
-                  <td className="font-mono">{f.target_ip}:{f.target_port}</td>
-                  <td className="text-right font-mono">{fmtBytes(f.total_bytes)}</td>
+              {rules.map(r => (
+                <tr key={r.id}>
+                  <td className="font-mono text-xs text-gray-400">{r.id}</td>
+                  <td className="font-semibold">
+                    <Link to={`/rules/${r.id}`} className="text-blue-600 hover:underline">{r.name}</Link>
+                  </td>
+                  <td className="font-mono text-gray-500">{r.node_name || `#${r.node_id}`}</td>
+                  <td><ProtoBadge proto={r.proto} /></td>
+                  <td className="font-mono text-xs">{r.entry || '--'}</td>
+                  <td className="font-mono text-xs">{r.exit || '--'}</td>
+                  <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <Empty title="该用户尚无转发" />}
+        ) : <Empty title="该用户尚无规则" />}
       </div>
 
       <Link to="/users" className="inline-flex items-center gap-1 text-blue-600 text-[13px] font-semibold hover:underline">
@@ -175,6 +151,12 @@ export default function UserDetail() {
       </Link>
     </Layout>
   )
+}
+
+function NodeTypeBadge({ type }) {
+  if (type === 'composite') return <Badge color="violet">组合</Badge>
+  if (type === 'self') return <Badge color="blue">自身</Badge>
+  return <Badge color="green">单点</Badge>
 }
 
 function ExpiryForm({ userId, expiresAt, onDone }) {
@@ -200,62 +182,29 @@ function RevokeBtn({ url, onDone }) {
   return <button onClick={revoke} className="btn-danger-sm text-xs">撤销</button>
 }
 
-function GrantTunnelForm({ userId, tunnels, onDone }) {
-  const [tunnelId, setTunnelId] = useState('')
+function GrantNodeForm({ userId, nodes, onDone }) {
+  const [nodeId, setNodeId] = useState('')
   const [max, setMax] = useState('10')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
-  if (!tunnels?.length) return <Empty desc={<Link to="/tunnels" className="text-blue-600 text-xs font-semibold">请先创建通道</Link>} />
+  if (!nodes?.length) return <Empty desc={<Link to="/nodes" className="text-blue-600 text-xs font-semibold">请先创建节点</Link>} />
   const submit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      await api.post(`/users/${userId}/grants`, { tunnel_id: Number(tunnelId), max_forwards: Number(max) })
+      await api.post(`/users/${userId}/grants`, { node_id: Number(nodeId), max_forwards: Number(max) })
       toast('已授权'); onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
   return (
     <>
-      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">授权新通道</div>
+      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">授权新节点</div>
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-          <label className="fl">通道</label>
-          <select className="input-field" value={tunnelId} onChange={e => setTunnelId(e.target.value)} required>
+          <label className="fl">节点</label>
+          <select className="input-field" value={nodeId} onChange={e => setNodeId(e.target.value)} required>
             <option value="">-- 选择 --</option>
-            {tunnels.map(t => <option key={t.id} value={t.id}>{t.name} (节点 #{t.node_id}, {t.port_start}-{t.port_end}/{t.proto_mask})</option>)}
-          </select>
-          <label className="fl">本用户上限</label>
-          <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />
-        </div>
-        <button type="submit" disabled={loading} className="btn-primary text-xs">授权</button>
-      </form>
-    </>
-  )
-}
-
-function GrantComboForm({ userId, combos, onDone }) {
-  const [comboId, setComboId] = useState('')
-  const [max, setMax] = useState('10')
-  const [loading, setLoading] = useState(false)
-  const toast = useToast()
-  if (!combos?.length) return <Empty desc={<Link to="/combos" className="text-blue-600 text-xs font-semibold">请先创建组合通道</Link>} />
-  const submit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      await api.post(`/users/${userId}/combo-grants`, { combo_id: Number(comboId), max_forwards: Number(max) })
-      toast('已授权'); onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
-  }
-  return (
-    <>
-      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">授权新组合</div>
-      <form onSubmit={submit} className="space-y-3 max-w-xl">
-        <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-          <label className="fl">组合通道</label>
-          <select className="input-field" value={comboId} onChange={e => setComboId(e.target.value)} required>
-            <option value="">-- 选择 --</option>
-            {combos.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {nodes.map(n => <option key={n.id} value={n.id}>{n.name} ({n.node_type === 'composite' ? '组合' : n.node_type === 'self' ? '自身' : '单点'})</option>)}
           </select>
           <label className="fl">本用户上限</label>
           <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />

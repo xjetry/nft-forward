@@ -97,133 +97,176 @@ func TestHealth_FailsOnOkFalse(t *testing.T) {
 	}
 }
 
-func TestGetRuleset_RoundTrip(t *testing.T) {
+func TestStatus_Connected(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"owners":{"tui":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80}]}}`))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"connected":true,"node_name":"edge","node_id":7}`))
 	})
 	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	got, err := c.GetRuleset()
+	s, err := c.Status()
 	if err != nil {
-		t.Fatalf("GetRuleset: %v", err)
+		t.Fatalf("Status: %v", err)
 	}
-	if len(got["tui"]) != 1 || got["tui"][0].ID != "r1" {
-		t.Fatalf("unexpected ruleset: %+v", got)
+	if !s.Connected || s.NodeName != "edge" || s.NodeID != 7 {
+		t.Fatalf("unexpected status: %+v", s)
 	}
 }
 
-func TestGetRuleset_EmptyOwnersReturnsNonNilMap(t *testing.T) {
+func TestListRules_RoundTrip(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"owners":{}}`))
+		_, _ = w.Write([]byte(`{"rules":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80}]}`))
 	})
 	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	got, err := c.GetRuleset()
+	got, err := c.ListRules()
 	if err != nil {
-		t.Fatalf("GetRuleset: %v", err)
+		t.Fatalf("ListRules: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "r1" {
+		t.Fatalf("unexpected rules: %+v", got)
+	}
+}
+
+func TestListRules_EmptyReturnsNonNilSlice(t *testing.T) {
+	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"rules":[]}`))
+	})
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.ListRules()
+	if err != nil {
+		t.Fatalf("ListRules: %v", err)
 	}
 	if got == nil {
-		t.Fatal("expected non-nil OwnerRuleset")
+		t.Fatal("expected non-nil slice")
 	}
 	if len(got) != 0 {
-		t.Fatalf("expected zero owners, got %+v", got)
+		t.Fatalf("expected zero rules, got %+v", got)
 	}
 }
 
-func TestPostRuleset_SendsBodyAndOwnerInPath(t *testing.T) {
-	var capturedPath string
+func TestCreateRule_SendsBodyAndReturnsEntry(t *testing.T) {
 	var capturedBody []byte
 	sock := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		capturedPath = r.URL.Path
 		capturedBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"count":1}`))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"entry":"10.0.0.1:12000","listen_port":12000}`))
 	})
 	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = c.PostRuleset("tui", []nft.Rule{
-		{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 80},
+	resp, err := c.CreateRule(CreateRuleReq{
+		Proto: "tcp", ExitHost: "1.2.3.4", ExitPort: 80, ListenPort: 12000,
 	})
 	if err != nil {
-		t.Fatalf("PostRuleset: %v", err)
+		t.Fatalf("CreateRule: %v", err)
 	}
-	if capturedPath != "/v1/ruleset/tui" {
-		t.Errorf("path = %q, want /v1/ruleset/tui", capturedPath)
+	if resp.ListenPort != 12000 {
+		t.Errorf("ListenPort = %d, want 12000", resp.ListenPort)
 	}
-	var got segmentPayload
+	var got CreateRuleReq
 	if err := json.Unmarshal(capturedBody, &got); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if len(got.Rules) != 1 || got.Rules[0].ID != "r1" {
-		t.Fatalf("body did not carry rule: %+v", got)
+	if got.Proto != "tcp" || got.ExitHost != "1.2.3.4" {
+		t.Fatalf("body mismatch: %+v", got)
 	}
 }
 
-func TestPostRuleset_NilRulesNormalizesToEmpty(t *testing.T) {
-	var capturedBody []byte
-	sock := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		capturedBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"count":0}`))
-	})
-	c, err := New(sock)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := c.PostRuleset("tui", nil); err != nil {
-		t.Fatalf("PostRuleset: %v", err)
-	}
-	if !strings.Contains(string(capturedBody), `"rules":[]`) {
-		t.Fatalf("expected empty rules array in body, got %s", capturedBody)
-	}
-}
-
-func TestPostRuleset_PropagatesConflict(t *testing.T) {
+func TestCreateRule_PropagatesServerError(t *testing.T) {
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "port tcp/80 already claimed by owner \"panel\"", http.StatusConflict)
+		http.Error(w, "port conflict", http.StatusConflict)
 	})
 	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = c.PostRuleset("tui", []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}})
-	if err == nil {
-		t.Fatal("expected conflict error")
-	}
-	if !strings.Contains(err.Error(), "409") || !strings.Contains(err.Error(), "tcp/80") {
-		t.Fatalf("error should mention 409 and conflicting port; got: %v", err)
+	_, err = c.CreateRule(CreateRuleReq{Proto: "tcp", ExitHost: "1.0.0.0", ExitPort: 80})
+	if err == nil || !strings.Contains(err.Error(), "port conflict") {
+		t.Fatalf("expected error with port conflict, got %v", err)
 	}
 }
 
-func TestPostRuleset_EmptyOwnerRejectedClientSide(t *testing.T) {
-	c, err := New("/tmp/not-used.sock")
+func TestUpdateRule_PutsWithID(t *testing.T) {
+	var capturedMethod, capturedPath string
+	sock := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = c.PostRuleset("", []nft.Rule{{ID: "x"}})
-	if err == nil || !strings.Contains(err.Error(), "owner") {
-		t.Fatalf("expected owner-empty error, got %v", err)
+	err = c.UpdateRule("abc123", UpdateRuleReq{Proto: "tcp", ExitHost: "1.2.3.4", ExitPort: 80})
+	if err != nil {
+		t.Fatalf("UpdateRule: %v", err)
+	}
+	if capturedMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", capturedMethod)
+	}
+	if capturedPath != "/v1/rules/abc123" {
+		t.Errorf("path = %q, want /v1/rules/abc123", capturedPath)
 	}
 }
 
-func TestClient_HTTPTransport_HealthAndPost(t *testing.T) {
+func TestUpdateRule_SurfacesServerError(t *testing.T) {
+	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "端口被占用", http.StatusBadRequest)
+	})
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.UpdateRule("5", UpdateRuleReq{ListenPort: 21000})
+	if err == nil || !strings.Contains(err.Error(), "端口被占用") {
+		t.Fatalf("expected server error surfaced verbatim, got %v", err)
+	}
+}
+
+func TestDeleteRule_DeletesWithID(t *testing.T) {
+	var capturedMethod, capturedPath string
+	sock := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	c, err := New(sock)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.DeleteRule("9"); err != nil {
+		t.Fatal(err)
+	}
+	if capturedMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", capturedMethod)
+	}
+	if capturedPath != "/v1/rules/9" {
+		t.Errorf("path = %q, want /v1/rules/9", capturedPath)
+	}
+}
+
+func TestClient_HTTPTransport_HealthAndCreate(t *testing.T) {
 	var gotAuth string
-	var gotOwner string
-	var gotBody []byte
 	srv := http.NewServeMux()
 	srv.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
-	srv.HandleFunc("/v1/ruleset/panel", func(w http.ResponseWriter, r *http.Request) {
-		gotOwner = "panel"
-		gotBody, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusNoContent)
+	srv.HandleFunc("/v1/rules", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"entry":"10.0.0.1:22","listen_port":22}`))
 	})
 	httpSrv := &http.Server{Handler: srv}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -241,17 +284,15 @@ func TestClient_HTTPTransport_HealthAndPost(t *testing.T) {
 	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
 	}
-	if err := c.PostRuleset("panel", []nft.Rule{{Proto: "tcp", SrcPort: 22, DestIP: "10.0.0.1", DestPort: 22}}); err != nil {
-		t.Fatalf("PostRuleset: %v", err)
+	resp, err := c.CreateRule(CreateRuleReq{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 22, ListenPort: 22})
+	if err != nil {
+		t.Fatalf("CreateRule: %v", err)
 	}
 	if gotAuth != "Bearer s3cret" {
 		t.Errorf("Authorization = %q, want Bearer s3cret", gotAuth)
 	}
-	if gotOwner != "panel" {
-		t.Errorf("owner = %q", gotOwner)
-	}
-	if !strings.Contains(string(gotBody), `"src_port":22`) {
-		t.Errorf("body missing rule: %s", gotBody)
+	if resp.ListenPort != 22 {
+		t.Errorf("ListenPort = %d, want 22", resp.ListenPort)
 	}
 }
 
@@ -278,51 +319,21 @@ func TestClient_UnixTransport_StillWorks(t *testing.T) {
 	}
 }
 
-func TestChainEditPostsAndSurfacesServerError(t *testing.T) {
+func TestDeleteRule_SurfacesServerError(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chain/edit", func(w http.ResponseWriter, r *http.Request) {
-		var got struct {
-			ChainID    int64  `json:"chain_id"`
-			ListenPort int    `json:"listen_port"`
-			Mode       string `json:"mode"`
-			Comment    string `json:"comment"`
-		}
-		json.NewDecoder(r.Body).Decode(&got)
-		if got.ChainID != 5 || got.ListenPort != 21000 || got.Mode != "kernel" || got.Comment != "x" {
-			http.Error(w, "bad request body", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "端口被占用", http.StatusBadRequest)
+	mux.HandleFunc("/v1/rules/9", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rule in use", http.StatusConflict)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	c, _ := New(srv.URL)
 
-	err := c.ChainEdit(5, 21000, "kernel", "x")
-	if err == nil || !strings.Contains(err.Error(), "端口被占用") {
-		t.Fatalf("expected server error surfaced verbatim, got %v", err)
+	err := c.DeleteRule("9")
+	if err == nil || !strings.Contains(err.Error(), "rule in use") {
+		t.Fatalf("expected server error surfaced, got %v", err)
 	}
 }
 
-func TestChainDeletePostsChainID(t *testing.T) {
-	var gotID int64
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chain/delete", func(w http.ResponseWriter, r *http.Request) {
-		var got struct {
-			ChainID int64 `json:"chain_id"`
-		}
-		json.NewDecoder(r.Body).Decode(&got)
-		gotID = got.ChainID
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	c, _ := New(srv.URL)
-
-	if err := c.ChainDelete(9); err != nil {
-		t.Fatal(err)
-	}
-	if gotID != 9 {
-		t.Fatalf("server got chain_id %d, want 9", gotID)
-	}
-}
+// Verify that nft.Rule is not imported just for the old types; the import
+// should still be used by ListRules.
+var _ = nft.Rule{}

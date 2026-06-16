@@ -16,7 +16,7 @@ export default function MyDashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { user, tunnels = [], grants = [], node_by_id = {} } = data
+  const { user, nodes = [], grants = [] } = data
 
   const expiresAt = user.expires_at?.Valid && user.expires_at.Int64 > 0 ? user.expires_at.Int64 : null
 
@@ -48,33 +48,33 @@ export default function MyDashboard() {
         </div>
       </div>
 
-      {/* Available tunnels */}
+      {/* Granted nodes */}
       <div className="card">
         <div className="card-header">
-          <h3 className="text-sm font-bold">可用通道</h3>
-          <Link to="/my/forwards" className="btn-secondary text-xs ml-auto">前往「我的转发」</Link>
+          <h3 className="text-sm font-bold">已授权节点</h3>
+          <Link to="/my/rules" className="btn-secondary text-xs ml-auto">前往「我的规则」</Link>
         </div>
-        {tunnels.length ? (
+        {nodes.length ? (
           <table className="tbl">
-            <thead><tr><th>通道</th><th>节点</th><th>协议</th><th>端口段</th><th>允许目标 CIDR</th><th>本通道上限</th></tr></thead>
+            <thead><tr><th>节点</th><th>类型</th><th>本节点上限</th></tr></thead>
             <tbody>
-              {tunnels.map((t, i) => {
-                const node = node_by_id?.[t.node_id]
-                return (
-                  <tr key={t.id}>
-                    <td className="font-semibold">{t.name}</td>
-                    <td className="font-mono text-gray-500">{node ? node.name : '--'}</td>
-                    <td>{t.proto_mask}</td>
-                    <td className="font-mono">{t.port_start}-{t.port_end}</td>
-                    <td className="font-mono text-gray-500">{t.target_cidr_allow}</td>
-                    <td className="font-mono">{grants[i]?.max_forwards}</td>
-                  </tr>
-                )
-              })}
+              {nodes.map((n, i) => (
+                <tr key={n.id}>
+                  <td className="font-semibold">{n.name}</td>
+                  <td><NodeTypeBadge type={n.node_type} /></td>
+                  <td className="font-mono">{grants[i]?.max_forwards ?? '--'}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
-        ) : <Empty title="管理员尚未为您授权任何通道" desc="请联系管理员。" />}
+        ) : <Empty title="管理员尚未为您授权任何节点" desc="请联系管理员。" />}
       </div>
     </Layout>
   )
+}
+
+function NodeTypeBadge({ type }) {
+  if (type === 'composite') return <Badge color="violet">组合</Badge>
+  if (type === 'self') return <Badge color="blue">自身</Badge>
+  return <Badge color="green">单点</Badge>
 }

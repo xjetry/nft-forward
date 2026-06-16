@@ -100,9 +100,9 @@ func (m model) View() string {
 		inner = m.viewForm()
 	case viewConfirmDelete:
 		r := m.rowAt(m.cursor)
-		if r.ChainID != 0 {
+		if r.HopCount > 1 {
 			inner = m.viewConfirm(fmt.Sprintf(
-				"确认删除整条链路「%s」？\n\n  这会删除该链路在所有节点上的全部转发，不可恢复。\n", r.ChainName))
+				"确认删除整条链路「%s」？\n\n  这会删除该链路在所有节点上的全部转发，不可恢复。\n", r.RuleName))
 		} else {
 			inner = m.viewConfirm(
 				fmt.Sprintf("确认删除该规则？\n\n  %s\n", r.Display()))
@@ -122,7 +122,11 @@ func (m model) View() string {
 
 func (m model) viewList() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("nft-forward — IPv4 端口转发") + "\n\n")
+	suffix := "本地模式"
+	if m.connected {
+		suffix = "已连接 " + m.nodeName
+	}
+	b.WriteString(titleStyle.Render(fmt.Sprintf("nft-forward — %s", suffix)) + "\n\n")
 
 	if m.totalRows() == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
@@ -149,8 +153,8 @@ func (m model) viewList() string {
 				protoCell += " (U)"
 			}
 			var commentCell string
-			if r.ChainID != 0 {
-				commentCell = "链路 " + r.ChainName
+			if r.HopCount > 1 {
+				commentCell = "链路 " + r.RuleName
 				if r.Comment != "" {
 					commentCell += " · " + r.Comment
 				}

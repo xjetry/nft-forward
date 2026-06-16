@@ -2,11 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-
-	"nft-forward/internal/nft"
 )
 
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -52,30 +51,20 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		r := m.rowAt(m.cursor)
-		if r.ChainID != 0 {
-			if err := m.client.ChainDelete(r.ChainID); err != nil {
-				m.err = err.Error()
-				m.mode = viewList
-				return m, nil
-			}
-			m.status = fmt.Sprintf("已提交删除链路「%s」，按 r 刷新查看", r.ChainName)
-			m.mode = viewList
-			return m, nil
+		id := r.ID
+		if r.RuleID != 0 {
+			id = strconv.FormatInt(r.RuleID, 10)
 		}
-		removed := m.rules[m.cursor]
-		next := append([]nft.Rule{}, m.rules[:m.cursor]...)
-		next = append(next, m.rules[m.cursor+1:]...)
-		applied, err := commit(m.client, next)
-		if err != nil {
+		if err := m.client.DeleteRule(id); err != nil {
 			m.err = err.Error()
 			m.mode = viewList
 			return m, nil
 		}
-		m.rules = applied
+		m.refresh()
 		if m.cursor >= m.totalRows() && m.cursor > 0 {
 			m.cursor--
 		}
-		m.status = fmt.Sprintf("已删除 %s/%d", removed.Proto, removed.SrcPort)
+		m.status = fmt.Sprintf("已删除 %s/%d", r.Proto, r.SrcPort)
 		m.mode = viewList
 	case "n", "N", "esc":
 		m.mode = viewList
@@ -88,13 +77,18 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		applied, err := commit(m.client, nil)
-		if err != nil {
-			m.err = err.Error()
-			m.mode = viewList
-			return m, nil
+		for _, r := range m.rules {
+			id := r.ID
+			if r.RuleID != 0 {
+				id = strconv.FormatInt(r.RuleID, 10)
+			}
+			if err := m.client.DeleteRule(id); err != nil {
+				m.err = err.Error()
+				m.mode = viewList
+				return m, nil
+			}
 		}
-		m.rules = applied
+		m.refresh()
 		m.cursor = 0
 		m.status = "已清空全部转发规则"
 		m.mode = viewList

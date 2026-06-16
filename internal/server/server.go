@@ -38,7 +38,7 @@ func New(d *sql.DB) (*Server, error) {
 }
 
 // enforceUserQuota disables a user that has reached its traffic quota and
-// re-pushes every node it had forwards on so ActiveForwardsForPush (which
+// re-pushes every node it had rule hops on so ActiveRuleHopsForPush (which
 // excludes disabled users) removes them from the kernel. Quota 0 = unlimited.
 func (s *Server) enforceUserQuota(userID int64) {
 	u, err := db.GetUserByID(s.DB, userID)
@@ -67,24 +67,19 @@ func (s *Server) enforceUserQuota(userID int64) {
 }
 
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
-// forwards DB and dispatches it via the Hub (or unix socket for the
-// self-node). Called after admin CRUD on forwards/tunnels/users.
+// rule_hops DB and dispatches it via the Hub (or unix socket for the
+// self-node).
 //
 // The outcome is reflected on the nodes row so the panel UI can show
-// "已同步 / 错误" without each handler having to write that itself:
-// success stamps last_apply_at and clears last_error; failure stamps
-// last_error while preserving last_apply_at (so admins can read both
-// "last successful apply was at T" and "but the most recent attempt
-// failed with msg"). DB-write failures of these status columns are
-// swallowed because the dispatch error is the load-bearing signal we
-// owe the caller.
+// sync status: success stamps last_apply_at and clears last_error;
+// failure stamps last_error while preserving last_apply_at.
 func (s *Server) dispatchToNode(nodeID int64) error {
-	forwards, err := db.ActiveForwardsForPush(s.DB, nodeID)
+	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
 	if err != nil {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
 	}
-	rules := buildRules(s.DB, forwards)
+	rules := buildRules(s.DB, ruleHops)
 	rev := computeRev(rules)
 	if err := s.Dispatcher.Dispatch(nodeID, rules, rev); err != nil {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
@@ -96,11 +91,7 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 
 // dispatchAfterMutation wraps the common "CRUD-handler dispatches to a
 // node and wants to surface failure to the admin doing the mutation"
-// pattern. action is a short Chinese label describing what was just
-// mutated (e.g. "转发新增"); on failure it becomes part of the flash
-// message so the admin sees both what they did and why the kernel
-// didn't catch up. Background / non-handler call sites should invoke
-// dispatchToNode directly and log.
+// pattern.
 func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, action string) {
 	if err := s.dispatchToNode(nodeID); err != nil {
 		setFlash(w, fmt.Sprintf("%s 已保存，但下发到节点失败：%v", action, err))
@@ -109,10 +100,8 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 }
 
 // dispatchAfterFanout dispatches to every node touched by a user-scope
-// mutation (e.g. user toggle/delete affects every node that ran the
-// user's forwards). Per-node errors are aggregated into a single flash
-// because the flash cookie holds only one message; per-node detail still
-// lands in last_error on each affected nodes row.
+// mutation. Per-node errors are aggregated into a single flash because
+// the flash cookie holds only one message.
 func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, action string) {
 	type result struct {
 		nodeID int64
@@ -138,76 +127,74 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 		}
 	}
 	if len(failed) > 0 {
-		sort.Strings(failed) // deterministic flash ordering
+		sort.Strings(failed)
 		setFlash(w, fmt.Sprintf("%s 已保存，但下发到 %d 个节点失败（%s）",
 			action, len(failed), strings.Join(failed, "；")))
 	}
 }
 
 // redispatchNodes re-pushes kernel state to every node a background (WS-driven)
-// chain mutation touched. Dispatches run off the caller's goroutine: this is
-// invoked from the hub read loop, and dispatchToNode blocks up to the apply-ack
-// timeout per node — blocking the read loop would stall the originating agent's
-// connection (even pings). The chain mutation is already committed; dispatch is
-// best-effort and per-node failures land in last_error.
+// rule mutation touched. Dispatches run off the caller's goroutine.
 func (s *Server) redispatchNodes(nodeIDs []int64) {
 	for _, n := range nodeIDs {
 		go func(n int64) {
 			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("dispatch node %d (链式变更): %v", n, err)
+				log.Printf("dispatch node %d (规则变更): %v", n, err)
 			}
 		}(n)
 	}
 }
 
-// buildRules converts panel-side Forward rows into kernel-side nft.Rule
-// values, stamping per-rule bandwidth from the owning tunnel (forwards
-// without a tunnel are unmetered admin-mode rules). Lookup tables are
-// preloaded in bulk so the conversion is O(forwards) with no per-row queries.
-func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
-	tunnels, _ := db.TunnelsByID(d)
-	if tunnels == nil {
-		tunnels = map[int64]*db.Tunnel{}
-	}
-	chains, _ := db.ChainsByID(d)
-	if chains == nil {
-		chains = map[int64]*db.Chain{}
+// buildRules converts panel-side RuleHop rows into kernel-side nft.Rule
+// values. Lookup tables are preloaded in bulk so the conversion is
+// O(ruleHops) with no per-row queries.
+func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
+	ruleMap, _ := db.RulesByID(d)
+	if ruleMap == nil {
+		ruleMap = map[int64]*db.Rule{}
 	}
 	users, _ := db.UsersByID(d)
 	if users == nil {
 		users = map[int64]*db.User{}
 	}
-	rules := make([]nft.Rule, 0, len(forwards))
-	for _, f := range forwards {
-		bw := 0
-		if f.TunnelID.Valid {
-			if t := tunnels[f.TunnelID.Int64]; t != nil {
-				bw = t.BandwidthMbps
-			}
-		}
+
+	// Collect distinct rule IDs for a single bulk hop-count query
+	ruleIDSet := map[int64]bool{}
+	for _, rh := range ruleHops {
+		ruleIDSet[rh.RuleID] = true
+	}
+	ruleIDs := make([]int64, 0, len(ruleIDSet))
+	for id := range ruleIDSet {
+		ruleIDs = append(ruleIDs, id)
+	}
+	hopCounts, _ := db.RuleHopCounts(d, ruleIDs)
+	if hopCounts == nil {
+		hopCounts = map[int64]int{}
+	}
+
+	rules := make([]nft.Rule, 0, len(ruleHops))
+	for _, rh := range ruleHops {
 		rule := nft.Rule{
-			Proto:         f.Proto,
-			SrcPort:       f.ListenPort,
-			DestPort:      f.TargetPort,
-			Comment:       f.Comment,
-			BandwidthMbps: bw,
-			Mode:          f.Mode,
+			Proto:    rh.Proto,
+			SrcPort:  rh.ListenPort,
+			DestPort: rh.TargetPort,
+			Comment:  rh.Comment,
+			Mode:     rh.Mode,
+			HopCount: hopCounts[rh.RuleID],
 		}
-		if f.ChainID.Valid {
-			rule.ChainID = f.ChainID.Int64
-			if c := chains[f.ChainID.Int64]; c != nil {
-				rule.ChainName = c.Name
+		if r := ruleMap[rh.RuleID]; r != nil {
+			rule.RuleID = r.ID
+			rule.RuleName = r.Name
+			if r.OwnerID.Valid {
+				if u := users[r.OwnerID.Int64]; u != nil {
+					rule.OwnerName = u.Username
+				}
 			}
 		}
-		if f.OwnerID.Valid {
-			if u := users[f.OwnerID.Int64]; u != nil {
-				rule.TenantName = u.Username
-			}
-		}
-		if resolver.IsHostname(f.TargetIP) {
-			rule.DestHost = f.TargetIP
+		if resolver.IsHostname(rh.TargetHost) {
+			rule.DestHost = rh.TargetHost
 		} else {
-			rule.DestIP = f.TargetIP
+			rule.DestIP = rh.TargetHost
 		}
 		rules = append(rules, rule)
 	}
@@ -216,18 +203,18 @@ func buildRules(d *sql.DB, forwards []*db.Forward) []nft.Rule {
 
 // computeRev returns a stable hash of the ruleset so a reconnecting
 // agent whose last_applied_rev matches can be skipped. Determinism
-// hinges on ActiveForwardsForPush returning rows in a stable order
+// hinges on ActiveRuleHopsForPush returning rows in a stable order
 // (it sorts by listen_port).
 //
-// Chain metadata is panel-side display info, not part of the data plane;
-// exclude it so a chain rename does not force a redundant re-apply on
+// Rule metadata is panel-side display info, not part of the data plane;
+// exclude it so a rule rename does not force a redundant re-apply on
 // reconnecting nodes.
 func computeRev(rules []nft.Rule) string {
 	bare := make([]nft.Rule, len(rules))
 	for i, r := range rules {
-		r.ChainID = 0
-		r.ChainName = ""
-		r.TenantName = ""
+		r.RuleID = 0
+		r.RuleName = ""
+		r.OwnerName = ""
 		bare[i] = r
 	}
 	h := sha256.New()
@@ -269,40 +256,26 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/resync", s.apiResyncNode)
 			r.Post("/nodes/{id}/upgrade", s.apiUpgradeNode)
 			r.Delete("/nodes/{id}", s.apiDeleteNode)
+			r.Post("/nodes/{id}/toggle", s.apiToggleNode)
+			r.Post("/nodes/{id}/owner", s.apiUpdateNodeOwner)
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
+			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)
 
-			r.Get("/tunnels", s.apiListTunnels)
-			r.Post("/tunnels", s.apiCreateTunnel)
-			r.Delete("/tunnels/{id}", s.apiDeleteTunnel)
-
-			r.Get("/forwards", s.apiListForwards)
-			r.Post("/forwards", s.apiCreateForward)
-			r.Get("/forwards/{id}", s.apiGetForward)
-			r.Put("/forwards/{id}", s.apiUpdateForward)
-			r.Delete("/forwards/{id}", s.apiDeleteForward)
-
-			r.Get("/chains", s.apiListChains)
-			r.Post("/chains", s.apiCreateChain)
-			r.Get("/chains/{id}", s.apiGetChain)
-			r.Put("/chains/{id}", s.apiUpdateChain)
-			r.Delete("/chains/{id}", s.apiDeleteChain)
-			r.Post("/chains/{id}/hops/{pos}/reallocate", s.apiReallocateHop)
-
-			r.Get("/combos", s.apiListCombos)
-			r.Post("/combos", s.apiCreateCombo)
-			r.Put("/combos/{id}", s.apiUpdateCombo)
-			r.Delete("/combos/{id}", s.apiDeleteCombo)
+			r.Get("/rules", s.apiListRules)
+			r.Post("/rules", s.apiCreateRule)
+			r.Get("/rules/{id}", s.apiGetRule)
+			r.Put("/rules/{id}", s.apiUpdateRule)
+			r.Delete("/rules/{id}", s.apiDeleteRule)
+			r.Post("/rules/{id}/hops/{pos}/reallocate", s.apiReallocateRuleHop)
 
 			r.Get("/users/{id}", s.apiGetUser)
 			r.Post("/users", s.apiCreateUser)
-			r.Post("/users/{id}/grants", s.apiGrantTunnel)
-			r.Delete("/users/{id}/grants/{tunnelID}", s.apiRevokeTunnel)
-			r.Post("/users/{id}/combo-grants", s.apiGrantCombo)
-			r.Delete("/users/{id}/combo-grants/{comboID}", s.apiRevokeCombo)
+			r.Post("/users/{id}/grants", s.apiGrantNode)
+			r.Delete("/users/{id}/grants/{nodeID}", s.apiRevokeNode)
 			r.Post("/users/{id}/quota", s.apiSetUserQuota)
 			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
 			r.Post("/users/{id}/reset-traffic", s.apiResetUserTraffic)
@@ -317,12 +290,9 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth, s.requireRole("user"))
 			r.Get("/my", s.apiMyDashboard)
-			r.Get("/my/forwards", s.apiMyListForwards)
-			r.Post("/my/forwards", s.apiMyCreateForward)
-			r.Delete("/my/forwards/{id}", s.apiMyDeleteForward)
-			r.Get("/my/chains", s.apiMyListChains)
-			r.Post("/my/chains", s.apiMyCreateChain)
-			r.Delete("/my/chains/{id}", s.apiMyDeleteChain)
+			r.Get("/my/rules", s.apiMyListRules)
+			r.Post("/my/rules", s.apiMyCreateRule)
+			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
 		})
 	})
 

@@ -8,13 +8,12 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"nft-forward/internal/nft"
-	"nft-forward/internal/resolver"
+	"nft-forward/internal/daemonclient"
 )
 
 func (m *model) enterAddMode() {
 	m.mode = viewAdd
-	m.editingChainID = 0
+	m.editingRuleID = 0
 	m.err = ""
 	m.status = ""
 	m.inputs = buildInputs()
@@ -25,7 +24,7 @@ func (m *model) enterAddMode() {
 
 func (m *model) enterEditMode() {
 	r := m.rowAt(m.cursor)
-	m.editingChainID = r.ChainID
+	m.editingRuleID = r.RuleID
 	m.mode = viewEdit
 	m.err = ""
 	m.status = ""
@@ -147,8 +146,8 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// commitForm collects form fields, validates, and either creates a new rule
-// (isEdit=false) or updates the existing rule at the cursor (isEdit=true).
+// commitForm collects form fields, validates locally (basic sanity only),
+// and delegates to the daemon via CreateRule or UpdateRule.
 func (m model) commitForm(isEdit bool) (tea.Model, tea.Cmd) {
 	proto := protoOptions[m.protoIdx]
 	srcPortStr := strings.TrimSpace(m.inputs[fSrcPort].Value())
@@ -156,28 +155,25 @@ func (m model) commitForm(isEdit bool) (tea.Model, tea.Cmd) {
 	destPortStr := strings.TrimSpace(m.inputs[fDestPort].Value())
 	comment := strings.TrimSpace(m.inputs[fComment].Value())
 
-	srcPort, err := strconv.Atoi(srcPortStr)
-	if err != nil {
-		m.err = "端口必须为数字"
-		return m, nil
-	}
-
-	// Chain hops are server-authoritative: only listen_port/mode/comment are
-	// editable. Send a command and let the server re-dispatch.
-	if isEdit && m.editingChainID != 0 {
-		if err := m.client.ChainEdit(m.editingChainID, srcPort, modeOptions[m.modeIdx], comment); err != nil {
-			m.err = err.Error()
+	// SrcPort 0 = auto-assign by daemon.
+	srcPort := 0
+	if srcPortStr != "" {
+		var err error
+		srcPort, err = strconv.Atoi(srcPortStr)
+		if err != nil || srcPort < 1 || srcPort > 65535 {
+			m.err = "端口必须为 1-65535 的数字"
 			return m, nil
 		}
-		m.mode = viewList
-		m.status = fmt.Sprintf("已提交链路端口/模式变更（监听 %d），按 r 刷新查看", srcPort)
-		m.err = ""
-		return m, nil
 	}
 
 	destPort, err := strconv.Atoi(destPortStr)
 	if err != nil {
-		m.err = "端口必须为数字"
+		m.err = "目标端口必须为数字"
+		return m, nil
+	}
+
+	if destInput == "" {
+		m.err = "目标地址不能为空"
 		return m, nil
 	}
 
@@ -188,92 +184,50 @@ func (m model) commitForm(isEdit bool) (tea.Model, tea.Cmd) {
 }
 
 func (m model) commitAdd(proto string, srcPort int, destInput string, destPort int, comment string) (tea.Model, tea.Cmd) {
-	r := nft.Rule{
-		ID:       nft.NewRuleID(),
-		Proto:    proto,
-		Mode:     modeOptions[m.modeIdx],
-		SrcPort:  srcPort,
-		DestPort: destPort,
-		Comment:  comment,
-	}
-	if resolver.IsHostname(destInput) {
-		r.DestHost = destInput
-	} else {
-		r.DestIP = destInput
-	}
-	if err := nft.Validate(r); err != nil {
-		m.err = err.Error()
-		return m, nil
-	}
-	for _, existing := range m.rules {
-		if existing.Proto == r.Proto && existing.SrcPort == r.SrcPort {
-			m.err = fmt.Sprintf("%s/%d 已被转发占用", r.Proto, r.SrcPort)
-			return m, nil
-		}
-	}
-
-	next := append([]nft.Rule{}, m.rules...)
-	next = append(next, r)
-	applied, err := commit(m.client, next)
+	resp, err := m.client.CreateRule(daemonclient.CreateRuleReq{
+		Proto:      proto,
+		ExitHost:   destInput,
+		ExitPort:   destPort,
+		ListenPort: srcPort,
+		Mode:       modeOptions[m.modeIdx],
+		Comment:    comment,
+	})
 	if err != nil {
 		m.err = err.Error()
 		return m, nil
 	}
-	m.rules = applied
+	m.refresh()
 	m.mode = viewList
-	statusTarget := r.DestIP
-	if r.DestHost != "" {
-		statusTarget = r.DestHost
+	entry := resp.Entry
+	if entry == "" {
+		entry = fmt.Sprintf(":%d", resp.ListenPort)
 	}
-	m.status = fmt.Sprintf("已添加 %s/%d → %s:%d", r.Proto, r.SrcPort, statusTarget, r.DestPort)
+	m.status = fmt.Sprintf("已添加 %s → %s:%d 入口 %s", proto, destInput, destPort, entry)
 	m.err = ""
 	return m, nil
 }
 
 func (m model) commitEdit(proto string, srcPort int, destInput string, destPort int, comment string) (tea.Model, tea.Cmd) {
-	idx := m.cursor
-	seg := m.rules
-
-	r := nft.Rule{
-		ID:        seg[idx].ID,
-		Proto:     proto,
-		Mode:      modeOptions[m.modeIdx],
-		SrcPort:   srcPort,
-		DestPort:  destPort,
-		Comment:   comment,
-		ChainID:   seg[idx].ChainID,
-		ChainName: seg[idx].ChainName,
+	r := m.rowAt(m.cursor)
+	// Server rules use their numeric RuleID; local rules use their hex ID.
+	id := r.ID
+	if r.RuleID != 0 {
+		id = strconv.FormatInt(r.RuleID, 10)
 	}
-	if resolver.IsHostname(destInput) {
-		r.DestHost = destInput
-	} else {
-		r.DestIP = destInput
-	}
-	if err := nft.Validate(r); err != nil {
+	if err := m.client.UpdateRule(id, daemonclient.UpdateRuleReq{
+		Proto:      proto,
+		ExitHost:   destInput,
+		ExitPort:   destPort,
+		ListenPort: srcPort,
+		Mode:       modeOptions[m.modeIdx],
+		Comment:    comment,
+	}); err != nil {
 		m.err = err.Error()
 		return m, nil
 	}
-	for i, existing := range seg {
-		if i != idx && existing.Proto == r.Proto && existing.SrcPort == r.SrcPort {
-			m.err = fmt.Sprintf("%s/%d 已被转发占用", r.Proto, r.SrcPort)
-			return m, nil
-		}
-	}
-
-	next := append([]nft.Rule{}, seg...)
-	next[idx] = r
-	applied, err := commit(m.client, next)
-	if err != nil {
-		m.err = err.Error()
-		return m, nil
-	}
-	m.rules = applied
+	m.refresh()
 	m.mode = viewList
-	statusTarget := r.DestIP
-	if r.DestHost != "" {
-		statusTarget = r.DestHost
-	}
-	m.status = fmt.Sprintf("已更新 %s/%d → %s:%d", r.Proto, r.SrcPort, statusTarget, r.DestPort)
+	m.status = fmt.Sprintf("已更新 %s → %s:%d", proto, destInput, destPort)
 	m.err = ""
 	return m, nil
 }

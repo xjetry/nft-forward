@@ -54,9 +54,9 @@ func TestNew_ExplicitOverrides(t *testing.T) {
 func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	if err := SaveState(statePath, OwnerRuleset{
-		"tui": []nft.Rule{{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080}},
-		"panel": []nft.Rule{
-			{ID: "p1", Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
+		"tui": []nft.Rule{
+			{ID: "r1", Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080},
+			{ID: "r2", Proto: "udp", SrcPort: 53, DestIP: "8.8.8.8", DestPort: 53},
 		},
 	}, AgentMeta{}); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 2 {
 		t.Fatalf("Bootstrap should apply merged ruleset (2 rules), got nftCalls: %+v", fa.nftCalls)
 	}
-	if len(d.owners["tui"]) != 1 || len(d.owners["panel"]) != 1 {
+	if len(d.owners["tui"]) != 2 {
 		t.Fatalf("in-memory owners not populated: %+v", d.owners)
 	}
 }
@@ -142,8 +142,8 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 			},
 		},
 	}
-	body := `{"rules":[{"id":"rZ","proto":"tcp","src_port":9090,"dest_ip":"1.2.3.4","dest_port":80}]}`
-	resp, err := client.Post("http://unix/v1/ruleset/tui", "application/json", strings.NewReader(body))
+	body := `{"proto":"tcp","exit_host":"1.2.3.4","exit_port":80,"listen_port":9090}`
+	resp, err := client.Post("http://unix/v1/rules", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +151,14 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("POST status = %d", resp.StatusCode)
 	}
-	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].ID != "rZ" {
+	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 || fa.nftCalls[0][0].SrcPort != 9090 {
 		t.Fatalf("data plane did not Reconcile the POSTed rule: %+v", fa.nftCalls)
 	}
 	saved, _, err := LoadState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(saved["tui"]) != 1 || saved["tui"][0].ID != "rZ" {
+	if len(saved["tui"]) != 1 || saved["tui"][0].SrcPort != 9090 {
 		t.Fatalf("state.json not persisted as expected: %+v", saved)
 	}
 }

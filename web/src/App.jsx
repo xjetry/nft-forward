@@ -8,18 +8,13 @@ import ChangePassword from './pages/ChangePassword'
 
 import NodeList from './pages/nodes/List'
 import NodeDetail from './pages/nodes/Detail'
-import TunnelList from './pages/tunnels/List'
-import ForwardList from './pages/forwards/List'
-import ForwardEdit from './pages/forwards/Edit'
-import ChainList from './pages/chains/List'
-import ChainDetail from './pages/chains/Detail'
-import ComboList from './pages/combos/List'
+import RulesList from './pages/rules/List'
+import RulesDetail from './pages/rules/Detail'
 import UserList from './pages/users/List'
 import UserDetail from './pages/users/Detail'
 
 import MyDashboard from './pages/my/Dashboard'
-import MyForwards from './pages/my/Forwards'
-import MyChains from './pages/my/Chains'
+import MyRules from './pages/my/Rules'
 
 function ProtectedRoute({ children }) {
   const { user } = useUser()
@@ -75,19 +70,14 @@ export default function App() {
           {/* Admin routes */}
           <Route path="/nodes" element={<AdminRoute><NodeList /></AdminRoute>} />
           <Route path="/nodes/:id" element={<AdminRoute><NodeDetail /></AdminRoute>} />
-          <Route path="/tunnels" element={<AdminRoute><TunnelList /></AdminRoute>} />
-          <Route path="/forwards" element={<AdminRoute><ForwardList /></AdminRoute>} />
-          <Route path="/forwards/:id/edit" element={<AdminRoute><ForwardEdit /></AdminRoute>} />
-          <Route path="/chains" element={<AdminRoute><ChainList /></AdminRoute>} />
-          <Route path="/chains/:id" element={<AdminRoute><ChainDetail /></AdminRoute>} />
-          <Route path="/combos" element={<AdminRoute><ComboList /></AdminRoute>} />
+          <Route path="/rules" element={<AdminRoute><RulesList /></AdminRoute>} />
+          <Route path="/rules/:id" element={<AdminRoute><RulesDetail /></AdminRoute>} />
           <Route path="/users" element={<AdminRoute><UserList /></AdminRoute>} />
           <Route path="/users/:id" element={<AdminRoute><UserDetail /></AdminRoute>} />
 
           {/* Regular user routes */}
           <Route path="/my" element={<UserRoute><MyDashboard /></UserRoute>} />
-          <Route path="/my/forwards" element={<UserRoute><MyForwards /></UserRoute>} />
-          <Route path="/my/chains" element={<UserRoute><MyChains /></UserRoute>} />
+          <Route path="/my/rules" element={<UserRoute><MyRules /></UserRoute>} />
 
           {/* Shared routes */}
           <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />

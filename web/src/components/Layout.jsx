@@ -96,15 +96,9 @@ export function Layout({ children }) {
                 </NavGroup>
                 <NavGroup label="资源">
                   <SideLink to="/nodes" icon={<IconNodes />}>节点</SideLink>
-                  <SideLink to="/tunnels" icon={<IconTunnels />}>通道</SideLink>
-                  <SideLink to="/combos" icon={<IconCombos />}>组合通道</SideLink>
+                  <SideLink to="/rules" icon={<IconForwards />}>规则</SideLink>
                   <SideLink to="/users" icon={<IconUserGroup />}>用户</SideLink>
                 </NavGroup>
-                <NavGroup label="转发">
-                  <SideLink to="/forwards" icon={<IconForwards />}>转发规则</SideLink>
-                  <SideLink to="/chains" icon={<IconChains />}>中继链路</SideLink>
-                </NavGroup>
-                {false /* accounts merged into /users */}
               </>
             ) : (
               <>
@@ -112,8 +106,7 @@ export function Layout({ children }) {
                   <SideLink to="/my" icon={<IconDashboard />} end>概览</SideLink>
                 </NavGroup>
                 <NavGroup label="转发">
-                  <SideLink to="/my/forwards" icon={<IconForwards />}>我的转发</SideLink>
-                  <SideLink to="/my/chains" icon={<IconChains />}>我的链路</SideLink>
+                  <SideLink to="/my/rules" icon={<IconForwards />}>我的规则</SideLink>
                 </NavGroup>
               </>
             )}
@@ -197,21 +190,9 @@ function IconDashboard() {
 function IconNodes() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
 }
-function IconTunnels() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>
-}
-function IconCombos() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>
-}
 function IconUserGroup() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 8.5a3 3 0 0 1 0 5.5M18 19a5 5 0 0 0-3-4.6"/></svg>
 }
 function IconForwards() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h12"/><path d="M13 7l5 5-5 5"/><path d="M20 5v14"/></svg>
-}
-function IconChains() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 14.5l5-5"/><path d="M8 9l-2.5 2.5a3.5 3.5 0 0 0 5 5L13 14"/><path d="M16 15l2.5-2.5a3.5 3.5 0 0 0-5-5L11 10"/></svg>
-}
-function IconUsers() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
 }

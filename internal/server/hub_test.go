@@ -55,9 +55,8 @@ func sendJSON(t *testing.T, c *websocket.Conn, v any) {
 }
 
 // syncByPing sends a ping after a one-way notification frame and waits
-// for the matching pong. readerLoop is a single goroutine that processes
-// frames serially, so the pong's arrival proves the prior notification
-// has finished its DB write — no fixed sleep needed.
+// for the matching pong. readerLoop processes frames serially, so the
+// pong's arrival proves the prior notification has finished its DB write.
 func syncByPing(t *testing.T, c *websocket.Conn) {
 	t.Helper()
 	p, _ := json.Marshal(wsproto.Ping{TS: time.Now().UnixMilli()})
@@ -110,8 +109,6 @@ func TestHubAcceptsGoodToken(t *testing.T) {
 	if ack.NodeID != n.ID || ack.Error != "" {
 		t.Fatalf("hello_ack mismatch: %+v", ack)
 	}
-	// hello_ack only ships after registerConn has put the conn in the hub
-	// map, so the IsOnline check needs no wait.
 	if !hub.IsOnline(n.ID) {
 		t.Fatalf("expected node %d online after hello_ack", n.ID)
 	}
@@ -126,12 +123,9 @@ func TestHubSecondConnReplacesFirst(t *testing.T) {
 	c2 := dialWS(t, srv)
 	sendJSON(t, c2, wsproto.Envelope{Type: wsproto.TypeHello, ID: "2", Payload: hp})
 	_ = recvEnvelope(t, c2)
-	// hello_ack arrives after the second conn has supplanted the first in
-	// the hub map; no wait needed before IsOnline.
 	if !hub.IsOnline(n.ID) {
 		t.Fatalf("expected node still online after replace")
 	}
-	// c1 should now read EOF / closed.
 	_, _, err := c1.Read(context.Background())
 	if err == nil {
 		t.Fatalf("expected first conn to be closed after second hello")
@@ -144,25 +138,19 @@ func TestHubSendApplyRulesetReturnsAck(t *testing.T) {
 	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
 	_ = recvEnvelope(t, c)
-	// hello_ack arrives only after the conn is in the hub map, so the
-	// lookup in SendApplyRuleset is guaranteed to find it without any
-	// wait.
 	if !hub.IsOnline(n.ID) {
 		t.Fatalf("expected node %d online immediately after hello_ack", n.ID)
 	}
 
-	// In a goroutine, server SendApplyRuleset and wait for ack.
 	done := make(chan error, 1)
 	go func() {
 		done <- hub.SendApplyRuleset(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
 	}()
 
-	// Client reads the apply_ruleset frame.
 	env := recvEnvelope(t, c)
 	if env.Type != wsproto.TypeApplyRuleset {
 		t.Fatalf("expected apply_ruleset, got %s", env.Type)
 	}
-	// Client sends apply_ack.
 	ackPayload, _ := json.Marshal(wsproto.ApplyAck{Rev: "rev1", OK: true})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeApplyAck, ID: env.ID, Payload: ackPayload})
 
@@ -171,18 +159,49 @@ func TestHubSendApplyRulesetReturnsAck(t *testing.T) {
 	}
 }
 
-func TestHubCountersUpdatesForwardBytes(t *testing.T) {
-	srv, hub, n := newHubTestServer(t)
-	// Pre-create a forward in the DB matching what the agent will report.
-	fid, err := db.CreateForward(hub.DB, &db.Forward{
-		NodeID:     n.ID,
-		Proto:      "tcp",
-		ListenPort: 9000,
-		TargetIP:   "10.0.0.10",
-		TargetPort: 9000,
-	})
+// createStandaloneRuleHop creates a single-hop rule on a node and returns the
+// rule ID and hop ID for testing counters/panel edits.
+func createStandaloneRuleHop(t *testing.T, d *sql.DB, nodeID int64, proto string, listenPort int, targetHost string, targetPort int, ownerID sql.NullInt64) (int64, int64) {
+	t.Helper()
+	_ = db.UpdateNodeRelayHost(d, nodeID, "127.0.0.1")
+	tx, err := d.Begin()
 	if err != nil {
 		t.Fatal(err)
+	}
+	rl := &db.Rule{NodeID: nodeID, OwnerID: ownerID, Name: "test", Proto: proto, ExitHost: targetHost, ExitPort: targetPort}
+	ruleID, err := db.CreateRule(tx, rl)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	rl.ID = ruleID
+	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: nodeID, DesiredPort: listenPort}}, nil)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	hops, _ := db.ListRuleHops(d, ruleID)
+	if len(hops) != 1 {
+		t.Fatalf("expected 1 hop, got %d", len(hops))
+	}
+	return ruleID, hops[0].ID
+}
+
+func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	_, hopID := createStandaloneRuleHop(t, hub.DB, n.ID, "tcp", 0, "10.0.0.10", 9000, sql.NullInt64{})
+
+	// Get the actual listen port allocated
+	hops, _ := db.ListRuleHopsByNode(hub.DB, n.ID)
+	var listenPort int
+	for _, h := range hops {
+		if h.ID == hopID {
+			listenPort = h.ListenPort
+			break
+		}
 	}
 
 	c := dialWS(t, srv)
@@ -190,21 +209,21 @@ func TestHubCountersUpdatesForwardBytes(t *testing.T) {
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
 	_ = recvEnvelope(t, c)
 
-	// First counters frame: total += 1024.
 	cf, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{
-		{ListenPort: 9000, Proto: "tcp", BytesDelta: 1024},
+		{ListenPort: listenPort, Proto: "tcp", BytesDelta: 1024},
 	}})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf})
-	// Second frame: total += 512.
 	cf2, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{
-		{ListenPort: 9000, Proto: "tcp", BytesDelta: 512},
+		{ListenPort: listenPort, Proto: "tcp", BytesDelta: 512},
 	}})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf2})
 	syncByPing(t, c)
 
-	got, err := db.GetForward(hub.DB, fid)
-	if err != nil {
-		t.Fatal(err)
+	hopMap, _ := db.RuleHopMapByNode(hub.DB, n.ID)
+	key := "tcp/" + strconv.Itoa(listenPort)
+	got := hopMap[key]
+	if got == nil {
+		t.Fatalf("rule hop not found for %s", key)
 	}
 	if got.TotalBytes != 1536 {
 		t.Fatalf("expected TotalBytes 1536 (1024 + 512), got %d", got.TotalBytes)
@@ -215,7 +234,7 @@ func TestHubCountersUpdatesForwardBytes(t *testing.T) {
 }
 
 func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
-	srv, hub, n := newHubTestServer(t)
+	_, hub, n := newHubTestServer(t)
 	hash, _ := HashPassword("pw")
 	uid, err := db.CreateUser(hub.DB, "acme", hash, "user")
 	if err != nil {
@@ -224,16 +243,15 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	if _, err := hub.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
-	fid, err := db.CreateForward(hub.DB, &db.Forward{
-		NodeID:     n.ID,
-		OwnerID:    sql.NullInt64{Int64: uid, Valid: true},
-		Proto:      "tcp",
-		ListenPort: 9100,
-		TargetIP:   "10.0.0.20",
-		TargetPort: 9100,
-	})
-	if err != nil {
-		t.Fatal(err)
+	_, hopID := createStandaloneRuleHop(t, hub.DB, n.ID, "tcp", 0, "10.0.0.20", 9100, sql.NullInt64{Int64: uid, Valid: true})
+
+	hops, _ := db.ListRuleHopsByNode(hub.DB, n.ID)
+	var listenPort int
+	for _, h := range hops {
+		if h.ID == hopID {
+			listenPort = h.ListenPort
+			break
+		}
 	}
 
 	var notified []int64
@@ -241,16 +259,9 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{
-		{ListenPort: 9100, Proto: "tcp", BytesDelta: delta},
+		{ListenPort: listenPort, Proto: "tcp", BytesDelta: delta},
 	})
 
-	gotFwd, err := db.GetForward(hub.DB, fid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotFwd.TotalBytes != delta {
-		t.Fatalf("forward total_bytes = %d, want %d", gotFwd.TotalBytes, delta)
-	}
 	gotUser, err := db.GetUserByID(hub.DB, uid)
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +272,6 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	if len(notified) != 1 || notified[0] != uid {
 		t.Fatalf("OnTrafficUpdate calls = %v, want [%d]", notified, uid)
 	}
-	_ = srv
 }
 
 func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
@@ -270,8 +280,6 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Route the user's forward through the self-node so the re-dispatch the
-	// enforcer triggers hits the stubbed local sender instead of a real socket.
 	self, err := EnsureSelfNode(d)
 	if err != nil {
 		t.Fatal(err)
@@ -290,19 +298,10 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddUserTraffic(d, uid, 1500); err != nil { // push usage past the quota
+	if err := db.AddUserTraffic(d, uid, 1500); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateForward(d, &db.Forward{
-		NodeID:     self.ID,
-		OwnerID:    sql.NullInt64{Int64: uid, Valid: true},
-		Proto:      "tcp",
-		ListenPort: 9200,
-		TargetIP:   "10.0.0.30",
-		TargetPort: 9200,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	createStandaloneRuleHop(t, d, self.ID, "tcp", 0, "10.0.0.30", 9200, sql.NullInt64{Int64: uid, Valid: true})
 
 	s.enforceUserQuota(uid)
 
@@ -345,111 +344,45 @@ func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
 	}
 }
 
-func TestHubPanelSegmentEditUpdatesNonChainForward(t *testing.T) {
-	srv, hub, n := newHubTestServer(t)
-	fid, err := db.CreateForward(hub.DB, &db.Forward{
-		NodeID: n.ID, Proto: "tcp", ListenPort: 30000, TargetIP: "10.0.0.1", TargetPort: 30000, Comment: "old", Mode: "kernel",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	c := dialWS(t, srv)
-	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
-	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
-	_ = recvEnvelope(t, c)
-
-	pse, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: []wsproto.Forward{
-		{Proto: "tcp", ListenPort: 30000, TargetIP: "10.9.9.9", TargetPort: 8443, Comment: "new", Mode: "userspace"},
-	}})
-	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pse})
-	syncByPing(t, c)
-
-	got, err := db.GetForward(hub.DB, fid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TargetIP != "10.9.9.9" || got.TargetPort != 8443 || got.Comment != "new" || got.Mode != "userspace" {
-		t.Fatalf("panel edit not persisted: %+v", got)
-	}
-}
-
-func TestHubPanelSegmentEditIgnoresChainForward(t *testing.T) {
-	srv, hub, n := newHubTestServer(t)
-	res, err := hub.DB.Exec(`INSERT INTO chains(name,proto,exit_host,exit_port,created_at) VALUES ('c','tcp','9.9.9.9',8443,0)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cid, _ := res.LastInsertId()
-	fid, err := db.CreateForward(hub.DB, &db.Forward{
-		NodeID: n.ID, Proto: "tcp", ListenPort: 20001, TargetIP: "5.6.7.8", TargetPort: 20002,
-		ChainID: sql.NullInt64{Int64: cid, Valid: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A chained hop reported with a tampered target must be rejected.
-	hub.applyPanelEdits(n.ID, []wsproto.Forward{
-		{Proto: "tcp", ListenPort: 20001, TargetIP: "1.1.1.1", TargetPort: 1, Comment: "hijack"},
-	})
-
-	got, err := db.GetForward(hub.DB, fid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TargetIP != "5.6.7.8" || got.TargetPort != 20002 {
-		t.Fatalf("chain hop port/target must stay intact: %+v", got)
-	}
-	_ = srv
-}
-
-func TestHubPanelSegmentEditSkipsUnknownForward(t *testing.T) {
-	_, hub, n := newHubTestServer(t)
-	// No matching forward row exists; applyPanelEdits must not error/panic.
-	hub.applyPanelEdits(n.ID, []wsproto.Forward{
-		{Proto: "tcp", ListenPort: 65000, TargetIP: "10.0.0.1", TargetPort: 65000},
-	})
-}
-
-func seedTwoHopChainDB(t *testing.T, d *sql.DB) (*db.Chain, int64, int64) {
+func seedTwoHopRuleDB(t *testing.T, d *sql.DB) (*db.Rule, int64, int64) {
 	t.Helper()
-	n0, _ := db.CreateNode(d, "chain-edge-0", "https://p0", "tok-chain-0")
-	n1, _ := db.CreateNode(d, "chain-edge-1", "https://p1", "tok-chain-1")
+	n0, _ := db.CreateNode(d, "rule-edge-0", "https://p0", "tok-rule-0")
+	n1, _ := db.CreateNode(d, "rule-edge-1", "https://p1", "tok-rule-1")
 	d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.10", n0.ID)
 	d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, "10.0.0.11", n1.ID)
-	c := &db.Chain{Name: "wire", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
-	id, err := db.CreateChain(d, c)
+	rl := &db.Rule{NodeID: n0.ID, Name: "wire", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
+	tx, _ := d.Begin()
+	id, err := db.CreateRule(tx, rl)
 	if err != nil {
+		tx.Rollback()
 		t.Fatal(err)
 	}
-	c.ID = id
-	tx, _ := d.Begin()
-	if _, _, err := db.RegenerateChain(tx, c, []db.HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
+	rl.ID = id
+	if _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
 	tx.Commit()
-	return c, n0.ID, n1.ID
+	return rl, n0.ID, n1.ID
 }
 
-func TestHubApplyChainHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
+func TestHubApplyRuleHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
 	_, hub, _ := newHubTestServer(t)
-	c, n0, n1 := seedTwoHopChainDB(t, hub.DB)
+	rl, n0, n1 := seedTwoHopRuleDB(t, hub.DB)
 	var got []int64
 	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
 
-	entry, err := hub.applyChainHopEdit(n1, c.ID, 11222, "kernel", "renamed")
+	entry, err := hub.applyRuleHopEdit(n1, rl.ID, 11222, "kernel", "renamed")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry == "" {
 		t.Fatal("expected entry endpoint returned")
 	}
-	fwds, _ := db.ListForwardsByChain(hub.DB, c.ID)
-	byNode := map[int64]*db.Forward{}
-	for _, f := range fwds {
-		byNode[f.NodeID] = f
+	hops, _ := db.ListRuleHops(hub.DB, rl.ID)
+	byNode := map[int64]*db.RuleHop{}
+	for _, h := range hops {
+		byNode[h.NodeID] = h
 	}
 	if byNode[n1].ListenPort != 11222 {
 		t.Fatalf("hop n1 listen_port = %d, want 11222", byNode[n1].ListenPort)
@@ -462,34 +395,31 @@ func TestHubApplyChainHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
 	}
 }
 
-func TestHubApplyChainHopEditRejectsForeignNode(t *testing.T) {
+func TestHubApplyRuleHopEditRejectsForeignNode(t *testing.T) {
 	_, hub, _ := newHubTestServer(t)
-	c, _, _ := seedTwoHopChainDB(t, hub.DB)
+	rl, _, _ := seedTwoHopRuleDB(t, hub.DB)
 	other, _ := db.CreateNode(hub.DB, "outsider", "https://x", "tokx")
-	if _, err := hub.applyChainHopEdit(other.ID, c.ID, 21000, "kernel", ""); err == nil {
-		t.Fatal("node not on chain must be rejected")
+	if _, err := hub.applyRuleHopEdit(other.ID, rl.ID, 21000, "kernel", ""); err == nil {
+		t.Fatal("node not on rule must be rejected")
 	}
 }
 
-func TestHubApplyChainDeleteRemovesChainAndRedispatches(t *testing.T) {
+func TestHubApplyRuleDeleteRemovesRuleAndRedispatches(t *testing.T) {
 	_, hub, _ := newHubTestServer(t)
-	c, n0, n1 := seedTwoHopChainDB(t, hub.DB)
+	rl, n0, n1 := seedTwoHopRuleDB(t, hub.DB)
 	var got []int64
 	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
 
-	if err := hub.applyChainDelete(n0, c.ID); err != nil {
+	if err := hub.applyRuleDelete(n0, rl.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.GetChain(hub.DB, c.ID); err == nil {
-		t.Fatal("chain row should be gone")
+	if _, err := db.GetRule(hub.DB, rl.ID); err == nil {
+		t.Fatal("rule row should be gone")
 	}
-	fwds, _ := db.ListForwardsByChain(hub.DB, c.ID)
-	if len(fwds) != 0 {
-		t.Fatalf("chain forwards should be gone, got %d", len(fwds))
+	hops, _ := db.ListRuleHops(hub.DB, rl.ID)
+	if len(hops) != 0 {
+		t.Fatalf("rule hops should be gone, got %d", len(hops))
 	}
-	// Redispatch must receive the full set of nodes whose forwards were
-	// removed — both the node that asked and the other hop — so every node
-	// drops the deleted rules from its kernel.
 	gotSet := map[int64]bool{}
 	for _, id := range got {
 		gotSet[id] = true
@@ -499,25 +429,23 @@ func TestHubApplyChainDeleteRemovesChainAndRedispatches(t *testing.T) {
 	}
 }
 
-func TestHubChainHopEditMalformedPayloadAcksError(t *testing.T) {
+func TestHubRuleHopEditMalformedPayloadAcksError(t *testing.T) {
 	srv, _, _ := newHubTestServer(t)
 	c := dialWS(t, srv)
 	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
-	_ = recvEnvelope(t, c) // hello_ack
+	_ = recvEnvelope(t, c)
 
-	// A JSON string is a valid envelope payload but can't decode into the
-	// ChainHopEdit object, so it drives the malformed-payload branch.
 	const reqID = "edit-bad"
-	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeChainHopEdit, ID: reqID, Payload: json.RawMessage(`"not-an-object"`)})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeRuleHopEdit, ID: reqID, Payload: json.RawMessage(`"not-an-object"`)})
 	env := recvEnvelope(t, c)
-	if env.Type != wsproto.TypeChainCmdAck {
-		t.Fatalf("expected chain_cmd_ack, got %s", env.Type)
+	if env.Type != wsproto.TypeRuleCmdAck {
+		t.Fatalf("expected rule_cmd_ack, got %s", env.Type)
 	}
 	if env.ID != reqID {
 		t.Fatalf("ack envelope ID = %q, want %q (must pair with request)", env.ID, reqID)
 	}
-	var ack wsproto.ChainCmdAck
+	var ack wsproto.RuleCmdAck
 	if err := json.Unmarshal(env.Payload, &ack); err != nil {
 		t.Fatal(err)
 	}
@@ -531,11 +459,10 @@ func TestHubCloseSendsGoingAway(t *testing.T) {
 	c := dialWS(t, srv)
 	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
-	_ = recvEnvelope(t, c) // hello_ack
+	_ = recvEnvelope(t, c)
 
 	hub.Close()
 
-	// The client's next read should observe a close frame with StatusGoingAway.
 	_, _, err := c.Read(context.Background())
 	var ce websocket.CloseError
 	if !errors.As(err, &ce) {

@@ -140,105 +140,161 @@ func (c *Client) Health() error {
 	return nil
 }
 
-// GetRuleset fetches the full segmented ruleset currently held by daemon.
-func (c *Client) GetRuleset() (OwnerRuleset, error) {
-	buf, code, err := c.do(http.MethodGet, "/v1/ruleset", nil)
+// StatusResp holds the daemon's connection status.
+type StatusResp struct {
+	Connected bool   `json:"connected"`
+	NodeName  string `json:"node_name,omitempty"`
+	NodeID    int64  `json:"node_id,omitempty"`
+}
+
+// Status returns the daemon's connection status and node identity.
+func (c *Client) Status() (StatusResp, error) {
+	buf, code, err := c.do(http.MethodGet, "/v1/status", nil)
+	if err != nil {
+		return StatusResp{}, err
+	}
+	if code/100 != 2 {
+		return StatusResp{}, fmt.Errorf("daemon status: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
+	}
+	var resp StatusResp
+	if err := json.Unmarshal(buf, &resp); err != nil {
+		return StatusResp{}, fmt.Errorf("daemon status: decode: %w", err)
+	}
+	return resp, nil
+}
+
+// ListRules returns the active rule list from the daemon. When connected
+// to a server, these are the server-managed rules; otherwise local rules.
+func (c *Client) ListRules() ([]nft.Rule, error) {
+	buf, code, err := c.do(http.MethodGet, "/v1/rules", nil)
 	if err != nil {
 		return nil, err
 	}
 	if code/100 != 2 {
-		return nil, fmt.Errorf("daemon ruleset: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
+		return nil, fmt.Errorf("daemon rules: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
 	}
-	var payload fullPayload
-	if err := json.Unmarshal(buf, &payload); err != nil {
-		return nil, fmt.Errorf("daemon ruleset: decode: %w", err)
+	var resp struct {
+		Rules []nft.Rule `json:"rules"`
 	}
-	if payload.Owners == nil {
-		payload.Owners = OwnerRuleset{}
+	if err := json.Unmarshal(buf, &resp); err != nil {
+		return nil, fmt.Errorf("daemon rules: decode: %w", err)
 	}
-	return payload.Owners, nil
+	if resp.Rules == nil {
+		resp.Rules = []nft.Rule{}
+	}
+	return resp.Rules, nil
 }
 
-// PostRuleset replaces the daemon's ruleset segment for owner with rules.
-// Passing an empty slice clears the segment. Returns an error with the
-// daemon's response body on non-2xx so the caller can show conflict /
-// validation messages verbatim.
-func (c *Client) PostRuleset(owner string, rules []nft.Rule) error {
-	if strings.TrimSpace(owner) == "" {
-		return errors.New("daemonclient: owner is required")
+// CreateRuleReq is the body for POST /v1/rules.
+type CreateRuleReq struct {
+	Proto      string `json:"proto"`
+	ExitHost   string `json:"exit_host"`
+	ExitPort   int    `json:"exit_port"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode"`
+	Comment    string `json:"comment"`
+	Name       string `json:"name"`
+}
+
+// CreateRuleResp is the response from POST /v1/rules.
+type CreateRuleResp struct {
+	Entry      string `json:"entry"`
+	ListenPort int    `json:"listen_port"`
+}
+
+// CreateRule creates a rule. When the daemon is connected to a server the
+// rule is created server-side; otherwise it is managed locally.
+func (c *Client) CreateRule(req CreateRuleReq) (CreateRuleResp, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return CreateRuleResp{}, err
 	}
+	buf, code, err := c.do(http.MethodPost, "/v1/rules", body)
+	if err != nil {
+		return CreateRuleResp{}, err
+	}
+	if code/100 != 2 {
+		msg := strings.TrimSpace(string(buf))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", code)
+		}
+		return CreateRuleResp{}, errors.New(msg)
+	}
+	var resp CreateRuleResp
+	if err := json.Unmarshal(buf, &resp); err != nil {
+		return CreateRuleResp{}, fmt.Errorf("daemon create rule: decode: %w", err)
+	}
+	return resp, nil
+}
+
+// UpdateRuleReq is the body for PUT /v1/rules/{id}.
+type UpdateRuleReq struct {
+	Proto      string `json:"proto"`
+	ExitHost   string `json:"exit_host"`
+	ExitPort   int    `json:"exit_port"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode"`
+	Comment    string `json:"comment"`
+	Name       string `json:"name"`
+}
+
+// UpdateRule updates an existing rule identified by id. Server rules use
+// numeric IDs; local rules use hex IDs.
+func (c *Client) UpdateRule(id string, req UpdateRuleReq) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	buf, code, err := c.do(http.MethodPut, "/v1/rules/"+url.PathEscape(id), body)
+	if err != nil {
+		return err
+	}
+	if code/100 != 2 {
+		msg := strings.TrimSpace(string(buf))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", code)
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// DeleteRule deletes a rule identified by id.
+func (c *Client) DeleteRule(id string) error {
+	buf, code, err := c.do(http.MethodDelete, "/v1/rules/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	if code/100 != 2 {
+		msg := strings.TrimSpace(string(buf))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", code)
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// ApplyRuleset pushes a complete ruleset for the "panel" owner segment to the
+// daemon. Used by the server's self-node dispatch path to replicate what the
+// WS apply_ruleset frame does for remote nodes. The daemon replaces its panel
+// segment atomically and applies to the kernel.
+func (c *Client) ApplyRuleset(rules []nft.Rule) error {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
-	body, err := json.Marshal(segmentPayload{Rules: rules})
-	if err != nil {
-		return err
-	}
-	buf, code, err := c.do(http.MethodPost, "/v1/ruleset/"+url.PathEscape(owner), body)
-	if err != nil {
-		return err
-	}
-	if code/100 != 2 {
-		return fmt.Errorf("daemon push %s: HTTP %d: %s", owner, code, strings.TrimSpace(string(buf)))
-	}
-	return nil
-}
-
-// ChainEdit asks the daemon to apply an edit (listen_port/mode/comment) to
-// this node's hop in a chain. The daemon relays it to the server and blocks
-// for the verdict; a non-2xx body is the server's rejection reason (e.g.
-// "端口被占用") surfaced verbatim so the TUI can show it.
-func (c *Client) ChainEdit(chainID int64, listenPort int, mode, comment string) error {
 	body, err := json.Marshal(struct {
-		ChainID    int64  `json:"chain_id"`
-		ListenPort int    `json:"listen_port"`
-		Mode       string `json:"mode"`
-		Comment    string `json:"comment"`
-	}{chainID, listenPort, mode, comment})
+		Rules []nft.Rule `json:"rules"`
+	}{Rules: rules})
 	if err != nil {
 		return err
 	}
-	buf, code, err := c.do(http.MethodPost, "/v1/chain/edit", body)
-	if err != nil {
-		return err
-	}
-	if code/100 != 2 {
-		// The body is the server's user-facing rejection reason (e.g.
-		// "端口被占用"); surface it verbatim with no technical prefix so the
-		// TUI can show it as the primary message. Fall back to the status
-		// code only when the body is empty and carries no reason.
-		msg := strings.TrimSpace(string(buf))
-		if msg == "" {
-			msg = fmt.Sprintf("HTTP %d", code)
-		}
-		return errors.New(msg)
-	}
-	return nil
-}
-
-// ChainDelete asks the daemon to delete the entire chain this node
-// participates in. The daemon relays it to the server and blocks for the
-// verdict.
-func (c *Client) ChainDelete(chainID int64) error {
-	body, err := json.Marshal(struct {
-		ChainID int64 `json:"chain_id"`
-	}{chainID})
-	if err != nil {
-		return err
-	}
-	buf, code, err := c.do(http.MethodPost, "/v1/chain/delete", body)
+	buf, code, err := c.do(http.MethodPost, "/v1/apply", body)
 	if err != nil {
 		return err
 	}
 	if code/100 != 2 {
-		// The body is the server's user-facing rejection reason; surface it
-		// verbatim with no technical prefix so the TUI shows it as the
-		// primary message. Fall back to the status code only on an empty body.
-		msg := strings.TrimSpace(string(buf))
-		if msg == "" {
-			msg = fmt.Sprintf("HTTP %d", code)
-		}
-		return errors.New(msg)
+		return fmt.Errorf("daemon apply: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
 	}
 	return nil
 }

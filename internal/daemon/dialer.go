@@ -38,9 +38,12 @@ type DialerConfig struct {
 	Token        string
 	AgentVersion string
 
-	GetState      func() (OwnerRuleset, AgentMeta)
-	OnApply       func(ctx context.Context, rev string, rules []nft.Rule) error
-	OnPanelNotice func(forwards []wsproto.Forward) // optional; nil = skip notice
+	GetState func() (OwnerRuleset, AgentMeta)
+	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) error
+
+	// OnMigrated is called after a successful migrate_rules handshake.
+	// The daemon clears the tui segment so rules now live server-side only.
+	OnMigrated func()
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
 	CountersFn func() []wsproto.CounterSample
@@ -54,14 +57,18 @@ type upgradeResult struct {
 type Dialer struct {
 	cfg DialerConfig
 
-	panelCh   chan []nft.Rule
 	upgradeCh chan upgradeResult
 
 	cmdCh     chan wsproto.Envelope
 	pendMu    sync.Mutex
-	pending   map[string]chan wsproto.ChainCmdAck
+	pending   map[string]chan wsproto.RuleCmdAck
 	idSeq     atomic.Uint64
 	connected atomic.Bool
+
+	// nodeMu guards nodeID/nodeName set on successful hello_ack.
+	nodeMu   sync.Mutex
+	nodeID   int64
+	nodeName string
 
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -71,10 +78,9 @@ type Dialer struct {
 func NewDialer(cfg DialerConfig) *Dialer {
 	return &Dialer{
 		cfg:       cfg,
-		panelCh:   make(chan []nft.Rule, 1),
 		upgradeCh: make(chan upgradeResult, 1),
 		cmdCh:     make(chan wsproto.Envelope),
-		pending:   make(map[string]chan wsproto.ChainCmdAck),
+		pending:   make(map[string]chan wsproto.RuleCmdAck),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}
@@ -92,49 +98,75 @@ func (d *Dialer) Done() <-chan struct{} {
 	return d.done
 }
 
-// NotifyPanelEdited accepts a new panel-segment snapshot from the
-// unix-socket handler after a TUI edit to a server-managed forward.
-// Last-write-wins: drain the stale snapshot and push the newer one so
-// only the latest state reaches the panel.
-func (d *Dialer) NotifyPanelEdited(rules []nft.Rule) {
-	cp := append([]nft.Rule(nil), rules...)
-	select {
-	case d.panelCh <- cp:
-	default:
-		select {
-		case <-d.panelCh:
-		default:
-		}
-		select {
-		case d.panelCh <- cp:
-		default:
-		}
-	}
+// IsConnected reports whether the dialer has an active session.
+func (d *Dialer) IsConnected() bool {
+	return d.connected.Load()
 }
 
-// EditChainHop sends a chain_hop_edit to the server and blocks for the ack.
-// The chain hop's port/mode/comment edit is authoritative server-side; this
+// NodeName returns the node name received from the server's hello_ack.
+func (d *Dialer) NodeName() string {
+	d.nodeMu.Lock()
+	defer d.nodeMu.Unlock()
+	return d.nodeName
+}
+
+// NodeID returns the node ID received from the server's hello_ack.
+func (d *Dialer) NodeID() int64 {
+	d.nodeMu.Lock()
+	defer d.nodeMu.Unlock()
+	return d.nodeID
+}
+
+// CreateRule sends a rule_create command to the server and blocks for the ack.
+func (d *Dialer) CreateRule(ctx context.Context, req wsproto.RuleCreate) (wsproto.RuleCmdAck, error) {
+	p, err := json.Marshal(req)
+	if err != nil {
+		return wsproto.RuleCmdAck{}, err
+	}
+	return d.sendCommand(ctx, wsproto.TypeRuleCreate, p)
+}
+
+// UpdateRule sends a rule_update command to the server and blocks for the ack.
+func (d *Dialer) UpdateRule(ctx context.Context, req wsproto.RuleUpdate) (wsproto.RuleCmdAck, error) {
+	p, err := json.Marshal(req)
+	if err != nil {
+		return wsproto.RuleCmdAck{}, err
+	}
+	return d.sendCommand(ctx, wsproto.TypeRuleUpdate, p)
+}
+
+// MigrateRules sends a migrate_rules command to the server and blocks for ack.
+func (d *Dialer) MigrateRules(ctx context.Context, rules []nft.Rule) (wsproto.RuleCmdAck, error) {
+	p, err := json.Marshal(wsproto.MigrateRules{Rules: rules})
+	if err != nil {
+		return wsproto.RuleCmdAck{}, err
+	}
+	return d.sendCommand(ctx, wsproto.TypeMigrateRules, p)
+}
+
+// EditRuleHop sends a rule_hop_edit to the server and blocks for the ack.
+// The rule hop's port/mode/comment edit is authoritative server-side; this
 // returns the server's verdict (ack.OK / ack.Error) so the TUI can show a
-// precise success or failure (e.g. "端口被占用") instead of failing silently.
-func (d *Dialer) EditChainHop(ctx context.Context, e wsproto.ChainHopEdit) (wsproto.ChainCmdAck, error) {
+// precise success or failure (e.g. port conflict) instead of failing silently.
+func (d *Dialer) EditRuleHop(ctx context.Context, e wsproto.RuleHopEdit) (wsproto.RuleCmdAck, error) {
 	p, err := json.Marshal(e)
 	if err != nil {
-		return wsproto.ChainCmdAck{}, err
+		return wsproto.RuleCmdAck{}, err
 	}
-	return d.sendCommand(ctx, wsproto.TypeChainHopEdit, p)
+	return d.sendCommand(ctx, wsproto.TypeRuleHopEdit, p)
 }
 
-// DeleteChain sends a chain_delete to the server and blocks for the ack.
-func (d *Dialer) DeleteChain(ctx context.Context, chainID int64) (wsproto.ChainCmdAck, error) {
-	p, err := json.Marshal(wsproto.ChainDelete{ChainID: chainID})
+// DeleteRule sends a rule_delete to the server and blocks for the ack.
+func (d *Dialer) DeleteRule(ctx context.Context, ruleID int64) (wsproto.RuleCmdAck, error) {
+	p, err := json.Marshal(wsproto.RuleDelete{RuleID: ruleID})
 	if err != nil {
-		return wsproto.ChainCmdAck{}, err
+		return wsproto.RuleCmdAck{}, err
 	}
-	return d.sendCommand(ctx, wsproto.TypeChainDelete, p)
+	return d.sendCommand(ctx, wsproto.TypeRuleDelete, p)
 }
 
 // sendCommand writes a command frame tagged with a fresh request ID and waits
-// for the matching ChainCmdAck (correlated by Envelope.ID) or ctx expiry. It
+// for the matching RuleCmdAck (correlated by Envelope.ID) or ctx expiry. It
 // fails fast when no session is up: with no serve loop draining cmdCh the send
 // would otherwise block until the caller's timeout. This fast-fail also rejects
 // commands during a reconnect-backoff gap (connected=false between sessions);
@@ -142,12 +174,12 @@ func (d *Dialer) DeleteChain(ctx context.Context, chainID int64) (wsproto.ChainC
 // caller (in this project the TUI user re-presses to retry). A disconnect
 // mid-wait is surfaced by runOnce, which drains pending with a connection-lost
 // ack.
-func (d *Dialer) sendCommand(ctx context.Context, frameType string, payload json.RawMessage) (wsproto.ChainCmdAck, error) {
+func (d *Dialer) sendCommand(ctx context.Context, frameType string, payload json.RawMessage) (wsproto.RuleCmdAck, error) {
 	if !d.connected.Load() {
-		return wsproto.ChainCmdAck{}, errors.New("daemon 未连接面板")
+		return wsproto.RuleCmdAck{}, errors.New("daemon 未连接面板")
 	}
 	id := "cmd-" + strconv.FormatUint(d.idSeq.Add(1), 36)
-	resCh := make(chan wsproto.ChainCmdAck, 1)
+	resCh := make(chan wsproto.RuleCmdAck, 1)
 	d.pendMu.Lock()
 	d.pending[id] = resCh
 	d.pendMu.Unlock()
@@ -160,17 +192,17 @@ func (d *Dialer) sendCommand(ctx context.Context, frameType string, payload json
 	select {
 	case d.cmdCh <- wsproto.Envelope{Type: frameType, ID: id, Payload: payload}:
 	case <-ctx.Done():
-		return wsproto.ChainCmdAck{}, ctx.Err()
+		return wsproto.RuleCmdAck{}, ctx.Err()
 	case <-d.stop:
-		return wsproto.ChainCmdAck{}, errors.New("daemon 停止中")
+		return wsproto.RuleCmdAck{}, errors.New("daemon 停止中")
 	}
 	select {
 	case ack := <-resCh:
 		return ack, nil
 	case <-ctx.Done():
-		return wsproto.ChainCmdAck{}, ctx.Err()
+		return wsproto.RuleCmdAck{}, ctx.Err()
 	case <-d.stop:
-		return wsproto.ChainCmdAck{}, errors.New("daemon 停止中")
+		return wsproto.RuleCmdAck{}, errors.New("daemon 停止中")
 	}
 }
 
@@ -219,7 +251,7 @@ func (d *Dialer) Run(ctx context.Context) {
 
 // runOnce dials, performs hello + optional register, then enters the
 // read/write loop until disconnection. helloAcked is true when the session
-// successfully completed hello_ack — the caller uses this to reset the
+// successfully completed hello_ack -- the caller uses this to reset the
 // reconnect backoff so long-lived sessions don't pay a minute-long penalty
 // after a single panel hiccup.
 func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
@@ -262,16 +294,37 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	}
 	helloAcked = true
 
-	owners, _ := d.cfg.GetState()
+	// Store node identity from the server for status queries.
+	d.nodeMu.Lock()
+	d.nodeID = ha.NodeID
+	d.nodeName = ha.Name
+	d.nodeMu.Unlock()
 
-	// Sync local panel-segment rules so the server DB knows about rules
-	// created via TUI while offline. Without this, the server dispatches
-	// an empty ruleset on connect and overwrites them.
-	if len(owners["panel"]) > 0 {
-		fwds := rulesToForwards(owners["panel"])
-		pp, _ := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
-		if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp}); err != nil {
-			log.Printf("dialer: write initial panel sync: %v", err)
+	// Migrate local tui rules to the server on first connect so they become
+	// server-managed. On success, the callback clears the tui segment locally.
+	owners, _ := d.cfg.GetState()
+	if tuiRules := owners["tui"]; len(tuiRules) > 0 {
+		migPayload, _ := json.Marshal(wsproto.MigrateRules{Rules: tuiRules})
+		if err := writeOne(ctx, ws, wsproto.Envelope{
+			Type:    wsproto.TypeMigrateRules,
+			ID:      "migrate-1",
+			Payload: migPayload,
+		}); err != nil {
+			log.Printf("dialer: write migrate_rules: %v", err)
+		} else {
+			migAck, err := readOne(ctx, ws, dialerReadTimeout)
+			if err != nil {
+				log.Printf("dialer: read migrate_rules ack: %v", err)
+			} else if migAck.Type == wsproto.TypeRuleCmdAck {
+				var ack wsproto.RuleCmdAck
+				if err := json.Unmarshal(migAck.Payload, &ack); err == nil && ack.OK {
+					if d.cfg.OnMigrated != nil {
+						d.cfg.OnMigrated()
+					}
+				} else if err == nil && !ack.OK {
+					log.Printf("dialer: migrate_rules rejected: %s", ack.Error)
+				}
+			}
 		}
 	}
 
@@ -284,7 +337,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		d.pendMu.Lock()
 		for id, ch := range d.pending {
 			select {
-			case ch <- wsproto.ChainCmdAck{Error: "与面板的连接已断开"}:
+			case ch <- wsproto.RuleCmdAck{Error: "与面板的连接已断开"}:
 			default:
 			}
 			delete(d.pending, id)
@@ -376,8 +429,8 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
 				log.Printf("dialer: server error frame: %s", string(env.Payload))
-			case wsproto.TypeChainCmdAck:
-				var ack wsproto.ChainCmdAck
+			case wsproto.TypeRuleCmdAck:
+				var ack wsproto.RuleCmdAck
 				if err := json.Unmarshal(env.Payload, &ack); err != nil {
 					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
 					continue
@@ -416,19 +469,6 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cp}); err != nil {
 				log.Printf("dialer: write %s: %v", wsproto.TypeCounters, err)
 			}
-		case rules := <-d.panelCh:
-			if d.cfg.OnPanelNotice == nil {
-				continue
-			}
-			fwds := rulesToForwards(rules)
-			pp, err := json.Marshal(wsproto.PanelSegmentEdit{Forwards: fwds})
-			if err != nil {
-				log.Printf("dialer: marshal %s: %v", wsproto.TypePanelSegmentEdit, err)
-				continue
-			}
-			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypePanelSegmentEdit, Payload: pp}); err != nil {
-				log.Printf("dialer: write %s: %v", wsproto.TypePanelSegmentEdit, err)
-			}
 		case res := <-d.upgradeCh:
 			ap, _ := json.Marshal(res.ack)
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeUpgradeAck, ID: res.id, Payload: ap}); err != nil {
@@ -440,27 +480,6 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			}
 		}
 	}
-}
-
-func rulesToForwards(rs []nft.Rule) []wsproto.Forward {
-	out := make([]wsproto.Forward, 0, len(rs))
-	for _, r := range rs {
-		f := wsproto.Forward{
-			Proto:         r.Proto,
-			ListenPort:    r.SrcPort,
-			TargetPort:    r.DestPort,
-			Comment:       r.Comment,
-			BandwidthMbps: r.BandwidthMbps,
-			Mode:          r.Mode,
-		}
-		if r.DestIP != "" {
-			f.TargetIP = r.DestIP
-		} else {
-			f.TargetIP = r.DestHost
-		}
-		out = append(out, f)
-	}
-	return out
 }
 
 func readOne(ctx context.Context, ws *websocket.Conn, timeout time.Duration) (wsproto.Envelope, error) {

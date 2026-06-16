@@ -95,30 +95,72 @@ func TestHandler_Health(t *testing.T) {
 	}
 }
 
-func TestHandler_GetRuleset_EmptyReturnsEmptyOwnersMap(t *testing.T) {
+func TestHandler_GetStatus_Disconnected(t *testing.T) {
 	_, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/ruleset")
+	resp, err := http.Get(srv.URL + "/v1/status")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var got fullPayload
+	var got statusResp
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Owners) != 0 {
-		t.Fatalf("expected empty owners, got %+v", got.Owners)
+	if got.Connected {
+		t.Fatal("expected disconnected")
 	}
 }
 
-func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
+func TestHandler_ListRules_EmptyReturnsEmptyArray(t *testing.T) {
+	_, srv := newTestServer(t, &fakeDataplane{})
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Rules []nft.Rule `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) != 0 {
+		t.Fatalf("expected empty rules, got %+v", got.Rules)
+	}
+}
+
+func TestHandler_ListRules_ReturnsTuiSegmentWhenDisconnected(t *testing.T) {
+	d := newTestDaemon(t)
+	d.owners = OwnerRuleset{
+		"tui":   {{ID: "t1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
+		"panel": {{ID: "p1", Proto: "tcp", SrcPort: 90, DestIP: "2.0.0.0", DestPort: 90}},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/rules", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var got struct {
+		Rules []nft.Rule `json:"rules"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) != 1 || got.Rules[0].ID != "t1" {
+		t.Fatalf("expected tui rules, got %+v", got.Rules)
+	}
+}
+
+func TestHandler_CreateRule_LocalAppliesAndSaves(t *testing.T) {
 	fa := &fakeDataplane{}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
-	body := `{"rules":[{"id":"r1","proto":"tcp","src_port":8080,"dest_ip":"1.2.3.4","dest_port":80}]}`
-	resp, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json", strings.NewReader(body))
+	body := `{"proto":"tcp","exit_host":"1.2.3.4","exit_port":80,"listen_port":12000}`
+	resp, err := http.Post(srv.URL+"/v1/rules", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +168,8 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
-	if len(fa.nftCalls) != 1 || fa.nftCalls[0][0].SrcPort != 8080 {
-		t.Fatalf("Apply not called with merged ruleset: %+v", fa.nftCalls)
+	if len(fa.nftCalls) != 1 || fa.nftCalls[0][0].SrcPort != 12000 {
+		t.Fatalf("Apply not called with correct rule: %+v", fa.nftCalls)
 	}
 	saved, _, err := LoadState(d.statePath)
 	if err != nil {
@@ -136,57 +178,41 @@ func TestHandler_PostOwnerSegment_AppliesAndSavesAndIsReadable(t *testing.T) {
 	if len(saved["tui"]) != 1 {
 		t.Fatalf("state segment not saved: %+v", saved)
 	}
-
-	resp2, err := http.Get(srv.URL + "/v1/ruleset")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	var got fullPayload
-	if err := json.NewDecoder(resp2.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Owners["tui"]) != 1 || got.Owners["tui"][0].ID != "r1" {
-		t.Fatalf("GET after POST mismatch: %+v", got.Owners)
-	}
 }
 
-func TestHandler_PostOwnerSegment_CrossOwnerPortConflictReturns409(t *testing.T) {
+func TestHandler_CreateRule_AutoAssignsPort(t *testing.T) {
 	fa := &fakeDataplane{}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
-	resp1, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
-		strings.NewReader(`{"rules":[{"id":"t1","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]}`))
+	body := `{"proto":"tcp","exit_host":"1.2.3.4","exit_port":80}`
+	resp, err := http.Post(srv.URL+"/v1/rules", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp1.Body.Close()
-	if resp1.StatusCode != 200 {
-		t.Fatalf("seed tui failed: %d", resp1.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
 	}
-
-	resp2, err := http.Post(srv.URL+"/v1/ruleset/panel", "application/json",
-		strings.NewReader(`{"rules":[{"id":"p1","proto":"tcp","src_port":80,"dest_ip":"2.0.0.0","dest_port":80}]}`))
-	if err != nil {
+	var got createRuleResp
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusConflict {
-		t.Fatalf("expected 409, got %d", resp2.StatusCode)
+	if got.ListenPort < 10001 || got.ListenPort > 20000 {
+		t.Fatalf("auto-assigned port %d out of range", got.ListenPort)
 	}
-	if len(d.owners["tui"]) != 1 || len(d.owners["panel"]) != 0 {
-		t.Fatalf("state mutated despite conflict: %+v", d.owners)
+	if len(d.owners["tui"]) != 1 || d.owners["tui"][0].SrcPort != got.ListenPort {
+		t.Fatalf("state not saved with auto-assigned port: %+v", d.owners["tui"])
 	}
 }
 
-func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testing.T) {
+func TestHandler_CreateRule_ApplyErrorReturns500(t *testing.T) {
 	fa := &fakeDataplane{err: errors.New("nft failed")}
 	d, srv := newTestServer(t, fa)
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
-		strings.NewReader(`{"rules":[{"id":"r1","proto":"tcp","src_port":1,"dest_ip":"1.0.0.0","dest_port":1}]}`))
+	body := `{"proto":"tcp","exit_host":"1.0.0.0","exit_port":1,"listen_port":12000}`
+	resp, err := http.Post(srv.URL+"/v1/rules", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,89 +223,80 @@ func TestHandler_PostOwnerSegment_ApplyErrorReturns500AndDoesNotMutate(t *testin
 	if _, exists := d.owners["tui"]; exists {
 		t.Fatalf("d.owners mutated despite apply error: %+v", d.owners)
 	}
-	saved, _, err := LoadState(d.statePath)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestHandler_UpdateRule_LocalHexID(t *testing.T) {
+	d := newTestDaemon(t)
+	d.owners = OwnerRuleset{
+		"tui": {{ID: "abcd1234", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
 	}
-	if len(saved) != 0 {
-		t.Fatalf("state was saved despite apply error: %+v", saved)
+	body := `{"comment":"updated","listen_port":90}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/abcd1234", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d: %s", w.Code, w.Body.String())
+	}
+	if d.owners["tui"][0].Comment != "updated" || d.owners["tui"][0].SrcPort != 90 {
+		t.Fatalf("rule not updated: %+v", d.owners["tui"][0])
 	}
 }
 
-func TestHandler_PostOwnerSegment_EmptyRulesClearsSegment(t *testing.T) {
-	fa := &fakeDataplane{}
-	d, srv := newTestServer(t, fa)
-	defer srv.Close()
-
-	http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
-		strings.NewReader(`{"rules":[{"id":"x","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]}`))
-	resp, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
-		strings.NewReader(`{"rules":[]}`))
-	if err != nil {
-		t.Fatal(err)
+func TestHandler_UpdateRule_NotFound(t *testing.T) {
+	d := newTestDaemon(t)
+	body := `{"comment":"x"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/nope", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", w.Code)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("status=%d", resp.StatusCode)
+}
+
+func TestHandler_UpdateRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
+	d := newTestDaemon(t)
+	body := `{"listen_port":21000}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/5", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandler_DeleteRule_LocalHexID(t *testing.T) {
+	d := newTestDaemon(t)
+	d.owners = OwnerRuleset{
+		"tui": {{ID: "abcd1234", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/abcd1234", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d: %s", w.Code, w.Body.String())
 	}
 	if _, exists := d.owners["tui"]; exists {
-		t.Fatalf("empty rules POST should drop owner key, got: %+v", d.owners)
+		t.Fatalf("tui segment should be deleted after last rule removed: %+v", d.owners)
 	}
 }
 
-func TestHandler_PostFlatRulesetReturns410Gone(t *testing.T) {
-	_, srv := newTestServer(t, &fakeDataplane{})
-	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/ruleset", "application/json",
-		strings.NewReader(`{"rules":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusGone {
-		t.Fatalf("expected 410 Gone, got %d", resp.StatusCode)
+func TestHandler_DeleteRule_NotFound(t *testing.T) {
+	d := newTestDaemon(t)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/nope", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", w.Code)
 	}
 }
 
-func TestHandler_BadJSONOnOwnerEndpoint(t *testing.T) {
-	_, srv := newTestServer(t, &fakeDataplane{})
-	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/ruleset/tui", "application/json",
-		strings.NewReader("not json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 400 {
-		t.Fatalf("status=%d", resp.StatusCode)
-	}
-}
-
-func TestHandler_MissingOwnerInPathRejected(t *testing.T) {
-	_, srv := newTestServer(t, &fakeDataplane{})
-	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/ruleset/", "application/json",
-		strings.NewReader(`{"rules":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 400 {
-		t.Fatalf("status=%d", resp.StatusCode)
-	}
-}
-
-func TestHandler_PutRulesetNotAllowed(t *testing.T) {
-	_, srv := newTestServer(t, &fakeDataplane{})
-	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/v1/ruleset", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("status=%d", resp.StatusCode)
+func TestHandler_DeleteRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
+	d := newTestDaemon(t)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/9", nil)
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 }
 
@@ -337,14 +354,13 @@ func TestHandleCounters_NilSliceEncodesAsEmptyArray(t *testing.T) {
 	}
 }
 
-func TestPostOwnerSegment_PassesResolvedRulesToReconcile(t *testing.T) {
+func TestCreateRule_PassesResolvedRulesToReconcile(t *testing.T) {
 	fake := &fakeDataplane{}
 	d := newTestDaemon(t)
 	d.dp = fake
 
-	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, BandwidthMbps: 50}}
-	body, _ := json.Marshal(map[string]any{"rules": rules})
-	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 80, ListenPort: 12000})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 
@@ -354,20 +370,15 @@ func TestPostOwnerSegment_PassesResolvedRulesToReconcile(t *testing.T) {
 	if len(fake.nftCalls) != 1 || len(fake.nftCalls[0]) != 1 {
 		t.Fatalf("expected one Reconcile with one rule, got %+v", fake.nftCalls)
 	}
-	got := fake.nftCalls[0][0]
-	if got.SrcPort != 80 || got.BandwidthMbps != 50 {
-		t.Errorf("resolved rule did not reach Reconcile intact: %+v", got)
-	}
 }
 
-func TestPostOwnerSegment_ReconcileErrorReturns500(t *testing.T) {
+func TestCreateRule_ReconcileErrorReturns500(t *testing.T) {
 	fake := &fakeDataplane{err: fmt.Errorf("tc broke")}
 	d := newTestDaemon(t)
 	d.dp = fake
 
-	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}
-	body, _ := json.Marshal(map[string]any{"rules": rules})
-	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 80, ListenPort: 12000})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 
@@ -376,11 +387,10 @@ func TestPostOwnerSegment_ReconcileErrorReturns500(t *testing.T) {
 	}
 }
 
-func TestApplyResolvesDestHost(t *testing.T) {
+func TestCreateRule_ResolvesDestHost(t *testing.T) {
 	fake := &fakeDataplane{}
 	d := newTestDaemon(t)
 	d.dp = fake
-	// fake resolver: example.com -> 192.0.2.5
 	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
 		out := make([]nft.Rule, len(in))
 		for i, r := range in {
@@ -392,9 +402,8 @@ func TestApplyResolvesDestHost(t *testing.T) {
 		return out, true, nil
 	}
 
-	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestHost: "example.com", DestPort: 80}}
-	body, _ := json.Marshal(map[string]any{"rules": rules})
-	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "example.com", ExitPort: 80, ListenPort: 12000})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 
@@ -418,15 +427,13 @@ func TestApplyResolvesDestHost(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsUnresolvableHost(t *testing.T) {
+func TestCreateRule_RejectsUnresolvableHost(t *testing.T) {
 	d := newTestDaemon(t)
 	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
-		// resolver returns rules unchanged: DestHost still set, DestIP empty.
 		return in, false, nil
 	}
-	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestHost: "nowhere.invalid", DestPort: 80}}
-	body, _ := json.Marshal(map[string]any{"rules": rules})
-	req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "nowhere.invalid", ExitPort: 80, ListenPort: 12000})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -484,53 +491,9 @@ func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 	}
 }
 
-func TestPostRulesetPanelInvokesPanelHook(t *testing.T) {
-	dir := t.TempDir()
-	d, err := New(Config{
-		SocketPath: filepath.Join(dir, "s.sock"),
-		StatePath:  filepath.Join(dir, "state.json"),
-		Dataplane:  &fakeDataplane{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	called := make(chan []nft.Rule, 1)
-	d.panelHook = func(r []nft.Rule) { called <- r }
-
-	if err := d.setOwnerRuleset(context.Background(), "panel",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}}, ""); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-called:
-		if len(got) != 1 || got[0].SrcPort != 30000 {
-			t.Fatalf("unexpected panelHook rules: %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("panelHook never called")
-	}
-}
-
-func TestPostRulesetTUIDoesNotInvokePanelHook(t *testing.T) {
-	dir := t.TempDir()
-	d, err := New(Config{
-		SocketPath: filepath.Join(dir, "s.sock"),
-		StatePath:  filepath.Join(dir, "state.json"),
-		Dataplane:  &fakeDataplane{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.panelHook = func(r []nft.Rule) { t.Fatalf("panelHook fired on tui owner write") }
-	if err := d.setOwnerRuleset(context.Background(), "tui",
-		[]nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, ""); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRefreshAndHandlerNoRace(t *testing.T) {
 	// Should pass under `go test -race`. Drives concurrent
-	// handleRulesetOwner POST + refreshOnce calls to ensure no data race
+	// create rule + refreshOnce calls to ensure no data race
 	// on d.owners / d.lastResolved.
 	d := newTestDaemon(t)
 	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
@@ -546,9 +509,8 @@ func TestRefreshAndHandlerNoRace(t *testing.T) {
 	}()
 
 	for i := 0; i < 50; i++ {
-		rules := []nft.Rule{{Proto: "tcp", SrcPort: 80 + i, DestIP: "10.0.0.1", DestPort: 80}}
-		body, _ := json.Marshal(map[string]any{"rules": rules})
-		req := httptest.NewRequest(http.MethodPost, "/v1/ruleset/tui", bytes.NewReader(body))
+		body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 80, ListenPort: 12000 + i})
+		req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 		d.Handler().ServeHTTP(w, req)
 	}
@@ -690,27 +652,41 @@ func TestCounterSamples_DeltasAndReset(t *testing.T) {
 	}
 }
 
-// Without a dialer the node is not panel-connected, so chain edit/delete have
-// no server to relay to and must report unavailable rather than silently
-// no-op or panic on the nil dialer.
-func TestHandleChainEdit_NoDialerReturns503(t *testing.T) {
-	d := newTestDaemon(t)
-	body, _ := json.Marshal(map[string]any{"chain_id": 5, "listen_port": 21000, "mode": "kernel", "comment": "x"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chain/edit", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	d.handleChainEdit(rr, req)
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+func TestParseRuleID(t *testing.T) {
+	cases := []struct {
+		in   string
+		id   int64
+		ok   bool
+	}{
+		{"5", 5, true},
+		{"123", 123, true},
+		{"0", 0, false},      // zero not valid
+		{"", 0, false},       // empty
+		{"abc", 0, false},    // hex
+		{"abcd1234", 0, false}, // hex
+		{"-1", 0, false},     // negative
+	}
+	for _, tc := range cases {
+		got, ok := parseRuleID(tc.in)
+		if ok != tc.ok || got != tc.id {
+			t.Errorf("parseRuleID(%q) = (%d, %v), want (%d, %v)", tc.in, got, ok, tc.id, tc.ok)
+		}
 	}
 }
 
-func TestHandleChainDelete_NoDialerReturns503(t *testing.T) {
+func TestPickLocalFreePort(t *testing.T) {
 	d := newTestDaemon(t)
-	body, _ := json.Marshal(map[string]any{"chain_id": 9})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chain/delete", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	d.handleChainDelete(rr, req)
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+	d.owners = OwnerRuleset{
+		"tui": {{Proto: "tcp", SrcPort: 10001, DestIP: "1.0.0.0", DestPort: 80}},
+	}
+	port := d.pickLocalFreePort("tcp")
+	if port == 0 {
+		t.Fatal("no port available")
+	}
+	if port == 10001 {
+		t.Fatal("picked occupied port")
+	}
+	if port < 10001 || port > 20000 {
+		t.Fatalf("port %d out of range", port)
 	}
 }

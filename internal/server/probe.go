@@ -66,29 +66,26 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	chainID, err := strconv.ParseInt(r.URL.Query().Get("chain"), 10, 64)
+
+	// Accept both "chain" and "rule" query params for backward compat
+	ruleIDStr := r.URL.Query().Get("rule")
+	if ruleIDStr == "" {
+		ruleIDStr = r.URL.Query().Get("chain")
+	}
+	ruleID, err := strconv.ParseInt(ruleIDStr, 10, 64)
 	if err != nil {
-		json.NewEncoder(w).Encode(probeResult{Error: "invalid chain id"})
+		json.NewEncoder(w).Encode(probeResult{Error: "invalid rule id"})
 		return
 	}
-	chain, err := db.GetChain(s.DB, chainID)
+	_, err = db.GetRule(s.DB, ruleID)
 	if err != nil {
-		json.NewEncoder(w).Encode(probeResult{Error: "chain not found"})
+		json.NewEncoder(w).Encode(probeResult{Error: "rule not found"})
 		return
 	}
-	hops, err := db.ListChainHops(s.DB, chainID)
+	hops, err := db.ListRuleHops(s.DB, ruleID)
 	if err != nil || len(hops) == 0 {
 		json.NewEncoder(w).Encode(probeResult{Error: "no hops"})
 		return
-	}
-	fwds, err := db.ListForwardsByChain(s.DB, chainID)
-	if err != nil {
-		json.NewEncoder(w).Encode(probeResult{Error: "cannot load forwards"})
-		return
-	}
-	fwdByNode := make(map[int64]*db.Forward)
-	for _, f := range fwds {
-		fwdByNode[f.NodeID] = f
 	}
 
 	type probeTask struct {
@@ -99,18 +96,13 @@ func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	var tasks []probeTask
 	for i, h := range hops {
-		f := fwdByNode[h.NodeID]
-		if f == nil {
-			continue
-		}
-		target := net.JoinHostPort(f.TargetIP, strconv.Itoa(f.TargetPort))
+		target := net.JoinHostPort(h.TargetHost, strconv.Itoa(h.TargetPort))
 		nodeName := fmt.Sprintf("#%d", h.NodeID)
 		if n, err := db.GetNode(s.DB, h.NodeID); err == nil {
 			nodeName = n.Name
 		}
 		tasks = append(tasks, probeTask{idx: i, nodeID: h.NodeID, name: nodeName, target: target})
 	}
-	_ = chain
 
 	results := make([]hopProbe, len(tasks))
 	var wg sync.WaitGroup

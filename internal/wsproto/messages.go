@@ -19,10 +19,12 @@ const (
 	TypeApplyRuleset     = "apply_ruleset"
 	TypeApplyAck         = "apply_ack"
 	TypeCounters         = "counters"
-	TypePanelSegmentEdit = "panel_segment_edit"
-	TypeChainHopEdit     = "chain_hop_edit"
-	TypeChainDelete      = "chain_delete"
-	TypeChainCmdAck      = "chain_cmd_ack"
+	TypeRuleHopEdit      = "rule_hop_edit"
+	TypeRuleDelete       = "rule_delete"
+	TypeRuleCmdAck       = "rule_cmd_ack"
+	TypeRuleCreate       = "rule_create"
+	TypeRuleUpdate       = "rule_update"
+	TypeMigrateRules     = "migrate_rules"
 	TypeUpgrade          = "upgrade"
 	TypeUpgradeAck       = "upgrade_ack"
 	TypeProbe            = "probe"
@@ -42,19 +44,29 @@ type Envelope struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-// Forward is the panel-side rule view shared by panel_segment_edit.
-// It intentionally differs from nft.Rule: panel storage doesn't need
-// DestHost (daemon-resolved) or the wire-internal ID, and uses
-// listen_port/target_ip/target_port field names that match the forwards
-// DB schema rather than nft.Rule's kernel-side names.
-type Forward struct {
-	Proto         string `json:"proto"`
-	ListenPort    int    `json:"listen_port"`
-	TargetIP      string `json:"target_ip"`
-	TargetPort    int    `json:"target_port"`
-	Comment       string `json:"comment,omitempty"`
-	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
-	Mode          string `json:"mode,omitempty"`
+type RuleCreate struct {
+	Proto      string `json:"proto"`
+	ExitHost   string `json:"exit_host"`
+	ExitPort   int    `json:"exit_port"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode"`
+	Comment    string `json:"comment"`
+	Name       string `json:"name"`
+}
+
+type RuleUpdate struct {
+	RuleID     int64  `json:"rule_id"`
+	Proto      string `json:"proto"`
+	ExitHost   string `json:"exit_host"`
+	ExitPort   int    `json:"exit_port"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode"`
+	Comment    string `json:"comment"`
+	Name       string `json:"name"`
+}
+
+type MigrateRules struct {
+	Rules []nft.Rule `json:"rules"`
 }
 
 type Hello struct {
@@ -105,40 +117,31 @@ type Counters struct {
 	Samples []CounterSample `json:"samples"`
 }
 
-// PanelSegmentEdit carries a node's edits to its panel-segment forwards
-// back to the server: a full snapshot of the segment, not a delta. The server locates each forward by
-// (node_id, proto, listen_port), reads chain_id from the DB to decide
-// whether the row is editable, and persists non-chain edits into the
-// forwards table — so chain_id never needs to ride on the wire.
-type PanelSegmentEdit struct {
-	Forwards []Forward `json:"forwards"`
-}
-
-// ChainHopEdit carries a node's edit to its single hop in a relay chain.
-// The hop is located server-side by (chain_id, connection node) — a chain
+// RuleHopEdit carries a node's edit to its single hop in a relay rule.
+// The hop is located server-side by (rule_id, connection node) — a rule
 // can't repeat a node — so neither position nor target rides on the wire.
 // Only listen_port/mode/comment are editable; the server recomputes targets
-// and uses chain.proto, so the relay skeleton can't be rewritten from a node.
-type ChainHopEdit struct {
-	ChainID    int64  `json:"chain_id"`
+// and uses rule.proto, so the relay skeleton can't be rewritten from a node.
+type RuleHopEdit struct {
+	RuleID     int64  `json:"rule_id"`
 	ListenPort int    `json:"listen_port"`
 	Mode       string `json:"mode,omitempty"`
 	Comment    string `json:"comment,omitempty"`
 }
 
-// ChainDelete asks the server to delete an entire chain (all hops on all
-// nodes), identified by ChainID. The requesting node must participate in it.
-type ChainDelete struct {
-	ChainID int64 `json:"chain_id"`
+// RuleDelete asks the server to delete an entire rule (all hops on all
+// nodes), identified by RuleID. The requesting node must participate in it.
+type RuleDelete struct {
+	RuleID int64 `json:"rule_id"`
 }
 
-// ChainCmdAck is the server's reply to ChainHopEdit/ChainDelete, matched to
+// RuleCmdAck is the server's reply to RuleHopEdit/RuleDelete, matched to
 // the request via Envelope.ID. OK==true requires Error=="". Entry is only
-// meaningful on a successful ChainHopEdit, where it carries the chain's
-// copyable entry endpoint; a ChainDelete ack leaves it empty because the
-// deleted chain has no endpoint left to surface. Mirrors ApplyAck's OK+Error
+// meaningful on a successful RuleHopEdit, where it carries the rule's
+// copyable entry endpoint; a RuleDelete ack leaves it empty because the
+// deleted rule has no endpoint left to surface. Mirrors ApplyAck's OK+Error
 // contract: OK is the load-bearing signal, Error is human context.
-type ChainCmdAck struct {
+type RuleCmdAck struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	Entry string `json:"entry,omitempty"`

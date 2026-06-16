@@ -11,16 +11,13 @@ import (
 )
 
 // daemonClient is the subset of daemonclient.Client the TUI relies on.
-// Declared locally so the TUI test suite can substitute a fake; the
-// return type uses daemonclient.OwnerRuleset because Go's interface
-// matching is strict on named-vs-unnamed map types — *daemonclient.Client
-// declares OwnerRuleset, so the TUI's interface must use the same name
-// for the structural match to hold.
+// Declared locally so the TUI test suite can substitute a fake.
 type daemonClient interface {
-	GetRuleset() (daemonclient.OwnerRuleset, error)
-	PostRuleset(owner string, rules []nft.Rule) error
-	ChainEdit(chainID int64, listenPort int, mode, comment string) error
-	ChainDelete(chainID int64) error
+	Status() (daemonclient.StatusResp, error)
+	ListRules() ([]nft.Rule, error)
+	CreateRule(daemonclient.CreateRuleReq) (daemonclient.CreateRuleResp, error)
+	UpdateRule(id string, req daemonclient.UpdateRuleReq) error
+	DeleteRule(id string) error
 }
 
 type viewMode int
@@ -54,10 +51,10 @@ type model struct {
 	mode   viewMode
 	rules  []nft.Rule
 	cursor int
-	// editingChainID is the chain a chain-hop edit targets (0 = the
-	// row is not a chain hop). It routes submitEdit to the chain command path
+	// editingRuleID is the rule a rule-hop edit targets (0 = the
+	// row is not a rule hop). It routes submitEdit to the rule command path
 	// and selects the field-lock set.
-	editingChainID int64
+	editingRuleID int64
 
 	inputs       []textinput.Model
 	focusedInput int
@@ -70,41 +67,46 @@ type model struct {
 	width  int
 	height int
 
+	connected bool
+	nodeName  string
+
 	client daemonClient
 }
 
 // Run starts the TUI bound to the given daemon client. Caller (cmd) is
 // responsible for verifying the daemon is reachable before invoking Run.
 func Run(client daemonClient) error {
-	rules, err := loadInitialRules(client)
+	rules, connected, nodeName, err := loadInitialRules(client)
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(initialModel(client, rules), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(client, rules, connected, nodeName), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func initialModel(client daemonClient, rules []nft.Rule) model {
+func initialModel(client daemonClient, rules []nft.Rule, connected bool, nodeName string) model {
 	return model{
-		mode:   viewList,
-		rules:  rules,
-		inputs: buildInputs(),
-		client: client,
+		mode:      viewList,
+		rules:     rules,
+		inputs:    buildInputs(),
+		client:    client,
+		connected: connected,
+		nodeName:  nodeName,
 	}
 }
 
-// loadInitialRules fetches the panel-segment ruleset from the daemon.
-func loadInitialRules(client daemonClient) ([]nft.Rule, error) {
-	owners, err := client.GetRuleset()
+// loadInitialRules fetches the active ruleset and connection status from the daemon.
+func loadInitialRules(client daemonClient) ([]nft.Rule, bool, string, error) {
+	st, _ := client.Status()
+	rules, err := client.ListRules()
 	if err != nil {
-		return nil, fmt.Errorf("加载规则失败: %w", err)
+		return nil, false, "", fmt.Errorf("加载规则失败: %w", err)
 	}
-	panelRules := owners["panel"]
-	if panelRules == nil {
-		panelRules = []nft.Rule{}
+	if rules == nil {
+		rules = []nft.Rule{}
 	}
-	return panelRules, nil
+	return rules, st.Connected, st.NodeName, nil
 }
 
 func (m model) totalRows() int {
@@ -116,11 +118,12 @@ func (m model) rowAt(i int) nft.Rule {
 }
 
 // lockedFields returns the form field indices that stay read-only for the
-// row being edited. Standalone rows lock nothing — all fields are editable.
-// Chain rows lock proto+target (the relay skeleton owned by the server) but
-// free listen_port/mode/comment.
+// row being edited. Single-hop and local rows lock nothing — all fields are
+// editable. Multi-hop chain rows lock proto+target (the relay skeleton owned
+// by the server) but free listen_port/mode/comment.
 func (m model) lockedFields() map[int]bool {
-	if m.editingChainID != 0 {
+	r := m.rowAt(m.cursor)
+	if r.HopCount > 1 {
 		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
 	}
 	return nil
@@ -141,7 +144,7 @@ func buildInputs() []textinput.Model {
 	// modeIdx instead.
 	return []textinput.Model{
 		mk("", 0), // fProto placeholder
-		mk("监听端口 1-65535", 12),
+		mk("监听端口（空=自动）", 12),
 		mk("目标 IPv4 或域名", 32),
 		mk("目标端口", 12),
 		mk("可选备注", 40),
@@ -175,12 +178,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) refresh() {
-	rules, err := loadInitialRules(m.client)
+	rules, connected, nodeName, err := loadInitialRules(m.client)
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
 	m.rules = rules
+	m.connected = connected
+	m.nodeName = nodeName
 	if m.cursor >= m.totalRows() {
 		m.cursor = m.totalRows() - 1
 	}
@@ -188,17 +193,4 @@ func (m *model) refresh() {
 		m.cursor = 0
 	}
 	m.status = "已从 daemon 重新加载"
-}
-
-// commit posts a full panel-segment snapshot to the daemon. Raw rules go
-// on the wire — the daemon resolves hostnames at apply time — so
-// DestHost/DestIP are sent as the user typed them.
-func commit(client daemonClient, rules []nft.Rule) ([]nft.Rule, error) {
-	if rules == nil {
-		rules = []nft.Rule{}
-	}
-	if err := client.PostRuleset("panel", rules); err != nil {
-		return nil, err
-	}
-	return rules, nil
 }

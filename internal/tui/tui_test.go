@@ -24,50 +24,88 @@ func stripANSI(s string) string {
 // fakeDaemonClient stubs the daemonClient interface for TUI tests so
 // they don't have to spin up a real daemon over unix sockets.
 type fakeDaemonClient struct {
-	owners      daemonclient.OwnerRuleset
-	postedOwner string
-	postedRules []nft.Rule
-	postErr     error
+	rules     []nft.Rule // returned by ListRules
+	connected bool
+	nodeName  string
 
-	chainEdits []struct {
-		ChainID    int64
-		ListenPort int
-		Mode       string
-		Comment    string
+	// createResp is returned by CreateRule; createErr overrides with an error.
+	createResp daemonclient.CreateRuleResp
+	createErr  error
+	creates    []daemonclient.CreateRuleReq
+
+	ruleEdits []struct {
+		ID  string
+		Req daemonclient.UpdateRuleReq
 	}
-	chainDeletes []int64
-	chainErr     error
+	ruleDeletes []string
+	ruleErr     error
 }
 
-func (f *fakeDaemonClient) GetRuleset() (daemonclient.OwnerRuleset, error) {
-	if f.owners == nil {
-		return daemonclient.OwnerRuleset{}, nil
+func (f *fakeDaemonClient) ListRules() ([]nft.Rule, error) {
+	if f.rules == nil {
+		return []nft.Rule{}, nil
 	}
-	return f.owners, nil
+	return append([]nft.Rule(nil), f.rules...), nil
 }
 
-func (f *fakeDaemonClient) PostRuleset(owner string, rules []nft.Rule) error {
-	if f.postErr != nil {
-		return f.postErr
+func (f *fakeDaemonClient) Status() (daemonclient.StatusResp, error) {
+	return daemonclient.StatusResp{
+		Connected: f.connected,
+		NodeName:  f.nodeName,
+	}, nil
+}
+
+func (f *fakeDaemonClient) CreateRule(req daemonclient.CreateRuleReq) (daemonclient.CreateRuleResp, error) {
+	f.creates = append(f.creates, req)
+	if f.createErr != nil {
+		return daemonclient.CreateRuleResp{}, f.createErr
 	}
-	f.postedOwner = owner
-	f.postedRules = append([]nft.Rule(nil), rules...)
+	// Simulate: daemon assigns a listen port and adds the rule to its store.
+	lp := req.ListenPort
+	if lp == 0 {
+		lp = 40000 // fake auto-assign
+	}
+	f.rules = append(f.rules, nft.Rule{
+		ID:       nft.NewRuleID(),
+		Proto:    req.Proto,
+		SrcPort:  lp,
+		DestHost: req.ExitHost,
+		DestPort: req.ExitPort,
+		Comment:  req.Comment,
+		Mode:     req.Mode,
+	})
+	resp := f.createResp
+	if resp.ListenPort == 0 {
+		resp.ListenPort = lp
+	}
+	return resp, nil
+}
+
+func (f *fakeDaemonClient) UpdateRule(id string, req daemonclient.UpdateRuleReq) error {
+	f.ruleEdits = append(f.ruleEdits, struct {
+		ID  string
+		Req daemonclient.UpdateRuleReq
+	}{id, req})
+	return f.ruleErr
+}
+
+func (f *fakeDaemonClient) DeleteRule(id string) error {
+	f.ruleDeletes = append(f.ruleDeletes, id)
+	if f.ruleErr != nil {
+		return f.ruleErr
+	}
+	// Remove the rule from the local store so refresh sees the change.
+	for i := range f.rules {
+		rid := f.rules[i].ID
+		if f.rules[i].RuleID != 0 {
+			rid = strconv.FormatInt(f.rules[i].RuleID, 10)
+		}
+		if rid == id {
+			f.rules = append(f.rules[:i], f.rules[i+1:]...)
+			break
+		}
+	}
 	return nil
-}
-
-func (f *fakeDaemonClient) ChainEdit(chainID int64, listenPort int, mode, comment string) error {
-	f.chainEdits = append(f.chainEdits, struct {
-		ChainID    int64
-		ListenPort int
-		Mode       string
-		Comment    string
-	}{chainID, listenPort, mode, comment})
-	return f.chainErr
-}
-
-func (f *fakeDaemonClient) ChainDelete(chainID int64) error {
-	f.chainDeletes = append(f.chainDeletes, chainID)
-	return f.chainErr
 }
 
 // fixedPortion returns the byte-prefix of s whose lipgloss display width equals
@@ -85,6 +123,13 @@ func fixedPortion(s string, targetCells int) string {
 		}
 	}
 	return s
+}
+
+func newTestModel(fc *fakeDaemonClient, rules []nft.Rule) model {
+	if fc.rules == nil && rules != nil {
+		fc.rules = append([]nft.Rule(nil), rules...)
+	}
+	return initialModel(fc, rules, fc.connected, fc.nodeName)
 }
 
 func TestRenderTableRow_ColumnAlignment(t *testing.T) {
@@ -164,7 +209,7 @@ func TestTruncateCell(t *testing.T) {
 }
 
 func TestProtoSelectorCycles(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, nil)
+	m := newTestModel(&fakeDaemonClient{}, nil)
 	m.enterAddMode()
 	if m.protoIdx != 0 {
 		t.Fatalf("expected protoIdx=0, got %d", m.protoIdx)
@@ -198,7 +243,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 		{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.1", DestPort: 443},
 	}
 	for _, r := range rules {
-		m := initialModel(&fakeDaemonClient{}, rules)
+		m := newTestModel(&fakeDaemonClient{}, rules)
 		for i, rule := range rules {
 			if rule.Proto == r.Proto && rule.SrcPort == r.SrcPort {
 				m.cursor = i
@@ -219,7 +264,7 @@ func TestProtoSelectorEditPreFill(t *testing.T) {
 }
 
 func TestProtoSelectorRenderContainsOptions(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, nil)
+	m := newTestModel(&fakeDaemonClient{}, nil)
 	m.enterAddMode()
 	view := m.renderProtoSelector()
 	plain := stripANSI(view)
@@ -302,24 +347,9 @@ func TestViewList_ColumnConsistency(t *testing.T) {
 	}
 }
 
-func TestCommitPostsToPanel(t *testing.T) {
-	fake := &fakeDaemonClient{}
-	rules := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestHost: "home.example.com", DestPort: 80}}
-	applied, err := commit(fake, rules)
-	if err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if fake.postedOwner != "panel" {
-		t.Errorf("owner = %q, want panel", fake.postedOwner)
-	}
-	if len(applied) != 1 || applied[0].DestHost != "home.example.com" {
-		t.Errorf("expected raw rule with DestHost set, got %+v", applied)
-	}
-}
-
 func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, nil)
+	m := newTestModel(fc, nil)
 	m.enterAddMode()
 	m.protoIdx = 0
 	m.modeIdx = 1
@@ -331,14 +361,38 @@ func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
 	}
-	if len(mm.rules) != 1 || mm.rules[0].Mode != nft.ModeUserspace {
-		t.Fatalf("rule should carry userspace mode: %+v", mm.rules)
+	if len(fc.creates) != 1 {
+		t.Fatalf("expected 1 CreateRule call, got %d", len(fc.creates))
+	}
+	if fc.creates[0].Mode != nft.ModeUserspace {
+		t.Fatalf("CreateRule should carry userspace mode, got %q", fc.creates[0].Mode)
 	}
 }
 
-func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
+func TestSubmitAdd_AutoAssignPort(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, nil)
+	m := newTestModel(fc, nil)
+	m.enterAddMode()
+	m.protoIdx = 0
+	// Leave SrcPort empty for auto-assign.
+	m.inputs[fDestIP].SetValue("10.0.0.1")
+	m.inputs[fDestPort].SetValue("443")
+	nm, _ := m.submitAdd()
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	if len(fc.creates) != 1 {
+		t.Fatalf("expected 1 CreateRule call, got %d", len(fc.creates))
+	}
+	if fc.creates[0].ListenPort != 0 {
+		t.Fatalf("empty SrcPort should send ListenPort=0, got %d", fc.creates[0].ListenPort)
+	}
+}
+
+func TestSubmitAdd_DaemonError(t *testing.T) {
+	fc := &fakeDaemonClient{createErr: fmt.Errorf("UDP 不支持用户态转发")}
+	m := newTestModel(fc, nil)
 	m.enterAddMode()
 	m.protoIdx = 1
 	m.modeIdx = 1
@@ -347,7 +401,10 @@ func TestSubmitAdd_RejectsUDPUserspace(t *testing.T) {
 	m.inputs[fDestPort].SetValue("443")
 	nm, _ := m.submitAdd()
 	if nm.(model).err == "" {
-		t.Fatal("expected validation error for udp+userspace")
+		t.Fatal("expected daemon error to surface")
+	}
+	if !strings.Contains(nm.(model).err, "UDP") {
+		t.Fatalf("expected UDP error, got: %q", nm.(model).err)
 	}
 }
 
@@ -375,17 +432,41 @@ func TestViewListClampsCommentWidthOnNarrowTerminal(t *testing.T) {
 	_ = m.View() // must not panic
 }
 
-func TestLoadInitialRulesLoadsPanelOnly(t *testing.T) {
-	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
-		"tui":   {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
-		"panel": {{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200, ChainID: 5, ChainName: "seednet-vless"}},
-	}}
-	rules, err := loadInitialRules(fc)
+func TestViewListShowsConnectionStatus(t *testing.T) {
+	m := model{
+		mode:      viewList,
+		width:     140,
+		connected: true,
+		nodeName:  "test-node",
+		rules:     []nft.Rule{},
+	}
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "已连接 test-node") {
+		t.Fatalf("expected connection status in title, got:\n%s", out)
+	}
+
+	m.connected = false
+	out = stripANSI(m.View())
+	if !strings.Contains(out, "本地模式") {
+		t.Fatalf("expected local mode in title, got:\n%s", out)
+	}
+}
+
+func TestLoadInitialRulesReturnsActiveRules(t *testing.T) {
+	fc := &fakeDaemonClient{
+		rules:     []nft.Rule{{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200, RuleID: 5, RuleName: "seednet-vless"}},
+		connected: true,
+		nodeName:  "my-node",
+	}
+	rules, connected, nodeName, err := loadInitialRules(fc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rules) != 1 || rules[0].SrcPort != 200 {
-		t.Fatalf("expected 1 panel rule on port 200, got %+v", rules)
+		t.Fatalf("expected 1 rule on port 200, got %+v", rules)
+	}
+	if !connected || nodeName != "my-node" {
+		t.Fatalf("expected connected=true nodeName=my-node, got connected=%v nodeName=%q", connected, nodeName)
 	}
 }
 
@@ -409,7 +490,7 @@ func TestRowAtReturnsRule(t *testing.T) {
 
 func TestDeleteAnyRuleAllowed(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, []nft.Rule{
+	m := newTestModel(fc, []nft.Rule{
 		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 	})
 	m.cursor = 0
@@ -421,10 +502,10 @@ func TestDeleteAnyRuleAllowed(t *testing.T) {
 }
 
 func TestRefreshClampsCursor(t *testing.T) {
-	fc := &fakeDaemonClient{owners: daemonclient.OwnerRuleset{
-		"panel": {{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}},
+	fc := &fakeDaemonClient{rules: []nft.Rule{
+		{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
 	}}
-	m := initialModel(fc, nil)
+	m := newTestModel(fc, nil)
 	m.cursor = 5
 	m.refresh()
 	if m.cursor != 0 {
@@ -432,10 +513,10 @@ func TestRefreshClampsCursor(t *testing.T) {
 	}
 }
 
-func TestSubmitEditPostsPanel(t *testing.T) {
+func TestSubmitEditCallsUpdateRule(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, []nft.Rule{
-		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443, Comment: "old"},
+	m := newTestModel(fc, []nft.Rule{
+		{ID: "aabb", Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443, Comment: "old"},
 	})
 	m.cursor = 0
 	m.enterEditMode()
@@ -447,41 +528,22 @@ func TestSubmitEditPostsPanel(t *testing.T) {
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
 	}
-	if fc.postedOwner != "panel" {
-		t.Fatalf("expected post to panel, got %q", fc.postedOwner)
+	if len(fc.ruleEdits) != 1 {
+		t.Fatalf("expected 1 UpdateRule call, got %d", len(fc.ruleEdits))
 	}
-	if len(mm.rules) != 1 || mm.rules[0].DestIP != "10.9.9.9" {
-		t.Fatalf("rule not updated: %+v", mm.rules)
+	e := fc.ruleEdits[0]
+	if e.ID != "aabb" {
+		t.Fatalf("expected hex ID 'aabb', got %q", e.ID)
 	}
-}
-
-func TestLockedFieldsByRowType(t *testing.T) {
-	m := model{editingChainID: 0}
-	if len(m.lockedFields()) != 0 {
-		t.Fatalf("non-chain should lock nothing, got %v", m.lockedFields())
-	}
-	m = model{editingChainID: 7}
-	lf := m.lockedFields()
-	if !lf[fProto] || !lf[fDestIP] || !lf[fDestPort] || lf[fSrcPort] {
-		t.Fatalf("chain locks wrong fields: %v", lf)
+	if e.Req.ExitHost != "10.9.9.9" || e.Req.ExitPort != 8443 || e.Req.Comment != "new" {
+		t.Fatalf("UpdateRule args wrong: %+v", e)
 	}
 }
 
-func TestEnterEditModeChainRow(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, []nft.Rule{
-		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
-	})
-	m.cursor = 0
-	m.enterEditMode()
-	if m.mode != viewEdit || m.editingChainID != 7 {
-		t.Fatalf("editingChainID=%d, want 7", m.editingChainID)
-	}
-}
-
-func TestSubmitEditChainRowSendsChainEdit(t *testing.T) {
+func TestSubmitEditServerRule(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, []nft.Rule{
-		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless", Comment: "old"},
+	m := newTestModel(fc, []nft.Rule{
+		{ID: "aabb", Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless", Comment: "old"},
 	})
 	m.cursor = 0
 	m.enterEditMode()
@@ -493,19 +555,23 @@ func TestSubmitEditChainRowSendsChainEdit(t *testing.T) {
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
 	}
-	if len(fc.chainEdits) != 1 {
-		t.Fatalf("expected one ChainEdit call, got %d", len(fc.chainEdits))
+	if len(fc.ruleEdits) != 1 {
+		t.Fatalf("expected one UpdateRule call, got %d", len(fc.ruleEdits))
 	}
-	e := fc.chainEdits[0]
-	if e.ChainID != 7 || e.ListenPort != 21555 || e.Mode != nft.ModeUserspace || e.Comment != "new note" {
-		t.Fatalf("ChainEdit args wrong: %+v", e)
+	e := fc.ruleEdits[0]
+	// Server rule uses numeric RuleID.
+	if e.ID != "7" {
+		t.Fatalf("expected numeric ID '7', got %q", e.ID)
+	}
+	if e.Req.ListenPort != 21555 || e.Req.Mode != nft.ModeUserspace || e.Req.Comment != "new note" {
+		t.Fatalf("UpdateRule args wrong: %+v", e)
 	}
 }
 
-func TestSubmitEditChainRowSurfacesServerError(t *testing.T) {
-	fc := &fakeDaemonClient{chainErr: fmt.Errorf("端口被占用")}
-	m := initialModel(fc, []nft.Rule{
-		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+func TestSubmitEditRuleRowSurfacesServerError(t *testing.T) {
+	fc := &fakeDaemonClient{ruleErr: fmt.Errorf("端口被占用")}
+	m := newTestModel(fc, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless"},
 	})
 	m.cursor = 0
 	m.enterEditMode()
@@ -516,21 +582,36 @@ func TestSubmitEditChainRowSurfacesServerError(t *testing.T) {
 	}
 }
 
-func TestDeleteChainRowSendsChainDelete(t *testing.T) {
+func TestDeleteRuleCallsDeleteRule(t *testing.T) {
 	fc := &fakeDaemonClient{}
-	m := initialModel(fc, []nft.Rule{
-		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+	m := newTestModel(fc, []nft.Rule{
+		{ID: "cc11", Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
 	})
 	m.cursor = 0
 	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	m = nm.(model)
 	if m.mode != viewConfirmDelete {
-		t.Fatal("d on a chain row should enter confirm-delete")
+		t.Fatal("d should enter confirm-delete")
 	}
 	nm, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	if len(fc.chainDeletes) != 1 || fc.chainDeletes[0] != 7 {
-		t.Fatalf("expected ChainDelete(7), got %v", fc.chainDeletes)
+	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != "cc11" {
+		t.Fatalf("expected DeleteRule(\"cc11\"), got %v", fc.ruleDeletes)
 	}
+}
+
+func TestDeleteServerRuleUsesRuleID(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := newTestModel(fc, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless"},
+	})
+	m.cursor = 0
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = nm.(model)
+	nm, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != "7" {
+		t.Fatalf("expected DeleteRule(\"7\"), got %v", fc.ruleDeletes)
+	}
+	_ = nm
 }
 
 func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
@@ -546,9 +627,41 @@ func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
 	}
 }
 
-func TestUpdateEditChainRowLocksTargetNotListenPort(t *testing.T) {
-	m := initialModel(&fakeDaemonClient{}, []nft.Rule{
-		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, ChainID: 7, ChainName: "vless"},
+func TestLockedFieldsByHopCount(t *testing.T) {
+	// Single-hop or local: all fields editable.
+	m := model{
+		rules:  []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 1}},
+		cursor: 0,
+	}
+	if len(m.lockedFields()) != 0 {
+		t.Fatalf("single-hop should lock nothing, got %v", m.lockedFields())
+	}
+
+	// Multi-hop: lock proto/dest.
+	m = model{
+		rules:  []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 3, RuleID: 7}},
+		cursor: 0,
+	}
+	lf := m.lockedFields()
+	if !lf[fProto] || !lf[fDestIP] || !lf[fDestPort] || lf[fSrcPort] {
+		t.Fatalf("multi-hop locks wrong fields: %v", lf)
+	}
+}
+
+func TestEnterEditModeRuleRow(t *testing.T) {
+	m := newTestModel(&fakeDaemonClient{}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless"},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	if m.mode != viewEdit || m.editingRuleID != 7 {
+		t.Fatalf("editingRuleID=%d, want 7", m.editingRuleID)
+	}
+}
+
+func TestUpdateEditMultiHopLocksTargetNotListenPort(t *testing.T) {
+	m := newTestModel(&fakeDaemonClient{}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless", HopCount: 3},
 	})
 	m.cursor = 0
 	m.enterEditMode()
@@ -557,14 +670,55 @@ func TestUpdateEditChainRowLocksTargetNotListenPort(t *testing.T) {
 	before := m.inputs[fDestIP].Value()
 	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
 	if nm.(model).inputs[fDestIP].Value() != before {
-		t.Fatal("target IP must be read-only for chain rows")
+		t.Fatal("target IP must be read-only for multi-hop rows")
 	}
 
 	m.focusedInput = fSrcPort
 	m.inputs[fSrcPort].Focus()
 	nm, _ = m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
 	if nm.(model).inputs[fSrcPort].Value() == "21000" {
-		t.Fatal("listen port must be editable for chain rows")
+		t.Fatal("listen port must be editable for multi-hop rows")
 	}
 }
 
+func TestUpdateEditSingleHopAllFieldsEditable(t *testing.T) {
+	m := newTestModel(&fakeDaemonClient{}, []nft.Rule{
+		{Proto: "tcp", SrcPort: 21000, DestIP: "1.2.3.4", DestPort: 443, RuleID: 7, RuleName: "vless", HopCount: 1},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+
+	// Single-hop server rule: all fields editable.
+	m.focusedInput = fDestIP
+	m.inputs[fDestIP].Focus()
+	nm, _ := m.updateEdit(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9")})
+	if nm.(model).inputs[fDestIP].Value() == "1.2.3.4" {
+		t.Fatal("target IP must be editable for single-hop server rules")
+	}
+}
+
+func TestClearAllDeletesEachRule(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := newTestModel(fc, []nft.Rule{
+		{ID: "aa", Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
+		{ID: "bb", Proto: "udp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200},
+		{Proto: "tcp", SrcPort: 300, DestIP: "10.0.0.3", DestPort: 300, RuleID: 5},
+	})
+	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m = nm.(model)
+	if m.mode != viewConfirmClear {
+		t.Fatal("c should enter confirm-clear")
+	}
+	nm, _ = m.updateConfirmClear(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	mm := nm.(model)
+	if mm.err != "" {
+		t.Fatalf("unexpected err: %s", mm.err)
+	}
+	// Should have 3 delete calls: two hex IDs and one numeric RuleID.
+	if len(fc.ruleDeletes) != 3 {
+		t.Fatalf("expected 3 DeleteRule calls, got %d: %v", len(fc.ruleDeletes), fc.ruleDeletes)
+	}
+	if fc.ruleDeletes[0] != "aa" || fc.ruleDeletes[1] != "bb" || fc.ruleDeletes[2] != "5" {
+		t.Fatalf("wrong delete IDs: %v", fc.ruleDeletes)
+	}
+}

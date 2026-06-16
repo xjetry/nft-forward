@@ -33,15 +33,11 @@ type Hub struct {
 	// OnTrafficUpdate, when set, is invoked once per user whose usage was
 	// advanced by a counters batch. The Hub stays a pure transport: it knows
 	// how to accumulate bytes but delegates quota policy (and the re-dispatch
-	// it may trigger) to the owner that wires this callback, so the dispatch
-	// path is never imported here.
+	// it may trigger) to the owner that wires this callback.
 	OnTrafficUpdate func(userID int64)
 
 	// Redispatch re-pushes kernel state to a set of nodes after the hub
-	// mutates chain state on their behalf. Like OnTrafficUpdate it keeps the
-	// hub transport-only: the hub knows which nodes a chain edit touched but
-	// delegates the actual dispatch to the owner that wires this, so the
-	// dispatch path is never imported here.
+	// mutates rule state on their behalf. Keeps the hub transport-only.
 	Redispatch func(nodeIDs []int64)
 
 	mu    sync.RWMutex
@@ -60,8 +56,7 @@ type agentConn struct {
 
 	// closeOnce guards closed so the multiple close paths (a displaced
 	// conn in registerConn, unregisterConn on disconnect, and Hub.Close
-	// on shutdown) can race without double-closing the channel (which
-	// would panic).
+	// on shutdown) can race without double-closing the channel.
 	closeOnce sync.Once
 
 	pendMu  sync.Mutex
@@ -90,8 +85,7 @@ func (h *Hub) IsOnline(nodeID int64) bool {
 // ServeWS handles the /v1/agents WS endpoint. Upgrades the request,
 // reads the mandatory hello frame, validates the bearer token against
 // nodes.secret, registers the conn, and loops on reads dispatching by
-// message type. Returns when the client disconnects, hello fails, or
-// the read deadline expires.
+// message type.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true, // we authenticate via bearer in hello
@@ -125,11 +119,8 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register the conn before sending hello_ack so both sides can rely
-	// on the invariant "hello_ack visible ⇒ conn is in the hub map":
-	// the agent may immediately push counters/register_local, and panel
-	// dispatch may immediately call SendApplyRuleset, with no
-	// goroutine-startup window where the lookup would miss.
+	// Register before hello_ack so both sides can rely on the invariant
+	// "hello_ack visible => conn is in the hub map".
 	ac := &agentConn{
 		nodeID:  node.ID,
 		ws:      ws,
@@ -178,11 +169,7 @@ func (h *Hub) unregisterConn(ac *agentConn) {
 	_ = db.MarkNodeOffline(h.DB, ac.nodeID)
 }
 
-// Close gracefully shuts down every agent connection by sending a
-// StatusGoingAway close frame, so agents distinguish an intentional
-// panel shutdown from a crash and can reconnect without alarm. Bounded
-// by the caller's expectation of a quick shutdown — each close is
-// best-effort and non-blocking.
+// Close gracefully shuts down every agent connection.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	conns := make([]*agentConn, 0, len(h.conns))
@@ -193,9 +180,6 @@ func (h *Hub) Close() {
 	h.mu.Unlock()
 
 	for _, ac := range conns {
-		// Signal the reader/writer loops to stop, then send a polite
-		// close frame. The websocket Close is best-effort: if the conn
-		// is already broken it returns an error we don't care about.
 		ac.signalClose()
 		_ = ac.ws.Close(websocket.StatusGoingAway, "panel shutting down")
 	}
@@ -242,40 +226,38 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev s
 				continue
 			}
 			h.applyCounters(ac.nodeID, co.Samples)
-		case wsproto.TypePanelSegmentEdit:
-			var pse wsproto.PanelSegmentEdit
-			if err := json.Unmarshal(env.Payload, &pse); err != nil {
-				log.Printf("hub: node %d malformed panel_segment_edit: %v", ac.nodeID, err)
-				continue
-			}
-			log.Printf("hub: node %d panel_segment_edit: %d forwards", ac.nodeID, len(pse.Forwards))
-			h.applyPanelEdits(ac.nodeID, pse.Forwards)
-		case wsproto.TypeChainHopEdit:
-			var e wsproto.ChainHopEdit
+		case wsproto.TypeRuleCreate:
+			h.handleRuleCreate(ac, env)
+		case wsproto.TypeRuleUpdate:
+			h.handleRuleUpdate(ac, env)
+		case wsproto.TypeMigrateRules:
+			h.handleMigrateRules(ac, env)
+		case wsproto.TypeRuleHopEdit:
+			var e wsproto.RuleHopEdit
 			if err := json.Unmarshal(env.Payload, &e); err != nil {
-				sendChainAckErr(ac, env.ID, "malformed payload")
+				sendRuleAckErr(ac, env.ID, "malformed payload")
 				continue
 			}
-			entry, cerr := h.applyChainHopEdit(ac.nodeID, e.ChainID, e.ListenPort, e.Mode, e.Comment)
-			ack := wsproto.ChainCmdAck{OK: cerr == nil, Entry: entry}
+			entry, cerr := h.applyRuleHopEdit(ac.nodeID, e.RuleID, e.ListenPort, e.Mode, e.Comment)
+			ack := wsproto.RuleCmdAck{OK: cerr == nil, Entry: entry}
 			if cerr != nil {
 				ack.Error = cerr.Error()
 			}
 			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeChainDelete:
-			var dl wsproto.ChainDelete
+			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+		case wsproto.TypeRuleDelete:
+			var dl wsproto.RuleDelete
 			if err := json.Unmarshal(env.Payload, &dl); err != nil {
-				sendChainAckErr(ac, env.ID, "malformed payload")
+				sendRuleAckErr(ac, env.ID, "malformed payload")
 				continue
 			}
-			cerr := h.applyChainDelete(ac.nodeID, dl.ChainID)
-			ack := wsproto.ChainCmdAck{OK: cerr == nil}
+			cerr := h.applyRuleDelete(ac.nodeID, dl.RuleID)
+			ack := wsproto.RuleCmdAck{OK: cerr == nil}
 			if cerr != nil {
 				ack.Error = cerr.Error()
 			}
 			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: env.ID, Payload: ackP})
+			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
 		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
 			ac.dispatchAck(env)
 		default:
@@ -443,58 +425,51 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 	_ = writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeError, Payload: p})
 }
 
-// applyCounters folds per-rule bytes_delta into the forwards table and the
-// owning user's usage. last_bytes is the most recent delta (UI surfaces it
-// as "current rate input"); total_bytes is monotonically accumulated. The
-// (node_id, listen_port, proto) tuple identifies the rule — there is no
-// rule_id on the wire because agent restarts re-key the same forward.
-//
-// Each sample is resolved to its forward row so we learn the forward id and
-// the user it belongs to; user-owned bytes are added to the user's
-// usage. Touched users are collected and OnTrafficUpdate fires once per
-// user after the loop rather than once per sample, so a batch carrying many
-// of a user's rules triggers a single quota evaluation instead of N.
-//
-// Per-sample failures (DB error, or a lookup miss meaning the rule was
-// deleted on the panel side between the agent's count and the frame's
-// arrival) are logged and the loop continues: counters are recoverable on
-// the next frame, but abandoning the rest of the batch on the first hiccup
-// would lose observability for unrelated rules.
+// applyCounters folds per-rule bytes_delta into the rule_hops table and the
+// owning user's usage. The (node_id, listen_port, proto) tuple identifies
+// the hop. Each sample is resolved to its rule_hop row so we learn the hop
+// id and the owning rule/user.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
-	fwdMap, err := db.ForwardMapByNode(h.DB, nodeID)
+	hopMap, err := db.RuleHopMapByNode(h.DB, nodeID)
 	if err != nil {
-		log.Printf("hub: node %d load forward map for counters: %v", nodeID, err)
+		log.Printf("hub: node %d load rule hop map for counters: %v", nodeID, err)
 		return
 	}
-	// Entry-hop set: only entry hops of a chain count toward user traffic
+	// Entry-hop set: only entry hops (position=0) count toward user traffic
 	// so the same bytes aren't billed once per relay node.
-	entryFwds, err := db.EntryChainForwardIDs(h.DB, nodeID)
+	entryHops, err := db.EntryRuleHopIDs(h.DB, nodeID)
 	if err != nil {
-		log.Printf("hub: node %d load entry chain forwards: %v", nodeID, err)
-		entryFwds = nil // degrade: count all (over-bill rather than silently lose data)
+		log.Printf("hub: node %d load entry rule hops: %v", nodeID, err)
+		entryHops = nil // degrade: count all (over-bill rather than silently lose data)
+	}
+	ruleMap, _ := db.RulesByID(h.DB)
+	if ruleMap == nil {
+		ruleMap = map[int64]*db.Rule{}
 	}
 	touched := map[int64]bool{}
 	for _, s := range samples {
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
-		f, ok := fwdMap[key]
+		rh, ok := hopMap[key]
 		if !ok {
-			log.Printf("hub: node %d counters sample for %s/%d matched no forward row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
+			log.Printf("hub: node %d counters sample for %s/%d matched no rule_hop row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 			continue
 		}
-		if _, err := h.DB.Exec(`UPDATE forwards SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
-			s.BytesDelta, s.BytesDelta, f.ID); err != nil {
+		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
+			s.BytesDelta, s.BytesDelta, rh.ID); err != nil {
 			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
 			continue
 		}
-		if f.OwnerID.Valid && s.BytesDelta > 0 {
-			if f.ChainID.Valid && !entryFwds[f.ID] {
-				continue // non-entry chain hop: skip user billing
-			}
-			if err := db.AddUserTraffic(h.DB, f.OwnerID.Int64, s.BytesDelta); err != nil {
-				log.Printf("hub: user %d traffic add: %v", f.OwnerID.Int64, err)
+		r := ruleMap[rh.RuleID]
+		if r != nil && r.OwnerID.Valid && s.BytesDelta > 0 {
+			// Only bill entry hops to avoid counting the same bytes at every relay
+			if !entryHops[rh.ID] {
 				continue
 			}
-			touched[f.OwnerID.Int64] = true
+			if err := db.AddUserTraffic(h.DB, r.OwnerID.Int64, s.BytesDelta); err != nil {
+				log.Printf("hub: user %d traffic add: %v", r.OwnerID.Int64, err)
+				continue
+			}
+			touched[r.OwnerID.Int64] = true
 		}
 	}
 	if h.OnTrafficUpdate != nil {
@@ -504,89 +479,26 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	}
 }
 
-// applyPanelEdits folds a node's edits to its panel-segment forwards back
-// into the forwards table so the server becomes their authority. Each
-// forward is located by (node_id, proto, listen_port). Only non-chain rows
-// are updated: a chained hop's listen_port/target form a relay skeleton
-// owned by chain orchestration (RegenerateChain wires neighbor hops
-// together), so a node-side edit must never rewrite it — UpdateForward's
-// chain_id IS NULL guard is the second backstop behind this ChainID.Valid
-// skip.
-//
-// Per-edit failures (DB error, or a lookup miss meaning the forward was
-// deleted on the panel side between the node's snapshot and the frame's
-// arrival) are logged and the loop continues, mirroring applyCounters: one
-// bad row shouldn't abandon the rest of the batch.
-func (h *Hub) applyPanelEdits(nodeID int64, forwards []wsproto.Forward) {
-	fwdMap, err := db.ForwardMapByNode(h.DB, nodeID)
-	if err != nil {
-		log.Printf("hub: node %d load forward map for panel edits: %v", nodeID, err)
-		return
-	}
-
-	incoming := make(map[string]bool, len(forwards))
-	for _, f := range forwards {
-		key := fmt.Sprintf("%s/%d", f.Proto, f.ListenPort)
-		incoming[key] = true
-		existing, ok := fwdMap[key]
-		if !ok {
-			if _, err := db.CreateForward(h.DB, &db.Forward{
-				NodeID:     nodeID,
-				Proto:      f.Proto,
-				ListenPort: f.ListenPort,
-				TargetIP:   f.TargetIP,
-				TargetPort: f.TargetPort,
-				Comment:    f.Comment,
-				Mode:       db.NormalizeForwardMode(f.Mode),
-			}); err != nil {
-				log.Printf("hub: node %d panel edit create %s/%d: %v", nodeID, f.Proto, f.ListenPort, err)
-			}
-			continue
-		}
-		if existing.ChainID.Valid {
-			continue
-		}
-		if _, err := db.UpdateForward(h.DB, nodeID, f.Proto, f.ListenPort, f.TargetIP, f.TargetPort, f.Comment, f.Mode); err != nil {
-			log.Printf("hub: node %d panel edit update for %s/%d: %v", nodeID, f.Proto, f.ListenPort, err)
-		}
-	}
-
-	for key, existing := range fwdMap {
-		if incoming[key] {
-			continue
-		}
-		if existing.ChainID.Valid {
-			continue
-		}
-		if _, err := db.DeleteForward(h.DB, existing.ID); err != nil {
-			log.Printf("hub: node %d panel edit delete %s: %v", nodeID, key, err)
-		}
-	}
-}
-
-// applyChainHopEdit folds a node-reported edit to its hop in chainID back
-// into the chain skeleton and re-dispatches every node the regeneration
-// touched, returning the chain's copyable entry endpoint. The hop is located
-// by (chainID, nodeID): a chain can't repeat a node, so that pair is unique.
-// Only listen_port/mode/comment are editable — target/proto stay owned by
-// chain orchestration, which is why RegenerateChain recomputes targets and
-// uses chain.proto. A node may only edit a chain it actually participates in.
-func (h *Hub) applyChainHopEdit(nodeID, chainID int64, listenPort int, mode, comment string) (string, error) {
-	c, err := db.GetChain(h.DB, chainID)
+// applyRuleHopEdit folds a node-reported edit to its hop in ruleID back
+// into the rule skeleton and re-dispatches every node the regeneration
+// touched, returning the rule's copyable entry endpoint. The hop is located
+// by (ruleID, nodeID): a rule can't repeat a node, so that pair is unique.
+func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comment string) (string, error) {
+	r, err := db.GetRule(h.DB, ruleID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("链路不存在")
+		return "", fmt.Errorf("规则不存在")
 	}
 	if err != nil {
 		return "", err
 	}
-	hops, err := db.ListChainHops(h.DB, chainID)
+	hops, err := db.ListRuleHops(h.DB, ruleID)
 	if err != nil {
 		return "", err
 	}
 	found := false
 	inputs := make([]db.HopInput, len(hops))
 	for i, hp := range hops {
-		in := db.HopInput{NodeID: hp.NodeID, TunnelID: hp.TunnelID, Mode: hp.Mode}
+		in := db.HopInput{NodeID: hp.NodeID, Mode: hp.Mode}
 		if hp.NodeID == nodeID {
 			found = true
 			in.DesiredPort = listenPort
@@ -596,14 +508,14 @@ func (h *Hub) applyChainHopEdit(nodeID, chainID int64, listenPort int, mode, com
 		inputs[i] = in
 	}
 	if !found {
-		return "", fmt.Errorf("节点不在该链路上")
+		return "", fmt.Errorf("节点不在该规则上")
 	}
 	tx, err := h.DB.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
-	entry, affected, err := db.RegenerateChain(tx, c, inputs, nil)
+	entry, affected, err := db.RegenerateRule(tx, r, inputs, nil)
 	if err != nil {
 		return "", err
 	}
@@ -616,25 +528,25 @@ func (h *Hub) applyChainHopEdit(nodeID, chainID int64, listenPort int, mode, com
 	return entry, nil
 }
 
-// applyChainDelete removes the whole chain (all hops on all nodes) on behalf
+// applyRuleDelete removes the whole rule (all hops on all nodes) on behalf
 // of a node that participates in it, then re-dispatches every node that ran
-// its forwards so the deleted rules leave the kernel.
-func (h *Hub) applyChainDelete(nodeID, chainID int64) error {
-	hops, err := db.ListChainHops(h.DB, chainID)
+// its hops so the deleted rules leave the kernel.
+func (h *Hub) applyRuleDelete(nodeID, ruleID int64) error {
+	hops, err := db.ListRuleHops(h.DB, ruleID)
 	if err != nil {
 		return err
 	}
-	onChain := false
+	onRule := false
 	for _, hp := range hops {
 		if hp.NodeID == nodeID {
-			onChain = true
+			onRule = true
 			break
 		}
 	}
-	if !onChain {
-		return fmt.Errorf("节点不在该链路上")
+	if !onRule {
+		return fmt.Errorf("节点不在该规则上")
 	}
-	nodes, err := db.DeleteChain(h.DB, chainID)
+	nodes, err := db.DeleteRule(h.DB, ruleID)
 	if err != nil {
 		return err
 	}
@@ -644,8 +556,253 @@ func (h *Hub) applyChainDelete(nodeID, chainID int64) error {
 	return nil
 }
 
-func sendChainAckErr(ac *agentConn, id, msg string) {
-	ackP, _ := json.Marshal(wsproto.ChainCmdAck{OK: false, Error: msg})
-	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeChainCmdAck, ID: id, Payload: ackP})
+// handleRuleCreate creates a new single-hop rule on the requesting node.
+// The node must have an owner (via node.owner_id) who is active and within quota.
+func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
+	var req wsproto.RuleCreate
+	if err := json.Unmarshal(env.Payload, &req); err != nil {
+		sendRuleAckErr(ac, env.ID, "malformed payload")
+		return
+	}
+	node, err := db.GetNode(h.DB, ac.nodeID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "节点不存在")
+		return
+	}
+	if node.OwnerID == nil {
+		sendRuleAckErr(ac, env.ID, "节点无归属用户")
+		return
+	}
+	ownerID := *node.OwnerID
+	u, err := db.GetUserByID(h.DB, ownerID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "归属用户不存在")
+		return
+	}
+	if u.Disabled {
+		sendRuleAckErr(ac, env.ID, "用户已被禁用")
+		return
+	}
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+		sendRuleAckErr(ac, env.ID, "用户已过期")
+		return
+	}
+	total, _ := db.CountRulesForUser(h.DB, ownerID)
+	if total >= u.MaxForwards {
+		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d）", u.MaxForwards))
+		return
+	}
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "内部错误")
+		return
+	}
+	defer tx.Rollback()
+
+	rl := &db.Rule{
+		NodeID:   ac.nodeID,
+		OwnerID:  sql.NullInt64{Int64: ownerID, Valid: true},
+		Name:     req.Name,
+		Proto:    req.Proto,
+		ExitHost: req.ExitHost,
+		ExitPort: req.ExitPort,
+		Comment:  req.Comment,
+	}
+	id, err := db.CreateRule(tx, rl)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, err.Error())
+		return
+	}
+	rl.ID = id
+
+	hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(req.Mode)}
+	if req.ListenPort > 0 {
+		hop.DesiredPort = req.ListenPort
+	}
+	entry, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		sendRuleAckErr(ac, env.ID, "提交失败")
+		return
+	}
+	if h.Redispatch != nil {
+		go h.Redispatch(affected)
+	}
+	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: entry})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
 }
 
+// handleRuleUpdate modifies a single-hop rule's header and regenerates it.
+// Only rules with exactly 1 hop that belong to the node's owner are editable.
+func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
+	var req wsproto.RuleUpdate
+	if err := json.Unmarshal(env.Payload, &req); err != nil {
+		sendRuleAckErr(ac, env.ID, "malformed payload")
+		return
+	}
+	node, err := db.GetNode(h.DB, ac.nodeID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "节点不存在")
+		return
+	}
+	if node.OwnerID == nil {
+		sendRuleAckErr(ac, env.ID, "节点无归属用户")
+		return
+	}
+	rl, err := db.GetRule(h.DB, req.RuleID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "规则不存在")
+		return
+	}
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != *node.OwnerID {
+		sendRuleAckErr(ac, env.ID, "无权操作该规则")
+		return
+	}
+	// Only single-hop rules are editable from a node
+	hops, err := db.ListRuleHops(h.DB, req.RuleID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "读取跳数失败")
+		return
+	}
+	if len(hops) != 1 {
+		sendRuleAckErr(ac, env.ID, "仅支持编辑单跳规则")
+		return
+	}
+
+	rl.Name = req.Name
+	rl.Proto = req.Proto
+	rl.ExitHost = req.ExitHost
+	rl.ExitPort = req.ExitPort
+	rl.Comment = req.Comment
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "内部错误")
+		return
+	}
+	defer tx.Rollback()
+
+	if err := db.UpdateRuleHeader(tx, rl); err != nil {
+		sendRuleAckErr(ac, env.ID, err.Error())
+		return
+	}
+	hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(req.Mode)}
+	if req.ListenPort > 0 {
+		hop.DesiredPort = req.ListenPort
+	}
+	entry, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		sendRuleAckErr(ac, env.ID, "提交失败")
+		return
+	}
+	if h.Redispatch != nil {
+		go h.Redispatch(affected)
+	}
+	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: entry})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+}
+
+// handleMigrateRules bulk-imports rules from an agent's local state.
+// Each rule becomes a new single-hop rule owned by the node's owner.
+func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
+	var req wsproto.MigrateRules
+	if err := json.Unmarshal(env.Payload, &req); err != nil {
+		sendRuleAckErr(ac, env.ID, "malformed payload")
+		return
+	}
+	node, err := db.GetNode(h.DB, ac.nodeID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "节点不存在")
+		return
+	}
+	if node.OwnerID == nil {
+		sendRuleAckErr(ac, env.ID, "节点无归属用户")
+		return
+	}
+	ownerID := *node.OwnerID
+	u, err := db.GetUserByID(h.DB, ownerID)
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "归属用户不存在")
+		return
+	}
+	if u.Disabled {
+		sendRuleAckErr(ac, env.ID, "用户已被禁用")
+		return
+	}
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+		sendRuleAckErr(ac, env.ID, "用户已过期")
+		return
+	}
+
+	total, _ := db.CountRulesForUser(h.DB, ownerID)
+	if total+len(req.Rules) > u.MaxForwards {
+		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d），当前 %d 条，迁入 %d 条", u.MaxForwards, total, len(req.Rules)))
+		return
+	}
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		sendRuleAckErr(ac, env.ID, "内部错误")
+		return
+	}
+	defer tx.Rollback()
+
+	var allAffected []int64
+	for _, r := range req.Rules {
+		exitHost := r.DestIP
+		if r.DestHost != "" {
+			exitHost = r.DestHost
+		}
+		name := r.Comment
+		if name == "" {
+			name = r.RuleName
+		}
+		rl := &db.Rule{
+			NodeID:   ac.nodeID,
+			OwnerID:  sql.NullInt64{Int64: ownerID, Valid: true},
+			Name:     name,
+			Proto:    r.Proto,
+			ExitHost: exitHost,
+			ExitPort: r.DestPort,
+		}
+		id, err := db.CreateRule(tx, rl)
+		if err != nil {
+			sendRuleAckErr(ac, env.ID, fmt.Sprintf("创建规则失败: %v", err))
+			return
+		}
+		rl.ID = id
+		hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(r.Mode)}
+		if r.SrcPort > 0 {
+			hop.DesiredPort = r.SrcPort
+		}
+		_, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+		if err != nil {
+			sendRuleAckErr(ac, env.ID, fmt.Sprintf("生成规则失败: %v", err))
+			return
+		}
+		allAffected = append(allAffected, affected...)
+	}
+
+	if err := tx.Commit(); err != nil {
+		sendRuleAckErr(ac, env.ID, "提交失败")
+		return
+	}
+	if h.Redispatch != nil {
+		go h.Redispatch(allAffected)
+	}
+	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+}
+
+func sendRuleAckErr(ac *agentConn, id, msg string) {
+	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: false, Error: msg})
+	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: id, Payload: ackP})
+}

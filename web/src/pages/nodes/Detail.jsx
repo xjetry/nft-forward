@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTime, nullStr } from '../../lib/fmt'
+import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText, Modal } from '../../components/ui'
 
 export default function NodeDetail() {
   const { id } = useParams()
@@ -11,6 +11,7 @@ export default function NodeDetail() {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
   const [relayHost, setRelayHost] = useState('')
+  const [showComposite, setShowComposite] = useState(false)
   const toast = useToast()
   const blurred = useBlur()
 
@@ -28,7 +29,8 @@ export default function NodeDetail() {
   if (!data) return <Layout><Empty title="节点不存在" /></Layout>
 
   const { node, panel_url, panel_url_configured, server_version } = data
-  const forwards = data.forwards || []
+  const ruleHops = data.rule_hops || []
+  const nodeHops = data.node_hops || []
 
   const saveName = async (e) => {
     e.preventDefault()
@@ -55,7 +57,10 @@ export default function NodeDetail() {
     <Layout>
       {/* Basic info */}
       <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">基本信息</h3></div>
+        <div className="card-header">
+          <h3 className="text-sm font-bold">基本信息</h3>
+          {node.node_type && <NodeTypeBadge type={node.node_type} />}
+        </div>
         <div className="p-5">
           <div className="grid grid-cols-[140px_1fr] gap-4 items-center text-sm">
             <span className="text-gray-500 font-semibold">连接 IP</span>
@@ -64,6 +69,8 @@ export default function NodeDetail() {
             <span className="font-mono">{node.relay_host ? <SensText blurred={blurred}>{node.relay_host}</SensText> : <span className="text-gray-300">未设置（设置后才能进链路）</span>}</span>
             <span className="text-gray-500 font-semibold">Token</span>
             <span className="font-mono"><SensText blurred={blurred}>{node.secret}</SensText></span>
+            <span className="text-gray-500 font-semibold">节点类型</span>
+            <span><NodeTypeBadge type={node.node_type} /></span>
             <span className="text-gray-500 font-semibold">最近同步</span>
             <span className="font-mono text-gray-500">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</span>
             <span className="text-gray-500 font-semibold">最近心跳</span>
@@ -131,33 +138,62 @@ export default function NodeDetail() {
         </div>
       </div>
 
-      {/* Forwards on this node */}
-      <div className="card mb-5">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">该节点上的转发</h3>
-          <span className="text-xs text-gray-400">{forwards.length} 条</span>
-        </div>
-        {forwards.length ? (
+      {/* Composite node hops */}
+      {node.node_type === 'composite' && nodeHops.length > 0 && (
+        <div className="card mb-5">
+          <div className="card-header">
+            <h3 className="text-sm font-bold">组合节点跳序</h3>
+            <span className="text-xs text-gray-400">{nodeHops.length} 跳</span>
+          </div>
           <table className="tbl">
-            <thead><tr><th>ID</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th>备注</th></tr></thead>
+            <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th></tr></thead>
             <tbody>
-              {forwards.map(f => (
-                <tr key={f.id}>
-                  <td className="font-mono text-xs text-gray-400">{f.id}</td>
-                  <td><ProtoBadge proto={f.proto} /></td>
-                  <td><ModeBadge mode={f.mode} /></td>
-                  <td className="font-mono">{f.listen_port}</td>
-                  <td className="font-mono"><SensText blurred={blurred}>{f.target_ip}:{f.target_port}</SensText></td>
-                  <td className="text-gray-500">{f.comment || '--'}</td>
+              {nodeHops.map((h, i) => (
+                <tr key={i}>
+                  <td className="font-mono text-xs text-gray-400">{i + 1}</td>
+                  <td className="font-semibold">{h.node_name || `#${h.hop_node_id}`}</td>
+                  <td><ModeBadge mode={h.mode} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <Empty title="该节点尚无转发规则"><Link to="/forwards" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty>}
+        </div>
+      )}
+
+      {/* Rule hops passing through this node */}
+      <div className="card mb-5">
+        <div className="card-header">
+          <h3 className="text-sm font-bold">经过该节点的规则</h3>
+          <span className="text-xs text-gray-400">{ruleHops.length} 条</span>
+        </div>
+        {ruleHops.length ? (
+          <table className="tbl">
+            <thead><tr><th>规则</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
+            <tbody>
+              {ruleHops.map((rh, i) => (
+                <tr key={i}>
+                  <td className="font-semibold">
+                    {rh.rule_id ? <Link to={`/rules/${rh.rule_id}`} className="text-blue-600 hover:underline">{rh.rule_name || `#${rh.rule_id}`}</Link> : '--'}
+                  </td>
+                  <td><ProtoBadge proto={rh.proto} /></td>
+                  <td><ModeBadge mode={rh.mode} /></td>
+                  <td className="font-mono">{rh.listen_port}</td>
+                  <td className="font-mono"><SensText blurred={blurred}>{rh.target || '--'}</SensText></td>
+                  <td className="text-right font-mono text-xs text-gray-400">{fmtBytes(rh.total_bytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty>}
       </div>
 
       {/* Actions */}
       <div className="flex items-center gap-3 flex-wrap">
+        <button onClick={async () => {
+          try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
+        }} className={node.disabled ? 'btn-primary' : 'btn-secondary'}>
+          {node.disabled ? '启用节点' : '禁用节点'}
+        </button>
         <button onClick={resync} className="btn-secondary">重新同步</button>
         {node.agent_version && node.agent_version !== server_version && (
           <button onClick={upgrade} className="btn-primary">推送升级到 {server_version}</button>
@@ -169,6 +205,12 @@ export default function NodeDetail() {
       </div>
     </Layout>
   )
+}
+
+function NodeTypeBadge({ type }) {
+  if (type === 'composite') return <Badge color="violet">组合</Badge>
+  if (type === 'self') return <Badge color="blue">自身</Badge>
+  return <Badge color="green">单点</Badge>
 }
 
 function NodeStatusDetail({ node }) {
