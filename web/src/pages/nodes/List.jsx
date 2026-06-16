@@ -234,7 +234,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
                 <span className="text-xs text-gray-400 w-5 text-center font-mono">{i + 1}</span>
                 <select className="input-field flex-1" value={hop.node_id} onChange={e => setHop(i, 'node_id', e.target.value)} required>
                   <option value="">-- 选择节点 --</option>
-                  {nodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                  {nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
                 </select>
                 <select className="input-field" value={hop.mode} onChange={e => setHop(i, 'mode', e.target.value)} style={{ width: 110 }}>
                   <option value="kernel">kernel</option>
