@@ -65,21 +65,7 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
   const [loading, setLoading] = useState(false)
   const toast = useToast()
 
-  const set = (k, v) => {
-    setForm(f => {
-      const next = { ...f, [k]: v }
-      if (k === 'node_id') {
-        const n = (nodes || []).find(nd => String(nd.id) === v)
-        if (n?.node_type === 'composite' && next.proto !== 'tcp') {
-          next.proto = 'tcp'
-        }
-      }
-      return next
-    })
-  }
-
-  const selectedNode = nodes?.find(n => String(n.id) === form.node_id)
-  const isComposite = selectedNode?.node_type === 'composite'
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const submit = async (e) => {
     e.preventDefault()
@@ -108,12 +94,8 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
-          {isComposite ? (
-            <input className="input-field" value="TCP" disabled style={{ maxWidth: 200 }} />
-          ) : (
-            <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
-              options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
-          )}
+          <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
+            options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
           <label className="fl">出口</label>
           <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
           <label className="fl">备注 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
