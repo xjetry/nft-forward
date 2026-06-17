@@ -131,14 +131,42 @@ func NormalizeForwardMode(m string) string {
 	return "kernel"
 }
 
+// overlappingProtos returns every stored rule_hops.proto that competes for the
+// same listen port as proto. tcp+udp occupies both the tcp and udp namespaces
+// (forward.Partition splits it across both), so tcp+udp conflicts with tcp,
+// udp, and tcp+udp; a plain tcp hop conflicts with tcp and tcp+udp; likewise
+// for udp. Mirrors the overlap rule in forward.Partition so the server never
+// hands out a port the daemon would later reject.
+func overlappingProtos(proto string) []string {
+	switch proto {
+	case "tcp+udp":
+		return []string{"tcp", "udp", "tcp+udp"}
+	case "tcp":
+		return []string{"tcp", "tcp+udp"}
+	case "udp":
+		return []string{"udp", "tcp+udp"}
+	default:
+		return []string{proto}
+	}
+}
+
 // OccupiedPortsOnNode returns every listen port held on (node, proto) in the
 // rule_hops table. excludeRuleID>0 drops that rule's own hops so a rule
 // regenerating in place doesn't see itself as occupying its ports.
 func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeRuleID int64) (map[int]bool, error) {
+	protos := overlappingProtos(proto)
+	placeholders := make([]string, len(protos))
+	args := make([]any, 0, len(protos)+2)
+	args = append(args, nodeID)
+	for i, p := range protos {
+		placeholders[i] = "?"
+		args = append(args, p)
+	}
+	args = append(args, excludeRuleID)
+	q := `SELECT listen_port FROM rule_hops WHERE node_id=? AND proto IN (` +
+		strings.Join(placeholders, ",") + `) AND (rule_id IS NULL OR rule_id<>?)`
 	out := map[int]bool{}
-	rows, err := d.Query(
-		`SELECT listen_port FROM rule_hops WHERE node_id=? AND proto=? AND (rule_id IS NULL OR rule_id<>?)`,
-		nodeID, proto, excludeRuleID)
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

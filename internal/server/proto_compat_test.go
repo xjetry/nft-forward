@@ -39,3 +39,29 @@ func TestCreateMyRuleAcceptsTCPUDP(t *testing.T) {
 		}
 	}
 }
+
+func TestOccupiedPortsCrossProto(t *testing.T) {
+	d := openDB(t)
+	n, _ := db.CreateNode(d, "edge", "https://p", "tok")
+	rid, err := db.CreateRule(d, &db.Rule{NodeID: n.ID, Name: "r", Proto: "tcp+udp", ExitHost: "9.9.9.9", ExitPort: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(
+		`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,0,?,?,?,?,?,?,?)`,
+		rid, n.ID, "tcp+udp", 10001, "9.9.9.9", 443, "userspace", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	occ, err := db.OccupiedPortsOnNode(d, n.ID, "tcp", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !occ[10001] {
+		t.Fatalf("tcp query should see tcp+udp port 10001 as occupied, got %v", occ)
+	}
+	occ, _ = db.OccupiedPortsOnNode(d, n.ID, "udp", 0)
+	if !occ[10001] {
+		t.Fatalf("udp query should see tcp+udp port 10001 as occupied, got %v", occ)
+	}
+}
