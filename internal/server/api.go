@@ -300,6 +300,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		"node": n, "rule_hops": ruleHops, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"server_version":       serverVersion(),
+		"upgrade":              deriveUpgradeStatus(n, time.Now()),
 	}
 
 	// Include node_hops if composite, enriched with each child's name.
@@ -470,10 +471,18 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	if panelURL == "" {
 		panelURL = "https://" + r.Host
 	}
-	if err := s.Hub.SendUpgrade(id, wsproto.Upgrade{
+	err = s.Hub.SendUpgrade(id, wsproto.Upgrade{
 		Version: serverVersion(), SHA256: selfBinarySHA,
 		Size: int64(len(selfBinaryBytes)), DownloadAt: panelURL + "/v1/binary",
-	}); err != nil {
+	})
+	// Record the dispatch outcome so the node detail can surface a silent
+	// failure later (an acked upgrade whose version never takes).
+	status, errText := "acked", ""
+	if err != nil {
+		status, errText = "error", err.Error()
+	}
+	db.RecordUpgradeResult(s.DB, id, serverVersion(), status, errText)
+	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -595,11 +604,15 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 		if n.AgentVersion == serverVersion() {
 			continue
 		}
-		if err := s.Hub.SendUpgrade(n.ID, upgrade); err != nil {
+		err := s.Hub.SendUpgrade(n.ID, upgrade)
+		status, errText := "acked", ""
+		if err != nil {
+			status, errText = "error", err.Error()
 			fail++
 		} else {
 			ok++
 		}
+		db.RecordUpgradeResult(s.DB, n.ID, serverVersion(), status, errText)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d fail=%d", ok, fail))
 	jsonOK(w, map[string]any{"ok": true, "upgraded": ok, "failed": fail})

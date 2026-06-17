@@ -41,6 +41,10 @@ type Node struct {
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
 	PortRange    string       `json:"port_range"`
 	CreatedAt    int64        `json:"created_at"`
+	LastUpgradeAt      sql.NullInt64 `json:"last_upgrade_at"`
+	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
+	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
+	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
 }
 
 type Rule struct {
@@ -214,7 +218,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -229,11 +233,13 @@ func scanNode(r rowScanner) (*Node, error) {
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
+	var luVersion, luStatus, luError sql.NullString
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.Online, &agentVersion,
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
+		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 	); err != nil {
 		return nil, err
 	}
@@ -253,6 +259,9 @@ func scanNode(r rowScanner) (*Node, error) {
 	if agentVersion.Valid {
 		n.AgentVersion = agentVersion.String
 	}
+	n.LastUpgradeVersion = luVersion.String
+	n.LastUpgradeStatus = luStatus.String
+	n.LastUpgradeError = luError.String
 	return n, nil
 }
 
@@ -341,6 +350,17 @@ func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
 	return err
 }
 
+// RecordUpgradeResult stores the outcome of the most recent upgrade push to a
+// node. status is "acked" (daemon accepted and is restarting) or "error"
+// (send/ack failure); errText is empty on acked. It overwrites the previous
+// record — only the latest attempt is kept.
+func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) error {
+	_, err := d.Exec(
+		`UPDATE nodes SET last_upgrade_at=?, last_upgrade_version=?, last_upgrade_status=?, last_upgrade_error=? WHERE id=?`,
+		now(), version, status, errText, nodeID)
+	return err
+}
+
 // Rules
 
 const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
@@ -417,12 +437,25 @@ func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {
 }
 
 // hopCounterKeys returns the proto/port counter keys a hop may receive samples
-// under. A tcp+udp hop fans in to tcp, udp, and tcp+udp; anything else uses its
-// own proto only.
+// under. The daemon reports a kernel aggregate sample under the literal proto
+// (e.g. "tcp+udp/port" via th dport) and, when forward.Partition splits the
+// hop, separate per-namespace samples (tcp userspace + udp kernel). So a
+// tcp+udp hop fans in to tcp+udp, tcp, and udp; anything else uses its own
+// proto only. Derived from protoNamespaces so its key set stays a subset of
+// overlappingProtos — cross-proto port occupancy then guarantees no two hops on
+// a node ever produce the same key.
 func hopCounterKeys(proto string, port int) []string {
-	protos := []string{proto}
-	if proto == "tcp+udp" {
-		protos = []string{"tcp+udp", "tcp", "udp"}
+	seen := map[string]bool{}
+	var protos []string
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			protos = append(protos, p)
+		}
+	}
+	add(proto)
+	for _, ns := range protoNamespaces(proto) {
+		add(ns)
 	}
 	out := make([]string, len(protos))
 	for i, p := range protos {

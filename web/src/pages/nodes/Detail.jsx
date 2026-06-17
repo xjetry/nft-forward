@@ -37,6 +37,8 @@ export default function NodeDetail() {
   const nodeHops = data.node_hops || []
   const isComposite = node.node_type === 'composite'
   const agentOutdated = node.agent_version && node.agent_version !== server_version
+  const up = data.upgrade || { status: 'none' }
+  const showUpgrade = up.status !== 'none'
 
   const saveName = async (e) => {
     e.preventDefault()
@@ -130,11 +132,19 @@ export default function NodeDetail() {
                 {fmtTime(node.last_seen ?? null)}
                 <span className={`ml-1.5 font-semibold ${node.online === 1 ? 'text-[#0a8a4f]' : 'text-[#c2520a]'}`}>{node.online === 1 ? '在线' : '离线'}</span>
               </InfoRow>
-              <InfoRow label="Agent 版本" mono valueClass="text-[12.5px]" last>
+              <InfoRow label="Agent 版本" mono valueClass="text-[12.5px]" last={!showUpgrade}>
                 {node.agent_version
                   ? <>{node.agent_version} {agentOutdated ? <Badge color="amber">非最新</Badge> : <Badge color="green">最新</Badge>}</>
                   : <span className="text-ink-mut">未知</span>}
               </InfoRow>
+              {showUpgrade && (
+                <InfoRow label="升级状态" valueClass="text-[12.5px]" last>
+                  {up.status === 'ok' && <><Badge color="green">升级成功</Badge> <span className="ml-1 text-ink-mut">{up.version} · {fmtTime(up.at)}</span></>}
+                  {up.status === 'error' && <><Badge color="red">升级失败</Badge> <span className="ml-1 text-ink-mut break-all">{up.error}</span></>}
+                  {up.status === 'pending' && <><Badge color="blue">升级中</Badge> <span className="ml-1 text-ink-mut">已推送 {up.version} · {fmtTime(up.at)}</span></>}
+                  {up.status === 'stuck' && <><Badge color="amber">可能未生效</Badge> <span className="ml-1 text-ink-mut">已确认接收 {up.version}（{fmtTime(up.at)}），当前仍为 {node.agent_version || '未知'}，可能重启失败</span></>}
+                </InfoRow>
+              )}
             </div>
           </section>
 
