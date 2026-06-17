@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ProtoBadge, SensText, CopyText } from './ui'
+import { ProtoBadge, SensText, CopyText, Tooltip } from './ui'
 import { fmtBytes } from '../lib/fmt'
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
@@ -79,7 +79,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
               <td className="font-semibold">
                 {r.comment
-                  ? <span className="border-b border-dotted border-ink-mut cursor-help" title={r.comment}>{r.name}</span>
+                  ? <Tooltip content={r.comment} className="border-b border-dotted border-ink-mut cursor-help">{r.name}</Tooltip>
                   : r.name}
               </td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>

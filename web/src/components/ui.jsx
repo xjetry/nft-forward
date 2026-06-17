@@ -149,6 +149,36 @@ export function CopyText({ text, children }) {
   )
 }
 
+/* ---------- Tooltip ---------- */
+/* Hover/focus bubble for cramped spots like table cells. The bubble is
+   position:fixed (placed from the trigger's rect) so the Panel's
+   overflow-hidden can't clip it — the same escape hatch Modal relies on; a
+   plain absolute bubble would be cut off at the panel edge. bg-ink/text-surface
+   invert together with the theme, so it reads as a dark bubble in light mode
+   and a light one in dark mode. */
+export function Tooltip({ content, children, className = '' }) {
+  const [box, setBox] = useState(null)
+  const ref = useRef(null)
+  if (!content) return children
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect()
+    if (r) setBox({ x: r.left + r.width / 2, y: r.top })
+  }
+  const hide = () => setBox(null)
+  return (
+    <span ref={ref} className={className} tabIndex={0}
+      onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+      {children}
+      {box && (
+        <span role="tooltip" style={{ position: 'fixed', left: box.x, top: box.y }}
+          className="z-50 -translate-x-1/2 -translate-y-full -mt-2 max-w-xs px-2.5 py-1.5 rounded-md text-[12px] font-normal leading-snug text-surface bg-ink shadow-lg whitespace-pre-wrap break-words pointer-events-none">
+          {content}
+        </span>
+      )}
+    </span>
+  )
+}
+
 /* ---------- SensText: blurrable sensitive text ---------- */
 export function SensText({ children, blurred }) {
   return (
