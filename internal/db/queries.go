@@ -403,9 +403,32 @@ func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {
 	}
 	m := make(map[string]*RuleHop, len(hops))
 	for _, h := range hops {
-		m[h.Proto+"/"+fmt.Sprintf("%d", h.ListenPort)] = h
+		// A tcp+udp hop is reported by the daemon either as one tcp+udp sample
+		// (kernel mode) or as separate tcp and udp samples (userspace mode, where
+		// Partition splits it into a udp kernel DNAT + a tcp userspace relay).
+		// Register every key that can carry this hop's bytes so applyCounters
+		// sums them into the same row. Cross-proto port occupancy guarantees no
+		// two hops on a node share an overlapping (proto, port), so keys stay unique.
+		for _, key := range hopCounterKeys(h.Proto, h.ListenPort) {
+			m[key] = h
+		}
 	}
 	return m, nil
+}
+
+// hopCounterKeys returns the proto/port counter keys a hop may receive samples
+// under. A tcp+udp hop fans in to tcp, udp, and tcp+udp; anything else uses its
+// own proto only.
+func hopCounterKeys(proto string, port int) []string {
+	protos := []string{proto}
+	if proto == "tcp+udp" {
+		protos = []string{"tcp+udp", "tcp", "udp"}
+	}
+	out := make([]string, len(protos))
+	for i, p := range protos {
+		out[i] = fmt.Sprintf("%s/%d", p, port)
+	}
+	return out
 }
 
 func ListRuleHopsByNode(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
