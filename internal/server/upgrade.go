@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -13,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"nft-forward/internal/db"
 	"nft-forward/internal/wsproto"
 )
 
@@ -59,39 +57,6 @@ func (s *Server) serveBinary(w http.ResponseWriter, r *http.Request) {
 	w.Write(selfBinaryBytes)
 }
 
-func (s *Server) upgradeNode(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
-	}
-	loadSelfBinary()
-	if selfBinaryErr != nil {
-		s.flashRedirect(w, r, "无法读取 server 二进制: "+selfBinaryErr.Error(), fmt.Sprintf("/nodes/%d", id))
-		return
-	}
-
-	panelURL, err := db.GetSetting(s.DB, "panel_url")
-	if err != nil || panelURL == "" {
-		panelURL = "https://" + r.Host
-	}
-	downloadURL := panelURL + "/v1/binary"
-
-	err = s.Hub.SendUpgrade(id, wsproto.Upgrade{
-		Version:    serverVersion(),
-		SHA256:     selfBinarySHA,
-		Size:       int64(len(selfBinaryBytes)),
-		DownloadAt: downloadURL,
-	})
-	if err != nil {
-		s.flashRedirect(w, r, "推送升级失败: "+err.Error(), fmt.Sprintf("/nodes/%d", id))
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), serverVersion())
-	s.flashRedirect(w, r, "升级命令已推送，节点正在更新", fmt.Sprintf("/nodes/%d", id))
-}
-
 func (h *Hub) SendUpgrade(nodeID int64, u wsproto.Upgrade) error {
 	h.mu.RLock()
 	ac, ok := h.conns[nodeID]
@@ -131,40 +96,3 @@ func (h *Hub) SendUpgrade(nodeID int64, u wsproto.Upgrade) error {
 	}
 }
 
-func (s *Server) upgradeAllNodes(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	loadSelfBinary()
-	if selfBinaryErr != nil {
-		s.flashRedirect(w, r, "无法读取 server 二进制: "+selfBinaryErr.Error(), "/nodes")
-		return
-	}
-	panelURL, err := db.GetSetting(s.DB, "panel_url")
-	if err != nil || panelURL == "" {
-		panelURL = "https://" + r.Host
-	}
-	upgrade := wsproto.Upgrade{
-		Version:    serverVersion(),
-		SHA256:     selfBinarySHA,
-		Size:       int64(len(selfBinaryBytes)),
-		DownloadAt: panelURL + "/v1/binary",
-	}
-	nodes, err := db.ListNodes(s.DB)
-	if err != nil {
-		s.flashRedirect(w, r, err.Error(), "/nodes")
-		return
-	}
-	var ok, fail int
-	for _, n := range nodes {
-		if n.AgentVersion == serverVersion() {
-			continue
-		}
-		if err := s.Hub.SendUpgrade(n.ID, upgrade); err != nil {
-			log.Printf("upgrade node %d (%s): %v", n.ID, n.Name, err)
-			fail++
-		} else {
-			ok++
-		}
-	}
-	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d fail=%d", ok, fail))
-	s.flashRedirect(w, r, fmt.Sprintf("已推送升级：成功 %d，失败 %d", ok, fail), "/nodes")
-}
