@@ -131,23 +131,47 @@ func NormalizeForwardMode(m string) string {
 	return "kernel"
 }
 
-// overlappingProtos returns every stored rule_hops.proto that competes for the
-// same listen port as proto. tcp+udp occupies both the tcp and udp namespaces
-// (forward.Partition splits it across both), so tcp+udp conflicts with tcp,
-// udp, and tcp+udp; a plain tcp hop conflicts with tcp and tcp+udp; likewise
-// for udp. Mirrors the overlap rule in forward.Partition so the server never
-// hands out a port the daemon would later reject.
-func overlappingProtos(proto string) []string {
-	switch proto {
-	case "tcp+udp":
-		return []string{"tcp", "udp", "tcp+udp"}
-	case "tcp":
-		return []string{"tcp", "tcp+udp"}
-	case "udp":
-		return []string{"udp", "tcp+udp"}
-	default:
-		return []string{proto}
+// storedProtos enumerates the proto values rule_hops.proto can hold (enforced by
+// the table's CHECK constraint). overlappingProtos walks it to find conflicts.
+var storedProtos = []string{"tcp", "udp", "tcp+udp"}
+
+// protoNamespaces returns the L4 transport namespaces a forward proto occupies:
+// tcp+udp spans both tcp and udp; tcp and udp each span only their own. This is
+// the single source of truth that keeps port-occupancy overlap and counter-key
+// fan-out (hopCounterKeys) from drifting apart, and mirrors the split
+// forward.Partition performs on the daemon.
+func protoNamespaces(proto string) []string {
+	if proto == "tcp+udp" {
+		return []string{"tcp", "udp"}
 	}
+	return []string{proto}
+}
+
+// overlappingProtos returns every stored rule_hops.proto that competes for the
+// same listen port as proto: any stored proto whose namespaces intersect this
+// one's. So tcp+udp conflicts with tcp, udp, and tcp+udp; a plain tcp hop with
+// tcp and tcp+udp; likewise for udp. The server uses this so it never hands out
+// a port the daemon's forward.Partition would later reject as overlapping.
+func overlappingProtos(proto string) []string {
+	want := map[string]bool{}
+	for _, ns := range protoNamespaces(proto) {
+		want[ns] = true
+	}
+	var out []string
+	for _, cand := range storedProtos {
+		for _, ns := range protoNamespaces(cand) {
+			if want[ns] {
+				out = append(out, cand)
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		// Unknown proto (not in storedProtos): fall back to self so the IN clause
+		// is never empty.
+		out = []string{proto}
+	}
+	return out
 }
 
 // OccupiedPortsOnNode returns every listen port held on (node, proto) in the

@@ -417,12 +417,25 @@ func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {
 }
 
 // hopCounterKeys returns the proto/port counter keys a hop may receive samples
-// under. A tcp+udp hop fans in to tcp, udp, and tcp+udp; anything else uses its
-// own proto only.
+// under. The daemon reports a kernel aggregate sample under the literal proto
+// (e.g. "tcp+udp/port" via th dport) and, when forward.Partition splits the
+// hop, separate per-namespace samples (tcp userspace + udp kernel). So a
+// tcp+udp hop fans in to tcp+udp, tcp, and udp; anything else uses its own
+// proto only. Derived from protoNamespaces so its key set stays a subset of
+// overlappingProtos — cross-proto port occupancy then guarantees no two hops on
+// a node ever produce the same key.
 func hopCounterKeys(proto string, port int) []string {
-	protos := []string{proto}
-	if proto == "tcp+udp" {
-		protos = []string{"tcp+udp", "tcp", "udp"}
+	seen := map[string]bool{}
+	var protos []string
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			protos = append(protos, p)
+		}
+	}
+	add(proto)
+	for _, ns := range protoNamespaces(proto) {
+		add(ns)
 	}
 	out := make([]string, len(protos))
 	for i, p := range protos {
