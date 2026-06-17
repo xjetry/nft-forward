@@ -70,6 +70,18 @@ func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
 }
 
+// validRuleProto reports whether proto is an accepted forward protocol. tcp+udp
+// is accepted: the data plane splits it into a udp kernel DNAT plus a tcp
+// userspace relay when the hop runs in userspace mode (see forward.Partition).
+func validRuleProto(proto string) bool {
+	switch proto {
+	case "tcp", "udp", "tcp+udp":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseExit(raw string) (string, int, error) {
 	raw = strings.TrimSpace(raw)
 	host, portStr, err := net.SplitHostPort(raw)

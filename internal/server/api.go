@@ -686,8 +686,8 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(body.Name)
 	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	if name == "" || (proto != "tcp" && proto != "udp") {
-		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp 或 udp")
+	if name == "" || !validRuleProto(proto) {
+		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
@@ -835,8 +835,8 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(body.Name)
 	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	if name == "" || (proto != "tcp" && proto != "udp") {
-		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp 或 udp")
+	if name == "" || !validRuleProto(proto) {
+		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
@@ -1308,8 +1308,8 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(body.Name)
 	proto := strings.ToLower(strings.TrimSpace(body.Proto))
-	if name == "" || (proto != "tcp" && proto != "udp") {
-		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp 或 udp")
+	if name == "" || !validRuleProto(proto) {
+		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
