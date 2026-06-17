@@ -48,7 +48,7 @@ export function Layout({ children }) {
   const { user } = useUser()
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
-  const [blurred, setBlurred] = useState(() => localStorage.getItem('nf-blur') === '1')
+  const { blurred, toggleBlur } = useContext(BlurCtx)
   const [theme, setThemeState] = useState(getStoredTheme())
   const isDark = resolvedDark(theme)
 
@@ -56,13 +56,6 @@ export function Layout({ children }) {
     const next = isDark ? 'light' : 'dark'
     setStoredTheme(next)
     setThemeState(next)
-  }
-
-  const toggleBlur = () => {
-    setBlurred(v => {
-      localStorage.setItem('nf-blur', v ? '0' : '1')
-      return !v
-    })
   }
 
   const handleLogout = async () => {
@@ -75,8 +68,7 @@ export function Layout({ children }) {
   const isAdmin = user.role === 'admin'
 
   return (
-    <BlurCtx.Provider value={blurred}>
-      <div className="flex min-h-screen bg-app">
+    <div className="flex min-h-screen bg-app">
         {/* Mobile overlay */}
         {sideOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={() => setSideOpen(false)} />}
 
@@ -168,14 +160,29 @@ export function Layout({ children }) {
             {children}
           </div>
         </main>
-      </div>
-    </BlurCtx.Provider>
+    </div>
   )
 }
 
 /* ---------- Blur context ---------- */
-const BlurCtx = createContext(false)
-export function useBlur() { return useContext(BlurCtx) }
+/* The provider is mounted above the routes (App) so the topbar toggle inside
+   Layout and the pages reading useBlur() share one state. When the provider
+   sat inside Layout, every page rendered Layout as its own child, so the
+   page's useBlur() resolved above the provider and always read the default —
+   the toggle never reached the page content. */
+const BlurCtx = createContext({ blurred: false, toggleBlur: () => {} })
+export function useBlur() { return useContext(BlurCtx).blurred }
+
+export function BlurProvider({ children }) {
+  const [blurred, setBlurred] = useState(() => localStorage.getItem('nf-blur') === '1')
+  const toggleBlur = useCallback(() => {
+    setBlurred(v => {
+      localStorage.setItem('nf-blur', v ? '0' : '1')
+      return !v
+    })
+  }, [])
+  return <BlurCtx.Provider value={{ blurred, toggleBlur }}>{children}</BlurCtx.Provider>
+}
 
 /* ---------- Nav helpers ---------- */
 function NavGroup({ label, children }) {

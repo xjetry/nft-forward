@@ -15,7 +15,7 @@ export function PageHeader({ title, count, unit = '条' }) {
 /* Rounded card that wraps a list's toolbar and table. */
 export function Panel({ children, className = '' }) {
   return (
-    <section className={`max-w-[1320px] bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${className}`}>
+    <section className={`bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${className}`}>
       {children}
     </section>
   )
