@@ -41,6 +41,10 @@ type Node struct {
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
 	PortRange    string       `json:"port_range"`
 	CreatedAt    int64        `json:"created_at"`
+	LastUpgradeAt      sql.NullInt64 `json:"last_upgrade_at"`
+	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
+	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
+	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
 }
 
 type Rule struct {
@@ -214,7 +218,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -229,11 +233,13 @@ func scanNode(r rowScanner) (*Node, error) {
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
+	var luVersion, luStatus, luError sql.NullString
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.Online, &agentVersion,
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
+		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 	); err != nil {
 		return nil, err
 	}
@@ -253,6 +259,9 @@ func scanNode(r rowScanner) (*Node, error) {
 	if agentVersion.Valid {
 		n.AgentVersion = agentVersion.String
 	}
+	n.LastUpgradeVersion = luVersion.String
+	n.LastUpgradeStatus = luStatus.String
+	n.LastUpgradeError = luError.String
 	return n, nil
 }
 
@@ -338,6 +347,17 @@ func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
 		portRange = DefaultPortRange
 	}
 	_, err := d.Exec(`UPDATE nodes SET port_range=? WHERE id=?`, portRange, id)
+	return err
+}
+
+// RecordUpgradeResult stores the outcome of the most recent upgrade push to a
+// node. status is "acked" (daemon accepted and is restarting) or "error"
+// (send/ack failure); errText is empty on acked. It overwrites the previous
+// record — only the latest attempt is kept.
+func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) error {
+	_, err := d.Exec(
+		`UPDATE nodes SET last_upgrade_at=?, last_upgrade_version=?, last_upgrade_status=?, last_upgrade_error=? WHERE id=?`,
+		now(), version, status, errText, nodeID)
 	return err
 }
 
