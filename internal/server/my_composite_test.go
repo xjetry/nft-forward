@@ -140,7 +140,11 @@ func TestMyListRulesItemShapeIsFlat(t *testing.T) {
 		t.Fatalf("list item name=%v, want r1 (keys=%v)", item["name"], keys)
 	}
 	// View fields must survive the flattening.
-	if _, ok := item["path"]; !ok {
-		t.Fatalf("list item missing path (keys=%v)", keys)
+	if _, ok := item["entry"]; !ok {
+		t.Fatalf("list item missing entry (keys=%v)", keys)
+	}
+	// path was dropped from the list response (the table never rendered it).
+	if _, ok := item["path"]; ok {
+		t.Fatalf("list item should no longer carry path (keys=%v)", keys)
 	}
 }

@@ -103,7 +103,6 @@ func TestGetRuleIncludesComputedFields(t *testing.T) {
 	var resp struct {
 		Rule struct {
 			Entry string `json:"entry"`
-			Path  string `json:"path"`
 			Exit  string `json:"exit"`
 		} `json:"rule"`
 	}
@@ -115,9 +114,6 @@ func TestGetRuleIncludesComputedFields(t *testing.T) {
 	}
 	if resp.Rule.Entry == "" {
 		t.Error("entry should be populated by the detail endpoint, got empty")
-	}
-	if resp.Rule.Path == "" {
-		t.Error("path should be populated by the detail endpoint, got empty")
 	}
 }
 
