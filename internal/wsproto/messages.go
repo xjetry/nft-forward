@@ -152,6 +152,10 @@ type Upgrade struct {
 	SHA256     string `json:"sha256"`
 	Size       int64  `json:"size"`
 	DownloadAt string `json:"download_at"`
+	// Data, when non-empty, carries the binary inline so daemons that cannot
+	// reach the panel over HTTP still upgrade over the WS link. DownloadAt
+	// remains the fallback for daemons that predate inline transport.
+	Data []byte `json:"data,omitempty"`
 }
 
 type UpgradeAck struct {

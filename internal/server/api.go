@@ -474,6 +474,7 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	err = s.Hub.SendUpgrade(id, wsproto.Upgrade{
 		Version: serverVersion(), SHA256: selfBinarySHA,
 		Size: int64(len(selfBinaryBytes)), DownloadAt: panelURL + "/v1/binary",
+		Data: selfBinaryBytes,
 	})
 	// Record the dispatch outcome so the node detail can surface a silent
 	// failure later (an acked upgrade whose version never takes).
@@ -593,6 +594,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	upgrade := wsproto.Upgrade{
 		Version: serverVersion(), SHA256: selfBinarySHA,
 		Size: int64(len(selfBinaryBytes)), DownloadAt: panelURL + "/v1/binary",
+		Data: selfBinaryBytes,
 	}
 	nodes, err := db.ListNodes(s.DB)
 	if err != nil {

@@ -8,6 +8,21 @@ import (
 	"nft-forward/internal/nft"
 )
 
+func TestUpgradeDataRoundTrip(t *testing.T) {
+	in := Upgrade{Version: "v1", SHA256: "abc", Size: 3, DownloadAt: "u", Data: []byte{1, 2, 3}}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Upgrade
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if string(out.Data) != string(in.Data) || out.SHA256 != in.SHA256 {
+		t.Fatalf("round-trip mismatch: %+v", out)
+	}
+}
+
 func TestEnvelopeRoundtrip(t *testing.T) {
 	e := Envelope{Type: TypeHello, ID: "abc", Payload: json.RawMessage(`{"k":"v"}`)}
 	b, err := json.Marshal(e)
