@@ -12,6 +12,32 @@ import (
 	"nft-forward/internal/db"
 )
 
+// ListNodesForUser interpolates nodeCols into its SELECT but scans by an
+// inline argument list; the two must stay in lockstep or every granted-node
+// listing silently fails. Guard that the scan count matches the column count.
+func TestListNodesForUserAfterGrant(t *testing.T) {
+	d := openDB(t)
+	n, err := db.CreateNode(d, "edge", "https://p", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(d, "u1", hash, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantNode(d, uid, n.ID, 5); err != nil {
+		t.Fatal(err)
+	}
+	nodes, grants, err := db.ListNodesForUser(d, uid)
+	if err != nil {
+		t.Fatalf("ListNodesForUser: %v", err)
+	}
+	if len(nodes) != 1 || len(grants) != 1 || nodes[0].ID != n.ID {
+		t.Fatalf("expected 1 granted node, got nodes=%d grants=%d", len(nodes), len(grants))
+	}
+}
+
 func TestNodeUpgradeColumnsRoundTrip(t *testing.T) {
 	d := openDB(t)
 	n, err := db.CreateNode(d, "edge", "https://p", "tok")
