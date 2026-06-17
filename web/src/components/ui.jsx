@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback, createContext, useContext } from 'react'
 
 /* ---------- Modal ---------- */
 export function Modal({ open, onClose, title, children, wide }) {
@@ -213,5 +213,65 @@ export function ProbeChainButton({ chainId, ruleId }) {
       {state === 'fail' && <span className="text-[11px] text-red-600">{result}</span>}
       {state === 'loading' && <span className="text-[11px] text-ink-mut">测试中...</span>}
     </span>
+  )
+}
+
+/* ---------- Promise-based confirm dialog ---------- */
+// useConfirm() returns confirm(opts) -> Promise<boolean>, so callers can write
+// `if (!(await confirm({...}))) return` instead of the native window.confirm.
+const ConfirmCtx = createContext(() => Promise.resolve(false))
+export function useConfirm() { return useContext(ConfirmCtx) }
+
+export function ConfirmProvider({ children }) {
+  const [state, setState] = useState(null)
+  const confirm = useCallback((opts = {}) => new Promise(resolve => {
+    setState({ resolve, ...opts })
+  }), [])
+  const finish = (result) => setState(s => { s?.resolve(result); return null })
+  return (
+    <ConfirmCtx.Provider value={confirm}>
+      {children}
+      <Modal open={!!state} onClose={() => finish(false)} title={state?.title || '确认操作'}>
+        <div className="text-sm text-ink-soft mb-5 whitespace-pre-line">{state?.message}</div>
+        <div className="flex gap-3 justify-end">
+          <button onClick={() => finish(false)} className="btn-secondary">{state?.cancelText || '取消'}</button>
+          <button onClick={() => finish(true)} className={state?.danger ? 'btn-danger' : 'btn-primary'}>{state?.confirmText || '确认'}</button>
+        </div>
+      </Modal>
+    </ConfirmCtx.Provider>
+  )
+}
+
+/* ---------- Select: styled dropdown replacing native <select> ---------- */
+// options: [{ value, label }]. onChange receives the chosen value as a string.
+export function Select({ value, onChange, options, placeholder = '请选择', disabled, className = '', style }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+  const selected = options.find(o => String(o.value) === String(value))
+  return (
+    <div ref={ref} className={`relative ${className}`} style={style}>
+      <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
+        className="input-field flex items-center justify-between gap-2 text-left disabled:opacity-60 disabled:cursor-not-allowed">
+        <span className={`truncate ${selected ? 'text-ink' : 'text-ink-mut'}`}>{selected ? selected.label : placeholder}</span>
+        <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-surface border border-line rounded-lg shadow-lg max-h-60 overflow-auto py-1">
+          {options.map(o => (
+            <button key={String(o.value)} type="button"
+              onClick={() => { onChange(String(o.value)); setOpen(false) }}
+              className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

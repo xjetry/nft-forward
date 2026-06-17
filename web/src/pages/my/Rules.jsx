@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Modal } from '../../components/ui'
+import { Loading, Empty, Modal, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 
@@ -12,6 +12,7 @@ export default function MyRules() {
   const [search, setSearch] = useState('')
   const toast = useToast()
   const blurred = useBlur()
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -24,7 +25,7 @@ export default function MyRules() {
   const { rules = [], nodes = [], node_by_id = {} } = data || {}
 
   const deleteRule = async (rule) => {
-    if (!confirm(`确认删除规则「${rule.name}」？`)) return
+    if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
     try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
@@ -102,23 +103,16 @@ function CreateMyRuleModal({ open, onClose, nodes, onDone }) {
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>
-          <select className="input-field" value={form.node_id} onChange={e => set('node_id', e.target.value)} required>
-            <option value="">-- 选择已授权节点 --</option>
-            {(nodes || []).map(n => (
-              <option key={n.id} value={n.id}>{n.name}</option>
-            ))}
-          </select>
+          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择已授权节点 --"
+            options={(nodes || []).map(n => ({ value: n.id, label: n.name }))} />
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
           {isComposite ? (
             <input className="input-field" value="TCP" disabled style={{ maxWidth: 200 }} />
           ) : (
-            <select className="input-field" value={form.proto} onChange={e => set('proto', e.target.value)} style={{ maxWidth: 200 }}>
-              <option value="tcp">TCP</option>
-              <option value="udp">UDP</option>
-              <option value="tcp+udp">TCP+UDP</option>
-            </select>
+            <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
+              options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
           )}
           <label className="fl">出口</label>
           <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />

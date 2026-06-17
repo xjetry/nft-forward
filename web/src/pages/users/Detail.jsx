@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
 
 export default function UserDetail() {
   const { id } = useParams()
@@ -11,6 +11,7 @@ export default function UserDetail() {
   const toast = useToast()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -29,15 +30,15 @@ export default function UserDetail() {
     try { await api.post(`/users/${id}/toggle`); toast(user.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
   }
   const resetTraffic = async () => {
-    if (!confirm('清零该用户的已用流量？')) return
+    if (!(await confirm({ title: '清零流量', message: '清零该用户的已用流量？', confirmText: '清零', danger: true }))) return
     try { await api.post(`/users/${id}/reset-traffic`); toast('已重置'); load() } catch (err) { toast(err.message) }
   }
   const deleteUser = async () => {
-    if (!confirm('删除用户？关联的规则将被一并清除。')) return
+    if (!(await confirm({ title: '删除用户', message: '删除用户？关联的规则将被一并清除。', confirmText: '删除', danger: true }))) return
     try { await api.del(`/users/${id}`); toast('已删除'); navigate('/users') } catch (err) { toast(err.message) }
   }
   const resetPassword = async () => {
-    if (!confirm('重置该用户密码？新密码会一次性显示。')) return
+    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码会一次性显示。', confirmText: '重置', danger: true }))) return
     try {
       const d = await api.post(`/users/${id}/reset-password`)
       toast(d?.new_password ? `新密码：${d.new_password}` : '已重置')
@@ -215,10 +216,7 @@ function GrantNodeForm({ userId, nodes, onDone }) {
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>
-          <select className="input-field" value={nodeId} onChange={e => setNodeId(e.target.value)} required>
-            <option value="">-- 选择 --</option>
-            {nodes.map(n => <option key={n.id} value={n.id}>{n.name} ({n.node_type === 'composite' ? '组合' : n.node_type === 'self' ? '自身' : '单点'})</option>)}
-          </select>
+          <Select value={nodeId} onChange={v => setNodeId(v)} placeholder="-- 选择 --" options={nodes.map(n => ({ value: n.id, label: `${n.name} (${n.node_type === 'composite' ? '组合' : n.node_type === 'self' ? '自身' : '单点'})` }))} />
           <label className="fl">本用户上限</label>
           <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />
         </div>

@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText, useConfirm, Select } from '../../components/ui'
 
 export default function RulesDetail() {
   const { id } = useParams()
@@ -12,6 +12,7 @@ export default function RulesDetail() {
   const [loading, setLoading] = useState(true)
   const toast = useToast()
   const blurred = useBlur()
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -26,7 +27,7 @@ export default function RulesDetail() {
   const node = node_by_id[rule.node_id]
 
   const deleteRule = async () => {
-    if (!confirm(`确认删除规则「${rule.name}」？`)) return
+    if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
     try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate('/rules') } catch (err) { toast(err.message) }
   }
 
@@ -164,11 +165,8 @@ function EditRuleCard({ rule, onDone }) {
             <label className="fl">名称</label>
             <input className="input-field" value={name} onChange={e => setName(e.target.value)} required />
             <label className="fl">协议</label>
-            <select className="input-field" value={proto} onChange={e => setProto(e.target.value)} style={{ maxWidth: 200 }}>
-              <option value="tcp">TCP</option>
-              <option value="udp">UDP</option>
-              <option value="tcp+udp">TCP+UDP</option>
-            </select>
+            <Select value={proto} onChange={setProto} style={{ maxWidth: 200 }}
+              options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
             <label className="fl">出口</label>
             <input className="input-field font-mono" value={exit} onChange={e => setExit(e.target.value)} required placeholder="host:port" />
           </div>

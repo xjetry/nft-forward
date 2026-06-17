@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, useConfirm } from '../../components/ui'
 
 const card = 'bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
@@ -16,6 +16,7 @@ export default function NodeDetail() {
   const [portRange, setPortRange] = useState('')
   const toast = useToast()
   const blurred = useBlur()
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -53,7 +54,7 @@ export default function NodeDetail() {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
   }
   const upgrade = async () => {
-    if (!confirm('推送 server 二进制到此节点并重启？')) return
+    if (!(await confirm({ title: '升级节点', message: '推送 server 二进制到此节点并重启？', confirmText: '升级' }))) return
     try { await api.post(`/nodes/${id}/upgrade`); toast('已发起升级') } catch (err) { toast(err.message) }
   }
   const toggle = async () => {

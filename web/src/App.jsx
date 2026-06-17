@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { UserProvider, useUser } from './components/Layout'
-import { Loading } from './components/ui'
+import { Loading, ConfirmProvider } from './components/ui'
 
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -62,6 +62,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <UserProvider>
+        <ConfirmProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
 
@@ -84,6 +85,7 @@ export default function App() {
 
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </ConfirmProvider>
       </UserProvider>
     </BrowserRouter>
   )

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge } from '../../components/ui'
+import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
 
 export default function NodeList() {
@@ -14,6 +14,7 @@ export default function NodeList() {
   const [panelUrl, setPanelUrl] = useState('')
   const [search, setSearch] = useState('')
   const toast = useToast()
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -33,17 +34,17 @@ export default function NodeList() {
   }
 
   const resyncAll = async () => {
-    if (!confirm('向所有节点重新推送转发规则？')) return
+    if (!(await confirm({ title: '同步所有节点', message: '向所有节点重新推送转发规则？', confirmText: '同步' }))) return
     try { await api.post('/nodes/resync-all'); toast('已发起同步'); load() } catch (err) { toast(err.message) }
   }
 
   const upgradeAll = async () => {
-    if (!confirm('向所有版本不一致的节点推送升级？')) return
+    if (!(await confirm({ title: '升级所有节点', message: '向所有版本不一致的节点推送升级？', confirmText: '升级' }))) return
     try { await api.post('/nodes/upgrade-all'); toast('已发起升级'); load() } catch (err) { toast(err.message) }
   }
 
   const deleteNode = async (node) => {
-    if (!confirm(`确认删除节点 ${node.name}？此操作会清空节点上的转发。`)) return
+    if (!(await confirm({ title: '删除节点', message: `确认删除节点 ${node.name}？此操作会清空节点上的转发。`, confirmText: '删除', danger: true }))) return
     try { await api.del(`/nodes/${node.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
@@ -177,6 +178,9 @@ function NodeStatus({ node }) {
   if (node.node_type === 'composite') {
     return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
   }
+  // A disconnected agent is offline regardless of when it last synced; a stale
+  // "已同步" on an offline node misrepresents its real state.
+  if (node.online !== 1) return <Badge color="gray">离线</Badge>
   const lastErr = nullStr(node.last_error)
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
@@ -239,14 +243,10 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
             {hops.map((hop, i) => (
               <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
-                <select className="input-field flex-1" value={hop.node_id} onChange={e => setHop(i, 'node_id', e.target.value)} required>
-                  <option value="">-- 选择节点 --</option>
-                  {nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
-                </select>
-                <select className="input-field" value={hop.mode} onChange={e => setHop(i, 'mode', e.target.value)} style={{ width: 110 }}>
-                  <option value="kernel">kernel</option>
-                  <option value="userspace">userspace</option>
-                </select>
+                <Select className="flex-1" placeholder="-- 选择节点 --" value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
+                  options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
+                <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
+                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
                 <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>
                 {hops.length > 1 && (

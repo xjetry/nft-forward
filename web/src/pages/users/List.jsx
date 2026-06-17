@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTrafficGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
-import { Loading, Empty, Badge, Modal } from '../../components/ui'
+import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
 
 export default function UserList() {
@@ -13,6 +13,7 @@ export default function UserList() {
   const [search, setSearch] = useState('')
   const { user: currentUser } = useUser()
   const toast = useToast()
+  const confirm = useConfirm()
 
   const load = () => {
     setLoading(true)
@@ -28,14 +29,14 @@ export default function UserList() {
     try { await api.post(`/users/${u.id}/toggle`); toast(u.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
   }
   const resetPassword = async (u) => {
-    if (!confirm('重置该用户密码？新密码会一次性显示。')) return
+    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码会一次性显示。', confirmText: '重置', danger: true }))) return
     try {
       const d = await api.post(`/users/${u.id}/reset-password`)
       toast(d?.new_password ? `新密码：${d.new_password}` : '已重置')
     } catch (err) { toast(err.message) }
   }
   const deleteUser = async (u) => {
-    if (!confirm('删除该用户？关联的转发将被一并清除。')) return
+    if (!(await confirm({ title: '删除用户', message: '删除该用户？关联的转发将被一并清除。', confirmText: '删除', danger: true }))) return
     try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
   }
 
@@ -133,10 +134,7 @@ function CreateUserModal({ open, onClose, onDone }) {
           <label className="fl">密码</label>
           <input className="input-field" type="password" value={form.password} onChange={e => set('password', e.target.value)} required />
           <label className="fl">角色</label>
-          <select className="input-field" value={form.role} onChange={e => set('role', e.target.value)} style={{ maxWidth: 200 }}>
-            <option value="user">user (普通用户)</option>
-            <option value="admin">admin (管理员)</option>
-          </select>
+          <Select value={form.role} onChange={v => set('role', v)} options={[{ value: 'user', label: 'user (普通用户)' }, { value: 'admin', label: 'admin (管理员)' }]} style={{ maxWidth: 200 }} />
           {form.role === 'user' && (
             <>
               <label className="fl">最大转发数</label>
