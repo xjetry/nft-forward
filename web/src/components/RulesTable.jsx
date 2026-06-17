@@ -77,7 +77,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               className={isAdmin ? 'cursor-pointer' : ''}
               onClick={isAdmin && onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
-              <td className="font-semibold">{r.name}</td>
+              <td className="font-semibold">
+                {r.comment
+                  ? <span className="border-b border-dotted border-ink-mut cursor-help" title={r.comment}>{r.name}</span>
+                  : r.name}
+              </td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td><ProtoBadge proto={r.proto} /></td>
               <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
