@@ -22,8 +22,13 @@ type upgradeView struct {
 // deriveUpgradeStatus turns a node's stored last-upgrade columns plus its live
 // agent_version into a display status. It surfaces the silent failure: an acked
 // upgrade whose target version never took, past the grace window.
-func deriveUpgradeStatus(n *db.Node, now time.Time) upgradeView {
+func deriveUpgradeStatus(n *db.Node, serverVersion string, now time.Time) upgradeView {
 	if !n.LastUpgradeAt.Valid {
+		return upgradeView{Status: "none"}
+	}
+	// A node already on the panel's current version has nothing to report; any
+	// stored failure or attempt is stale (e.g. it was upgraded out of band).
+	if n.AgentVersion != "" && n.AgentVersion == serverVersion {
 		return upgradeView{Status: "none"}
 	}
 	v := upgradeView{At: n.LastUpgradeAt.Int64, Version: n.LastUpgradeVersion, Error: n.LastUpgradeError}

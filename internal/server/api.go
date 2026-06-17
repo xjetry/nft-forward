@@ -300,7 +300,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		"node": n, "rule_hops": ruleHops, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"server_version":       serverVersion(),
-		"upgrade":              deriveUpgradeStatus(n, time.Now()),
+		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),
 	}
 
 	// Include node_hops if composite, enriched with each child's name.
