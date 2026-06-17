@@ -57,8 +57,6 @@ export default function RulesDetail() {
             </span>
             <span className="text-ink-soft font-semibold">协议</span>
             <span><ProtoBadge proto={rule.proto} /></span>
-            <span className="text-ink-soft font-semibold">路径</span>
-            <span className="font-mono text-ink-soft"><SensText blurred={blurred}>{rule.path || '--'}</SensText></span>
             <span className="text-ink-soft font-semibold">出口</span>
             <span className="font-mono"><SensText blurred={blurred}>{rule.exit || '--'}</SensText></span>
             {rule.comment && <>

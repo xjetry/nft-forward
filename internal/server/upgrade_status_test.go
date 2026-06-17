@@ -28,9 +28,10 @@ func TestDeriveUpgradeStatus(t *testing.T) {
 		{"error", mk(base.Unix(), "v2", "error", "节点未连接", "v1"), base, "error"},
 		{"pending within grace", mk(base.Unix(), "v2", "acked", "", "v1"), base.Add(30 * time.Second), "pending"},
 		{"stuck past grace", mk(base.Unix(), "v2", "acked", "", "v1"), base.Add(5 * time.Minute), "stuck"},
+		{"current hides stale error", mk(base.Unix(), "v2", "error", "节点未连接", "vSERVER"), base, "none"},
 	}
 	for _, tc := range cases {
-		got := deriveUpgradeStatus(tc.node, tc.now)
+		got := deriveUpgradeStatus(tc.node, "vSERVER", tc.now)
 		if got.Status != tc.want {
 			t.Errorf("%s: status=%q want %q", tc.name, got.Status, tc.want)
 		}

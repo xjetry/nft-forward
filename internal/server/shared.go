@@ -13,7 +13,6 @@ import (
 // ruleView is the per-rule row the list/detail API renders.
 type ruleView struct {
 	Rule        *db.Rule
-	Path        string
 	Entry       string
 	Exit        string
 	EntryNodeID int64
@@ -22,17 +21,7 @@ type ruleView struct {
 
 func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	hops, _ := db.ListRuleHops(s.DB, r.ID)
-	names := make([]string, 0, len(hops)+1)
-	for _, h := range hops {
-		n, err := db.GetNode(s.DB, h.NodeID)
-		if err == nil {
-			names = append(names, n.Name)
-		} else {
-			names = append(names, fmt.Sprintf("#%d", h.NodeID))
-		}
-	}
 	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
-	names = append(names, exit)
 	entry := "—"
 	var entryNodeID int64
 	if len(hops) > 0 && r.EntryListenPort > 0 {
@@ -41,7 +30,7 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 			entry = net.JoinHostPort(n.RelayHost, strconv.Itoa(r.EntryListenPort))
 		}
 	}
-	return ruleView{Rule: r, Path: strings.Join(names, " → "), Entry: entry, Exit: exit, EntryNodeID: entryNodeID}
+	return ruleView{Rule: r, Entry: entry, Exit: exit, EntryNodeID: entryNodeID}
 }
 
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
@@ -51,7 +40,6 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 type ruleListItem struct {
 	*db.Rule
 	OwnerName   string `json:"owner_name"`
-	Path        string `json:"path"`
 	Entry       string `json:"entry"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
@@ -67,7 +55,7 @@ type nodeHopView struct {
 
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Path: v.Path, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
+	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
 }
 
 // validRuleProto reports whether proto is an accepted forward protocol. tcp+udp

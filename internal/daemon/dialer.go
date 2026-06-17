@@ -261,6 +261,9 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("dial %s: %w", d.cfg.URL, err)
 	}
+	// The panel may push the upgrade binary inline over WS (~13MB); the default
+	// read limit (32KB) would reject that frame and break upgrades.
+	ws.SetReadLimit(64 << 20)
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	_, currentMeta := d.cfg.GetState()

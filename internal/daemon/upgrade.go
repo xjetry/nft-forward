@@ -22,9 +22,9 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	log.Printf("upgrade: received version=%s sha256=%s size=%d from=%s",
 		u.Version, u.SHA256, u.Size, u.DownloadAt)
 
-	binary, err := downloadBinary(u)
+	binary, err := upgradeBinary(u)
 	if err != nil {
-		log.Printf("upgrade: download failed: %v", err)
+		log.Printf("upgrade: obtain binary failed: %v", err)
 		return wsproto.UpgradeAck{Error: err.Error()}
 	}
 
@@ -45,6 +45,21 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	go restartSelf()
 
 	return wsproto.UpgradeAck{OK: true}
+}
+
+// upgradeBinary returns the new binary for u: the inline Data (sha-verified)
+// when present, otherwise an HTTP download from u.DownloadAt. Inline transport
+// lets nodes that cannot reach the panel over HTTP still upgrade over the WS
+// link; the download path stays for daemons reached by an older panel.
+func upgradeBinary(u wsproto.Upgrade) ([]byte, error) {
+	if len(u.Data) > 0 {
+		sum := sha256.Sum256(u.Data)
+		if got := hex.EncodeToString(sum[:]); got != u.SHA256 {
+			return nil, fmt.Errorf("sha256 mismatch: got %s, want %s", got, u.SHA256)
+		}
+		return u.Data, nil
+	}
+	return downloadBinary(u)
 }
 
 func downloadBinary(u wsproto.Upgrade) ([]byte, error) {
