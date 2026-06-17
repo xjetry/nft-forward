@@ -1,7 +1,13 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"nft-forward/internal/db"
 )
@@ -37,5 +43,53 @@ func TestNodeUpgradeColumnsRoundTrip(t *testing.T) {
 	got, _ = db.GetNode(d, n.ID)
 	if got.LastUpgradeStatus != "error" || got.LastUpgradeError != "节点未连接" {
 		t.Fatalf("after error record: status=%q err=%q", got.LastUpgradeStatus, got.LastUpgradeError)
+	}
+}
+
+func TestApiUpgradeNodeRecordsError(t *testing.T) {
+	d := openDB(t)
+	n, err := db.CreateNode(d, "edge", "https://p", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := HashPassword("pw")
+	aid, err := db.CreateUser(d, "admin1", hash, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookieTok, err := db.CreateSession(d, aid, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: sessionCookie, Value: cookieTok}
+
+	s, _ := New(d)
+
+	// Node not connected -> SendUpgrade fails -> must be recorded as error.
+	req := httptest.NewRequest("POST", "/api/nodes/"+strconv.FormatInt(n.ID, 10)+"/upgrade", bytes.NewReader([]byte("{}")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	got, _ := db.GetNode(d, n.ID)
+	if got.LastUpgradeStatus != "error" || got.LastUpgradeError == "" {
+		t.Fatalf("expected recorded error after failed upgrade, got status=%q err=%q (http=%d)", got.LastUpgradeStatus, got.LastUpgradeError, rec.Code)
+	}
+
+	// apiGetNode must expose a derived upgrade object.
+	req2 := httptest.NewRequest("GET", "/api/nodes/"+strconv.FormatInt(n.ID, 10), nil)
+	req2.AddCookie(cookie)
+	rec2 := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("get node: http=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var resp struct {
+		Upgrade upgradeView `json:"upgrade"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Upgrade.Status != "error" {
+		t.Fatalf("apiGetNode upgrade.status=%q want error", resp.Upgrade.Status)
 	}
 }
