@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, useConfirm } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
 
 const card = 'bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
@@ -179,24 +179,7 @@ export default function NodeDetail() {
 
         {/* ===== 组合节点跳序 ===== */}
         {isComposite && nodeHops.length > 0 && (
-          <section className={`${card} px-[26px] pt-[22px] pb-2`}>
-            <div className="flex items-baseline gap-2.5 mb-1.5">
-              <h2 className="m-0 text-[15px] font-bold">组合节点跳序</h2>
-              <span className="text-[12.5px] text-ink-mut">{nodeHops.length} 跳</span>
-            </div>
-            <table className="tbl">
-              <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th></tr></thead>
-              <tbody>
-                {nodeHops.map((h, i) => (
-                  <tr key={i}>
-                    <td className="font-mono text-xs text-ink-mut">{i + 1}</td>
-                    <td className="font-semibold">{h.node_name || `#${h.hop_node_id}`}</td>
-                    <td><ModeBadge mode={h.mode} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+          <CompositeHopsCard nodeId={id} hops={nodeHops} onDone={load} />
         )}
 
         {/* ===== 安装命令 ===== */}
@@ -289,5 +272,53 @@ function HeaderStatus({ node }) {
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
       {text}
     </span>
+  )
+}
+
+function CompositeHopsCard({ nodeId, hops, onDone }) {
+  const [modes, setModes] = useState(hops.map(h => h.mode))
+  const [saving, setSaving] = useState(false)
+  const toast = useToast()
+
+  const dirty = hops.some((h, i) => h.mode !== modes[i])
+  const setMode = (i, v) => setModes(m => m.map((x, j) => (j === i ? v : x)))
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.post(`/nodes/${nodeId}/hops`, { hops: modes.map(m => ({ mode: m })) })
+      toast('模式已保存')
+      onDone()
+    } catch (err) { toast(err.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
+      <div className="flex items-baseline gap-2.5 mb-1.5">
+        <h2 className="m-0 text-[15px] font-bold">组合节点跳序</h2>
+        <span className="text-[12.5px] text-ink-mut">{hops.length} 跳</span>
+      </div>
+      <p className="text-[12.5px] text-ink-mut mb-2.5">
+        内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP（TCP+UDP 中的 UDP 自动走内核态）。修改对此后新建的规则生效。
+      </p>
+      <table className="tbl">
+        <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th></tr></thead>
+        <tbody>
+          {hops.map((h, i) => (
+            <tr key={i}>
+              <td className="font-mono text-xs text-ink-mut">{i + 1}</td>
+              <td className="font-semibold">{h.node_name || `#${h.hop_node_id}`}</td>
+              <td>
+                <Select value={modes[i]} onChange={v => setMode(i, v)} style={{ width: 130 }}
+                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="pt-3">
+        <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存模式</button>
+      </div>
+    </section>
   )
 }

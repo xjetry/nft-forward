@@ -345,6 +345,79 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"node_hops": nodeHops})
 }
 
+// apiUpdateNodeHops switches the forwarding mode of each hop of a composite
+// node. Membership and order are preserved (the request supplies one mode per
+// existing hop, in order); this only flips kernel/userspace. The new modes
+// shape rules subsequently created on the composite — existing rules keep the
+// modes captured when they were expanded.
+func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.NodeType != "composite" {
+		jsonErr(w, http.StatusBadRequest, "非组合节点")
+		return
+	}
+	var body struct {
+		Hops []struct {
+			Mode string `json:"mode"`
+		} `json:"hops"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	existing, err := db.ListNodeHops(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(body.Hops) != len(existing) {
+		jsonErr(w, http.StatusBadRequest, "跳数与现有不一致")
+		return
+	}
+	hops := make([]db.NodeHop, len(existing))
+	for i, h := range existing {
+		mode := strings.ToLower(strings.TrimSpace(body.Hops[i].Mode))
+		if mode == "" {
+			mode = "userspace"
+		}
+		if mode != "kernel" && mode != "userspace" {
+			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+			return
+		}
+		hops[i] = db.NodeHop{NodeID: id, Position: h.Position, HopNodeID: h.HopNodeID, Mode: mode}
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if err := db.DeleteNodeHops(tx, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := db.CreateNodeHops(tx, id, hops); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.update_hops", strconv.FormatInt(id, 10), node.Name)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiRenameNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

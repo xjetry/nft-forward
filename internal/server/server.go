@@ -262,6 +262,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
+			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)
