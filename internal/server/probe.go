@@ -67,8 +67,11 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Accept both "chain" and "rule" query params for backward compat
-	ruleIDStr := r.URL.Query().Get("rule")
+	// rule_id is the canonical param; rule/chain are older aliases kept working.
+	ruleIDStr := r.URL.Query().Get("rule_id")
+	if ruleIDStr == "" {
+		ruleIDStr = r.URL.Query().Get("rule")
+	}
 	if ruleIDStr == "" {
 		ruleIDStr = r.URL.Query().Get("chain")
 	}
@@ -77,10 +80,19 @@ func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(probeResult{Error: "invalid rule id"})
 		return
 	}
-	_, err = db.GetRule(s.DB, ruleID)
+	rule, err := db.GetRule(s.DB, ruleID)
 	if err != nil {
 		json.NewEncoder(w).Encode(probeResult{Error: "rule not found"})
 		return
+	}
+	// A non-admin may probe only their own rule, so the per-hop node names and
+	// targets of other users' rules don't leak through the chain probe.
+	if u := userFromCtx(r.Context()); u != nil && u.Role != "admin" {
+		if !rule.OwnerID.Valid || rule.OwnerID.Int64 != u.ID {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(probeResult{Error: "无权操作该规则"})
+			return
+		}
 	}
 	hops, err := db.ListRuleHops(s.DB, ruleID)
 	if err != nil || len(hops) == 0 {

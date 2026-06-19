@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ProtoBadge, SensText, CopyText, Tooltip } from './ui'
+import { ProtoBadge, SensText, CopyText, Tooltip, ProbeChainButton } from './ui'
 import { fmtBytes } from '../lib/fmt'
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
@@ -93,6 +93,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
               {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                <span className="inline-flex items-center align-middle mr-1.5"><ProbeChainButton ruleId={r.id} /></span>
                 {isAdmin && <Link to={`/rules/${r.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>}
                 <button onClick={() => onDelete(r)} className="btn-danger-sm text-xs">删除</button>
               </td>
