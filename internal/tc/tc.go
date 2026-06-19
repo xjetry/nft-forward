@@ -100,14 +100,47 @@ func DefaultIface() string {
 	if err != nil {
 		return ""
 	}
+	return parseDefaultIface(data)
+}
+
+// parseDefaultIface picks the default-route interface from /proc/net/route
+// contents. When a host runs Docker/libvirt alongside a real uplink, more than
+// one interface can carry a default route; we prefer a physical NIC because
+// shaping a container bridge (docker0, br-<id>, veth*) would miss the real
+// egress. The virtual interface is kept only as a fallback so a host whose sole
+// default route is virtual still gets shaping.
+func parseDefaultIface(data []byte) string {
+	var fallback string
 	for i, line := range strings.Split(string(data), "\n") {
 		if i == 0 || line == "" {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "00000000" {
-			return fields[0]
+		if len(fields) < 2 || fields[1] != "00000000" {
+			continue
+		}
+		iface := fields[0]
+		if isVirtualIface(iface) {
+			if fallback == "" {
+				fallback = iface
+			}
+			continue
+		}
+		return iface
+	}
+	return fallback
+}
+
+// virtualIfacePrefixes names interface families added by container/VM stacks
+// rather than real uplinks. "br-" matches Docker's user-defined bridges without
+// catching a manually configured host bridge like "br0".
+var virtualIfacePrefixes = []string{"docker", "br-", "veth", "virbr", "vnet", "lo"}
+
+func isVirtualIface(name string) bool {
+	for _, p := range virtualIfacePrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
 		}
 	}
-	return ""
+	return false
 }
