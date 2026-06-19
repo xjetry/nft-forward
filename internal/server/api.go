@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -767,8 +768,13 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		ruleNodeID = hops[0].NodeID
 	}
 
+	// Rules created through the admin API are admin-managed: bind them to the
+	// creating admin so ownership listings and traffic accounting have a
+	// subject (this route group is admin-only). The agent/WS path instead
+	// inherits the node owner.
 	rl := &db.Rule{
 		NodeID:   ruleNodeID,
+		OwnerID:  sql.NullInt64{Int64: u.ID, Valid: true},
 		Name:     name,
 		Proto:    proto,
 		ExitHost: exitHost,
@@ -859,16 +865,33 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The edit form only touches the rule header (name/proto/exit/comment) and
+	// sends no hops. Treat an empty hop list as "keep the existing chain":
+	// RegenerateRule reuses each node's current listen port, so the entry
+	// endpoint and installed ports don't churn on a header-only edit.
+	var hops []db.HopInput
 	if len(body.Hops) == 0 {
-		jsonErr(w, http.StatusBadRequest, "至少添加一个节点")
-		return
-	}
-	hops := make([]db.HopInput, len(body.Hops))
-	for i, h := range body.Hops {
-		hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
-	}
-	if body.EntryPort > 0 {
-		hops[0].DesiredPort = body.EntryPort
+		existing, err := db.ListRuleHops(s.DB, id)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(existing) == 0 {
+			jsonErr(w, http.StatusBadRequest, "至少添加一个节点")
+			return
+		}
+		hops = make([]db.HopInput, len(existing))
+		for i, h := range existing {
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		}
+	} else {
+		hops = make([]db.HopInput, len(body.Hops))
+		for i, h := range body.Hops {
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		}
+		if body.EntryPort > 0 {
+			hops[0].DesiredPort = body.EntryPort
+		}
 	}
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)

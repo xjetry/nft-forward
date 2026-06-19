@@ -141,6 +141,7 @@ function EditRuleCard({ rule, onDone }) {
   const [name, setName] = useState(rule.name)
   const [proto, setProto] = useState(rule.proto)
   const [exit, setExit] = useState(rule.exit || '')
+  const [comment, setComment] = useState(rule.comment || '')
   const [saving, setSaving] = useState(false)
   const toast = useToast()
 
@@ -148,7 +149,7 @@ function EditRuleCard({ rule, onDone }) {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.put(`/rules/${rule.id}`, { name, proto, exit })
+      await api.put(`/rules/${rule.id}`, { name, proto, exit, comment })
       toast('已保存并重下发')
       onDone()
     } catch (err) { toast(err.message) } finally { setSaving(false) }
@@ -167,6 +168,8 @@ function EditRuleCard({ rule, onDone }) {
               options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
             <label className="fl">出口</label>
             <input className="input-field font-mono" value={exit} onChange={e => setExit(e.target.value)} required placeholder="host:port" />
+            <label className="fl">备注</label>
+            <input className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="可选" />
           </div>
           <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
             <button type="submit" disabled={saving} className="btn-primary">保存并重下发</button>
