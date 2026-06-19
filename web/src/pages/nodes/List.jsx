@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
@@ -139,15 +139,17 @@ function AddNodeModal({ open, onClose, onDone }) {
   const [secret, setSecret] = useState('')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
+  const navigate = useNavigate()
 
   const submit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      await api.post('/nodes', { name, secret: secret || undefined })
+      const res = await api.post('/nodes', { name, secret: secret || undefined })
       toast('节点已添加')
       setName(''); setSecret('')
-      onDone()
+      if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
+      else onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
@@ -192,6 +194,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
   const [hops, setHops] = useState([{ node_id: '', mode: 'userspace' }])
   const [loading, setLoading] = useState(false)
   const toast = useToast()
+  const navigate = useNavigate()
 
   const addHop = () => setHops(h => [...h, { node_id: '', mode: 'userspace' }])
   const removeHop = (i) => setHops(h => h.filter((_, j) => j !== i))
@@ -215,7 +218,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
     }
     setLoading(true)
     try {
-      await api.post('/nodes', {
+      const res = await api.post('/nodes', {
         name,
         node_type: 'composite',
         hops: validHops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
@@ -223,7 +226,8 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
       toast('组合节点已创建')
       setName('')
       setHops([{ node_id: '', mode: 'userspace' }])
-      onDone()
+      if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
+      else onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
