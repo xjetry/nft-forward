@@ -63,6 +63,10 @@ export default function NodeDetail() {
     try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
   }
 
+  const toggleHidden = async () => {
+    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已在规则列表显示' : '已在规则列表隐藏'); load() } catch (err) { toast(err.message) }
+  }
+
   const installCmd = `curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh\nsudo bash install.sh agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}`
 
   return (
@@ -84,6 +88,7 @@ export default function NodeDetail() {
               <h1 className="m-0 text-[22px] font-bold tracking-[-0.01em]">{node.name}</h1>
               <NodeTypeBadge type={node.node_type} />
               <HeaderStatus node={node} />
+              {node.hidden && <Badge color="gray">已隐藏</Badge>}
             </div>
             <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-ink-mut">
               <span>连接 IP&nbsp;&nbsp;{node.address
@@ -105,6 +110,7 @@ export default function NodeDetail() {
             ) : (
               <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
             )}
+            <button onClick={toggleHidden} title="隐藏后，该节点的规则不在规则列表显示" className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">{node.hidden ? '规则列表显示' : '规则列表隐藏'}</button>
             <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
             {agentOutdated && (
               <button onClick={upgrade} title={`推送升级到 ${server_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {server_version}</button>

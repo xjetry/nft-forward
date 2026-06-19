@@ -38,6 +38,7 @@ type Node struct {
 	LastApplyAt  sql.NullInt64 `json:"last_apply_at"`
 	LastError    sql.NullString `json:"last_error"`
 	Disabled     bool         `json:"disabled"`
+	Hidden       bool         `json:"hidden"`
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
 	PortRange    string       `json:"port_range"`
 	CreatedAt    int64        `json:"created_at"`
@@ -218,7 +219,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -229,7 +230,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var disabled int
+	var disabled, hidden int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
@@ -240,10 +241,12 @@ func scanNode(r rowScanner) (*Node, error) {
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
+		&hidden,
 	); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
+	n.Hidden = hidden == 1
 	if ownerID.Valid {
 		v := ownerID.Int64
 		n.OwnerID = &v
@@ -564,6 +567,14 @@ func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
 
 func ToggleNode(d *sql.DB, id int64) error {
 	_, err := d.Exec(`UPDATE nodes SET disabled = CASE WHEN disabled = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
+	return err
+}
+
+// ToggleNodeHidden flips a node's hidden flag. Hidden is purely a presentation
+// concern (the rules list omits rules on hidden nodes); it does not affect
+// forwarding, sync, or authorization.
+func ToggleNodeHidden(d *sql.DB, id int64) error {
+	_, err := d.Exec(`UPDATE nodes SET hidden = CASE WHEN hidden = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
 	return err
 }
 

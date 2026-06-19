@@ -34,9 +34,12 @@ export default function RulesList() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { rules = [], nodes = [] } = data || {}
+  const { rules: allRules = [], nodes = [] } = data || {}
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
+  // Rules on a node flagged hidden are omitted from this list (the node config
+  // is the single switch); they keep forwarding and stay reachable by URL.
+  const rules = allRules.filter(r => !nodeMap[r.node_id]?.hidden)
 
   const deleteRule = async (rule) => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
@@ -134,7 +137,7 @@ function CreateRuleModal({ open, onClose, nodes, onDone }) {
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>
-          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --"
+          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable
             options={nodes.map(n => ({ value: n.id, label: n.name }))} />
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
