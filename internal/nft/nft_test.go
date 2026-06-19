@@ -77,8 +77,8 @@ func TestRenderRulesetTCPSingleProtocol(t *testing.T) {
 	if !contains(out, "tcp dport 80") {
 		t.Fatalf("expected single-protocol tcp dport 80, got:\n%s", out)
 	}
-	if contains(out, "meta l4proto") {
-		t.Fatalf("single tcp rule must not use set syntax, got:\n%s", out)
+	if contains(out, "meta l4proto { tcp, udp }") {
+		t.Fatalf("single tcp rule must not use the tcp+udp set syntax, got:\n%s", out)
 	}
 }
 
@@ -117,11 +117,14 @@ func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
 	if contains(out, "dnat to :443") || contains(out, "ip daddr  ") {
 		t.Fatalf("must not emit invalid syntax for empty DestIP, got:\n%s", out)
 	}
-	if !contains(out, "tcp dport 9443 counter dnat to 10.0.0.6:443") {
+	if !contains(out, "tcp dport 9443 dnat to 10.0.0.6:443") {
 		t.Fatalf("sibling rule with valid DestIP must still render, got:\n%s", out)
 	}
 	if !contains(out, "ip daddr 10.0.0.6 tcp dport 443 ct status dnat masquerade") {
 		t.Fatalf("sibling masquerade must still render, got:\n%s", out)
+	}
+	if !contains(out, "meta l4proto tcp ct original proto-dst 9443 counter") {
+		t.Fatalf("sibling accounting counter must render, got:\n%s", out)
 	}
 }
 

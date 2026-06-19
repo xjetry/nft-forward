@@ -66,20 +66,20 @@ type nftMatch struct {
 	Right json.RawMessage `json:"right"`
 }
 
-// nftMatchSide holds the "left" operand which can be a meta reference or
-// a payload reference (or something we don't care about).
+// nftMatchSide holds the "left" operand of a match: a meta reference
+// (l4proto) or a conntrack reference (the original tuple's proto-dst).
 type nftMatchSide struct {
-	Meta    *nftMeta    `json:"meta,omitempty"`
-	Payload *nftPayload `json:"payload,omitempty"`
+	Meta *nftMeta `json:"meta,omitempty"`
+	Ct   *nftCt   `json:"ct,omitempty"`
 }
 
 type nftMeta struct {
 	Key string `json:"key"`
 }
 
-type nftPayload struct {
-	Protocol string `json:"protocol"`
-	Field    string `json:"field"`
+type nftCt struct {
+	Key string `json:"key"`
+	Dir string `json:"dir"`
 }
 
 type nftCounter struct {
@@ -94,7 +94,7 @@ func parseCounters(data []byte) ([]Counter, error) {
 	}
 	var out []Counter
 	for _, item := range doc.Nftables {
-		if item.Rule == nil || item.Rule.Chain != "prerouting" {
+		if item.Rule == nil || item.Rule.Chain != "account" {
 			continue
 		}
 		var c Counter
@@ -120,33 +120,47 @@ func parseCounters(data []byte) ([]Counter, error) {
 	return out, nil
 }
 
-// extractMatch pulls proto and listen-port info from one match expression.
+// extractMatch pulls proto and listen-port info from one match expression in
+// the accounting chain: `meta l4proto <p>` gives the protocol, and
+// `ct original proto-dst <port>` gives the listen port (the pre-DNAT dport
+// preserved by conntrack).
 func extractMatch(m *nftMatch, c *Counter) {
-	// meta match: left.meta.key == "l4proto", right is a string like "tcp"
 	if m.Left.Meta != nil && m.Left.Meta.Key == "l4proto" {
-		var proto string
-		if json.Unmarshal(m.Right, &proto) == nil {
-			c.Proto = proto
-		}
+		c.Proto = parseL4Proto(m.Right)
 		return
 	}
-	// payload match: left.payload.field == "dport"
-	if m.Left.Payload != nil && m.Left.Payload.Field == "dport" {
-		// right is a numeric port
+	if m.Left.Ct != nil && m.Left.Ct.Key == "proto-dst" {
 		var port float64
 		if json.Unmarshal(m.Right, &port) == nil {
 			c.ListenPort = int(port)
 		}
-		// The protocol on the payload tells us the transport layer.
-		// The tcp+udp set form uses a generic transport header ("th dport")
-		// which nft reports as protocol "th". Map it to "tcp+udp" so it
-		// stays consistent with how the rule is represented elsewhere.
-		if proto := m.Left.Payload.Protocol; proto != "" && c.Proto == "" {
-			if proto == "th" {
-				c.Proto = "tcp+udp"
-			} else {
-				c.Proto = proto
+	}
+}
+
+// parseL4Proto reads the right side of a `meta l4proto` match: nft emits a bare
+// string ("tcp") for a single protocol or {"set":["tcp","udp"]} for tcp+udp.
+func parseL4Proto(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var set struct {
+		Set []string `json:"set"`
+	}
+	if json.Unmarshal(raw, &set) == nil && len(set.Set) > 0 {
+		tcp, udp := false, false
+		for _, p := range set.Set {
+			switch p {
+			case "tcp":
+				tcp = true
+			case "udp":
+				udp = true
 			}
 		}
+		if tcp && udp {
+			return "tcp+udp"
+		}
+		return set.Set[0]
 	}
+	return ""
 }

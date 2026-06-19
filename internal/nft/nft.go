@@ -147,7 +147,11 @@ func RenderRuleset(rules []Rule) string {
 			// minor class id, so packets are routed to the rate-limited class.
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
-		b.WriteString(fmt.Sprintf("\t\t%s %scounter dnat to %s:%d\n",
+		// No counter here: a nat chain is only traversed by the first packet of
+		// each connection (conntrack fast-paths the rest), so a counter would see
+		// connection setups, not throughput. Byte accounting lives in the
+		// forward-hook `account` chain below.
+		b.WriteString(fmt.Sprintf("\t\t%s %sdnat to %s:%d\n",
 			ProtoDportMatch(r.Proto, r.SrcPort), mark, r.DestIP, r.DestPort))
 	}
 	b.WriteString("\t}\n")
@@ -166,8 +170,31 @@ func RenderRuleset(rules []Rule) string {
 			r.DestIP, ProtoDportMatch(r.Proto, r.DestPort)))
 	}
 	b.WriteString("\t}\n")
+	// The forward hook sees every forwarded packet in both directions. Keying on
+	// the conntrack original tuple's destination port recovers the listen port
+	// after DNAT has rewritten daddr/dport, so one counter per rule measures the
+	// real bidirectional byte total — matching the userspace backend's accounting.
+	b.WriteString("\tchain account {\n")
+	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
+	for _, r := range rules {
+		if r.DestIP == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d counter\n",
+			l4protoMatch(r.Proto), r.SrcPort))
+	}
+	b.WriteString("\t}\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// l4protoMatch is the nft transport-protocol match for a rule's proto, used by
+// the accounting chain where the post-DNAT dport no longer identifies the rule.
+func l4protoMatch(proto string) string {
+	if proto == "tcp+udp" {
+		return "meta l4proto { tcp, udp }"
+	}
+	return "meta l4proto " + proto
 }
 
 func Apply(rules []Rule) error {

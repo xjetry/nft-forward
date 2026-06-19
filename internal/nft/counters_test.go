@@ -2,12 +2,11 @@ package nft
 
 import "testing"
 
-// nft -j emits the dport match of a single-protocol rule as a payload
-// reference carrying that protocol, but the tcp+udp set form
-// (meta l4proto { tcp, udp } th dport N) emits a generic transport-header
-// payload whose protocol is "th". parseCounters must surface that as
-// "tcp+udp" so a counter's proto matches how the rule is represented
-// everywhere else.
+// The accounting chain identifies a rule by its transport protocol
+// (meta l4proto) and the listen port recovered from the conntrack original
+// tuple (ct original proto-dst), since DNAT has already rewritten the packet's
+// own dport by the time it reaches the forward hook. The tcp+udp form emits
+// l4proto as a {tcp,udp} set, which parseCounters must surface as "tcp+udp".
 func TestParseCountersProto(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -20,10 +19,10 @@ func TestParseCountersProto(t *testing.T) {
 			name: "tcp",
 			json: `{"nftables":[
 				{"metainfo":{"version":"1.0.6"}},
-				{"rule":{"chain":"prerouting","expr":[
-					{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":80}},
-					{"counter":{"packets":4,"bytes":400}},
-					{"dnat":{"addr":"10.0.0.1","port":80}}
+				{"rule":{"chain":"account","expr":[
+					{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"tcp"}},
+					{"match":{"op":"==","left":{"ct":{"key":"proto-dst","dir":"original"}},"right":80}},
+					{"counter":{"packets":4,"bytes":400}}
 				]}}
 			]}`,
 			wantPort: 80, wantProto: "tcp", wantBytes: 400,
@@ -31,10 +30,10 @@ func TestParseCountersProto(t *testing.T) {
 		{
 			name: "udp",
 			json: `{"nftables":[
-				{"rule":{"chain":"prerouting","expr":[
-					{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":53}},
-					{"counter":{"packets":2,"bytes":120}},
-					{"dnat":{"addr":"10.0.0.2","port":53}}
+				{"rule":{"chain":"account","expr":[
+					{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"udp"}},
+					{"match":{"op":"==","left":{"ct":{"key":"proto-dst","dir":"original"}},"right":53}},
+					{"counter":{"packets":2,"bytes":120}}
 				]}}
 			]}`,
 			wantPort: 53, wantProto: "udp", wantBytes: 120,
@@ -42,11 +41,10 @@ func TestParseCountersProto(t *testing.T) {
 		{
 			name: "tcp+udp set form",
 			json: `{"nftables":[
-				{"rule":{"chain":"prerouting","expr":[
+				{"rule":{"chain":"account","expr":[
 					{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":{"set":["tcp","udp"]}}},
-					{"match":{"op":"==","left":{"payload":{"protocol":"th","field":"dport"}},"right":8080}},
-					{"counter":{"packets":3,"bytes":222}},
-					{"dnat":{"addr":"10.0.0.3","port":8080}}
+					{"match":{"op":"==","left":{"ct":{"key":"proto-dst","dir":"original"}},"right":8080}},
+					{"counter":{"packets":3,"bytes":222}}
 				]}}
 			]}`,
 			wantPort: 8080, wantProto: "tcp+udp", wantBytes: 222,
@@ -75,12 +73,12 @@ func TestParseCountersProto(t *testing.T) {
 	}
 }
 
-// Rules outside the prerouting chain (e.g. the masquerade postrouting chain)
-// must not produce counters; otherwise totals would double-count.
-func TestParseCountersSkipsPostrouting(t *testing.T) {
+// Rules outside the accounting chain (the nat prerouting/postrouting chains)
+// must not produce counters; only the forward-hook account chain measures
+// throughput.
+func TestParseCountersSkipsNatChains(t *testing.T) {
 	doc := `{"nftables":[
 		{"rule":{"chain":"postrouting","expr":[
-			{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":80}},
 			{"counter":{"packets":9,"bytes":900}},
 			{"masquerade":null}
 		]}}
@@ -90,6 +88,6 @@ func TestParseCountersSkipsPostrouting(t *testing.T) {
 		t.Fatalf("parseCounters: %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("postrouting rule should be ignored, got %+v", got)
+		t.Fatalf("non-account rule should be ignored, got %+v", got)
 	}
 }
