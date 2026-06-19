@@ -13,6 +13,7 @@ export default function NodeList() {
   const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
   const [search, setSearch] = useState('')
+  const [tab, setTab] = useState('single')
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -55,8 +56,11 @@ export default function NodeList() {
   if (loading) return <Layout><Loading /></Layout>
 
   const { nodes = [], server_version } = data || {}
+  const singleNodes = nodes.filter(n => n.node_type !== 'composite')
+  const compositeNodes = nodes.filter(n => n.node_type === 'composite')
+  const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
   const q = search.trim().toLowerCase()
-  const filtered = !q ? nodes : nodes.filter(n => (n.name || '').toLowerCase().includes(q))
+  const filtered = !q ? tabNodes : tabNodes.filter(n => (n.name || '').toLowerCase().includes(q))
 
   return (
     <Layout>
@@ -90,8 +94,18 @@ export default function NodeList() {
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
         </PanelToolbar>
+        <div className="flex gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+          {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
+            <button key={key} onClick={() => setTab(key)}
+              className={`px-3 py-0.5 rounded text-xs border transition-colors ${
+                tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
+              }`}>{label} {n}</button>
+          ))}
+        </div>
         {nodes.length === 0 ? (
           <Empty title="尚未注册任何节点" desc="点击右上角「添加节点」创建。" />
+        ) : tabNodes.length === 0 ? (
+          <Empty title={tab === 'composite' ? '暂无组合节点' : '暂无单点节点'} desc={tab === 'composite' ? '点击右上角「组合节点」创建。' : '点击右上角「添加节点」创建。'} />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配节点" desc="试试别的关键词。" />
         ) : (
@@ -247,7 +261,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
             {hops.map((hop, i) => (
               <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
-                <Select className="flex-1" placeholder="-- 选择节点 --" value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
+                <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
                   options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
                 <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
                   options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />

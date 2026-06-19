@@ -274,16 +274,19 @@ export function ConfirmProvider({ children }) {
 
 /* ---------- Select: styled dropdown replacing native <select> ---------- */
 // options: [{ value, label }]. onChange receives the chosen value as a string.
-export function Select({ value, onChange, options, placeholder = '请选择', disabled, className = '', style }) {
+export function Select({ value, onChange, options, placeholder = '请选择', disabled, className = '', style, searchable = false }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const ref = useRef(null)
   useEffect(() => {
-    if (!open) return
+    if (!open) { setQuery(''); return }
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [open])
   const selected = options.find(o => String(o.value) === String(value))
+  const q = query.trim().toLowerCase()
+  const shown = searchable && q ? options.filter(o => String(o.label).toLowerCase().includes(q)) : options
   return (
     <div ref={ref} className={`relative ${className}`} style={style}>
       <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
@@ -292,14 +295,25 @@ export function Select({ value, onChange, options, placeholder = '请选择', di
         <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-surface border border-line rounded-lg shadow-lg max-h-60 overflow-auto py-1">
-          {options.map(o => (
-            <button key={String(o.value)} type="button"
-              onClick={() => { onChange(String(o.value)); setOpen(false) }}
-              className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
-              {o.label}
-            </button>
-          ))}
+        <div className="absolute z-50 mt-1 w-full bg-surface border border-line rounded-lg shadow-lg overflow-hidden">
+          {searchable && (
+            <div className="p-1.5 border-b border-line-soft">
+              <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索…"
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}
+                className="input-field w-full text-[13px]" style={{ height: 30 }} />
+            </div>
+          )}
+          <div className="max-h-60 overflow-auto py-1">
+            {shown.length === 0 ? (
+              <div className="px-3 py-2 text-[13px] text-ink-mut">无匹配</div>
+            ) : shown.map(o => (
+              <button key={String(o.value)} type="button"
+                onClick={() => { onChange(String(o.value)); setOpen(false) }}
+                className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
