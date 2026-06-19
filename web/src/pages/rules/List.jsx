@@ -138,7 +138,10 @@ function CreateRuleModal({ open, onClose, nodes, onDone }) {
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>
           <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable
-            options={nodes.map(n => ({ value: n.id, label: n.name }))} />
+            groups={[
+              { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
+              { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
+            ]} />
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>

@@ -274,7 +274,7 @@ export function ConfirmProvider({ children }) {
 
 /* ---------- Select: styled dropdown replacing native <select> ---------- */
 // options: [{ value, label }]. onChange receives the chosen value as a string.
-export function Select({ value, onChange, options, placeholder = '请选择', disabled, className = '', style, searchable = false }) {
+export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef(null)
@@ -284,9 +284,22 @@ export function Select({ value, onChange, options, placeholder = '请选择', di
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [open])
-  const selected = options.find(o => String(o.value) === String(value))
+  // Normalize to labelled sections so flat `options` and grouped `groups` share
+  // one render path. A null section label renders no header.
+  const sections = groups ? groups : [{ label: null, options }]
+  const selected = sections.flatMap(s => s.options).find(o => String(o.value) === String(value))
   const q = query.trim().toLowerCase()
-  const shown = searchable && q ? options.filter(o => String(o.label).toLowerCase().includes(q)) : options
+  const shownSections = sections
+    .map(s => ({ label: s.label, options: searchable && q ? s.options.filter(o => String(o.label).toLowerCase().includes(q)) : s.options }))
+    .filter(s => s.options.length > 0)
+  const empty = shownSections.length === 0
+  const renderOption = (o) => (
+    <button key={String(o.value)} type="button"
+      onClick={() => { onChange(String(o.value)); setOpen(false) }}
+      className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
+      {o.label}
+    </button>
+  )
   return (
     <div ref={ref} className={`relative ${className}`} style={style}>
       <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
@@ -304,14 +317,13 @@ export function Select({ value, onChange, options, placeholder = '请选择', di
             </div>
           )}
           <div className="max-h-60 overflow-auto py-1">
-            {shown.length === 0 ? (
+            {empty ? (
               <div className="px-3 py-2 text-[13px] text-ink-mut">无匹配</div>
-            ) : shown.map(o => (
-              <button key={String(o.value)} type="button"
-                onClick={() => { onChange(String(o.value)); setOpen(false) }}
-                className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
-                {o.label}
-              </button>
+            ) : shownSections.map((s, i) => (
+              <div key={i}>
+                {s.label && <div className="px-3 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-mut">{s.label}</div>}
+                {s.options.map(renderOption)}
+              </div>
             ))}
           </div>
         </div>
