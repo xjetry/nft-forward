@@ -116,7 +116,7 @@ function MyProxyURIs({ username }) {
         </p>
         <textarea className="input-field font-mono w-full flex-1 min-h-[100px] resize-y !py-3 !px-3.5" value={text} onChange={e => setText(e.target.value)}
           placeholder={'vless://…\ntrojan://…'} />
-        <button onClick={save} className="btn-primary mt-3.5">保存</button>
+        <button onClick={save} className="btn-primary mt-3.5 self-start">保存</button>
       </div>
     </div>
   )
