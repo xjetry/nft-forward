@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur } from '../../components/Layout'
@@ -15,6 +15,7 @@ export default function RulesList() {
   const [editRule, setEditRule] = useState(null)
   const [users, setUsers] = useState([])
   const [selectedOwners, setSelectedOwners] = useState(new Set())
+  const [selectedNodes, setSelectedNodes] = useState(new Set())
   const [search, setSearch] = useState('')
   const toast = useToast()
   const blurred = useBlur()
@@ -40,8 +41,6 @@ export default function RulesList() {
   const { rules: allRules = [], nodes = [] } = data || {}
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
-  // Rules on a node flagged hidden are omitted from this list (the node's hidden
-  // flag is the single switch); they keep forwarding and stay reachable by URL.
   const rules = allRules.filter(r => !nodeMap[r.node_id]?.hidden)
 
   const deleteRule = async (rule) => {
@@ -52,11 +51,24 @@ export default function RulesList() {
   const copyRule = (rule) => { setCreateInitial(copyInitial(rule)); setCreateOpen(true) }
 
   const q = search.trim().toLowerCase()
-  const filtered = !q ? rules : rules.filter(r => {
+  let filtered = rules
+  if (selectedNodes.size > 0) filtered = filtered.filter(r => selectedNodes.has(r.node_id))
+  if (q) filtered = filtered.filter(r => {
     const node = nodeMap[r.node_id]
     const exit = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : ''
     return [r.name, node?.name, r.entry, exit, r.owner_name].some(v => (v || '').toLowerCase().includes(q))
   })
+
+  const filterActive = selectedOwners.size > 0 || selectedNodes.size > 0
+  const clearFilters = () => {
+    const nextOwners = new Set()
+    setSelectedOwners(nextOwners)
+    setSelectedNodes(new Set())
+    load(nextOwners)
+  }
+
+  const userOptions = users.map(u => ({ value: u.id, label: u.username }))
+  const nodeOptions = nodes.filter(n => !n.hidden).map(n => ({ value: n.id, label: n.name }))
 
   return (
     <Layout>
@@ -69,33 +81,32 @@ export default function RulesList() {
           <ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton>
         </PanelToolbar>
 
-        {users.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
-            <button
-              onClick={() => { const next = new Set(); setSelectedOwners(next); load(next) }}
-              className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                selectedOwners.size === 0
-                  ? 'bg-blue-500 text-white border-blue-500'
-                  : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
-              }`}
-            >全部</button>
-            {users.map(u => (
-              <button
-                key={u.id}
-                onClick={() => {
-                  const next = new Set(selectedOwners)
-                  if (next.has(u.id)) next.delete(u.id)
-                  else next.add(u.id)
-                  setSelectedOwners(next)
-                  load(next)
-                }}
-                className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                  selectedOwners.has(u.id)
-                    ? 'bg-blue-500 text-white border-blue-500'
-                    : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
-                }`}
-              >{u.username}</button>
-            ))}
+        {(users.length > 0 || nodes.length > 0) && (
+          <div className="relative flex items-center gap-2.5 px-[22px] py-2.5 border-b border-line-soft flex-wrap z-10">
+            <span className="text-xs text-ink-mut">筛选</span>
+            <FilterDropdown
+              label="用户"
+              icon={<svg className="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>}
+              options={userOptions}
+              selected={selectedOwners}
+              onChange={next => { setSelectedOwners(next); load(next) }}
+              searchPlaceholder="搜索用户…"
+            />
+            <FilterDropdown
+              label="节点"
+              icon={<svg className="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/><path d="M7 8h.01M7 16h.01"/></svg>}
+              options={nodeOptions}
+              selected={selectedNodes}
+              onChange={setSelectedNodes}
+              searchPlaceholder="搜索节点…"
+            />
+            {filterActive && (
+              <button onClick={clearFilters}
+                className="inline-flex items-center gap-1 text-xs text-ink-mut hover:text-ink transition-colors cursor-pointer bg-transparent border-0 p-0">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                清除筛选
+              </button>
+            )}
           </div>
         )}
 
@@ -135,5 +146,68 @@ export default function RulesList() {
           toast('已保存并重下发'); setEditRule(null); load()
         }} />
     </Layout>
+  )
+}
+
+function FilterDropdown({ label, icon, options, selected, onChange, searchPlaceholder }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) { setQuery(''); return }
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  const q = query.trim().toLowerCase()
+  const shown = q ? options.filter(o => String(o.label).toLowerCase().includes(q)) : options
+
+  const toggle = (val) => {
+    const next = new Set(selected)
+    if (next.has(val)) next.delete(val); else next.add(val)
+    onChange(next)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] cursor-pointer transition-colors bg-surface border border-line text-ink-soft hover:border-ink-mut">
+        {icon}
+        {label}
+        {selected.size > 0 && (
+          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[11px] font-bold inline-flex items-center justify-center">
+            {selected.size}
+          </span>
+        )}
+        <svg className="w-3.5 h-3.5 text-ink-mut" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      {open && (
+        <div className="absolute top-[calc(100%+6px)] left-0 w-[260px] z-50 bg-surface border border-line rounded-xl shadow-lg overflow-hidden">
+          <div className="p-2.5 border-b border-line-soft">
+            <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder={searchPlaceholder}
+              onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}
+              className="input-field w-full text-[13px]" style={{ height: 32 }} />
+          </div>
+          <div className="max-h-[230px] overflow-y-auto py-1.5 px-1.5">
+            {shown.length === 0 ? (
+              <div className="px-3 py-2 text-[13px] text-ink-mut">无匹配</div>
+            ) : shown.map(o => {
+              const checked = selected.has(o.value)
+              return (
+                <div key={o.value} onClick={() => toggle(o.value)}
+                  className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg cursor-pointer text-[13px] text-ink hover:bg-raised transition-colors">
+                  <span className={`w-4 h-4 flex-none rounded border flex items-center justify-center ${checked ? 'bg-blue-600 border-blue-600' : 'border-line'}`}>
+                    {checked && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+                  </span>
+                  <span className="truncate">{o.label}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

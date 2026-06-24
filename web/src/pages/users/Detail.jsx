@@ -94,31 +94,7 @@ export default function UserDetail() {
 
       {/* Node grants (regular users only) */}
       {isRegularUser && (
-        <div className="card mb-5">
-          <div className="card-header"><h3 className="text-sm font-bold">已授权节点</h3></div>
-          {nodes.length ? (
-            <table className="tbl">
-              <thead><tr><th>节点</th><th>类型</th><th>本用户上限</th><th className="text-right">操作</th></tr></thead>
-              <tbody>
-                {nodes.map((n, i) => (
-                  <tr key={n.id}>
-                    <td className="font-semibold">
-                      <Link to={`/nodes/${n.id}`} className="text-blue-600 hover:underline">{n.name}</Link>
-                    </td>
-                    <td><NodeTypeBadge type={n.node_type} /></td>
-                    <td className="font-mono">{grants[i]?.max_forwards ?? '--'}</td>
-                    <td className="text-right">
-                      <RevokeBtn url={`/users/${id}/grants/${n.id}`} onDone={load} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <Empty title="尚未授权任何节点" />}
-          <div className="p-5 border-t border-line-soft">
-            <GrantNodeForm userId={id} allNodes={all_nodes} grantedNodes={nodes} onDone={load} />
-          </div>
-        </div>
+        <GrantedNodesCard userId={id} nodes={nodes} grants={grants} allNodes={all_nodes} onDone={load} />
       )}
 
       {/* Landing-node source (regular users only) */}
@@ -283,12 +259,100 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
   )
 }
 
-function RevokeBtn({ url, onDone }) {
+function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
+  const [tab, setTab] = useState('single')
+  const [selected, setSelected] = useState(new Set())
+  const [revoking, setRevoking] = useState(false)
   const toast = useToast()
-  const revoke = async () => {
-    try { await api.del(url); toast('已撤销'); onDone() } catch (err) { toast(err.message) }
+  const confirm = useConfirm()
+
+  const singleNodes = nodes.filter(n => n.node_type !== 'composite')
+  const compositeNodes = nodes.filter(n => n.node_type === 'composite')
+  const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
+  const grantByNode = {}
+  nodes.forEach((n, i) => { grantByNode[n.id] = grants[i] })
+
+  const toggleOne = (id) => setSelected(s => {
+    const next = new Set(s)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleAll = () => {
+    const allIds = tabNodes.map(n => n.id)
+    const allSelected = allIds.every(id => selected.has(id))
+    if (allSelected) setSelected(s => { const next = new Set(s); allIds.forEach(id => next.delete(id)); return next })
+    else setSelected(s => { const next = new Set(s); allIds.forEach(id => next.add(id)); return next })
   }
-  return <button onClick={revoke} className="btn-danger-sm text-xs">撤销</button>
+
+  const batchRevoke = async () => {
+    const ids = [...selected]
+    if (!ids.length) return
+    if (!(await confirm({ title: '批量撤销', message: `确认撤销 ${ids.length} 个节点的授权？`, confirmText: '撤销', danger: true }))) return
+    setRevoking(true)
+    try {
+      await api.post(`/users/${userId}/grants/batch-revoke`, { node_ids: ids })
+      toast(`已撤销 ${ids.length} 个节点`)
+      setSelected(new Set())
+      onDone()
+    } catch (err) { toast(err.message) } finally { setRevoking(false) }
+  }
+
+  const revokeOne = async (nodeId) => {
+    try { await api.del(`/users/${userId}/grants/${nodeId}`); toast('已撤销'); onDone() } catch (err) { toast(err.message) }
+  }
+
+  return (
+    <div className="card mb-5">
+      <div className="card-header"><h3 className="text-sm font-bold">已授权节点</h3></div>
+      {nodes.length > 0 && (
+        <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+          {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
+            <button key={key} onClick={() => { setTab(key); setSelected(new Set()) }}
+              className={`px-3 py-0.5 rounded text-xs border transition-colors ${
+                tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
+              }`}>{label} {n}</button>
+          ))}
+          {selected.size > 0 && (
+            <button onClick={batchRevoke} disabled={revoking} className="btn-danger-sm text-xs ml-auto">
+              撤销选中 ({selected.size})
+            </button>
+          )}
+        </div>
+      )}
+      {tabNodes.length > 0 ? (
+        <table className="tbl">
+          <thead><tr>
+            <th className="w-8"><input type="checkbox" className="accent-blue-600"
+              checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
+              onChange={toggleAll} /></th>
+            <th>节点</th><th>类型</th><th>本用户上限</th><th className="text-right">操作</th>
+          </tr></thead>
+          <tbody>
+            {tabNodes.map(n => (
+              <tr key={n.id}>
+                <td><input type="checkbox" className="accent-blue-600" checked={selected.has(n.id)} onChange={() => toggleOne(n.id)} /></td>
+                <td className="font-semibold">
+                  <Link to={`/nodes/${n.id}`} className="text-blue-600 hover:underline">{n.name}</Link>
+                </td>
+                <td><NodeTypeBadge type={n.node_type} /></td>
+                <td className="font-mono">{grantByNode[n.id]?.max_forwards ?? '--'}</td>
+                <td className="text-right">
+                  <button onClick={() => revokeOne(n.id)} className="btn-danger-sm text-xs">撤销</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : nodes.length > 0 ? (
+        <Empty title={tab === 'composite' ? '暂无已授权的组合节点' : '暂无已授权的单点节点'} />
+      ) : (
+        <Empty title="尚未授权任何节点" />
+      )}
+      <div className="p-5 border-t border-line-soft">
+        <GrantNodeForm userId={userId} allNodes={allNodes} grantedNodes={nodes} onDone={onDone} />
+      </div>
+    </div>
+  )
 }
 
 function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
@@ -307,11 +371,7 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
     if (!nodeIds.length) { toast('请选择节点'); return }
     setLoading(true)
     try {
-      // The grant endpoint takes one node; fan out so multiple nodes share the
-      // same per-user limit in a single action.
-      for (const id of nodeIds) {
-        await api.post(`/users/${userId}/grants`, { node_id: Number(id), max_forwards: Number(max) })
-      }
+      await api.post(`/users/${userId}/grants`, { node_ids: nodeIds.map(Number), max_forwards: Number(max) })
       toast(`已授权 ${nodeIds.length} 个节点`); setNodeIds([]); onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }

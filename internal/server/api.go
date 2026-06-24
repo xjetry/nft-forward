@@ -1260,8 +1260,9 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		NodeID      int64 `json:"node_id"`
-		MaxForwards int   `json:"max_forwards"`
+		NodeID      int64   `json:"node_id"`
+		NodeIDs     []int64 `json:"node_ids"`
+		MaxForwards int     `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1270,11 +1271,21 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 	if body.MaxForwards <= 0 {
 		body.MaxForwards = 10
 	}
-	if err := db.GrantNode(s.DB, userID, body.NodeID, body.MaxForwards); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	ids := body.NodeIDs
+	if len(ids) == 0 && body.NodeID != 0 {
+		ids = []int64{body.NodeID}
+	}
+	if len(ids) == 0 {
+		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(body.NodeID, 10))
+	for _, nid := range ids {
+		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1295,6 +1306,34 @@ func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		NodeIDs []int64 `json:"node_ids"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if len(body.NodeIDs) == 0 {
+		jsonErr(w, http.StatusBadRequest, "请选择节点")
+		return
+	}
+	for _, nid := range body.NodeIDs {
+		if err := db.RevokeNode(s.DB, userID, nid); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 

@@ -282,6 +282,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users", s.apiCreateUser)
 			r.Post("/users/{id}/grants", s.apiGrantNode)
 			r.Delete("/users/{id}/grants/{nodeID}", s.apiRevokeNode)
+			r.Post("/users/{id}/grants/batch-revoke", s.apiBatchRevokeNodes)
 			r.Post("/users/{id}/quota", s.apiSetUserQuota)
 			r.Post("/users/{id}/landing", s.apiSetUserLanding)
 			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
