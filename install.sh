@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nft-forward 一键安装脚本
-# 从 GitHub release 下载 nft-forward 二进制并配置 host daemon / server / agent / uninstall
+# 从 GitHub release 下载 nft-server / nft-agent 二进制并配置 server / agent / tui / uninstall
 # 用法：见 --help
 
 set -euo pipefail
@@ -9,9 +9,29 @@ REPO="xjetry/nft-forward"
 RELEASE="${NFTF_RELEASE:-latest}"
 INSTALL_DIR="/usr/local/sbin"
 SYSTEMD_DIR="/etc/systemd/system"
+ETC_DIR="/etc/nft-forward"
 SCRIPT_PATH="$INSTALL_DIR/nft-forward-upgrade"
-SCRIPT_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
+GH_PROXY_FILE="$ETC_DIR/gh-proxy"
 _update_tmp=""
+
+# gh-proxy is a URL prefix concatenated in front of the full GitHub URL, e.g.
+# https://gh-proxy.com/https://github.com/owner/repo/... . Empty = direct.
+# Resolution order: --gh-proxy / NFTF_GH_PROXY env / persisted file. Persisting
+# it means later self-upgrades (update / update-script / the upgrade wrapper)
+# keep reaching GitHub through the same mirror without re-passing the flag.
+GH_PROXY="${NFTF_GH_PROXY:-}"
+GH_PROXY_EXPLICIT=""
+
+normalize_gh_proxy() {
+  if [[ -n "$GH_PROXY" && "$GH_PROXY" != */ ]]; then
+    GH_PROXY="$GH_PROXY/"
+  fi
+}
+
+# raw.githubusercontent base for the script itself (self / update-script).
+script_url() {
+  echo "${GH_PROXY}https://raw.githubusercontent.com/$REPO/main/install.sh"
+}
 
 write_daemon_unit() {
   local extra_args="${1:-}"
@@ -22,7 +42,7 @@ After=network-online.target nftables.service
 Wants=network-online.target
 
 [Service]
-ExecStart=$INSTALL_DIR/nft-forward daemon$extra_args
+ExecStart=$INSTALL_DIR/nft-agent daemon$extra_args
 Restart=on-failure
 RuntimeDirectory=nft-forward
 RuntimeDirectoryMode=0750
@@ -43,7 +63,7 @@ Requires=nft-forward-daemon.service
 After=nft-forward-daemon.service
 
 [Service]
-ExecStart=$INSTALL_DIR/nft-forward server --addr $addr
+ExecStart=$INSTALL_DIR/nft-server --addr $addr
 Restart=on-failure
 
 [Install]
@@ -64,11 +84,11 @@ remove_legacy_units() {
     fi
   done
 
-  # Earlier releases also dropped two stand-alone binaries that the daemon
-  # has since absorbed. Remove them so PATH doesn't shadow nft-forward.
-  for bin in nft-agent nft-server; do
-    rm -f "$INSTALL_DIR/$bin"
-  done
+  # The single-binary era shipped one `nft-forward` that every unit invoked
+  # via a subcommand. The split layout uses separate nft-server / nft-agent
+  # binaries, so drop the stale combined binary to keep PATH from shadowing
+  # them with a binary that no longer understands the new unit ExecStarts.
+  rm -f "$INSTALL_DIR/nft-forward"
 }
 
 # Detect what role is currently installed by reading systemd unit-files and
@@ -131,6 +151,9 @@ do_uninstall() {
     server)
       systemctl disable --now nft-forward-server.service 2>/dev/null || true
       rm -f "$SYSTEMD_DIR/nft-forward-server.service"
+      # The panel host's local node daemon runs nft-agent; the standalone
+      # nft-server binary is panel-only, so it can go when the role does.
+      rm -f "$INSTALL_DIR/nft-server"
       systemctl daemon-reload
       if [[ "$purge" -eq 1 ]]; then
         # Clear daemon's panel segment so leftover rules from server pushes
@@ -179,7 +202,7 @@ do_uninstall() {
       fi
       systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
       rm -f "$SYSTEMD_DIR/nft-forward-daemon.service"
-      rm -f "$INSTALL_DIR/nft-forward"
+      rm -f "$INSTALL_DIR/nft-agent"
       systemctl daemon-reload
       if [[ "$purge" -eq 1 ]]; then
         rm -rf /var/lib/nft-forward/
@@ -202,16 +225,16 @@ do_uninstall() {
 
 usage() {
   cat <<USAGE
-nft-forward 一键安装/卸载/升级脚本
+nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节点）
 
 用法:
   $0 [tui|server|agent|update|update-script|uninstall|reset-password] [选项]
 
 模式:
-  tui              单机 TUI（host daemon 已被自动安装为 systemd 服务）
-  server           控制面板（依赖 daemon；自动叠加安装）
-  agent            受控节点（daemon 主动 dial panel WebSocket 反向纳管）
-  update           拉 latest 二进制原子替换 + restart + 失败回滚
+  tui              单机 TUI（装 nft-agent；host daemon 已被自动安装为 systemd 服务）
+  server           控制面板（装 nft-server + nft-agent；依赖 daemon；自动叠加安装）
+  agent            受控节点（装 nft-agent；daemon 主动 dial panel WebSocket 反向纳管）
+  update           拉 latest 二进制原子替换 + restart + 失败回滚（按已装角色拉对应二进制）
   update-script    从 GitHub main 分支拉取最新 install.sh 覆盖本地升级脚本
   uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
   reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
@@ -221,14 +244,22 @@ nft-forward 一键安装/卸载/升级脚本
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
+  --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；
+                                   留空 = 直连。安装时持久化，后续自升级自动沿用
   --purge                          uninstall 模式专用：按角色 scope 清残留数据
   --password PW                    reset-password 模式：新密码（缺省则交互输入或随机生成）
   -h, --help                       显示此帮助
+
+二进制:
+  nft-server  面板（web 前端 embed + sqlite + chi）；装于 $INSTALL_DIR/nft-server
+  nft-agent   节点（daemon + TUI）；装于 $INSTALL_DIR/nft-agent
+              daemon: nft-agent daemon [--connect …]；TUI: nft-agent
 
 示例:
   sudo $0                                # 交互式
   sudo $0 server --addr :9000            # 自定义面板端口
   sudo $0 agent --panel-url https://panel.example.com --token abc...  # 远程节点
+  sudo $0 agent --panel-url https://panel.example.com --token abc... --gh-proxy https://gh-proxy.com/
   sudo $0 update                         # 拉 latest 二进制升级
   sudo $0 update-script                  # 更新本地升级脚本（不动二进制）
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
@@ -242,29 +273,92 @@ die() { echo "错误: $*" >&2; exit 1; }
 note() { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
 
+# Persist the chosen gh-proxy so later self-upgrades reuse it. Empty value
+# leaves an empty file (treated as "direct"), keeping a single source of truth.
+persist_gh_proxy() {
+  mkdir -p "$ETC_DIR"
+  printf '%s' "$GH_PROXY" >"$GH_PROXY_FILE"
+}
+
 persist_script() {
-  if curl -fsSL "$SCRIPT_URL" -o "$tmp/upgrade.sh" 2>/dev/null; then
+  if curl -fsSL "$(script_url)" -o "$tmp/upgrade.sh" 2>/dev/null; then
     install -m 0755 "$tmp/upgrade.sh" "$SCRIPT_PATH"
     note "升级脚本已保存到 $SCRIPT_PATH（后续升级: sudo nft-forward-upgrade）"
   fi
 }
 
 do_update_script() {
-  local stmp
+  local stmp surl
+  surl="$(script_url)"
   stmp="$(mktemp -d)"
   note "下载最新 install.sh ..."
-  curl -fsSL "$SCRIPT_URL" -o "$stmp/upgrade.sh" \
-    || { rm -rf "$stmp"; die "下载失败: $SCRIPT_URL"; }
+  curl -fsSL "$surl" -o "$stmp/upgrade.sh" \
+    || { rm -rf "$stmp"; die "下载失败: $surl"; }
   install -m 0755 "$stmp/upgrade.sh" "$SCRIPT_PATH"
   rm -rf "$stmp"
   ok "升级脚本已更新: $SCRIPT_PATH"
 }
 
+# Resolve "latest" to the concrete tag so identity files record a real version
+# rather than the moving "latest" alias. Falls back to "latest" only if the
+# GitHub redirect can't be read (e.g. restricted network without a proxy set).
+resolve_release_tag() {
+  if [[ "$RELEASE" != "latest" ]]; then
+    echo "$RELEASE"
+    return 0
+  fi
+  local url="${GH_PROXY}https://github.com/$REPO/releases/latest"
+  local resolved
+  resolved="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$url" 2>/dev/null \
+              | sed -n 's#.*/releases/tag/##p' | tr -d '\r\n')"
+  if [[ -n "$resolved" ]]; then
+    echo "$resolved"
+  else
+    echo "latest"
+  fi
+}
+
+# Write the nft-agent identity files consumed by the daemon's first hello so the
+# panel knows which version/sha the node is running before the daemon self-
+# computes its sha. MUST run on every install and every upgrade path that lays
+# down an nft-agent binary; missing it leaves a node misreporting its identity.
+#   $1 = version label, $2 = sha256 hex of the installed nft-agent binary
+write_agent_identity() {
+  local version="$1" sha="$2"
+  mkdir -p "$ETC_DIR"
+  printf '%s' "$version" >"$ETC_DIR/agent.version"
+  printf '%s' "$sha" >"$ETC_DIR/agent.sha"
+}
+
+# Download one release asset through the proxy and strong-verify it against the
+# release's SHA256SUMS. Echoes the verified sha256 hex on success.
+#   $1 = base URL (releases/download root), $2 = asset name, $3 = dest path
+#   $4 = "strict" to hard-fail when SHA256SUMS is unavailable (binaries), or
+#        "soft" to warn and skip (legacy tolerance for optional fetches)
+fetch_and_verify() {
+  local base="$1" asset="$2" dest="$3" strictness="${4:-strict}"
+  curl -fL --progress-bar "$base/$asset" -o "$dest" \
+    || die "下载失败: $base/$asset"
+  local ddir
+  ddir="$(dirname "$dest")"
+  if curl -fLs "$base/SHA256SUMS" -o "$ddir/SHA256SUMS" 2>/dev/null; then
+    (cd "$ddir" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c -) \
+      || die "sha256 校验失败: $asset"
+  elif [[ "$strictness" == "strict" ]]; then
+    die "未取到 SHA256SUMS：必须强校验，拒绝裸跑（检查网络/代理或稍后重试）"
+  else
+    echo "    (SHA256SUMS 不可用，跳过校验)"
+  fi
+  sha256sum "$dest" | awk '{print $1}'
+}
+
 rollback_update() {
   echo "update 失败，回滚到旧二进制" >&2
-  if [[ -f "$INSTALL_DIR/nft-forward.bak" ]]; then
-    mv -f "$INSTALL_DIR/nft-forward.bak" "$INSTALL_DIR/nft-forward"
-  fi
+  for bin in nft-server nft-agent; do
+    if [[ -f "$INSTALL_DIR/$bin.bak" ]]; then
+      mv -f "$INSTALL_DIR/$bin.bak" "$INSTALL_DIR/$bin"
+    fi
+  done
   systemctl restart nft-forward-daemon.service 2>/dev/null || true
   if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
     systemctl restart nft-forward-server.service 2>/dev/null || true
@@ -274,53 +368,62 @@ rollback_update() {
 
 do_update() {
   # ---- 前置探测 ----
-  [[ -x "$INSTALL_DIR/nft-forward" ]] \
-    || die "未安装：$INSTALL_DIR/nft-forward 不存在；请先 install.sh tui/server/agent"
   # Probe the unit file write_daemon_unit actually writes, not
   # `systemctl list-unit-files`: its column layout varies across systemd
   # versions and can fail to match an installed unit, falsely reporting a
   # working install as missing.
   [[ -f "$SYSTEMD_DIR/nft-forward-daemon.service" ]] \
     || die "未安装：nft-forward-daemon.service 不存在；请先 install.sh tui/server/agent"
+  [[ -x "$INSTALL_DIR/nft-agent" ]] \
+    || die "未安装：$INSTALL_DIR/nft-agent 不存在；请先 install.sh tui/server/agent"
+
+  # A server install always carries nft-server alongside nft-agent; pull both
+  # so the panel and its local node daemon advance in lockstep.
+  local want_server=0
+  [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]] && want_server=1
 
   # ---- 下载到 tmp ----
   _update_tmp="$(mktemp -d)"
   trap 'rm -rf "$_update_tmp"' EXIT
 
-  note "[1/5] 下载 nft-forward (latest) ..."
-  curl -fL --progress-bar "$base/nft-forward" -o "$_update_tmp/nft-forward" \
-    || die "下载失败: $base/nft-forward"
+  local tag agent_sha
+  tag="$(resolve_release_tag)"
 
-  note "[2/5] 校验 sha256 ..."
-  if curl -fLs "$base/SHA256SUMS" -o "$_update_tmp/SHA256SUMS" 2>/dev/null; then
-    (cd "$_update_tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
-      || die "sha256 校验失败"
-  else
-    die "未取到 SHA256SUMS：update 必须强校验，拒绝裸跑（检查网络或稍后重试）"
+  note "[1/5] 下载二进制 ($tag) ..."
+  agent_sha="$(fetch_and_verify "$base" nft-agent "$_update_tmp/nft-agent" strict)"
+  if [[ "$want_server" -eq 1 ]]; then
+    fetch_and_verify "$base" nft-server "$_update_tmp/nft-server" strict >/dev/null
   fi
 
   # No product-side arch probe here. The host arch is already gated by the
   # uname -m check before any mode runs, and the sha256 above pins this
   # download to the published amd64 asset byte-for-byte — together those
-  # already guarantee the binary's architecture. Shelling out to `file` only
-  # added a dependency that minimal systems routinely lack, where its absence
-  # was misread as a corrupt binary. Whether the binary can actually run is
-  # proven by the post-install health-check (a daemon that fails to start
-  # rolls the swap back automatically).
+  # already guarantee the binary's architecture. Whether the binary can
+  # actually run is proven by the post-install health-check (a daemon that
+  # fails to start rolls the swap back automatically).
 
   # ---- 备份旧二进制 ----
-  note "[3/5] 备份旧二进制到 $INSTALL_DIR/nft-forward.bak ..."
-  cp -a "$INSTALL_DIR/nft-forward" "$INSTALL_DIR/nft-forward.bak"
+  note "[2/5] 备份旧二进制到 $INSTALL_DIR/*.bak ..."
+  cp -a "$INSTALL_DIR/nft-agent" "$INSTALL_DIR/nft-agent.bak"
+  if [[ "$want_server" -eq 1 && -x "$INSTALL_DIR/nft-server" ]]; then
+    cp -a "$INSTALL_DIR/nft-server" "$INSTALL_DIR/nft-server.bak"
+  fi
   trap 'rm -rf "$_update_tmp"; rollback_update' ERR INT TERM
 
   # ---- 原子替换 ----
-  install -m 0755 "$_update_tmp/nft-forward" "$INSTALL_DIR/nft-forward"
+  note "[3/5] 原子替换二进制 ..."
+  install -m 0755 "$_update_tmp/nft-agent" "$INSTALL_DIR/nft-agent"
+  if [[ "$want_server" -eq 1 ]]; then
+    install -m 0755 "$_update_tmp/nft-server" "$INSTALL_DIR/nft-server"
+  fi
+  # Record the freshly-installed nft-agent identity on this upgrade path too.
+  write_agent_identity "$tag" "$agent_sha"
 
   # ---- 重启 unit ----
   note "[4/5] 重启 daemon (+ server, if present) ..."
   systemctl daemon-reload
   systemctl restart nft-forward-daemon.service
-  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
+  if [[ "$want_server" -eq 1 ]]; then
     systemctl restart nft-forward-server.service
   fi
 
@@ -342,13 +445,10 @@ do_update() {
   # ---- 成功收尾 ----
   trap 'rm -rf "$_update_tmp"' EXIT
   trap - ERR INT TERM
-  rm -f "$INSTALL_DIR/nft-forward.bak"
-  local sha size
-  sha=$(sha256sum "$INSTALL_DIR/nft-forward" | awk '{print $1}')
-  size=$(stat -c %s "$INSTALL_DIR/nft-forward" 2>/dev/null || stat -f %z "$INSTALL_DIR/nft-forward")
+  rm -f "$INSTALL_DIR/nft-agent.bak" "$INSTALL_DIR/nft-server.bak"
   ok "===== Update 完成 ====="
-  echo "二进制 sha256: $sha"
-  echo "二进制 size:   $size 字节"
+  echo "版本标签:       $tag"
+  echo "nft-agent sha256: $agent_sha"
   echo "建议查看启动日志: journalctl -u nft-forward-daemon.service --since '1 minute ago'"
 }
 
@@ -362,8 +462,8 @@ gen_password() {
 
 do_reset_password() {
   local db="/var/lib/nft-forward/panel.db"
-  [[ -x "$INSTALL_DIR/nft-forward" ]] \
-    || die "未安装：$INSTALL_DIR/nft-forward 不存在；reset-password 仅适用于装了 server 的机器"
+  [[ -x "$INSTALL_DIR/nft-server" ]] \
+    || die "未安装：$INSTALL_DIR/nft-server 不存在；reset-password 仅适用于装了 server 的机器"
   [[ -f "$db" ]] \
     || die "未找到面板数据库 $db；本机似乎未安装 server 角色"
 
@@ -391,7 +491,7 @@ do_reset_password() {
   fi
 
   note "重置 admin 密码 ..."
-  if ! "$INSTALL_DIR/nft-forward" server --reset-admin-password "$pw" --db "$db"; then
+  if ! "$INSTALL_DIR/nft-server" --reset-admin-password "$pw" --db "$db"; then
     if [[ "$had_server" -eq 1 ]]; then
       systemctl start nft-forward-server.service 2>/dev/null || true
     fi
@@ -434,6 +534,8 @@ while [[ $# -gt 0 ]]; do
     --addr=*) addr="${1#*=}"; shift ;;
     --release) RELEASE="${2:?--release 需要值}"; RELEASE_EXPLICIT=1; shift 2 ;;
     --release=*) RELEASE="${1#*=}"; RELEASE_EXPLICIT=1; shift ;;
+    --gh-proxy) GH_PROXY="${2:?--gh-proxy 需要值}"; GH_PROXY_EXPLICIT=1; shift 2 ;;
+    --gh-proxy=*) GH_PROXY="${1#*=}"; GH_PROXY_EXPLICIT=1; shift ;;
     --purge) purge=1; shift ;;
     --password) RESET_PW="${2:?--password 需要值}"; shift 2 ;;
     --password=*) RESET_PW="${1#*=}"; shift ;;
@@ -444,6 +546,15 @@ while [[ $# -gt 0 ]]; do
     *) die "未知参数: $1（用 --help 查看用法）" ;;
   esac
 done
+
+# Fall back to the persisted proxy when neither flag nor env supplied one, so
+# self-upgrades (and the upgrade wrapper) keep using the mirror chosen at
+# install time. NFTF_GH_PROXY env still seeds GH_PROXY above; only consult the
+# file when nothing explicit was given.
+if [[ -z "$GH_PROXY_EXPLICIT" && -z "${NFTF_GH_PROXY:-}" && -f "$GH_PROXY_FILE" ]]; then
+  GH_PROXY="$(cat "$GH_PROXY_FILE" 2>/dev/null || true)"
+fi
+normalize_gh_proxy
 
 [[ $EUID -eq 0 ]] || die "请以 root 运行（sudo $0 ...）"
 
@@ -535,40 +646,47 @@ if [[ "$mode" == "update" ]]; then
   if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
     base="$NFTF_RELEASE_BASE_URL"
   else
-    base="https://github.com/$REPO/releases/latest/download"
+    base="${GH_PROXY}https://github.com/$REPO/releases/latest/download"
   fi
   do_update
   exit 0
 fi
 
-# All install modes need the binary + the daemon unit. Download once, install
-# once, then layer the role-specific unit on top.
+# All install modes need binaries + the daemon unit. Resolve the release base,
+# download/verify the role's binaries, then layer the role-specific unit on top.
 remove_legacy_units
 
 if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
   base="$NFTF_RELEASE_BASE_URL"
 elif [[ "$RELEASE" == "latest" ]]; then
-  base="https://github.com/$REPO/releases/latest/download"
+  base="${GH_PROXY}https://github.com/$REPO/releases/latest/download"
 else
-  base="https://github.com/$REPO/releases/download/$RELEASE"
+  base="${GH_PROXY}https://github.com/$REPO/releases/download/$RELEASE"
 fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-note "[1/3] 下载 nft-forward ($RELEASE) ..."
-curl -fL --progress-bar "$base/nft-forward" -o "$tmp/nft-forward" \
-  || die "下载失败: $base/nft-forward"
+# Concrete tag for the agent.version identity file (resolves "latest").
+release_tag="$(resolve_release_tag)"
 
-note "[2/3] 校验 sha256 ..."
-if curl -fLs "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-  (cd "$tmp" && grep -E '  nft-forward$' SHA256SUMS | sha256sum -c -) \
-    || die "sha256 校验失败"
-else
-  echo "    (SHA256SUMS 不可用，跳过校验)"
+# Every role installs nft-agent (the node daemon + TUI); only server adds the
+# panel binary on top.
+note "[1/3] 下载 nft-agent ($RELEASE) ..."
+agent_sha="$(fetch_and_verify "$base" nft-agent "$tmp/nft-agent" strict)"
+if [[ "$mode" == "server" ]]; then
+  note "      下载 nft-server ($RELEASE) ..."
+  fetch_and_verify "$base" nft-server "$tmp/nft-server" strict >/dev/null
 fi
 
-note "[3/3] 安装到 $INSTALL_DIR/nft-forward ..."
-install -m 0755 "$tmp/nft-forward" "$INSTALL_DIR/nft-forward"
+note "[2/3] 安装到 $INSTALL_DIR ..."
+install -m 0755 "$tmp/nft-agent" "$INSTALL_DIR/nft-agent"
+if [[ "$mode" == "server" ]]; then
+  install -m 0755 "$tmp/nft-server" "$INSTALL_DIR/nft-server"
+fi
+
+note "[3/3] 写入身份文件 + 持久化升级脚本/代理 ..."
+write_agent_identity "$release_tag" "$agent_sha"
+persist_gh_proxy
 persist_script
 
 primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
@@ -584,7 +702,7 @@ case "$mode" in
 
 $(ok "===== TUI 安装完成 =====")
 host daemon 已作为 systemd 服务启动：nft-forward-daemon.service
-运行 TUI:   sudo $INSTALL_DIR/nft-forward
+运行 TUI:   sudo $INSTALL_DIR/nft-agent
 TUI 会自动连接到上面的 daemon；规则在 daemon 重启后自动恢复。
 
 文档:  https://github.com/$REPO#readme
@@ -603,8 +721,8 @@ EOF
 
 $(ok "===== Server 安装完成 =====")
 面板:        http://$primary_ip$addr
-daemon unit: nft-forward-daemon.service
-server unit: nft-forward-server.service
+daemon unit: nft-forward-daemon.service (nft-agent daemon)
+server unit: nft-forward-server.service (nft-server)
 首次启动的 admin 密码: journalctl -u nft-forward-server.service | grep 密 \
   （或查看 server 启动日志）
 EOF

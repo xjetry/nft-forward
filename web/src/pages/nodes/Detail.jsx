@@ -15,6 +15,8 @@ export default function NodeDetail() {
   const [name, setName] = useState('')
   const [relayHost, setRelayHost] = useState('')
   const [portRange, setPortRange] = useState('')
+  const [useGhProxy, setUseGhProxy] = useState(false)
+  const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -72,7 +74,13 @@ export default function NodeDetail() {
     try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message) }
   }
 
-  const installCmd = `curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh\nsudo bash install.sh agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}`
+  // gh-proxy is a URL prefix: enabling it routes both the install.sh fetch and
+  // the binary downloads (via --gh-proxy passed to the script) through the mirror
+  // so nodes behind a GitHub-blocked network can still install.
+  const proxyPrefix = useGhProxy && ghProxy.trim()
+    ? (ghProxy.trim().endsWith('/') ? ghProxy.trim() : ghProxy.trim() + '/')
+    : ''
+  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh\nsudo bash install.sh agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
 
   return (
     <Layout>
@@ -225,6 +233,16 @@ export default function NodeDetail() {
               尚未设置面板地址，下面用你当前访问的域名 <code className="bg-amber-100 px-1 rounded">{panel_url}</code> 推断。如 agent 走不同地址，请到<Link to="/nodes" className="text-blue-600 font-semibold">节点页</Link>设置后再复制。
             </div>
           )}
+          <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
+            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" checked={useGhProxy} onChange={e => setUseGhProxy(e.target.checked)} className="accent-blue-600" />
+              <span className="text-ink-soft">使用 gh-proxy（GitHub 受限网络）</span>
+            </label>
+            {useGhProxy && (
+              <input className="input-field font-mono" style={{ height: 30, maxWidth: 280 }} value={ghProxy}
+                onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
+            )}
+          </div>
           <div className="relative bg-[#0e1320] rounded-xl px-5 py-[18px]">
             <button onClick={() => { navigator.clipboard.writeText(installCmd); toast('已复制') }}
               className="absolute top-3.5 right-3.5 text-[12px] font-semibold text-[#cdd5e0] bg-white/10 border border-white/15 px-3 py-[5px] rounded-lg cursor-pointer hover:bg-white/20 transition-colors">复制</button>
