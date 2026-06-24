@@ -98,7 +98,31 @@
 
 ### 9. 节点一键安装命令（point 6）
 
-- 面板节点详情页 installCmd 仍为 `install.sh agent --panel-url … --token …`；install.sh 的 agent 角色内部改为下载 nft-agent 并写 `{version, sha}`。命令文本基本不变。
+- 面板节点详情页 installCmd 仍为 `install.sh agent --panel-url … --token …`；install.sh 的 agent 角色内部改为下载 nft-agent 并写 `{version, sha}`。命令文本基本不变（gh-proxy 注入见 §10）。
+
+### 10. gh-proxy 支持
+
+动机：GitHub 在部分网络不可达，需可选经 gh-proxy 镜像下载。默认不启用。
+
+**install.sh**
+
+- 新增参数 `--gh-proxy <prefix>`（亦支持环境变量 `NFTF_GH_PROXY`），默认空 = 不走代理。
+- 归一化：非空时确保结尾带 `/`。代理是 URL **前缀**，最终地址 = `${GH_PROXY}<原始GitHub地址>`（gh-proxy.com 用法即 `https://gh-proxy.com/https://github.com/owner/repo/...`）。
+- 应用到全部 GitHub 拉取：`SCRIPT_URL`（raw.githubusercontent，自身脚本/update-script）与 `base`（releases/download，二进制 + SHA256SUMS）。拆分后下载 `nft-server`/`nft-agent`/`SHA256SUMS` 同理。
+- **持久化**：把所选 proxy 写入安装后的 `nft-forward-upgrade` 脚本/配置（如 `/etc/nft-forward/gh-proxy`），使后续自升级（update / update-script）继续用同一代理，无需每次重传。
+- sha256 强校验逻辑不变（校验文件也经代理拉取）。
+
+**节点一键安装命令（面板节点详情页 UI，纯前端生成）**
+
+- 新增开关「使用 gh-proxy」（默认关）。开启时显示一个可编辑文本框，默认值 `https://gh-proxy.com/`。
+- 开启时命令两处注入（关闭时与现状完全一致）：
+  - 拉取脚本行：`curl -fsSL ${proxy}https://raw.githubusercontent.com/<repo>/main/install.sh -o install.sh`
+  - 执行行追加：`--gh-proxy ${proxy}`
+- 命令随开关/输入框实时重算；复制按钮复制最终命令。
+
+**面板自身下载 agent（可选，非本次必须）**
+
+- §4 中面板从 GitHub 下载 nft-agent 缓存的逻辑，可选支持一个面板级配置的 gh-proxy（env/flag），供面板机本身处于受限网络时使用。与节点安装命令的 proxy 相互独立。本次可暂不做，留作扩展。
 
 ## 错误处理
 
@@ -121,7 +145,7 @@
 - B 版本/sha 模型（wsproto、daemon state、db 列、hello）。
 - C 推送改造（agent 缓存下载、sha 跳过、标签同步）。
 - D 版本检查 API + 前端。
-- E install.sh + release.md + 节点安装命令。
+- E install.sh（含 gh-proxy）+ release.md + 节点安装命令（含 gh-proxy 开关）。
 
 ## 非目标（YAGNI）
 
