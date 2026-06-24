@@ -28,10 +28,10 @@ export default function MyDashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-[18px] mb-[22px] items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-[18px] mb-[22px]">
         {/* Quota */}
-        <div className="card">
-          <div className="px-6 py-[22px]">
+        <div className="card flex flex-col">
+          <div className="px-6 py-[22px] flex-1 flex flex-col">
             <h3 className="text-[16px] font-bold mb-5">我的配额</h3>
             <div className="flex items-center gap-4 py-3 border-b border-line-soft">
               <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">规则配额</div>
@@ -103,8 +103,8 @@ function MyProxyURIs({ username }) {
   }
 
   return (
-    <div className="card">
-      <div className="px-6 py-[22px]">
+    <div className="card flex flex-col">
+      <div className="px-6 py-[22px] flex-1 flex flex-col">
         <div className="flex items-baseline gap-2.5 mb-3.5">
           <h3 className="text-[16px] font-bold">我的代理 URI</h3>
           <span className="text-[13px] text-ink-mut">{count} 个节点</span>
@@ -114,8 +114,8 @@ function MyProxyURIs({ username }) {
           <span className="text-amber-500 font-semibold">仅保存在本浏览器，不会上传服务器。</span>
           创建规则时可从中选择落地出口；规则出口与某条 URI 的 host:port 一致时，规则页可一键复制中转代理 URI。
         </p>
-        <textarea className="input-field font-mono w-full !h-[84px] resize-y" value={text} onChange={e => setText(e.target.value)}
-          placeholder={'vless://…\ntrojan://…'} style={{ height: 84 }} />
+        <textarea className="input-field font-mono w-full flex-1 min-h-[100px] resize-y !py-3 !px-3.5" value={text} onChange={e => setText(e.target.value)}
+          placeholder={'vless://…\ntrojan://…'} />
         <button onClick={save} className="btn-primary mt-3.5">保存</button>
       </div>
     </div>
