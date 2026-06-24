@@ -42,7 +42,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   const submit = async (e) => {
     e.preventDefault()
     if (!form.node_id) { toast('请选择节点'); return }
-    if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择落地节点'); return }
+    if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择出口节点'); return }
     setLoading(true)
     try {
       await onSubmit(form)
@@ -54,9 +54,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
   ]
 
+  // Show protocol + node remark only — the real connection address is hidden
+  // from the picker. The value stays host:port (the rule's exit target).
   const landingOptions = (landingNodes || []).map(n => ({
     value: `${n.host}:${n.port}`,
-    label: `${n.name || '(未命名)'} — ${n.host}:${n.port}`,
+    label: `${n.protocol ? `[${n.protocol}] ` : ''}${n.name || '(未命名)'}`,
   }))
 
   return (
@@ -75,7 +77,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
             <>
               <label className="fl">出口类型</label>
               <div className="inline-flex rounded-lg border border-line overflow-hidden w-fit text-xs">
-                {[['custom', '自定义'], ['landing', '落地节点']].map(([k, lbl]) => (
+                {[['custom', '自定义'], ['landing', '出口节点']].map(([k, lbl]) => (
                   <button key={k} type="button" onClick={() => set('exit_kind', k)}
                     className={`px-3.5 py-1.5 font-semibold transition-colors ${form.exit_kind === k ? 'bg-blue-600 text-white' : 'bg-surface text-ink-soft hover:bg-raised'}`}>
                     {lbl}
@@ -85,16 +87,16 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
 
               {form.exit_kind === 'landing' ? (
                 <>
-                  <label className="fl">落地节点</label>
+                  <label className="fl">出口节点</label>
                   {landingOptions.length ? (
-                    <Select value={form.exit} onChange={v => set('exit', v)} placeholder="-- 选择落地节点 --" searchable options={landingOptions} />
+                    <Select value={form.exit} onChange={v => set('exit', v)} placeholder="-- 选择出口节点 --" searchable options={landingOptions} />
                   ) : (
-                    <div className="text-xs text-ink-mut">尚无可用落地节点，请联系管理员配置订阅地址。</div>
+                    <div className="text-xs text-ink-mut">尚无可用出口节点，请在概览页添加代理 URI 或联系管理员。</div>
                   )}
                 </>
               ) : (
                 <>
-                  <label className="fl">出口</label>
+                  <label className="fl">出口地址</label>
                   <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
                 </>
               )}

@@ -281,8 +281,11 @@ export function ConfirmProvider({ children }) {
 }
 
 /* ---------- Select: styled dropdown replacing native <select> ---------- */
-// options: [{ value, label }]. onChange receives the chosen value as a string.
-export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false }) {
+// options: [{ value, label }]. Single-select (default): value is a scalar,
+// onChange receives the chosen value as a string and the menu closes. Multi-
+// select (multiple=true): value is an array, onChange receives the next array
+// of string values and the menu stays open so several can be picked.
+export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef(null)
@@ -295,24 +298,47 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
   // Normalize to labelled sections so flat `options` and grouped `groups` share
   // one render path. A null section label renders no header.
   const sections = groups ? groups : [{ label: null, options }]
-  const selected = sections.flatMap(s => s.options).find(o => String(o.value) === String(value))
+  const allOptions = sections.flatMap(s => s.options)
+  const selectedValues = multiple ? (Array.isArray(value) ? value.map(String) : []) : []
+  const isSelected = (o) => multiple ? selectedValues.includes(String(o.value)) : String(o.value) === String(value)
+  const selected = !multiple && allOptions.find(o => String(o.value) === String(value))
+  const triggerLabel = multiple
+    ? (selectedValues.length ? `已选 ${selectedValues.length} 项` : placeholder)
+    : (selected ? selected.label : placeholder)
+  const hasSelection = multiple ? selectedValues.length > 0 : !!selected
   const q = query.trim().toLowerCase()
   const shownSections = sections
     .map(s => ({ label: s.label, options: searchable && q ? s.options.filter(o => String(o.label).toLowerCase().includes(q)) : s.options }))
     .filter(s => s.options.length > 0)
   const empty = shownSections.length === 0
-  const renderOption = (o) => (
-    <button key={String(o.value)} type="button"
-      onClick={() => { onChange(String(o.value)); setOpen(false) }}
-      className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised ${String(o.value) === String(value) ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
-      {o.label}
-    </button>
-  )
+  const choose = (o) => {
+    const sv = String(o.value)
+    if (multiple) {
+      onChange(selectedValues.includes(sv) ? selectedValues.filter(x => x !== sv) : [...selectedValues, sv])
+    } else {
+      onChange(sv); setOpen(false)
+    }
+  }
+  const renderOption = (o) => {
+    const sel = isSelected(o)
+    return (
+      <button key={String(o.value)} type="button"
+        onClick={() => choose(o)}
+        className={`w-full text-left px-3 py-1.5 text-[13.5px] transition-colors hover:bg-raised flex items-center gap-2 ${sel ? 'text-blue-600 font-semibold' : 'text-ink'}`}>
+        {multiple && (
+          <span className={`w-3.5 h-3.5 flex-none rounded border flex items-center justify-center ${sel ? 'bg-blue-600 border-blue-600' : 'border-line'}`}>
+            {sel && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+          </span>
+        )}
+        <span className="truncate">{o.label}</span>
+      </button>
+    )
+  }
   return (
     <div ref={ref} className={`relative ${className}`} style={style}>
       <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
         className="input-field flex items-center justify-between gap-2 text-left disabled:opacity-60 disabled:cursor-not-allowed">
-        <span className={`truncate ${selected ? 'text-ink' : 'text-ink-mut'}`}>{selected ? selected.label : placeholder}</span>
+        <span className={`truncate ${hasSelection ? 'text-ink' : 'text-ink-mut'}`}>{triggerLabel}</span>
         <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (

@@ -100,27 +100,67 @@ export default function UserList() {
   )
 }
 
+function todayStr() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function toDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+// Unambiguous alphabet (no O/0/I/l/1) for a copy-pasteable random password.
+function genPassword(len = 16) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  const arr = new Uint32Array(len)
+  crypto.getRandomValues(arr)
+  return [...arr].map(n => chars[n % chars.length]).join('')
+}
+const emptyForm = () => ({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: todayStr() })
+
 function CreateUserModal({ open, onClose, onDone }) {
-  const [form, setForm] = useState({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: '' })
+  const [form, setForm] = useState(emptyForm)
   const [loading, setLoading] = useState(false)
+  const [panelURL, setPanelURL] = useState('')
   const toast = useToast()
 
+  // Fetch the configured panel address so "创建并复制信息" can include the login
+  // URL; fall back to the current origin when unset.
+  useEffect(() => {
+    if (!open) return
+    setForm(emptyForm())
+    api.get('/settings').then(d => setPanelURL((d?.panel_url || '').trim() || window.location.origin)).catch(() => setPanelURL(window.location.origin))
+  }, [open])
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const addToExpiry = (kind) => {
+    const base = form.expires_at ? new Date(form.expires_at + 'T00:00:00') : new Date()
+    if (kind === '1d') base.setDate(base.getDate() + 1)
+    if (kind === '1m') base.setMonth(base.getMonth() + 1)
+    if (kind === '3m') base.setMonth(base.getMonth() + 3)
+    if (kind === '1y') base.setFullYear(base.getFullYear() + 1)
+    set('expires_at', toDateStr(base))
+  }
 
   const submit = async (e) => {
     e.preventDefault()
     setLoading(true)
+    const isUser = form.role === 'user'
     try {
       await api.post('/users', {
         username: form.username,
         password: form.password,
         role: form.role,
-        max_forwards: Number(form.max_forwards),
-        traffic_quota_bytes: Math.max(0, Math.round((Number(form.traffic_quota_gb) || 0) * 1073741824)),
-        expires_at: form.expires_at || undefined,
+        ...(isUser ? {
+          max_forwards: Number(form.max_forwards),
+          traffic_quota_bytes: Math.max(0, Math.round((Number(form.traffic_quota_gb) || 0) * 1073741824)),
+          expires_at: form.expires_at || undefined,
+        } : {}),
       })
-      toast('用户已创建')
-      setForm({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: '' })
+      // Copy login info before resetting the form (the password is only here in
+      // plaintext at creation time).
+      const info = `面板地址：${panelURL}\n用户名：${form.username}\n密码：${form.password}`
+      try { await navigator.clipboard.writeText(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
+      setForm(emptyForm())
       onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
@@ -132,22 +172,32 @@ function CreateUserModal({ open, onClose, onDone }) {
           <label className="fl">用户名</label>
           <input className="input-field" value={form.username} onChange={e => set('username', e.target.value)} required placeholder="登录用户名" />
           <label className="fl">密码</label>
-          <input className="input-field" type="password" value={form.password} onChange={e => set('password', e.target.value)} required />
+          <div className="flex items-center gap-2">
+            <input className="input-field font-mono flex-1" type="text" value={form.password} onChange={e => set('password', e.target.value)} required placeholder="密码" />
+            <button type="button" onClick={() => set('password', genPassword())} className="btn-secondary text-xs flex-none">随机生成</button>
+          </div>
           <label className="fl">角色</label>
           <Select value={form.role} onChange={v => set('role', v)} options={[{ value: 'user', label: 'user (普通用户)' }, { value: 'admin', label: 'admin (管理员)' }]} style={{ maxWidth: 200 }} />
           {form.role === 'user' && (
             <>
               <label className="fl">最大转发数</label>
               <input className="input-field font-mono" type="number" min="1" value={form.max_forwards} onChange={e => set('max_forwards', e.target.value)} style={{ maxWidth: 160 }} />
-              <label className="fl">流量配额 <span className="text-ink-mut font-normal text-xs">(GB)</span></label>
+              <label className="fl">流量配额 <span className="text-ink-mut font-normal text-xs">(GB，0 = 不限)</span></label>
               <input className="input-field font-mono" type="number" min="0" step="0.1" value={form.traffic_quota_gb} onChange={e => set('traffic_quota_gb', e.target.value)} style={{ maxWidth: 160 }} />
-              <label className="fl">到期时间 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
-              <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
+              <label className="fl">到期时间</label>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
+                <div className="inline-flex gap-1.5">
+                  {[['1d', '+1天'], ['1m', '+1月'], ['3m', '+3月'], ['1y', '+1年']].map(([k, lbl]) => (
+                    <button key={k} type="button" onClick={() => addToExpiry(k)} className="btn-secondary text-xs">{lbl}</button>
+                  ))}
+                </div>
+              </div>
             </>
           )}
         </div>
         <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
-          <button type="submit" disabled={loading} className="btn-primary">创建用户</button>
+          <button type="submit" disabled={loading} className="btn-primary">创建并复制信息</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
           {form.role === 'user' && <span className="text-xs text-ink-mut">配额为 0 时不限制；超额后自动禁用。</span>}
         </div>

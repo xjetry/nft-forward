@@ -90,7 +90,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td className="font-mono text-xs text-ink-soft" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <ExitKindBadge kind={r.exit_kind} />
-                  <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
+                  {/* On the user list, a landing exit shows the node remark
+                      instead of its real address. Admin keeps the address. */}
+                  {!isAdmin && r.exit_kind === 'landing' && r.landing_name
+                    ? <span className="font-sans">{r.landing_name}</span>
+                    : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
                   {r.relay_uri && (
                     <CopyText text={r.relay_uri}><span className="text-blue-600 font-sans">复制代理URI</span></CopyText>
                   )}

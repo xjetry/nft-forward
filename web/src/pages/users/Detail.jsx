@@ -291,7 +291,7 @@ function RevokeBtn({ url, onDone }) {
 }
 
 function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
-  const [nodeId, setNodeId] = useState('')
+  const [nodeIds, setNodeIds] = useState([])
   const [max, setMax] = useState('10')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
@@ -303,11 +303,15 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!nodeId) { toast('请选择节点'); return }
+    if (!nodeIds.length) { toast('请选择节点'); return }
     setLoading(true)
     try {
-      await api.post(`/users/${userId}/grants`, { node_id: Number(nodeId), max_forwards: Number(max) })
-      toast('已授权'); setNodeId(''); onDone()
+      // The grant endpoint takes one node; fan out so multiple nodes share the
+      // same per-user limit in a single action.
+      for (const id of nodeIds) {
+        await api.post(`/users/${userId}/grants`, { node_id: Number(id), max_forwards: Number(max) })
+      }
+      toast(`已授权 ${nodeIds.length} 个节点`); setNodeIds([]); onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
   return (
@@ -315,8 +319,8 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
       <div className="text-xs font-bold text-ink-mut uppercase tracking-wider mb-3">授权新节点</div>
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-          <label className="fl">节点</label>
-          <Select value={nodeId} onChange={v => setNodeId(v)} placeholder="-- 选择 --" searchable
+          <label className="fl">节点 <span className="text-ink-mut font-normal text-xs">(可多选)</span></label>
+          <Select value={nodeIds} onChange={setNodeIds} placeholder="-- 选择 --" searchable multiple
             groups={[
               { label: '单点', options: available.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
               { label: '组合', options: available.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
