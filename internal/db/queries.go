@@ -61,7 +61,6 @@ type Rule struct {
 	Proto           string        `json:"proto"`
 	ExitHost        string        `json:"exit_host"`
 	ExitPort        int           `json:"exit_port"`
-	ExitURI         string        `json:"exit_uri"`
 	EntryListenPort int           `json:"entry_listen_port"`
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
@@ -379,12 +378,15 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,exit_uri,entry_listen_port,comment,disabled,created_at`
+// exit_uri exists as a column (migration 0010) but is no longer read or
+// written: user proxy URIs are kept client-side only, so the column is left
+// out of the projection rather than dropped (dropping needs a table rebuild).
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.ExitURI, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1

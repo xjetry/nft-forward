@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { resolvedDark, getStoredTheme, setStoredTheme } from '../lib/theme'
+import { hasLocalURIs } from '../lib/landing'
 
 /* ---------- User context ---------- */
 const UserCtx = createContext(null)
@@ -51,6 +52,17 @@ export function Layout({ children }) {
   const { blurred, toggleBlur } = useContext(BlurCtx)
   const [theme, setThemeState] = useState(getStoredTheme())
   const isDark = resolvedDark(theme)
+
+  // The landing-nodes entry shows when the user has an admin-assigned source or
+  // their own browser-local URIs. Local URIs change in the same tab, which the
+  // native 'storage' event misses, so re-check on our custom event too.
+  const [, bumpLanding] = useState(0)
+  useEffect(() => {
+    const h = () => bumpLanding(t => t + 1)
+    window.addEventListener('nf-landing-changed', h)
+    window.addEventListener('storage', h)
+    return () => { window.removeEventListener('nf-landing-changed', h); window.removeEventListener('storage', h) }
+  }, [])
 
   const toggleTheme = () => {
     const next = isDark ? 'light' : 'dark'
@@ -108,7 +120,7 @@ export function Layout({ children }) {
                 </NavGroup>
                 <NavGroup label="转发">
                   <SideLink to="/my/rules" icon={<IconForwards />}>我的规则</SideLink>
-                  {user.has_landing_source && <SideLink to="/my/landing" icon={<IconNodes />}>落地节点</SideLink>}
+                  {(user.has_landing_source || hasLocalURIs(user.username)) && <SideLink to="/my/landing" icon={<IconNodes />}>落地节点</SideLink>}
                 </NavGroup>
               </>
             )}

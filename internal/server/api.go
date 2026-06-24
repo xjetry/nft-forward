@@ -1451,6 +1451,19 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	nodes, _ := db.ListNodes(s.DB)
+	// A composite's online state is derived from its children, which may not be
+	// in the user's granted set — resolve over the full node list, then project
+	// the result onto the granted nodes so the dashboard shows accurate status.
+	db.ResolveCompositeOnline(s.DB, nodes)
+	onlineByID := make(map[int64]int, len(nodes))
+	for _, n := range nodes {
+		onlineByID[n.ID] = n.Online
+	}
+	for _, gn := range grantedNodes {
+		if o, ok := onlineByID[gn.ID]; ok {
+			gn.Online = o
+		}
+	}
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"user": apiUserFullView(u), "nodes": grantedNodes, "grants": grants,
@@ -1493,7 +1506,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Name      string `json:"name"`
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
-		ExitURI   string `json:"exit_uri"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
 	}
@@ -1508,11 +1520,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	exitURI, err := normalizeExitURI(body.ExitURI)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1585,7 +1592,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Proto:    proto,
 		ExitHost: exitHost,
 		ExitPort: exitPort,
-		ExitURI:  exitURI,
 		Comment:  strings.TrimSpace(body.Comment),
 	}
 	id, err := db.CreateRule(tx, rl)
@@ -1643,7 +1649,6 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		Proto   string `json:"proto"`
 		Exit    string `json:"exit"`
-		ExitURI string `json:"exit_uri"`
 		Comment string `json:"comment"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -1657,11 +1662,6 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	exitURI, err := normalizeExitURI(body.ExitURI)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1703,7 +1703,6 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.NodeID = nodeID
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
-	rl.ExitURI = exitURI
 	rl.Comment = strings.TrimSpace(body.Comment)
 	tx, err := s.DB.Begin()
 	if err != nil {

@@ -1,33 +1,45 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, CopyText, SensText } from '../../components/ui'
+import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
+import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
+import { parseURIs, mergeLanding, loadLocalURIs } from '../../lib/landing'
 
-/* Landing-nodes nav: lists the nodes resolved from the user's subscription
-   and/or manual URIs, each with a one-click copy of its original (direct)
-   proxy URI. The refresh button appears only for a dynamic source (a
-   subscription URL) — a manual-only source is static and needs no refetch. */
+/* Landing-nodes nav: lists the nodes available to the user — the admin-assigned
+   ones (resolved server-side from a subscription and/or URIs) plus the user's
+   own browser-local URIs — each with a one-click copy of its original (direct)
+   proxy URI. The user's own URIs win on a host:port collision. The refresh
+   button appears only for a dynamic source (a subscription URL); local URIs are
+   edited on the overview page. */
 export default function MyLandingNodes() {
-  const [nodes, setNodes] = useState(null)
+  const [serverNodes, setServerNodes] = useState(null)
   const [hasDynamic, setHasDynamic] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [search, setSearch] = useState('')
   const toast = useToast()
   const blurred = useBlur()
+  const { user } = useUser()
+
+  const localNodes = useMemo(
+    () => parseURIs(loadLocalURIs(user?.username)).map(n => ({ ...n, source: 'local' })),
+    [user])
 
   const load = (refresh = false) => {
     if (refresh) setRefreshing(true)
     api.get(`/my/landing-nodes${refresh ? '?refresh=1' : ''}`)
-      .then(d => { setNodes(d?.nodes || []); setHasDynamic(!!d?.has_dynamic) })
+      .then(d => { setServerNodes((d?.nodes || []).map(n => ({ ...n, source: 'admin' }))); setHasDynamic(!!d?.has_dynamic) })
       .catch(console.error)
       .finally(() => setRefreshing(false))
   }
   useEffect(() => load(false), [])
 
-  if (nodes === null) return <Layout><Loading /></Layout>
+  if (serverNodes === null) return <Layout><Loading /></Layout>
 
   const refresh = () => { load(true); toast('已刷新订阅') }
+
+  // User's own URIs take precedence over admin-assigned ones on a host:port clash.
+  const nodes = mergeLanding(localNodes, serverNodes)
 
   const q = search.trim().toLowerCase()
   const filtered = !q ? nodes : nodes.filter(n =>
@@ -48,18 +60,19 @@ export default function MyLandingNodes() {
         </PanelToolbar>
 
         {nodes.length === 0 ? (
-          <Empty title="暂无落地节点" desc="尚未配置订阅地址或节点 URI，请联系管理员。" />
+          <Empty title="暂无落地节点" desc={<>在<Link to="/my" className="text-blue-600 font-semibold">概览页</Link>添加你的代理 URI，或联系管理员配置订阅。</>} />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配节点" desc="试试别的关键词。" />
         ) : (
           <table className="tbl">
-            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>来源</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={i}>
                   <td className="font-semibold">{n.name || '(未命名)'}</td>
                   <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
+                  <td>{n.source === 'local' ? <Badge color="blue">本地</Badge> : <Badge color="gray">分配</Badge>}</td>
                   <td className="text-right">
                     <CopyText text={n.uri}><span className="text-blue-600 font-sans text-xs font-semibold">复制节点</span></CopyText>
                   </td>

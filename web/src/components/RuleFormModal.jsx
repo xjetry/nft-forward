@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Modal, Select } from './ui'
 import { useToast } from './Layout'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_uri: '', exit_kind: 'custom', comment: '' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', comment: '' }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -11,11 +11,13 @@ const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_uri: '', exi
    state, the single/composite node grouping and validation. `initial` seeds the
    fields for edit/copy prefills and is re-applied every time the modal opens.
 
-   When `landingNodes` is provided (the user side passes the parsed landing-node
-   list, even when empty), the exit gains a custom/landing toggle: a landing
-   exit picks a node's host:port from the subscription, a custom exit takes a
-   host:port plus an optional proxy URI so the rules page can offer a relay URI.
-   Admin callers omit the prop and keep the plain host:port box. */
+   When `landingNodes` is provided (the user side passes the merged landing-node
+   list — admin-assigned plus the user's own browser-local URIs, even when
+   empty), the exit gains a custom/landing toggle: a landing exit picks a node's
+   host:port, a custom exit takes a host:port. The user's proxy URIs never leave
+   the browser, so the modal only deals in host:port here; the rules page
+   resolves the relay URI client-side. Admin callers omit the prop and keep the
+   plain host:port box. */
 export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit }) {
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
@@ -43,9 +45,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择落地节点'); return }
     setLoading(true)
     try {
-      // A landing exit is reference-based — its proxy URI is resolved at view
-      // time, so never persist an exit_uri for it.
-      await onSubmit({ ...form, exit_uri: form.exit_kind === 'landing' ? '' : form.exit_uri })
+      await onSubmit(form)
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
@@ -96,9 +96,6 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                 <>
                   <label className="fl">出口</label>
                   <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
-                  <label className="fl">代理 URI <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
-                  <input className="input-field font-mono" value={form.exit_uri} onChange={e => set('exit_uri', e.target.value)}
-                    placeholder="vless://… 填写后可在规则页复制中转 URI" />
                 </>
               )}
             </>
@@ -123,7 +120,8 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
 
 /* Map a rule into the form's editable fields. The rule-list row carries split
    exit_host/exit_port; the detail view a combined exit string — accept either.
-   exit_kind/exit_uri come from the API so edit prefills the right exit mode. */
+   exit_kind comes from the (possibly client-enriched) rule so edit prefills the
+   right exit mode. */
 export function ruleToForm(rule) {
   const exit = rule.exit != null ? rule.exit
     : (rule.exit_host && rule.exit_port ? `${rule.exit_host}:${rule.exit_port}` : '')
@@ -132,7 +130,6 @@ export function ruleToForm(rule) {
     name: rule.name,
     proto: rule.proto,
     exit,
-    exit_uri: rule.exit_uri || '',
     exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
     comment: rule.comment || '',
   }

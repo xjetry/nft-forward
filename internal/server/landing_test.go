@@ -38,21 +38,7 @@ func TestClassifyExit(t *testing.T) {
 		}
 	})
 
-	t.Run("custom exit with stored uri yields relay uri", func(t *testing.T) {
-		it := ruleListItem{Rule: &db.Rule{ExitHost: "9.9.9.9", ExitPort: 8443,
-			ExitURI: "trojan://pass@9.9.9.9:8443?sni=b.com#Custom"},
-			Entry: "relay.example:20000", Exit: "9.9.9.9:8443"}
-		it.classifyExit(idx, true)
-		if it.ExitKind != "custom" {
-			t.Fatalf("kind = %q, want custom", it.ExitKind)
-		}
-		want := "trojan://pass@relay.example:20000?sni=b.com#Custom"
-		if it.RelayURI != want {
-			t.Errorf("relay_uri = %q, want %q", it.RelayURI, want)
-		}
-	})
-
-	t.Run("custom exit without uri has no relay uri", func(t *testing.T) {
+	t.Run("custom exit has no relay uri (user URIs are client-side)", func(t *testing.T) {
 		it := ruleListItem{Rule: &db.Rule{ExitHost: "9.9.9.9", ExitPort: 8443},
 			Entry: "relay.example:20000", Exit: "9.9.9.9:8443"}
 		it.classifyExit(idx, true)

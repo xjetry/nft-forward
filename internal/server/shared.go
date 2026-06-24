@@ -45,12 +45,12 @@ type ruleListItem struct {
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
 	// ExitKind is "landing" when the exit host:port matches one of the owner's
-	// landing nodes, else "custom". LandingURI is the original (direct) proxy
-	// URI; RelayURI is that URI with its host:port rewritten to the rule's entry
-	// endpoint, so a client dials the relay instead of the landing directly.
-	// RelayURI is populated only where the copy action is offered (detail and
-	// the user's own list), and for custom exits only when the rule carries an
-	// exit_uri.
+	// admin-assigned landing nodes, else "custom". LandingURI is the original
+	// (direct) proxy URI; RelayURI is that URI with its host:port rewritten to
+	// the rule's entry endpoint, so a client dials the relay instead of the
+	// landing directly. RelayURI is populated only where the copy action is
+	// offered (detail and the user's own list). Matches against the user's own
+	// browser-local URIs happen client-side, not here.
 	ExitKind    string `json:"exit_kind"`
 	LandingName string `json:"landing_name,omitempty"`
 	LandingURI  string `json:"landing_uri,omitempty"`
@@ -84,12 +84,6 @@ func (it *ruleListItem) classifyExit(idx map[string]landing.Node, withURI bool) 
 			if u, err := landing.RewriteEndpoint(node.URI, relayHost, relayPort); err == nil {
 				it.RelayURI = u
 			}
-		}
-		return
-	}
-	if withURI && entryOK && strings.TrimSpace(it.Rule.ExitURI) != "" {
-		if u, err := landing.RewriteEndpoint(it.Rule.ExitURI, relayHost, relayPort); err == nil {
-			it.RelayURI = u
 		}
 	}
 }
@@ -134,21 +128,6 @@ func parseExit(raw string) (string, int, error) {
 		return "", 0, fmt.Errorf("出口地址不能为空")
 	}
 	return host, port, nil
-}
-
-// normalizeExitURI trims an optional custom-exit proxy URI and verifies it
-// parses. Empty is allowed (no proxy URI for this exit); a non-empty value that
-// doesn't parse is rejected so the user fixes the typo at save time rather than
-// silently losing the copy-relay-URI action.
-func normalizeExitURI(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-	if len(landing.ParseURIs([]string{raw})) == 0 {
-		return "", fmt.Errorf("代理 URI 无法解析")
-	}
-	return raw, nil
 }
 
 func validateCIDRList(s string) error {

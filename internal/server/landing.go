@@ -10,10 +10,12 @@ import (
 	"nft-forward/internal/landing"
 )
 
-// landingNodesFor resolves a user's landing nodes by merging the manually
-// pasted URIs with the nodes parsed from the subscription URL (if any). Manual
-// URIs come first so they win on a host:port collision in landingIndex. force
-// bypasses the subscription cache.
+// landingNodesFor resolves a user's admin-assigned landing nodes by merging the
+// manually pasted URIs with the nodes parsed from the subscription URL (if any).
+// Manual URIs come first so they win on a host:port collision in landingIndex.
+// The user's own URIs are deliberately not handled here — they live only in the
+// browser (localStorage) and never reach the server, so the user's node info is
+// not exposed. force bypasses the subscription cache.
 func (s *Server) landingNodesFor(u *db.User, force bool) []landing.Node {
 	var nodes []landing.Node
 	if uris := strings.TrimSpace(u.LandingURIs); uris != "" {
@@ -44,7 +46,9 @@ func landingIndex(nodes []landing.Node) map[string]landing.Node {
 // button only makes sense then; a manual-only source is static).
 func hasDynamicSource(u *db.User) bool { return strings.TrimSpace(u.LandingSubURL) != "" }
 
-// hasLandingSource reports whether the user has any landing source at all.
+// hasLandingSource reports whether the user has any admin-assigned landing
+// source (subscription or URIs). The user's own browser-local URIs are tracked
+// client-side and don't factor in here.
 func hasLandingSource(u *db.User) bool {
 	return hasDynamicSource(u) || strings.TrimSpace(u.LandingURIs) != ""
 }

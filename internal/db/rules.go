@@ -248,8 +248,8 @@ type HopInput struct {
 // CreateRule inserts the rule header; hops are written by RegenerateRule.
 // entry_listen_port starts at 0 until the first regeneration.
 func CreateRule(d DBTX, r *Rule) (int64, error) {
-	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,exit_uri,comment,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.ExitURI, r.Comment, now())
+	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,comment,created_at) VALUES (?,?,?,?,?,?,?,?)`,
+		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, now())
 	if err != nil {
 		return 0, err
 	}
@@ -265,8 +265,8 @@ func GetRule(d DBTX, id int64) (*Rule, error) {
 // hand in hand with RegenerateRule rebuilding the hops for the new node.
 // entry_listen_port is owned by RegenerateRule and not touched here.
 func UpdateRuleHeader(d DBTX, r *Rule) error {
-	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,exit_uri=?,comment=? WHERE id=?`,
-		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.ExitURI, r.Comment, r.ID)
+	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=? WHERE id=?`,
+		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.ID)
 	return err
 }
 

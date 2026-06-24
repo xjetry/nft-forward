@@ -248,13 +248,13 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
       <div className="p-5">
         <form onSubmit={submit} className="space-y-3">
           <div>
-            <label className="fl block mb-1.5">订阅地址 <span className="text-ink-mut font-normal text-xs">(可选，任意面板的订阅链接)</span></label>
+            <label className="fl block mb-1.5">订阅地址 <span className="text-ink-mut font-normal text-xs">(可选，支持 Remnawave 等面板的订阅链接)</span></label>
             <input className="input-field font-mono w-full" value={url} onChange={e => setUrl(e.target.value)}
               placeholder="https://example.com/api/sub/xxxx" />
           </div>
           <div>
             <label className="fl block mb-1.5">手动节点 URI <span className="text-ink-mut font-normal text-xs">(可选，每行一条，可与订阅组合)</span></label>
-            <textarea className="input-field font-mono w-full" rows={4} value={text} onChange={e => setText(e.target.value)}
+            <textarea className="input-field font-mono w-full" rows={10} value={text} onChange={e => setText(e.target.value)}
               placeholder={'vless://…\ntrojan://…'} />
           </div>
           <button type="submit" disabled={loading} className="btn-primary text-xs">保存</button>

@@ -1,15 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api } from '../../lib/api'
-import { Layout, useToast, useBlur } from '../../components/Layout'
+import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
+import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs } from '../../lib/landing'
 
 export default function MyRules() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [landingNodes, setLandingNodes] = useState([])
+  const [serverLanding, setServerLanding] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState(null)
   const [editRule, setEditRule] = useState(null)
@@ -17,17 +18,40 @@ export default function MyRules() {
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
+  const { user } = useUser()
+
+  // The user's own proxy URIs live only in localStorage (never sent to the
+  // server). Parse them here to both feed the create picker and resolve a
+  // client-side relay URI for rules whose exit matches one of them.
+  const localNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
+  const localIdx = useMemo(() => landingIndex(localNodes), [localNodes])
 
   const load = () => {
     setLoading(true)
     api.get('/my/rules').then(setData).catch(console.error).finally(() => setLoading(false))
-    api.get('/my/landing-nodes').then(d => setLandingNodes(d?.nodes || [])).catch(console.error)
+    api.get('/my/landing-nodes').then(d => setServerLanding(d?.nodes || [])).catch(console.error)
   }
   useEffect(load, [])
 
   if (loading) return <Layout><Loading /></Layout>
 
   const { rules = [], nodes = [], node_by_id = {} } = data || {}
+
+  // User's own URIs take precedence over admin-assigned ones on a host:port clash.
+  const landingNodes = mergeLanding(localNodes, serverLanding)
+
+  // Enrich a rule with a client-side relay URI when its exit host:port matches
+  // one of the user's local URIs (user overrides any server classification).
+  const enrich = (r) => {
+    const key = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : null
+    if (key && localIdx.has(key) && r.entry) {
+      const ep = splitEndpoint(r.entry)
+      const node = localIdx.get(key)
+      const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
+      if (relay) return { ...r, exit_kind: 'landing', landing_name: node.name, relay_uri: relay }
+    }
+    return r
+  }
 
   const deleteRule = async (rule) => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
@@ -37,7 +61,8 @@ export default function MyRules() {
   const copyRule = (rule) => { setCreateInitial(copyInitial(rule)); setCreateOpen(true) }
 
   const q = search.trim().toLowerCase()
-  const filtered = !q ? rules : rules.filter(r => {
+  const enriched = rules.map(enrich)
+  const filtered = !q ? enriched : enriched.filter(r => {
     const node = node_by_id?.[r.node_id]
     const exit = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : ''
     return [r.name, node?.name, r.entry, exit].some(v => (v || '').toLowerCase().includes(q))
@@ -69,7 +94,7 @@ export default function MyRules() {
         onSubmit={async (form) => {
           await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, exit_uri: form.exit_uri || undefined, comment: form.comment || undefined,
+            exit: form.exit, comment: form.comment || undefined,
           })
           toast('规则已创建'); setCreateOpen(false); load()
         }} />
@@ -80,7 +105,7 @@ export default function MyRules() {
         onSubmit={async (form) => {
           await api.put(`/my/rules/${editRule.id}`, {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, exit_uri: form.exit_uri || undefined, comment: form.comment || undefined,
+            exit: form.exit, comment: form.comment || undefined,
           })
           toast('已保存并重下发'); setEditRule(null); load()
         }} />
