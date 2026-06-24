@@ -5,7 +5,7 @@ import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
 
-const card = 'bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
+const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
 export default function NodeDetail() {
   const { id } = useParams()
@@ -243,9 +243,9 @@ export default function NodeDetail() {
                 onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
             )}
           </div>
-          <div className="relative bg-[#0e1320] rounded-xl px-5 py-[18px]">
+          <div className="relative bg-app border border-line rounded-[10px] px-5 py-[18px]">
             <button onClick={() => { navigator.clipboard.writeText(installCmd); toast('已复制') }}
-              className="absolute top-3.5 right-3.5 text-[12px] font-semibold text-[#cdd5e0] bg-white/10 border border-white/15 px-3 py-[5px] rounded-lg cursor-pointer hover:bg-white/20 transition-colors">复制</button>
+              className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-ink-soft bg-raised border border-line px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-surface transition-colors">复制</button>
             <pre className="m-0 font-mono text-[13px] leading-[1.75] text-[#e8ecf3] whitespace-pre-wrap break-all">
               <SensText blurred={blurred}>{installCmd}</SensText>
             </pre>

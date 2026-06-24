@@ -4,13 +4,13 @@ import { useState, useRef, useEffect, useCallback, createContext, useContext } f
 export function Modal({ open, onClose, title, children, wide }) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 pt-16 px-4 overflow-y-auto" onClick={onClose}>
-      <div className={`bg-surface rounded-lg shadow-xl w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} animate-in`} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-line-soft">
-          <h3 className="text-sm font-bold text-ink">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] px-4 overflow-y-auto" onClick={onClose}>
+      <div className={`bg-surface border border-line rounded-2xl shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} animate-in`} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-[26px] py-5 border-b border-line-soft">
+          <h3 className="text-[17px] font-bold text-ink">{title}</h3>
           <button onClick={onClose} className="text-ink-mut hover:text-ink text-lg leading-none">&times;</button>
         </div>
-        <div className="px-6 py-5">{children}</div>
+        <div className="px-[26px] py-[26px]">{children}</div>
       </div>
     </div>
   )
@@ -31,37 +31,30 @@ export function Confirm({ open, onClose, onConfirm, title, children }) {
 
 /* ---------- Badge ---------- */
 const badgeColors = {
-  green: 'bg-green-50 text-green-700',
-  amber: 'bg-amber-50 text-amber-700',
-  red: 'bg-red-50 text-red-700',
-  gray: 'bg-raised text-ink-soft',
-  blue: 'bg-blue-50 text-blue-700',
-  violet: 'bg-violet-50 text-violet-700',
+  green: 'bg-green-500/[.12] text-green-700 dark:text-green-400 border-green-500/30',
+  amber: 'bg-amber-500/[.12] text-amber-700 dark:text-amber-400 border-amber-500/30',
+  red: 'bg-red-500/[.12] text-red-700 dark:text-red-400 border-red-500/30',
+  gray: 'bg-raised text-ink-soft border-line',
+  blue: 'bg-blue-500/[.12] text-blue-700 dark:text-blue-400 border-blue-500/30',
+  violet: 'bg-violet-500/[.12] text-violet-700 dark:text-violet-400 border-violet-500/30',
 }
 export function Badge({ color = 'gray', children }) {
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${badgeColors[color] || badgeColors.gray}`}>{children}</span>
+  return <span className={`inline-flex items-center gap-1.5 px-[11px] py-1 rounded-full text-[12px] font-semibold border ${badgeColors[color] || badgeColors.gray}`}>{children}</span>
 }
 
 /* ---------- NodeTypeBadge ---------- */
 // Single = a solid node dot; composite = interlocking chain links (a multi-hop
 // chain); self = the panel host itself.
 const nodeTypeIcon = {
-  single: (
-    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="12" r="8.5" />
-      <circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none" />
-    </svg>
-  ),
+  single: <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-none" />,
   composite: (
-    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    <svg className="w-[13px] h-[13px] flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 17H7A5 5 0 0 1 7 7h2" /><path d="M15 7h2a5 5 0 0 1 0 10h-2" /><path d="M8 12h8" />
     </svg>
   ),
   self: (
-    <svg className="w-3 h-3 mr-1 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <path d="M9 22V12h6v10" />
+    <svg className="w-[13px] h-[13px] flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M9 22V12h6v10" />
     </svg>
   ),
 }
@@ -348,25 +341,25 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
         <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-surface border border-line rounded-lg shadow-lg overflow-hidden">
+        <div className="absolute z-50 mt-1.5 w-full bg-surface border border-line rounded-[11px] shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] overflow-hidden">
           {useTabs && (
             <div className="flex border-b border-line-soft">
               {sections.map((s, i) => (
                 <button key={i} type="button" onClick={() => setActiveTab(i)}
-                  className={`flex-1 px-3 py-2 text-[12.5px] font-semibold transition-colors ${i === activeTab ? 'text-blue-600 border-b-2 border-blue-600 -mb-px' : 'text-ink-mut hover:text-ink-soft'}`}>
+                  className={`flex-1 px-3 py-[13px] text-[14px] font-semibold transition-colors ${i === activeTab ? 'text-blue-500 border-b-2 border-blue-600 -mb-px' : 'text-ink-soft hover:text-ink'}`}>
                   {s.label} <span className="text-ink-mut font-normal">{s.options.length}</span>
                 </button>
               ))}
             </div>
           )}
           {searchable && (
-            <div className="p-1.5 border-b border-line-soft">
+            <div className="p-3 border-b border-line-soft">
               <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索…"
                 onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}
-                className="input-field w-full text-[13px]" style={{ height: 30 }} />
+                className="input-field w-full text-[13px]" style={{ height: 34 }} />
             </div>
           )}
-          <div className="max-h-60 overflow-auto py-1">
+          <div className="max-h-[260px] overflow-auto py-1.5 px-1.5">
             {empty ? (
               <div className="px-3 py-2 text-[13px] text-ink-mut">无匹配</div>
             ) : shownSections.map((s, i) => (

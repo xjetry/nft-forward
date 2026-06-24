@@ -20,14 +20,14 @@
 }
 
 .dark {
-  --color-app: #0d1117;
-  --color-surface: #161b22;
-  --color-raised: #1c232e;
-  --color-line: #2a313c;
-  --color-line-soft: #222932;
-  --color-ink: #e6edf3;
-  --color-ink-soft: #adbac7;
-  --color-ink-mut: #768390;
+  --color-app: #0a0c10;
+  --color-surface: #101319;
+  --color-raised: #15191f;
+  --color-line: #1c2027;
+  --color-line-soft: #181c22;
+  --color-ink: #e7eaf0;
+  --color-ink-soft: #9aa2ae;
+  --color-ink-mut: #6b7280;
 }
 
 html, body { background: var(--color-app); color: var(--color-ink); }
@@ -36,7 +36,7 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 
 /* Input fields */
 .input-field {
-  @apply w-full h-[38px] rounded-[7px] px-3 text-[13.5px] transition-colors outline-none;
+  @apply w-full h-[40px] rounded-[9px] px-3.5 text-[13.5px] transition-colors outline-none;
   background: var(--color-surface);
   border: 1px solid var(--color-line);
   color: var(--color-ink);
@@ -46,12 +46,12 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 
 /* Button: primary */
 .btn-primary {
-  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-60 transition-colors cursor-pointer border-0;
+  @apply inline-flex items-center gap-1.5 h-[38px] px-5 rounded-[9px] text-[13.5px] font-semibold bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-60 transition-colors cursor-pointer border-0;
 }
 
 /* Button: secondary/ghost */
 .btn-secondary {
-  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold transition-colors cursor-pointer;
+  @apply inline-flex items-center gap-1.5 h-[38px] px-5 rounded-[9px] text-[13.5px] font-semibold transition-colors cursor-pointer;
   background: var(--color-surface);
   border: 1px solid var(--color-line);
   color: var(--color-ink-soft);
@@ -60,7 +60,7 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 
 /* Button: danger */
 .btn-danger {
-  @apply inline-flex items-center gap-1.5 h-9 px-4 rounded-[7px] text-[13px] font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors cursor-pointer border-0;
+  @apply inline-flex items-center gap-1.5 h-[38px] px-5 rounded-[9px] text-[13.5px] font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors cursor-pointer border-0;
 }
 
 /* Small danger button */
@@ -72,13 +72,13 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 
 /* Card */
 .card {
-  @apply rounded-[10px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+  @apply rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];
   background: var(--color-surface);
   border: 1px solid var(--color-line);
 }
 .card + .card { @apply mt-5; }
 .card-header {
-  @apply flex items-center gap-3 px-5 py-4;
+  @apply flex items-center gap-3 px-[22px] py-[18px];
   border-bottom: 1px solid var(--color-line-soft);
 }
 
@@ -86,13 +86,13 @@ html, body { background: var(--color-app); color: var(--color-ink); }
    every card in a row keeps the same height — h-full fills the grid cell and
    mt-auto pins the sub-label to the bottom whether or not it carries text, so
    cards never drift out of alignment. */
-.stat-card { @apply p-4 flex flex-col h-full; }
-.stat-card .stat-sub { @apply mt-auto pt-1; }
+.stat-card { @apply p-5 flex flex-col h-full min-h-[128px]; }
+.stat-card .stat-sub { @apply mt-auto pt-3; }
 
 /* Table */
 .tbl { @apply w-full border-collapse text-sm; }
 .tbl th {
-  @apply text-[11.5px] font-semibold uppercase tracking-wider text-left py-2.5 px-4 whitespace-nowrap;
+  @apply text-[12px] font-semibold tracking-wider text-left py-[13px] px-[22px] whitespace-nowrap;
   color: var(--color-ink-mut);
   background: var(--color-raised);
   border-bottom: 1px solid var(--color-line);
@@ -113,7 +113,7 @@ html, body { background: var(--color-app); color: var(--color-ink); }
    specificity would otherwise win and pull the label left). */
 .tbl th.text-right { @apply text-right; }
 .tbl td {
-  @apply py-3 px-4 align-middle whitespace-nowrap text-[13px];
+  @apply py-[15px] px-[22px] align-middle whitespace-nowrap text-[13px];
   border-bottom: 1px solid var(--color-line-soft);
   color: var(--color-ink);
 }
@@ -126,21 +126,21 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 
 /* Protocol tags */
 .tag-tcp {
-  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700;
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-[9px] py-[3px] rounded-md bg-blue-50 text-blue-700;
 }
 .tag-udp {
-  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-violet-50 text-violet-700;
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-[9px] py-[3px] rounded-md bg-violet-50 text-violet-700;
 }
 .tag-tcpudp {
-  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700;
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-[9px] py-[3px] rounded-md bg-emerald-50 text-emerald-700;
 }
 
 /* Mode tags */
 .tag-kernel {
-  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700;
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-[9px] py-[3px] rounded-md bg-green-50 text-green-700;
 }
 .tag-user {
-  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700;
+  @apply inline-flex items-center font-mono text-[11.5px] font-semibold px-[9px] py-[3px] rounded-md bg-amber-50 text-amber-700;
 }
 
 /* In dark mode, status/protocol pills use translucent fills so the saturated
@@ -153,7 +153,7 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 /* Segmented control */
 .seg-label { @apply relative flex-1; }
 .seg-label .seg-span {
-  @apply block text-center py-2 px-2.5 rounded-[7px] text-[13px] font-semibold cursor-pointer transition-colors;
+  @apply block text-center py-2 px-2.5 rounded-[9px] text-[13px] font-semibold cursor-pointer transition-colors;
   border: 1px solid var(--color-line);
   color: var(--color-ink-soft);
 }

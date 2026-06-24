@@ -53,9 +53,9 @@ export default function UserDetail() {
     <Layout>
       {/* Info */}
       <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">基本信息</h3></div>
-        <div className="p-5">
-          <div className="grid grid-cols-[140px_1fr] gap-4 items-center text-sm">
+        <div className="card-header"><h3 className="text-[15px] font-bold">基本信息</h3></div>
+        <div className="px-6 py-[22px]">
+          <div className="grid grid-cols-[120px_1fr] gap-4 items-center text-[13.5px]">
             <span className="fl">用户名</span><span className="font-semibold">{user.username}</span>
             <span className="fl">角色</span><span className="font-mono">{user.role}</span>
             {isRegularUser && (
@@ -105,8 +105,8 @@ export default function UserDetail() {
       {/* Rules */}
       <div className="card mb-5">
         <div className="card-header">
-          <h3 className="text-sm font-bold">该用户的规则</h3>
-          <span className="text-xs text-ink-mut">{rules.length} 条</span>
+          <h3 className="text-[15px] font-bold">该用户的规则</h3>
+          <span className="text-[13px] text-ink-mut">{rules.length} 条</span>
         </div>
         {rules.length ? (
           <table className="tbl">

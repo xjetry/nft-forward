@@ -63,8 +63,8 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      <form onSubmit={submit} className="space-y-4">
-        <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
+      <form onSubmit={submit} className="space-y-[22px]">
+        <div className="grid grid-cols-[120px_1fr] gap-6 items-center">
           <label className="fl">入口节点</label>
           <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
           <label className="fl">名称</label>
@@ -76,10 +76,10 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
           {landingEnabled ? (
             <>
               <label className="fl">出口类型</label>
-              <div className="inline-flex rounded-lg border border-line overflow-hidden w-fit text-xs">
+              <div className="inline-flex gap-1 p-1 rounded-[10px] border border-line bg-surface w-fit">
                 {[['custom', '自定义'], ['landing', '出口节点']].map(([k, lbl]) => (
                   <button key={k} type="button" onClick={() => set('exit_kind', k)}
-                    className={`px-3.5 py-1.5 font-semibold transition-colors ${form.exit_kind === k ? 'bg-blue-600 text-white' : 'bg-surface text-ink-soft hover:bg-raised'}`}>
+                    className={`px-5 py-[9px] rounded-[7px] text-[14px] font-semibold transition-colors ${form.exit_kind === k ? 'bg-blue-600 text-white' : 'text-ink-soft hover:text-ink'}`}>
                     {lbl}
                   </button>
                 ))}

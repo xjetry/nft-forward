@@ -28,22 +28,27 @@ export default function MyDashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-[18px] mb-[22px] items-start">
         {/* Quota */}
         <div className="card">
-          <div className="card-header"><h3 className="text-sm font-bold">我的配额</h3></div>
-          <div className="p-5">
-            <div className="grid grid-cols-[140px_1fr] gap-4 items-center text-sm">
-              <span className="fl">规则配额</span><span className="font-mono">{rules.length} / {user.max_forwards}</span>
-              <span className="fl">流量</span>
-              <span className="font-mono">
+          <div className="px-6 py-[22px]">
+            <h3 className="text-[16px] font-bold mb-5">我的配额</h3>
+            <div className="flex items-center gap-4 py-3 border-b border-line-soft">
+              <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">规则配额</div>
+              <div className="text-[14.5px]"><span className="font-mono">{rules.length}</span> <span className="text-ink-mut">/</span> <span className="font-mono">{user.max_forwards}</span></div>
+            </div>
+            <div className="flex items-center gap-4 py-3 border-b border-line-soft">
+              <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">流量</div>
+              <div className="text-[14.5px] font-mono">
                 {fmtTrafficGB(user.traffic_used_bytes, user.traffic_quota_bytes)}
-                {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
-              </span>
-              <span className="fl">到期时间</span>
-              <span className="font-mono">
+                {user.traffic_quota_bytes > 0 && <span className="text-green-600 dark:text-green-400"> ({pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-4 py-3">
+              <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">到期时间</div>
+              <div className="text-[14.5px]">
                 {expiresAt ? <>{fmtDate(expiresAt)} {isExpired(expiresAt) && <Badge color="red">已过期</Badge>}</> : '永不过期'}
-              </span>
+              </div>
             </div>
           </div>
         </div>
@@ -55,7 +60,7 @@ export default function MyDashboard() {
       {/* Granted nodes */}
       <div className="card">
         <div className="card-header">
-          <h3 className="text-sm font-bold">已授权节点</h3>
+          <h3 className="text-[15px] font-bold">已授权节点</h3>
         </div>
         {nodes.length ? (
           <table className="tbl">
@@ -99,19 +104,19 @@ function MyProxyURIs({ username }) {
 
   return (
     <div className="card">
-      <div className="card-header">
-        <h3 className="text-sm font-bold">我的代理 URI</h3>
-        <span className="text-xs text-ink-mut">{count} 个节点</span>
-      </div>
-      <div className="p-5">
-        <p className="text-xs text-ink-mut mb-2 leading-relaxed">
+      <div className="px-6 py-[22px]">
+        <div className="flex items-baseline gap-2.5 mb-3.5">
+          <h3 className="text-[16px] font-bold">我的代理 URI</h3>
+          <span className="text-[13px] text-ink-mut">{count} 个节点</span>
+        </div>
+        <p className="text-[13px] leading-[1.7] text-ink-soft mb-3.5">
           每行一条（vless:// / trojan:// / ss:// / vmess:// 等）。
-          <span className="text-amber-600 font-semibold">仅保存在本浏览器，不会上传服务器。</span>
+          <span className="text-amber-500 font-semibold">仅保存在本浏览器，不会上传服务器。</span>
           创建规则时可从中选择落地出口；规则出口与某条 URI 的 host:port 一致时，规则页可一键复制中转代理 URI。
         </p>
-        <textarea className="input-field font-mono w-full" rows={6} value={text} onChange={e => setText(e.target.value)}
-          placeholder={'vless://…\ntrojan://…'} />
-        <button onClick={save} className="btn-primary text-xs mt-3">保存</button>
+        <textarea className="input-field font-mono w-full !h-[84px] resize-y" value={text} onChange={e => setText(e.target.value)}
+          placeholder={'vless://…\ntrojan://…'} style={{ height: 84 }} />
+        <button onClick={save} className="btn-primary mt-3.5">保存</button>
       </div>
     </div>
   )

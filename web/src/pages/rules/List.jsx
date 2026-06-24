@@ -173,7 +173,7 @@ function FilterDropdown({ label, icon, options, selected, onChange, searchPlaceh
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen(o => !o)}
-        className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] cursor-pointer transition-colors bg-surface border border-line text-ink-soft hover:border-ink-mut">
+        className="inline-flex items-center gap-2 h-[34px] px-3.5 rounded-[9px] text-[13.5px] cursor-pointer transition-colors bg-surface border border-line text-ink-soft hover:border-ink-mut">
         {icon}
         {label}
         {selected.size > 0 && (
@@ -184,7 +184,7 @@ function FilterDropdown({ label, icon, options, selected, onChange, searchPlaceh
         <svg className="w-3.5 h-3.5 text-ink-mut" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (
-        <div className="absolute top-[calc(100%+6px)] left-0 w-[260px] z-50 bg-surface border border-line rounded-xl shadow-lg overflow-hidden">
+        <div className="absolute top-[calc(100%+8px)] left-0 w-[260px] z-50 bg-surface border border-line rounded-[11px] shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] overflow-hidden">
           <div className="p-2.5 border-b border-line-soft">
             <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder={searchPlaceholder}
               onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}

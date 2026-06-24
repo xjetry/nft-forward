@@ -86,22 +86,22 @@ export function Layout({ children }) {
 
         {/* Sidebar */}
         <aside className={`fixed inset-y-0 left-0 z-40 w-[248px] flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto ${sideOpen ? 'translate-x-0' : '-translate-x-full'}`}
-          style={{ background: 'linear-gradient(180deg, #10151c, #0b0f15)' }}>
+          style={{ background: '#0c0e13', borderRight: '1px solid #181b22' }}>
 
           {/* Brand */}
-          <div className="flex items-center gap-3 px-5 pt-5 pb-4">
-            <div className="w-[34px] h-[34px] rounded-[9px] flex-none grid place-items-center text-white shadow-[0_4px_14px_rgba(37,99,235,0.4)]"
-              style={{ background: 'linear-gradient(150deg, #3b82f6, #1e40af)' }}>
-              <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h11M4 7l3-3M4 7l3 3"/><path d="M20 17H9M20 17l-3-3M20 17l-3 3"/></svg>
+          <div className="flex items-center gap-3 px-5 pt-5 pb-5">
+            <div className="w-[42px] h-[42px] rounded-[11px] flex-none grid place-items-center text-white shadow-[0_6px_18px_-6px_rgba(74,108,247,0.7)]"
+              style={{ background: 'linear-gradient(150deg, #5b7cfa, #3a5bef)' }}>
+              <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
             </div>
             <div>
-              <div className="text-[15px] font-bold tracking-wide text-[#f3f6fa]">nft-forward</div>
-              <div className="text-[11px] text-[#6b7686] font-mono mt-px">{isAdmin ? '管理面板' : '用户面板'}</div>
+              <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">nft-forward</div>
+              <div className="text-[12px] text-[#6b7280] mt-0.5">{isAdmin ? '管理面板' : '用户面板'}</div>
             </div>
           </div>
 
           {/* Nav */}
-          <nav className="flex-1 overflow-y-auto px-3 py-2">
+          <nav className="flex-1 overflow-y-auto px-4 py-2">
             {isAdmin ? (
               <>
                 <NavGroup label="监控">
@@ -127,19 +127,19 @@ export function Layout({ children }) {
           </nav>
 
           {/* Footer */}
-          <div className="border-t border-[#1e2632] p-3">
-            <div className="flex items-center gap-2.5 px-2 py-1.5">
-              <div className="w-[30px] h-[30px] rounded-lg bg-[#26323f] text-[#cdd6e2] grid place-items-center font-bold text-[13px] flex-none">
+          <div className="border-t border-[#181b22] p-4 pt-3.5">
+            <div className="flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
+              <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd] flex-none">
                 {user.username?.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <div className="text-[13px] text-[#e2e8f0] font-semibold leading-tight truncate">{user.username}</div>
-                <div className="text-[11px] text-[#6b7686] font-mono">{user.role}</div>
+                <div className="text-[13.5px] text-[#e7eaf0] font-semibold leading-tight truncate">{user.username}</div>
+                <div className="text-[12px] text-[#6b7280] mt-px">{user.role}</div>
               </div>
             </div>
-            <div className="flex gap-1.5 mt-2">
-              <NavLink to="/change-password" className="flex-1 text-center text-[12px] text-[#9aa6b6] py-1.5 rounded-[7px] border border-[#1e2632] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
-              <button onClick={handleLogout} className="flex-1 text-center text-[12px] text-[#9aa6b6] py-1.5 rounded-[7px] border border-[#1e2632] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
+            <div className="flex gap-2">
+              <NavLink to="/change-password" className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
+              <button onClick={handleLogout} className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
             </div>
           </div>
         </aside>
@@ -147,7 +147,7 @@ export function Layout({ children }) {
         {/* Content */}
         <main className="flex-1 min-w-0 flex flex-col">
           {/* Topbar */}
-          <div className="sticky top-0 z-20 bg-app/85 backdrop-blur-sm border-b border-line px-4 sm:px-8 py-4 flex items-center gap-3">
+          <div className="sticky top-0 z-20 h-[60px] flex-shrink-0 bg-app/85 backdrop-blur-sm border-b border-line px-4 sm:px-7 flex items-center gap-2">
             <button onClick={() => setSideOpen(true)} className="lg:hidden p-1 text-ink-soft hover:text-ink">
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
             </button>
@@ -169,8 +169,10 @@ export function Layout({ children }) {
           </div>
 
           {/* Page content */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 pb-14">
-            {children}
+          <div className="flex-1 overflow-y-auto px-4 sm:px-7 py-7 pb-12">
+            <div className="max-w-[1680px] mx-auto">
+              {children}
+            </div>
           </div>
         </main>
     </div>
@@ -201,8 +203,8 @@ export function BlurProvider({ children }) {
 function NavGroup({ label, children }) {
   return (
     <div className="mt-4">
-      <div className="px-3 pb-1.5 text-[10.5px] font-semibold tracking-wider uppercase text-[#6b7686]">{label}</div>
-      {children}
+      <div className="px-[10px] pb-2 text-[11px] font-semibold tracking-[1px] uppercase text-[#5a616d]">{label}</div>
+      <div className="flex flex-col gap-1">{children}</div>
     </div>
   )
 }
@@ -211,11 +213,11 @@ function SideLink({ to, icon, end, children }) {
   return (
     <NavLink to={to} end={end}
       className={({ isActive }) =>
-        `flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13.5px] font-medium transition-colors relative ${isActive
-          ? 'bg-[#1b2531] text-[#e8edf4] before:content-[""] before:absolute before:-left-3 before:top-1/2 before:-translate-y-1/2 before:w-[3px] before:h-[18px] before:rounded-r before:bg-blue-600'
-          : 'text-[#9aa6b6] hover:bg-[#161d27] hover:text-[#cdd6e2]'}`
+        `flex items-center gap-3 px-3 py-2.5 rounded-[9px] text-[14px] font-medium transition-colors relative ${isActive
+          ? 'bg-[#181c24] text-[#f3f5f8] border border-[#262b35] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]'
+          : 'text-[#8b93a0] border border-transparent hover:bg-[#161d27] hover:text-[#cdd6e2]'}`
       }>
-      <span className="w-[17px] h-[17px] flex-none opacity-85">{icon}</span>
+      <span className="w-5 h-5 flex-none opacity-85">{icon}</span>
       <span>{children}</span>
     </NavLink>
   )

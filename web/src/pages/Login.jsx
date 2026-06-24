@@ -24,16 +24,16 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen grid place-items-center" style={{ background: 'linear-gradient(180deg, #10151c, #0b0f15)' }}>
-      <div className="bg-surface rounded-xl p-9 w-[380px] shadow-[0_16px_48px_rgba(0,0,0,0.25)]">
+    <div className="min-h-screen grid place-items-center bg-app">
+      <div className="bg-surface border border-line rounded-2xl p-9 w-[380px] shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)]">
         <div className="flex items-center gap-3 mb-7">
-          <div className="w-[38px] h-[38px] rounded-[10px] grid place-items-center text-white shadow-[0_4px_14px_rgba(37,99,235,0.4)]"
-            style={{ background: 'linear-gradient(150deg, #3b82f6, #1e40af)' }}>
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h11M4 7l3-3M4 7l3 3"/><path d="M20 17H9M20 17l-3-3M20 17l-3 3"/></svg>
+          <div className="w-[42px] h-[42px] rounded-[11px] grid place-items-center text-white shadow-[0_6px_18px_-6px_rgba(74,108,247,0.7)]"
+            style={{ background: 'linear-gradient(150deg, #5b7cfa, #3a5bef)' }}>
+            <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
           </div>
           <div>
-            <div className="text-[15px] font-bold">nft-forward</div>
-            <div className="text-[11px] text-ink-mut font-mono mt-px">转发管理面板</div>
+            <div className="text-[16px] font-bold">nft-forward</div>
+            <div className="text-[12px] text-ink-mut mt-0.5">转发管理面板</div>
           </div>
         </div>
 
