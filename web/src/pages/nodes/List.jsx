@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
+import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
 
 export default function NodeList() {
   const [data, setData] = useState(null)
@@ -15,8 +15,13 @@ export default function NodeList() {
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('single')
   const [dragIndex, setDragIndex] = useState(null)
+  // Default on, persisted per-browser: most of the time you want the working
+  // set, but the preference is a local view choice, not server state.
+  const [onlyVisible, setOnlyVisible] = useState(() => localStorage.getItem('nodes.onlyVisible') !== '0')
   const toast = useToast()
   const confirm = useConfirm()
+
+  useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
 
   const load = () => {
     setLoading(true)
@@ -54,6 +59,10 @@ export default function NodeList() {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
   }
 
+  const toggleHidden = async (node) => {
+    try { await api.post(`/nodes/${node.id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message) }
+  }
+
   if (loading) return <Layout><Loading /></Layout>
 
   const { nodes = [], server_version } = data || {}
@@ -61,11 +70,15 @@ export default function NodeList() {
   const compositeNodes = nodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
   const q = search.trim().toLowerCase()
-  const filtered = !q ? tabNodes : tabNodes.filter(n => (n.name || '').toLowerCase().includes(q))
-  // Drag-reorder is only offered on the unfiltered view so row indices line up
-  // with tabNodes. Persisting sends the full id order (the reordered tab plus
-  // the other tab in its current order) so sort_order stays a clean sequence.
-  const draggable = !q
+  const visibleNodes = onlyVisible ? tabNodes.filter(n => !n.hidden) : tabNodes
+  const filtered = !q ? visibleNodes : visibleNodes.filter(n => (n.name || '').toLowerCase().includes(q))
+  const hiddenCount = tabNodes.length - tabNodes.filter(n => !n.hidden).length
+  // Drag-reorder is only offered when the shown rows are exactly tabNodes in
+  // order — no search and no hidden rows filtered out — so a dropped row's
+  // index maps straight onto tabNodes. Persisting sends the full id order (the
+  // reordered tab plus the other tab in its current order) so sort_order stays
+  // a clean sequence.
+  const draggable = filtered.length === tabNodes.length
   const onDrop = async (toIndex) => {
     if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
     const list = [...tabNodes]
@@ -101,7 +114,7 @@ export default function NodeList() {
       </Panel>
 
       {/* Node list */}
-      <Panel>
+      <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索节点名称…" />
           {server_version && <span className="text-xs text-ink-mut whitespace-nowrap">server {server_version}</span>}
@@ -112,20 +125,28 @@ export default function NodeList() {
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
         </PanelToolbar>
-        <div className="flex gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+        <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
           {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`px-3 py-0.5 rounded text-xs border transition-colors ${
                 tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
               }`}>{label} {n}</button>
           ))}
+          <label className="ml-auto inline-flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer select-none"
+            title="仅展示未隐藏的节点。隐藏的节点及其规则不在列表显示，但转发照常运行。该偏好保存在本浏览器。">
+            <input type="checkbox" className="accent-blue-600" checked={onlyVisible} onChange={e => setOnlyVisible(e.target.checked)} />
+            仅展示可见节点{hiddenCount > 0 && <span className="text-ink-mut">（{hiddenCount} 个隐藏）</span>}
+          </label>
         </div>
+        <TableScroll>
         {nodes.length === 0 ? (
           <Empty title="尚未注册任何节点" desc="点击右上角「添加节点」创建。" />
         ) : tabNodes.length === 0 ? (
           <Empty title={tab === 'composite' ? '暂无组合节点' : '暂无单点节点'} desc={tab === 'composite' ? '点击右上角「组合节点」创建。' : '点击右上角「添加节点」创建。'} />
         ) : filtered.length === 0 ? (
-          <Empty title="无匹配节点" desc="试试别的关键词。" />
+          q
+            ? <Empty title="无匹配节点" desc="试试别的关键词。" />
+            : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
         ) : (
           <table className="tbl">
             <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
@@ -144,6 +165,7 @@ export default function NodeList() {
                     <span className="inline-flex items-center gap-2 font-semibold">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
                       <Link to={`/nodes/${n.id}`} className="text-blue-600 font-semibold hover:underline">{n.name}</Link>
+                      {n.hidden && <Badge color="gray">已隐藏</Badge>}
                     </span>
                   </td>
                   <td><NodeTypeBadge type={n.node_type} /></td>
@@ -157,6 +179,7 @@ export default function NodeList() {
                   </td>
                   <td><NodeStatus node={n} /></td>
                   <td className="text-right whitespace-nowrap">
+                    <button onClick={() => toggleHidden(n)} title={n.hidden ? '在节点列表与规则列表中显示' : '从节点列表与规则列表中隐藏（不影响转发）'} className="btn-secondary text-xs mr-1.5">{n.hidden ? '显示' : '隐藏'}</button>
                     {n.node_type !== 'composite' && <button onClick={() => resyncNode(n.id)} className="btn-secondary text-xs mr-1.5">重新同步</button>}
                     <button onClick={() => deleteNode(n)} className="btn-danger-sm text-xs">删除</button>
                   </td>
@@ -165,6 +188,7 @@ export default function NodeList() {
             </tbody>
           </table>
         )}
+        </TableScroll>
       </Panel>
 
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />

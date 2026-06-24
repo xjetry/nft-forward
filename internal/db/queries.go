@@ -607,8 +607,8 @@ func ToggleNode(d *sql.DB, id int64) error {
 }
 
 // ToggleNodeHidden flips a node's hidden flag. Hidden is purely a presentation
-// concern (the rules list omits rules on hidden nodes); it does not affect
-// forwarding, sync, or authorization.
+// concern — by default the node drops out of the node list and its rules drop
+// out of the rules list — and never affects forwarding, sync, or authorization.
 func ToggleNodeHidden(d *sql.DB, id int64) error {
 	_, err := d.Exec(`UPDATE nodes SET hidden = CASE WHEN hidden = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
 	return err

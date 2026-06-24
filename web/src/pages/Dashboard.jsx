@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { fmtBytes, fmtTime } from '../lib/fmt'
 import { Layout, useBlur } from '../components/Layout'
@@ -50,7 +51,7 @@ export default function Dashboard() {
             <tbody>
               {nodes.map(n => (
                 <tr key={n.id}>
-                  <td className="font-semibold">{n.name}</td>
+                  <td><Link to={`/nodes/${n.id}`} className="font-semibold text-blue-600 hover:underline">{n.name}</Link></td>
                   <td className="font-mono text-xs text-ink-soft"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></td>
                   <td><NodeTypeBadge type={n.node_type} /></td>
                   <td className="font-mono text-ink-soft">{ruleCount[n.id] || 0}</td>
@@ -68,13 +69,13 @@ export default function Dashboard() {
 
 function StatCard({ label, value, unit, sub, accent }) {
   return (
-    <div className="card p-4">
+    <div className="card stat-card">
       <div className="text-xs text-ink-soft font-medium">{label}</div>
       <div className="mt-1 flex items-baseline gap-1">
         <span className={`text-[28px] font-bold tracking-tight ${accent ? 'text-green-600' : 'text-ink'}`}>{value}</span>
         {unit && <span className="text-sm font-semibold text-ink-mut">{unit}</span>}
       </div>
-      <div className="text-[12px] text-ink-mut mt-1 font-mono truncate">{sub || ' '}</div>
+      <div className="stat-sub text-[12px] text-ink-mut font-mono truncate">{sub || ' '}</div>
     </div>
   )
 }

@@ -40,8 +40,8 @@ export default function RulesList() {
   const { rules: allRules = [], nodes = [] } = data || {}
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
-  // Rules on a node flagged hidden are omitted from this list (the node config
-  // is the single switch); they keep forwarding and stay reachable by URL.
+  // Rules on a node flagged hidden are omitted from this list (the node's hidden
+  // flag is the single switch); they keep forwarding and stay reachable by URL.
   const rules = allRules.filter(r => !nodeMap[r.node_id]?.hidden)
 
   const deleteRule = async (rule) => {

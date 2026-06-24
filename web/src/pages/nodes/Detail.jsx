@@ -65,7 +65,7 @@ export default function NodeDetail() {
   }
 
   const toggleHidden = async () => {
-    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已在规则列表显示' : '已在规则列表隐藏'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message) }
   }
   const remove = async () => {
     if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
@@ -121,7 +121,7 @@ export default function NodeDetail() {
             ) : (
               <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
             )}
-            <button onClick={toggleHidden} title="隐藏后，该节点的规则不在规则列表显示" className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">{node.hidden ? '规则列表显示' : '规则列表隐藏'}</button>
+            <button onClick={toggleHidden} title="隐藏后，该节点默认不在节点列表显示，其规则也不在规则列表显示（不影响转发）" className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">{node.hidden ? '显示节点' : '隐藏节点'}</button>
             {!isComposite && (
               <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
             )}
