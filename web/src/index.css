@@ -93,6 +93,7 @@ html, body { background: var(--color-app); color: var(--color-ink); }
   border: 1px solid var(--color-line);
 }
 .card + .card { @apply mt-5; }
+.stat-card + .stat-card { margin-top: 0; }
 .card-header {
   @apply flex items-center gap-3 px-[22px] py-[18px];
   border-bottom: 1px solid var(--color-line-soft);
@@ -102,8 +103,8 @@ html, body { background: var(--color-app); color: var(--color-ink); }
    every card in a row keeps the same height — h-full fills the grid cell and
    mt-auto pins the sub-label to the bottom whether or not it carries text, so
    cards never drift out of alignment. */
-.stat-card { @apply p-5 flex flex-col h-full min-h-[128px]; }
-.stat-card .stat-sub { @apply mt-auto pt-3; }
+.stat-card { @apply px-[22px] py-5 flex flex-col h-full min-h-[128px]; }
+.stat-card .stat-sub { @apply mt-auto pt-3 text-[12.5px]; }
 
 /* Table */
 .tbl { @apply w-full border-collapse text-sm; }

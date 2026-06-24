@@ -35,11 +35,15 @@ export default function Dashboard() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-[22px]">
-        <StatCard label="活跃转发" value={rules.length} sub="正在转发的规则" />
+        <StatCard label="活跃转发" value={rules.length} sub="正在转发的规则"
+          icon={<path d="M5 12h14M13 6l6 6-6 6"/>} />
         <StatCard label="在线节点" value={onlineCount} unit={` /${nodes.length}`}
-          sub={offline.length ? `${offline.slice(0, 2).join('、')}${offline.length > 2 ? ` 等 ${offline.length} 个` : ''} 离线` : '全部在线'} accent />
-        <StatCard label="总流量" value={fmtBytes(totalBytes)} sub="累计上下行" />
-        <StatCard label="用户" value={users.length} sub="系统用户数" />
+          sub={offline.length ? `${offline.slice(0, 2).join('、')}${offline.length > 2 ? ` 等 ${offline.length} 个` : ''} 离线` : '全部在线'} accent
+          icon={<><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></>} />
+        <StatCard label="总流量" value={fmtBytes(totalBytes)} sub="累计上下行"
+          icon={<><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></>} />
+        <StatCard label="用户" value={users.length} sub="系统用户数"
+          icon={<><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/></>} />
       </div>
 
       {/* Node status */}
@@ -67,22 +71,22 @@ export default function Dashboard() {
   )
 }
 
-function StatCard({ label, value, unit, sub, accent }) {
+function StatCard({ label, value, unit, sub, accent, icon }) {
   return (
     <div className="card stat-card">
-      <div className="text-[13px] text-ink-soft font-medium">{label}</div>
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] text-ink-soft font-medium">{label}</span>
+        {icon && <svg className="w-[18px] h-[18px] text-ink-mut opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg>}
+      </div>
       <div className="mt-3.5 flex items-baseline gap-0.5">
-        <span className={`text-[38px] font-bold leading-none tracking-tight ${accent ? 'text-green-600 dark:text-green-400' : 'text-ink'}`}>{value}</span>
+        <span className={`text-[38px] font-bold leading-[1.05] tracking-tight ${accent ? 'text-green-600 dark:text-green-400' : 'text-ink'}`}>{value}</span>
         {unit && <span className="text-[18px] font-semibold text-ink-mut">{unit}</span>}
       </div>
-      <div className="stat-sub text-[12.5px] text-ink-mut truncate">{sub || ' '}</div>
+      <div className="stat-sub text-[12.5px] text-ink-mut truncate">{sub || ' '}</div>
     </div>
   )
 }
 
-// Overview status is simply online/offline (disabled shown distinctly). A
-// composite node's online state is resolved server-side from its children, so
-// here it follows the same online flag — no sync/error states on the overview.
 function NodeStatus({ node }) {
   if (node.disabled) return <Badge color="amber">禁用</Badge>
   return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
