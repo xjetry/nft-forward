@@ -342,12 +342,14 @@ fetch_and_verify() {
   local ddir
   ddir="$(dirname "$dest")"
   if curl -fLs "$base/SHA256SUMS" -o "$ddir/SHA256SUMS" 2>/dev/null; then
-    (cd "$ddir" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c -) \
+    # Verification chatter must go to stderr — stdout carries only the hash the
+    # caller captures into the identity file.
+    (cd "$ddir" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c - >&2) \
       || die "sha256 校验失败: $asset"
   elif [[ "$strictness" == "strict" ]]; then
     die "未取到 SHA256SUMS：必须强校验，拒绝裸跑（检查网络/代理或稍后重试）"
   else
-    echo "    (SHA256SUMS 不可用，跳过校验)"
+    echo "    (SHA256SUMS 不可用，跳过校验)" >&2
   fi
   sha256sum "$dest" | awk '{print $1}'
 }
