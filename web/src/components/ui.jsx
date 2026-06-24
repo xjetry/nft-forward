@@ -285,12 +285,13 @@ export function ConfirmProvider({ children }) {
 // onChange receives the chosen value as a string and the menu closes. Multi-
 // select (multiple=true): value is an array, onChange receives the next array
 // of string values and the menu stays open so several can be picked.
-export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false }) {
+export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false, tabs = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [activeTab, setActiveTab] = useState(0)
   const ref = useRef(null)
   useEffect(() => {
-    if (!open) { setQuery(''); return }
+    if (!open) { setQuery(''); setActiveTab(0); return }
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -307,7 +308,12 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
     : (selected ? selected.label : placeholder)
   const hasSelection = multiple ? selectedValues.length > 0 : !!selected
   const q = query.trim().toLowerCase()
-  const shownSections = sections
+  // Tab mode (with groups): show one group at a time behind a tab bar so long
+  // node lists don't bury the second group below a scroll. The header per
+  // section is dropped (the tab already labels it).
+  const useTabs = tabs && sections.length > 1
+  const baseSections = useTabs ? [{ label: null, options: (sections[activeTab] || sections[0]).options }] : sections
+  const shownSections = baseSections
     .map(s => ({ label: s.label, options: searchable && q ? s.options.filter(o => String(o.label).toLowerCase().includes(q)) : s.options }))
     .filter(s => s.options.length > 0)
   const empty = shownSections.length === 0
@@ -343,6 +349,16 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
       </button>
       {open && (
         <div className="absolute z-50 mt-1 w-full bg-surface border border-line rounded-lg shadow-lg overflow-hidden">
+          {useTabs && (
+            <div className="flex border-b border-line-soft">
+              {sections.map((s, i) => (
+                <button key={i} type="button" onClick={() => setActiveTab(i)}
+                  className={`flex-1 px-3 py-2 text-[12.5px] font-semibold transition-colors ${i === activeTab ? 'text-blue-600 border-b-2 border-blue-600 -mb-px' : 'text-ink-mut hover:text-ink-soft'}`}>
+                  {s.label} <span className="text-ink-mut font-normal">{s.options.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {searchable && (
             <div className="p-1.5 border-b border-line-soft">
               <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索…"

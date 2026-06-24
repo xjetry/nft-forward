@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTrafficGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
+import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 
 export default function UserList() {
   const [data, setData] = useState(null)
@@ -45,9 +45,10 @@ export default function UserList() {
 
   return (
     <Layout>
+      <div className="h-full flex flex-col">
       <PageHeader title="用户列表" count={users.length} unit="个用户" />
 
-      <Panel>
+      <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索用户名…" />
           <ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton>
@@ -58,6 +59,7 @@ export default function UserList() {
         ) : filtered.length === 0 ? (
           <Empty title="无匹配用户" desc="试试别的关键词。" />
         ) : (
+          <TableScroll>
           <table className="tbl">
             <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -92,8 +94,10 @@ export default function UserList() {
               })}
             </tbody>
           </table>
+          </TableScroll>
         )}
       </Panel>
+      </div>
 
       <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
@@ -187,6 +191,10 @@ function CreateUserModal({ open, onClose, onDone }) {
               <label className="fl">到期时间</label>
               <div className="flex items-center gap-2 flex-wrap">
                 <input className="input-field font-mono" type="date" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} style={{ maxWidth: 200 }} />
+                <button type="button" onClick={() => set('expires_at', todayStr())} title="重置为当天"
+                  className="btn-secondary flex-none px-2" style={{ height: 38 }}>
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                </button>
                 <div className="inline-flex gap-1.5">
                   {[['1d', '+1天'], ['1m', '+1月'], ['3m', '+3月'], ['1y', '+1年']].map(([k, lbl]) => (
                     <button key={k} type="button" onClick={() => addToExpiry(k)} className="btn-secondary text-xs">{lbl}</button>
@@ -199,7 +207,6 @@ function CreateUserModal({ open, onClose, onDone }) {
         <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">创建并复制信息</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
-          {form.role === 'user' && <span className="text-xs text-ink-mut">配额为 0 时不限制；超额后自动禁用。</span>}
         </div>
       </form>
     </Modal>

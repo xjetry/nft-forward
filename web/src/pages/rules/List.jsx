@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton } from '../../components/page'
+import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
 
@@ -60,9 +60,10 @@ export default function RulesList() {
 
   return (
     <Layout>
+      <div className="h-full flex flex-col">
       <PageHeader title="转发规则" count={rules.length} />
 
-      <Panel>
+      <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
           <ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton>
@@ -103,11 +104,14 @@ export default function RulesList() {
         ) : filtered.length === 0 ? (
           <Empty title="无匹配规则" desc="试试别的关键词。" />
         ) : (
-          <RulesTable variant="admin" rules={filtered} nodeMap={nodeMap} blurred={blurred}
-            onDelete={deleteRule} onEdit={setEditRule} onCopy={copyRule}
-            onRowClick={r => navigate(`/rules/${r.id}`)} />
+          <TableScroll>
+            <RulesTable variant="admin" rules={filtered} nodeMap={nodeMap} blurred={blurred}
+              onDelete={deleteRule} onEdit={setEditRule} onCopy={copyRule}
+              onRowClick={r => navigate(`/rules/${r.id}`)} />
+          </TableScroll>
         )}
       </Panel>
+      </div>
 
       <RuleFormModal
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"

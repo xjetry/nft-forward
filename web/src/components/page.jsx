@@ -12,13 +12,22 @@ export function PageHeader({ title, count, unit = '条' }) {
   )
 }
 
-/* Rounded card that wraps a list's toolbar and table. */
-export function Panel({ children, className = '' }) {
+/* Rounded card that wraps a list's toolbar and table. With `fill`, it grows to
+   fill a flex-column page and lays its children out as a column so a
+   TableScroll child can scroll while the toolbar stays put. */
+export function Panel({ children, className = '', fill = false }) {
   return (
-    <section className={`bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${className}`}>
+    <section className={`bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${fill ? 'flex-1 min-h-0 flex flex-col' : ''} ${className}`}>
       {children}
     </section>
   )
+}
+
+/* Scroll container for a list table inside a `fill` Panel: only the rows
+   scroll, while the sticky table header (and the Panel toolbar above) stay
+   fixed. */
+export function TableScroll({ children }) {
+  return <div className="flex-1 min-h-0 overflow-auto">{children}</div>
 }
 
 /* Toolbar row inside a Panel — typically a SearchInput plus a primary action. */

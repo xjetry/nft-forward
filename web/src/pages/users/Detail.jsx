@@ -320,7 +320,7 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点 <span className="text-ink-mut font-normal text-xs">(可多选)</span></label>
-          <Select value={nodeIds} onChange={setNodeIds} placeholder="-- 选择 --" searchable multiple
+          <Select value={nodeIds} onChange={setNodeIds} placeholder="-- 选择 --" searchable multiple tabs
             groups={[
               { label: '单点', options: available.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
               { label: '组合', options: available.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },

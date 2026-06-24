@@ -80,7 +80,7 @@ export function Layout({ children }) {
   const isAdmin = user.role === 'admin'
 
   return (
-    <div className="flex min-h-screen bg-app">
+    <div className="flex h-screen overflow-hidden bg-app">
         {/* Mobile overlay */}
         {sideOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={() => setSideOpen(false)} />}
 

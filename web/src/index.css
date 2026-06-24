@@ -90,6 +90,15 @@ html, body { background: var(--color-app); color: var(--color-ink); }
   background: var(--color-raised);
   border-bottom: 1px solid var(--color-line);
 }
+/* When the table sits in a scroll container (the list pages), the header stays
+   put while rows scroll. box-shadow draws the divider because a border on a
+   border-collapse cell doesn't stick reliably. */
+.tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: inset 0 -1px 0 var(--color-line);
+}
 /* Header cells default to left; this lets a th opt into right alignment so its
    label lines up with right-aligned data below it (the base rule's higher
    specificity would otherwise win and pull the label left). */

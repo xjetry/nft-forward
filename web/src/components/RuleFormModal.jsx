@@ -66,7 +66,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">入口节点</label>
-          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable groups={groups} />
+          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
