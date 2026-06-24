@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal } from '../../components/ui'
 
 export default function UserDetail() {
   const { id } = useParams()
@@ -11,6 +11,7 @@ export default function UserDetail() {
   const toast = useToast()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [newPassword, setNewPassword] = useState(null)
   const confirm = useConfirm()
 
   const load = () => {
@@ -38,10 +39,11 @@ export default function UserDetail() {
     try { await api.del(`/users/${id}`); toast('已删除'); navigate('/users') } catch (err) { toast(err.message) }
   }
   const resetPassword = async () => {
-    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码会一次性显示。', confirmText: '重置', danger: true }))) return
+    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码只显示一次，请及时复制保存。', confirmText: '重置', danger: true }))) return
     try {
       const d = await api.post(`/users/${id}/reset-password`)
-      toast(d?.new_password ? `新密码：${d.new_password}` : '已重置')
+      if (d?.new_password) setNewPassword(d.new_password)
+      else toast('已重置')
     } catch (err) { toast(err.message) }
   }
 
@@ -113,7 +115,7 @@ export default function UserDetail() {
             </table>
           ) : <Empty title="尚未授权任何节点" />}
           <div className="p-5 border-t border-line-soft">
-            <GrantNodeForm userId={id} nodes={all_nodes} onDone={load} />
+            <GrantNodeForm userId={id} allNodes={all_nodes} grantedNodes={nodes} onDone={load} />
           </div>
         </div>
       )}
@@ -150,7 +152,31 @@ export default function UserDetail() {
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         返回用户列表
       </Link>
+
+      <Modal open={!!newPassword} onClose={() => setNewPassword(null)} title="新密码">
+        <p className="text-sm text-ink-soft mb-3">新密码只显示这一次，请复制并妥善保存。关闭后将无法再次查看。</p>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 font-mono text-sm bg-raised border border-line rounded-lg px-3 py-2.5 break-all select-all">{newPassword}</code>
+          <CopyButton text={newPassword} />
+        </div>
+        <div className="flex justify-end mt-5">
+          <button onClick={() => setNewPassword(null)} className="btn-secondary">关闭</button>
+        </div>
+      </Modal>
     </Layout>
+  )
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <button onClick={copy} className="btn-primary flex-none px-4">{copied ? '已复制' : '复制'}</button>
   )
 }
 
@@ -196,18 +222,24 @@ function RevokeBtn({ url, onDone }) {
   return <button onClick={revoke} className="btn-danger-sm text-xs">撤销</button>
 }
 
-function GrantNodeForm({ userId, nodes, onDone }) {
+function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
   const [nodeId, setNodeId] = useState('')
   const [max, setMax] = useState('10')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
-  if (!nodes?.length) return <Empty desc={<Link to="/nodes" className="text-blue-600 text-xs font-semibold">请先创建节点</Link>} />
+  if (!allNodes?.length) return <Empty desc={<Link to="/nodes" className="text-blue-600 text-xs font-semibold">请先创建节点</Link>} />
+
+  const grantedIds = new Set((grantedNodes || []).map(n => n.id))
+  const available = allNodes.filter(n => !grantedIds.has(n.id))
+  if (!available.length) return <div className="text-xs text-ink-mut">所有节点均已授权</div>
+
   const submit = async (e) => {
     e.preventDefault()
+    if (!nodeId) { toast('请选择节点'); return }
     setLoading(true)
     try {
       await api.post(`/users/${userId}/grants`, { node_id: Number(nodeId), max_forwards: Number(max) })
-      toast('已授权'); onDone()
+      toast('已授权'); setNodeId(''); onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
   return (
@@ -216,7 +248,11 @@ function GrantNodeForm({ userId, nodes, onDone }) {
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="fl">节点</label>
-          <Select value={nodeId} onChange={v => setNodeId(v)} placeholder="-- 选择 --" options={nodes.map(n => ({ value: n.id, label: `${n.name} (${n.node_type === 'composite' ? '组合' : n.node_type === 'self' ? '自身' : '单点'})` }))} />
+          <Select value={nodeId} onChange={v => setNodeId(v)} placeholder="-- 选择 --" searchable
+            groups={[
+              { label: '单点', options: available.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
+              { label: '组合', options: available.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
+            ]} />
           <label className="fl">本用户上限</label>
           <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />
         </div>
