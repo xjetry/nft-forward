@@ -39,6 +39,7 @@ type Node struct {
 	RelayHost string         `json:"relay_host"`
 	Online    int            `json:"online"`
 	AgentVersion string      `json:"agent_version"`
+	AgentSHA     string      `json:"agent_sha"`
 	LastSeen     *int64      `json:"last_seen,omitempty"`
 	LastApplyAt  sql.NullInt64 `json:"last_apply_at"`
 	LastError    sql.NullString `json:"last_error"`
@@ -235,7 +236,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -253,7 +254,7 @@ func scanNode(r rowScanner) (*Node, error) {
 	var luVersion, luStatus, luError sql.NullString
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
-		&n.RelayHost, &n.Online, &agentVersion,
+		&n.RelayHost, &n.Online, &agentVersion, &n.AgentSHA,
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
@@ -553,10 +554,10 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 
 // MarkNodeOnline records a successful hello/heartbeat from an agent and
 // refreshes the reported binary version and connect IP.
-func MarkNodeOnline(d *sql.DB, id int64, agentVersion, connectIP string) error {
+func MarkNodeOnline(d *sql.DB, id int64, agentVersion, agentSHA, connectIP string) error {
 	_, err := d.Exec(
-		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, last_error=NULL, address=? WHERE id=?`,
-		now(), agentVersion, connectIP, id)
+		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, agent_sha=?, last_error=NULL, address=? WHERE id=?`,
+		now(), agentVersion, agentSHA, connectIP, id)
 	return err
 }
 

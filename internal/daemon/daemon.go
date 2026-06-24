@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -198,6 +197,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			URL:          d.connectURL,
 			Token:        d.connectTok,
 			AgentVersion: agentVersion(),
+			AgentSHA:     agentSHA(),
 			GetState:     d.SnapshotForDialer,
 			OnApply:      d.SetPanelRuleset,
 			OnMigrated:   d.clearTuiSegment,
@@ -359,12 +359,3 @@ func (d *Daemon) SnapshotForDialer() (OwnerRuleset, AgentMeta) {
 	return cp, d.meta
 }
 
-// agentVersion is a coarse identifier surfaced in the hello frame for
-// ops visibility. Falls back to "dev" when build info is unavailable
-// (e.g. `go run` or a binary stripped of module data).
-func agentVersion() string {
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-	return "dev"
-}

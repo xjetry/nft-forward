@@ -70,8 +70,12 @@ type MigrateRules struct {
 }
 
 type Hello struct {
-	NodeToken      string `json:"node_token"`
-	AgentVersion   string `json:"agent_version"`
+	NodeToken    string `json:"node_token"`
+	AgentVersion string `json:"agent_version"`
+	// AgentSHA is the sha256 of the running nft-agent binary — the identity the
+	// panel compares against the agent it would push to decide whether a push is
+	// needed at all. Empty from agents that predate the split.
+	AgentSHA       string `json:"agent_sha,omitempty"`
 	OS             string `json:"os"`
 	Arch           string `json:"arch"`
 	LastAppliedRev string `json:"last_applied_rev,omitempty"`

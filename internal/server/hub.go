@@ -138,7 +138,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connectIP := extractIP(r)
-	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, connectIP); err != nil {
+	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
 	if node.RelayHost == "" && connectIP != "" {

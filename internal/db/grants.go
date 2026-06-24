@@ -105,7 +105,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		var luVersion, luStatus, luError sql.NullString
 		if err := rows.Scan(
 			&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
-			&n.RelayHost, &n.Online, &agentVersion,
+			&n.RelayHost, &n.Online, &agentVersion, &n.AgentSHA,
 			&lastSeen, &n.LastApplyAt, &n.LastError,
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,

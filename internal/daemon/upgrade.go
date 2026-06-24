@@ -19,8 +19,22 @@ import (
 )
 
 func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.UpgradeAck {
-	log.Printf("upgrade: received version=%s sha256=%s size=%d from=%s",
-		u.Version, u.SHA256, u.Size, u.DownloadAt)
+	log.Printf("upgrade: received version=%s sha256=%s size=%d data=%d from=%s",
+		u.Version, u.SHA256, u.Size, len(u.Data), u.DownloadAt)
+
+	// Label-only sync: the panel sends no binary when the running agent's sha
+	// already matches the target. Confirm against our own binary (the panel's
+	// view may be stale) and, if it holds, just record the new version label —
+	// no replace, no restart. On mismatch reject so the panel re-pushes the
+	// bytes.
+	if len(u.Data) == 0 && u.DownloadAt == "" {
+		if u.SHA256 != "" && u.SHA256 == agentSHA() {
+			writeAgentIdentity(u.Version, u.SHA256)
+			log.Printf("upgrade: already on sha %s, recorded version=%s (no restart)", u.SHA256, u.Version)
+			return wsproto.UpgradeAck{OK: true}
+		}
+		return wsproto.UpgradeAck{Error: "binary sha mismatch; full push required"}
+	}
 
 	binary, err := upgradeBinary(u)
 	if err != nil {
@@ -40,6 +54,9 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	if err := atomicReplace(exePath, binary); err != nil {
 		return wsproto.UpgradeAck{Error: "replace binary: " + err.Error()}
 	}
+	// Persist the new identity before restart so the relaunched (reproducible)
+	// binary reports the right version label, which it cannot self-derive.
+	writeAgentIdentity(u.Version, u.SHA256)
 	log.Printf("upgrade: binary replaced at %s (%d bytes), scheduling restart", exePath, len(binary))
 
 	go restartSelf()

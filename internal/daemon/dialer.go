@@ -37,6 +37,7 @@ type DialerConfig struct {
 	URL          string
 	Token        string
 	AgentVersion string
+	AgentSHA     string
 
 	GetState func() (OwnerRuleset, AgentMeta)
 	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) error
@@ -270,6 +271,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	helloPayload, err := json.Marshal(wsproto.Hello{
 		NodeToken:      d.cfg.Token,
 		AgentVersion:   d.cfg.AgentVersion,
+		AgentSHA:       d.cfg.AgentSHA,
 		OS:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
 		LastAppliedRev: currentMeta.LastAppliedRev,
