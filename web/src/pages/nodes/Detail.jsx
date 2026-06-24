@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
@@ -9,6 +9,7 @@ const card = 'bg-surface border border-line rounded-2xl shadow-[0_1px_2px_rgba(1
 
 export default function NodeDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -66,6 +67,10 @@ export default function NodeDetail() {
   const toggleHidden = async () => {
     try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已在规则列表显示' : '已在规则列表隐藏'); load() } catch (err) { toast(err.message) }
   }
+  const remove = async () => {
+    if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
+    try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message) }
+  }
 
   const installCmd = `curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh\nsudo bash install.sh agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}`
 
@@ -87,20 +92,26 @@ export default function NodeDetail() {
             <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="m-0 text-[22px] font-bold tracking-[-0.01em]">{node.name}</h1>
               <NodeTypeBadge type={node.node_type} />
-              <HeaderStatus node={node} />
+              {isComposite
+                ? (node.disabled && <Badge color="amber">已禁用</Badge>)
+                : <HeaderStatus node={node} />}
               {node.hidden && <Badge color="gray">已隐藏</Badge>}
             </div>
-            <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-ink-mut">
-              <span>连接 IP&nbsp;&nbsp;{node.address
-                ? <b className="text-ink-soft font-mono font-semibold"><SensText blurred={blurred}>{node.address}</SensText></b>
-                : <span className="text-ink-mut">未连接</span>}</span>
-              <span className="text-[#cfd6df]">|</span>
-              <span>Agent&nbsp;&nbsp;{node.agent_version
-                ? <><span className="font-mono text-ink-soft">{node.agent_version}</span>{agentOutdated && <span className="ml-1"><Badge color="amber">非最新</Badge></span>}</>
-                : <span className="text-ink-mut">未知</span>}</span>
-              <span className="text-[#cfd6df]">|</span>
-              <span>最近同步&nbsp;&nbsp;<b className="text-ink-soft font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
-            </div>
+            {isComposite ? (
+              <div className="mt-2 text-[13px] text-ink-mut">虚拟链路节点，由下列各跳依次转发；自身无 Agent / IP / 同步状态</div>
+            ) : (
+              <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-ink-mut">
+                <span>连接 IP&nbsp;&nbsp;{node.address
+                  ? <b className="text-ink-soft font-mono font-semibold"><SensText blurred={blurred}>{node.address}</SensText></b>
+                  : <span className="text-ink-mut">未连接</span>}</span>
+                <span className="text-[#cfd6df]">|</span>
+                <span>Agent&nbsp;&nbsp;{node.agent_version
+                  ? <><span className="font-mono text-ink-soft">{node.agent_version}</span>{agentOutdated && <span className="ml-1"><Badge color="amber">非最新</Badge></span>}</>
+                  : <span className="text-ink-mut">未知</span>}</span>
+                <span className="text-[#cfd6df]">|</span>
+                <span>最近同步&nbsp;&nbsp;<b className="text-ink-soft font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
+              </div>
+            )}
           </div>
 
           {/* header actions */}
@@ -111,14 +122,29 @@ export default function NodeDetail() {
               <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
             )}
             <button onClick={toggleHidden} title="隐藏后，该节点的规则不在规则列表显示" className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">{node.hidden ? '规则列表显示' : '规则列表隐藏'}</button>
-            <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
-            {agentOutdated && (
+            {!isComposite && (
+              <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
+            )}
+            <button onClick={remove} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">删除节点</button>
+            {!isComposite && agentOutdated && (
               <button onClick={upgrade} title={`推送升级到 ${server_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {server_version}</button>
             )}
           </div>
         </header>
 
-        {/* ===== TWO COLUMN: 基本信息 + 节点配置 ===== */}
+        {/* ===== 组合节点：仅名称配置 ===== */}
+        {isComposite ? (
+          <section className={`${card} px-[26px] py-[22px]`}>
+            <h2 className="m-0 mb-[18px] text-[15px] font-bold">节点配置</h2>
+            <ConfigField label="节点名称">
+              <form onSubmit={saveName} className="flex gap-2 max-w-md">
+                <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
+                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+              </form>
+            </ConfigField>
+          </section>
+        ) : (
+        /* ===== TWO COLUMN: 基本信息 + 节点配置 ===== */
         <div className="grid grid-cols-1 lg:grid-cols-[1.55fr_1fr] gap-[18px] items-start">
 
           {/* 基本信息 */}
@@ -172,23 +198,23 @@ export default function NodeDetail() {
               </form>
             </ConfigField>
 
-            {!isComposite && (
-              <ConfigField label="端口范围" hint="规则自动分配监听端口时从该范围中选取">
-                <form onSubmit={savePortRange} className="flex gap-2">
-                  <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
-                  <button type="submit" className="btn-primary flex-none px-5">保存</button>
-                </form>
-              </ConfigField>
-            )}
+            <ConfigField label="端口范围" hint="规则自动分配监听端口时从该范围中选取">
+              <form onSubmit={savePortRange} className="flex gap-2">
+                <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
+                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+              </form>
+            </ConfigField>
           </section>
         </div>
+        )}
 
         {/* ===== 组合节点跳序 ===== */}
         {isComposite && nodeHops.length > 0 && (
           <CompositeHopsCard nodeId={id} hops={nodeHops} onDone={load} />
         )}
 
-        {/* ===== 安装命令 ===== */}
+        {/* ===== 安装命令（实体节点专属） ===== */}
+        {!isComposite && (
         <section className={`${card} px-[26px] py-[22px]`}>
           <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
             <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
@@ -207,6 +233,7 @@ export default function NodeDetail() {
             </pre>
           </div>
         </section>
+        )}
 
         {/* ===== 经过该节点的规则 ===== */}
         <section className={`${card} px-[26px] pt-[22px] pb-2`}>
