@@ -260,11 +260,13 @@ func GetRule(d DBTX, id int64) (*Rule, error) {
 	return scanRule(d.QueryRow(`SELECT `+ruleCols+` FROM rules WHERE id=?`, id))
 }
 
-// UpdateRuleHeader persists editable header fields (name/proto/exit).
+// UpdateRuleHeader persists editable header fields (node/name/proto/exit).
+// node_id is the logical entry node the rule belongs to; switching it goes
+// hand in hand with RegenerateRule rebuilding the hops for the new node.
 // entry_listen_port is owned by RegenerateRule and not touched here.
 func UpdateRuleHeader(d DBTX, r *Rule) error {
-	_, err := d.Exec(`UPDATE rules SET name=?,proto=?,exit_host=?,exit_port=?,comment=? WHERE id=?`,
-		r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.ID)
+	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=? WHERE id=?`,
+		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.ID)
 	return err
 }
 

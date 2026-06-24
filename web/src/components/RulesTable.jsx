@@ -21,7 +21,7 @@ function SortArrow({ dir }) {
   )
 }
 
-export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onRowClick }) {
+export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick }) {
   const isAdmin = variant === 'admin'
   const [sort, setSort] = useState({ col: null, dir: null })
 
@@ -95,6 +95,8 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                 <span className="inline-flex items-center align-middle mr-1.5"><ProbeChainButton ruleId={r.id} /></span>
                 {isAdmin && <Link to={`/rules/${r.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>}
+                {onEdit && <button onClick={() => onEdit(r)} className="btn-secondary text-xs mr-1.5">编辑</button>}
+                {onCopy && <button onClick={() => onCopy(r)} className="btn-secondary text-xs mr-1.5">复制</button>}
                 <button onClick={() => onDelete(r)} className="btn-danger-sm text-xs">删除</button>
               </td>
             </tr>

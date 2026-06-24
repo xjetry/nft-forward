@@ -919,6 +919,29 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// hopsForNode expands a logical entry node into the chain of hops a rule runs
+// over: a single node yields one hop on itself; a composite yields its ordered
+// sub-node hops (carrying each hop's forwarding mode). Used when (re)pointing a
+// rule at a node so create and edit derive the chain the same way.
+func (s *Server) hopsForNode(nodeID int64) ([]db.HopInput, error) {
+	node, err := db.GetNode(s.DB, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("节点不存在")
+	}
+	if node.NodeType == "composite" {
+		nh, _ := db.ListNodeHops(s.DB, nodeID)
+		if len(nh) == 0 {
+			return nil, fmt.Errorf("组合节点无子节点")
+		}
+		hops := make([]db.HopInput, len(nh))
+		for i, h := range nh {
+			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode}
+		}
+		return hops, nil
+	}
+	return []db.HopInput{{NodeID: nodeID}}, nil
+}
+
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -932,6 +955,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		NodeID    int64  `json:"node_id"`
 		Name      string `json:"name"`
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
@@ -957,12 +981,24 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The edit form only touches the rule header (name/proto/exit/comment) and
-	// sends no hops. Treat an empty hop list as "keep the existing chain":
-	// RegenerateRule reuses each node's current listen port, so the entry
-	// endpoint and installed ports don't churn on a header-only edit.
+	// Three ways to resolve the chain, in priority order:
+	//   node_id  -> re-derive from the selected entry node (single/composite);
+	//               this is how the entry node gets switched.
+	//   hops     -> explicit chain (reorder/mode edits).
+	//   neither  -> keep the existing chain; RegenerateRule reuses each node's
+	//               current listen port so a header-only edit doesn't churn the
+	//               entry endpoint or installed ports.
 	var hops []db.HopInput
-	if len(body.Hops) == 0 {
+	switch {
+	case body.NodeID > 0:
+		derived, derr := s.hopsForNode(body.NodeID)
+		if derr != nil {
+			jsonErr(w, http.StatusBadRequest, derr.Error())
+			return
+		}
+		hops = derived
+		rl.NodeID = body.NodeID
+	case len(body.Hops) == 0:
 		existing, err := db.ListRuleHops(s.DB, id)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -976,7 +1012,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		for i, h := range existing {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 		}
-	} else {
+	default:
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
@@ -1536,6 +1572,119 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry})
+}
+
+// apiMyUpdateRule lets a user edit their own rule: name / proto / exit / comment
+// and the entry node. Switching the node re-derives the chain (single -> one
+// hop, composite -> sub-hops) and is gated by the grant on the target node and
+// the same caps create enforces; keeping the node reuses the existing chain so
+// the entry endpoint doesn't churn on a header-only edit.
+func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	if u.Disabled {
+		jsonErr(w, http.StatusForbidden, "用户已被禁用")
+		return
+	}
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+		jsonErr(w, http.StatusForbidden, "用户已过期")
+		return
+	}
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	rl, err := db.GetRule(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "规则不存在")
+		return
+	}
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+		jsonErr(w, http.StatusForbidden, "无权操作该规则")
+		return
+	}
+	var body struct {
+		NodeID  int64  `json:"node_id"`
+		Name    string `json:"name"`
+		Proto   string `json:"proto"`
+		Exit    string `json:"exit"`
+		Comment string `json:"comment"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	proto := strings.ToLower(strings.TrimSpace(body.Proto))
+	if name == "" || !validRuleProto(proto) {
+		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
+		return
+	}
+	exitHost, exitPort, err := parseExit(body.Exit)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nodeID := rl.NodeID
+	if body.NodeID > 0 {
+		nodeID = body.NodeID
+	}
+	// The grant on the target node authorizes the rule and carries the per-node
+	// cap; a composite is the unit of authorization (granting it covers the
+	// whole chain), so the check is on the selected node itself.
+	grant, gerr := db.GetNodeGrant(s.DB, u.ID, nodeID)
+	if gerr != nil {
+		jsonErr(w, http.StatusForbidden, "无权使用该节点")
+		return
+	}
+	hops, derr := s.hopsForNode(nodeID)
+	if derr != nil {
+		jsonErr(w, http.StatusBadRequest, derr.Error())
+		return
+	}
+	oldHops, err := db.ListRuleHops(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Per-node cap only when moving to a different node — the rule already
+	// counts against its current node, so a same-node edit can't exceed it.
+	if nodeID != rl.NodeID {
+		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, nodeID); cnt+1 > grant.MaxForwards {
+			jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
+			return
+		}
+	}
+	// Global per-user quota, adjusted for this rule's existing hop count.
+	if err := s.checkUserRuleQuota(u, len(hops), len(oldHops)); err != nil {
+		jsonErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	rl.NodeID = nodeID
+	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
+	rl.Comment = strings.TrimSpace(body.Comment)
+	tx, err := s.DB.Begin()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if err := db.UpdateRuleHeader(tx, rl); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "rule.user_save", strconv.FormatInt(id, 10), name)
+	s.apiDispatchFanout(affected)
+	jsonOK(w, map[string]any{"ok": true, "entry": entry})
 }
 
 func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {

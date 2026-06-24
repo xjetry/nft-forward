@@ -295,6 +295,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/my", s.apiMyDashboard)
 			r.Get("/my/rules", s.apiMyListRules)
 			r.Post("/my/rules", s.apiMyCreateRule)
+			r.Put("/my/rules/{id}", s.apiMyUpdateRule)
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
 		})
 	})

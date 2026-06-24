@@ -3,13 +3,15 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, CopyText, useConfirm, Select } from '../../components/ui'
+import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm } from '../../components/ui'
+import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
 
 export default function RulesDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [showEdit, setShowEdit] = useState(false)
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -25,6 +27,14 @@ export default function RulesDetail() {
 
   const { rule, hops = [], nodes = [], node_by_id = {} } = data
   const node = node_by_id[rule.node_id]
+
+  const saveEdit = async (form) => {
+    await api.put(`/rules/${rule.id}`, {
+      node_id: Number(form.node_id), name: form.name, proto: form.proto,
+      exit: form.exit, comment: form.comment || undefined,
+    })
+    toast('已保存并重下发'); setShowEdit(false); load()
+  }
 
   const deleteRule = async () => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
@@ -98,17 +108,19 @@ export default function RulesDetail() {
         ) : <Empty title="暂无跳数据" />}
       </div>
 
-      {/* Edit rule */}
-      <EditRuleCard rule={rule} onDone={load} />
-
       {/* Actions */}
       <div className="flex items-center gap-3 flex-wrap mt-5">
+        <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
         <button onClick={deleteRule} className="btn-danger-sm text-xs">删除规则</button>
         <Link to="/rules" className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           返回规则列表
         </Link>
       </div>
+
+      <RuleFormModal
+        open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
+        nodes={nodes} initial={ruleToForm(rule)} onSubmit={saveEdit} />
     </Layout>
   )
 }
@@ -137,45 +149,3 @@ function ReallocateForm({ ruleId, position, onDone }) {
   )
 }
 
-function EditRuleCard({ rule, onDone }) {
-  const [name, setName] = useState(rule.name)
-  const [proto, setProto] = useState(rule.proto)
-  const [exit, setExit] = useState(rule.exit || '')
-  const [comment, setComment] = useState(rule.comment || '')
-  const [saving, setSaving] = useState(false)
-  const toast = useToast()
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setSaving(true)
-    try {
-      await api.put(`/rules/${rule.id}`, { name, proto, exit, comment })
-      toast('已保存并重下发')
-      onDone()
-    } catch (err) { toast(err.message) } finally { setSaving(false) }
-  }
-
-  return (
-    <div className="card mb-5">
-      <div className="card-header"><h3 className="text-sm font-bold">编辑规则</h3></div>
-      <div className="p-5">
-        <form onSubmit={submit} className="space-y-4 max-w-2xl">
-          <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
-            <label className="fl">名称</label>
-            <input className="input-field" value={name} onChange={e => setName(e.target.value)} required />
-            <label className="fl">协议</label>
-            <Select value={proto} onChange={setProto} style={{ maxWidth: 200 }}
-              options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
-            <label className="fl">出口</label>
-            <input className="input-field font-mono" value={exit} onChange={e => setExit(e.target.value)} required placeholder="host:port" />
-            <label className="fl">备注</label>
-            <input className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="可选" />
-          </div>
-          <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
-            <button type="submit" disabled={saving} className="btn-primary">保存并重下发</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
