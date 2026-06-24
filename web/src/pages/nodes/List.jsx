@@ -65,7 +65,7 @@ export default function NodeList() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { nodes = [], server_version } = data || {}
+  const { nodes = [], latest_agent_version } = data || {}
   const singleNodes = nodes.filter(n => n.node_type !== 'composite')
   const compositeNodes = nodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
@@ -117,7 +117,7 @@ export default function NodeList() {
       <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索节点名称…" />
-          {server_version && <span className="text-xs text-ink-mut whitespace-nowrap">server {server_version}</span>}
+          {latest_agent_version && <span className="text-xs text-ink-mut whitespace-nowrap">agent {latest_agent_version}</span>}
           <div className="ml-auto flex gap-2">
             <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">+ 添加节点</button>
             <button onClick={() => setShowComposite(true)} className="btn-primary text-xs">+ 组合节点</button>
@@ -171,7 +171,7 @@ export default function NodeList() {
                   <td><NodeTypeBadge type={n.node_type} /></td>
                   <td className="font-mono text-xs">
                     {n.agent_version ? (
-                      <span className={n.agent_version !== server_version ? 'text-red-600' : ''}>{n.agent_version}</span>
+                      <span className={n.agent_version !== latest_agent_version ? 'text-red-600' : ''}>{n.agent_version}</span>
                     ) : <span className="text-ink-mut">--</span>}
                   </td>
                   <td className="font-mono text-xs text-ink-soft">

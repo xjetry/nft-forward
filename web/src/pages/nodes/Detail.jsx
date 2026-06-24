@@ -33,11 +33,11 @@ export default function NodeDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="节点不存在" /></Layout>
 
-  const { node, panel_url, panel_url_configured, server_version } = data
+  const { node, panel_url, panel_url_configured, latest_agent_version } = data
   const ruleHops = data.rule_hops || []
   const nodeHops = data.node_hops || []
   const isComposite = node.node_type === 'composite'
-  const agentOutdated = node.agent_version && node.agent_version !== server_version
+  const agentOutdated = node.agent_version && node.agent_version !== latest_agent_version
   const up = data.upgrade || { status: 'none' }
   const showUpgrade = up.status !== 'none'
 
@@ -57,7 +57,7 @@ export default function NodeDetail() {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
   }
   const upgrade = async () => {
-    if (!(await confirm({ title: '升级节点', message: '推送 server 二进制到此节点并重启？', confirmText: '升级' }))) return
+    if (!(await confirm({ title: '升级节点', message: '推送 agent 二进制到此节点并重启？', confirmText: '升级' }))) return
     try { await api.post(`/nodes/${id}/upgrade`); toast('已发起升级') } catch (err) { toast(err.message) }
   }
   const toggle = async () => {
@@ -127,7 +127,7 @@ export default function NodeDetail() {
             )}
             <button onClick={remove} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">删除节点</button>
             {!isComposite && agentOutdated && (
-              <button onClick={upgrade} title={`推送升级到 ${server_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {server_version}</button>
+              <button onClick={upgrade} title={`推送升级到 ${latest_agent_version}`} className="inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {latest_agent_version}</button>
             )}
           </div>
         </header>

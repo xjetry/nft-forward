@@ -212,7 +212,7 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL,
-		"server_version": serverVersion(),
+		"latest_agent_version": serverVersion(),
 	})
 }
 
@@ -300,7 +300,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"node": n, "rule_hops": ruleHops, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
-		"server_version":       serverVersion(),
+		"latest_agent_version": serverVersion(),
 		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),
 	}
 
