@@ -17,13 +17,10 @@ type DBTX interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// Rule port allocation range for chain hops (used as fallback when a node has
-// no explicit port_range).
-const (
-	ChainPortMin     = 10001
-	ChainPortMax     = 20000
-	DefaultPortRange = "10001-20000"
-)
+// DefaultPortRange is the fallback chain-hop port range when a node has no
+// explicit port_range. The start/end port picker lives in internal/portutil so
+// the daemon can allocate ports without importing this sqlite-backed package.
+const DefaultPortRange = "10001-20000"
 
 // ParsePortRange parses a composite port spec like "10001-19999,23333,40000-42000"
 // into individual (start, end) segments. A single port becomes (p, p).
@@ -211,24 +208,6 @@ func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeRuleID int64
 // hostPort joins a relay host / exit host with a port for display + targets.
 func hostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
-}
-
-// PickFreePort returns a port in [start,end] not present in used, or 0 when the
-// range is exhausted. A random offset keeps assignment unpredictable so two
-// near-simultaneous allocations don't keep colliding on the same port.
-func PickFreePort(start, end int, used map[int]bool) int {
-	span := end - start + 1
-	if span <= 0 {
-		return 0
-	}
-	offset := rand.Intn(span)
-	for i := 0; i < span; i++ {
-		p := start + ((offset + i) % span)
-		if !used[p] {
-			return p
-		}
-	}
-	return 0
 }
 
 // HopInput is one ordered hop the caller wants the rule to have. Mode is the

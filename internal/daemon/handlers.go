@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nft-forward/internal/db"
 	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/portutil"
 	"nft-forward/internal/wsproto"
 )
 
@@ -491,7 +491,7 @@ func (d *Daemon) pickLocalFreePort(proto string) int {
 			}
 		}
 	}
-	return db.PickFreePort(db.ChainPortMin, db.ChainPortMax, occupied)
+	return portutil.PickFreePort(portutil.ChainPortMin, portutil.ChainPortMax, occupied)
 }
 
 // ownerWriteError is the typed error returned by reconcileOwners so the
