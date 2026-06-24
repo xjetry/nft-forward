@@ -91,6 +91,13 @@ func TestApiUpgradeNodeRecordsError(t *testing.T) {
 
 	s, _ := New(d)
 
+	// Warm the agent artifact cache so the push reaches SendUpgrade without
+	// hitting GitHub (a "dev" test build has no matching release).
+	agentArtMu.Lock()
+	agentArtCache = &agentArtifact{Version: serverVersion(), SHA: "deadbeef", Data: []byte("agent-binary")}
+	agentArtMu.Unlock()
+	defer func() { agentArtMu.Lock(); agentArtCache = nil; agentArtMu.Unlock() }()
+
 	// Node not connected -> SendUpgrade fails -> must be recorded as error.
 	req := httptest.NewRequest("POST", "/api/nodes/"+strconv.FormatInt(n.ID, 10)+"/upgrade", bytes.NewReader([]byte("{}")))
 	req.AddCookie(cookie)

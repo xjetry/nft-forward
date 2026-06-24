@@ -19,7 +19,6 @@ import (
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
 	"nft-forward/internal/resolver"
-	"nft-forward/internal/wsproto"
 )
 
 // --- JSON helpers ---
@@ -537,32 +536,33 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	loadSelfBinary()
-	if selfBinaryErr != nil {
-		jsonErr(w, http.StatusInternalServerError, selfBinaryErr.Error())
+	art, err := s.loadAgentArtifact()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	if panelURL == "" {
 		panelURL = "https://" + r.Host
 	}
-	err = s.Hub.SendUpgrade(id, wsproto.Upgrade{
-		Version: serverVersion(), SHA256: selfBinarySHA,
-		Size: int64(len(selfBinaryBytes)), DownloadAt: panelURL + "/v1/binary",
-		Data: selfBinaryBytes,
-	})
+	err = s.Hub.SendUpgrade(id, upgradeFor(node, art, panelURL))
 	// Record the dispatch outcome so the node detail can surface a silent
 	// failure later (an acked upgrade whose version never takes).
 	status, errText := "acked", ""
 	if err != nil {
 		status, errText = "error", err.Error()
 	}
-	db.RecordUpgradeResult(s.DB, id, serverVersion(), status, errText)
+	db.RecordUpgradeResult(s.DB, id, art.Version, status, errText)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), serverVersion())
+	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), art.Version)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -695,19 +695,14 @@ func (s *Server) apiResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	loadSelfBinary()
-	if selfBinaryErr != nil {
-		jsonErr(w, http.StatusInternalServerError, selfBinaryErr.Error())
+	art, err := s.loadAgentArtifact()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	if panelURL == "" {
 		panelURL = "https://" + r.Host
-	}
-	upgrade := wsproto.Upgrade{
-		Version: serverVersion(), SHA256: selfBinarySHA,
-		Size: int64(len(selfBinaryBytes)), DownloadAt: panelURL + "/v1/binary",
-		Data: selfBinaryBytes,
 	}
 	nodes, err := db.ListNodes(s.DB)
 	if err != nil {
@@ -716,10 +711,12 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var ok, fail int
 	for _, n := range nodes {
-		if n.AgentVersion == serverVersion() {
+		// Already on the target binary: nothing to push (single-node upgrade
+		// still reconciles a stale version label via upgradeFor).
+		if n.AgentSHA != "" && n.AgentSHA == art.SHA {
 			continue
 		}
-		err := s.Hub.SendUpgrade(n.ID, upgrade)
+		err := s.Hub.SendUpgrade(n.ID, upgradeFor(n, art, panelURL))
 		status, errText := "acked", ""
 		if err != nil {
 			status, errText = "error", err.Error()
@@ -727,7 +724,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 		} else {
 			ok++
 		}
-		db.RecordUpgradeResult(s.DB, n.ID, serverVersion(), status, errText)
+		db.RecordUpgradeResult(s.DB, n.ID, art.Version, status, errText)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d fail=%d", ok, fail))
 	jsonOK(w, map[string]any{"ok": true, "upgraded": ok, "failed": fail})
