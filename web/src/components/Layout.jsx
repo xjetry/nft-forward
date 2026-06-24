@@ -108,6 +108,7 @@ export function Layout({ children }) {
                 </NavGroup>
                 <NavGroup label="转发">
                   <SideLink to="/my/rules" icon={<IconForwards />}>我的规则</SideLink>
+                  {user.has_landing_source && <SideLink to="/my/landing" icon={<IconNodes />}>落地节点</SideLink>}
                 </NavGroup>
               </>
             )}

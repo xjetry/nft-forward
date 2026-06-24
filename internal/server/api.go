@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/landing"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/wsproto"
 )
@@ -761,15 +762,34 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		byID[u.ID] = u
 		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
 	}
+	// Per-owner landing index, resolved once per owner (subscriptions are cached
+	// in s.Landing). The admin list only needs the kind badge, so withURI=false
+	// — no relay URI is computed here.
+	idxByOwner := map[int64]map[string]landing.Node{}
+	ownerIndex := func(ownerID int64) map[string]landing.Node {
+		if idx, ok := idxByOwner[ownerID]; ok {
+			return idx
+		}
+		var idx map[string]landing.Node
+		if u := byID[ownerID]; u != nil {
+			idx = landingIndex(s.landingNodesFor(u, false))
+		}
+		idxByOwner[ownerID] = idx
+		return idx
+	}
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
 		oname := ""
+		var idx map[string]landing.Node
 		if rl.OwnerID.Valid {
 			if u := byID[rl.OwnerID.Int64]; u != nil {
 				oname = u.Username
 			}
+			idx = ownerIndex(rl.OwnerID.Int64)
 		}
-		views = append(views, s.buildRuleListItem(rl, oname))
+		item := s.buildRuleListItem(rl, oname)
+		item.classifyExit(idx, false)
+		views = append(views, item)
 	}
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
 }
@@ -909,13 +929,17 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
+	var idx map[string]landing.Node
 	if rl.OwnerID.Valid {
 		if u, e := db.GetUserByID(s.DB, rl.OwnerID.Int64); e == nil {
 			ownerName = u.Username
+			idx = landingIndex(s.landingNodesFor(u, false))
 		}
 	}
+	item := s.buildRuleListItem(rl, ownerName)
+	item.classifyExit(idx, true)
 	jsonOK(w, map[string]any{
-		"rule": s.buildRuleListItem(rl, ownerName), "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
+		"rule": item, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
 }
 
@@ -1151,7 +1175,8 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"user": target, "nodes": grantedNodes,
 		"grants": grants, "all_nodes": allNodes,
-		"rules": rules,
+		"rules":         rules,
+		"landing_nodes": s.landingNodesFor(target, false),
 	})
 }
 
@@ -1439,9 +1464,12 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	idx := landingIndex(s.landingNodesFor(u, false))
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
-		views = append(views, s.buildRuleListItem(rl, ""))
+		item := s.buildRuleListItem(rl, "")
+		item.classifyExit(idx, true)
+		views = append(views, item)
 	}
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	jsonOK(w, map[string]any{
@@ -1465,6 +1493,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Name      string `json:"name"`
 		Proto     string `json:"proto"`
 		Exit      string `json:"exit"`
+		ExitURI   string `json:"exit_uri"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
 	}
@@ -1479,6 +1508,11 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	exitURI, err := normalizeExitURI(body.ExitURI)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1551,6 +1585,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Proto:    proto,
 		ExitHost: exitHost,
 		ExitPort: exitPort,
+		ExitURI:  exitURI,
 		Comment:  strings.TrimSpace(body.Comment),
 	}
 	id, err := db.CreateRule(tx, rl)
@@ -1608,6 +1643,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		Proto   string `json:"proto"`
 		Exit    string `json:"exit"`
+		ExitURI string `json:"exit_uri"`
 		Comment string `json:"comment"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -1621,6 +1657,11 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	exitURI, err := normalizeExitURI(body.ExitURI)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1662,6 +1703,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.NodeID = nodeID
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
+	rl.ExitURI = exitURI
 	rl.Comment = strings.TrimSpace(body.Comment)
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -1743,6 +1785,9 @@ func apiUserFullView(u *db.User) map[string]any {
 	} else {
 		m["disable_reason"] = nil
 	}
+	// Lets the user-side nav decide whether to show the landing-nodes entry
+	// without an extra round-trip.
+	m["has_landing_source"] = hasLandingSource(u)
 	return m
 }
 

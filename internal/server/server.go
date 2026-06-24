@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/landing"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 )
@@ -23,6 +24,7 @@ type Server struct {
 	DB         *sql.DB
 	Hub        *Hub
 	Dispatcher *Dispatcher
+	Landing    *landing.Fetcher
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -31,7 +33,7 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher()}
 	hub.OnTrafficUpdate = s.enforceUserQuota
 	hub.Redispatch = s.redispatchNodes
 	return s, nil
@@ -280,6 +282,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/grants", s.apiGrantNode)
 			r.Delete("/users/{id}/grants/{nodeID}", s.apiRevokeNode)
 			r.Post("/users/{id}/quota", s.apiSetUserQuota)
+			r.Post("/users/{id}/landing", s.apiSetUserLanding)
 			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
 			r.Post("/users/{id}/reset-traffic", s.apiResetUserTraffic)
 
@@ -293,6 +296,7 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth, s.requireRole("user"))
 			r.Get("/my", s.apiMyDashboard)
+			r.Get("/my/landing-nodes", s.apiMyLandingNodes)
 			r.Get("/my/rules", s.apiMyListRules)
 			r.Post("/my/rules", s.apiMyCreateRule)
 			r.Put("/my/rules/{id}", s.apiMyUpdateRule)

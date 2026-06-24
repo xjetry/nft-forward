@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/landing"
 )
 
 // ruleView is the per-rule row the list/detail API renders.
@@ -43,6 +44,17 @@ type ruleListItem struct {
 	Entry       string `json:"entry"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
+	// ExitKind is "landing" when the exit host:port matches one of the owner's
+	// landing nodes, else "custom". LandingURI is the original (direct) proxy
+	// URI; RelayURI is that URI with its host:port rewritten to the rule's entry
+	// endpoint, so a client dials the relay instead of the landing directly.
+	// RelayURI is populated only where the copy action is offered (detail and
+	// the user's own list), and for custom exits only when the rule carries an
+	// exit_uri.
+	ExitKind    string `json:"exit_kind"`
+	LandingName string `json:"landing_name,omitempty"`
+	LandingURI  string `json:"landing_uri,omitempty"`
+	RelayURI    string `json:"relay_uri,omitempty"`
 }
 
 // nodeHopView adds the resolved child node name to a composite node's hop so
@@ -56,6 +68,44 @@ type nodeHopView struct {
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
 	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
+}
+
+// classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to
+// the owner's landing nodes; withURI controls whether the copyable relay URI is
+// computed (skipped for the admin list, which only shows the kind badge).
+func (it *ruleListItem) classifyExit(idx map[string]landing.Node, withURI bool) {
+	it.ExitKind = "custom"
+	relayHost, relayPort, entryOK := splitEntry(it.Entry)
+	if node, ok := idx[it.Exit]; ok {
+		it.ExitKind = "landing"
+		it.LandingName = node.Name
+		it.LandingURI = node.URI
+		if withURI && entryOK {
+			if u, err := landing.RewriteEndpoint(node.URI, relayHost, relayPort); err == nil {
+				it.RelayURI = u
+			}
+		}
+		return
+	}
+	if withURI && entryOK && strings.TrimSpace(it.Rule.ExitURI) != "" {
+		if u, err := landing.RewriteEndpoint(it.Rule.ExitURI, relayHost, relayPort); err == nil {
+			it.RelayURI = u
+		}
+	}
+}
+
+// splitEntry parses a "host:port" entry string; entry is "—" before the rule's
+// first regeneration, which fails the split and reports ok=false.
+func splitEntry(entry string) (host string, port int, ok bool) {
+	h, p, err := net.SplitHostPort(entry)
+	if err != nil {
+		return "", 0, false
+	}
+	pp, err := strconv.Atoi(p)
+	if err != nil {
+		return "", 0, false
+	}
+	return h, pp, true
 }
 
 // validRuleProto reports whether proto is an accepted forward protocol. tcp+udp
@@ -84,6 +134,21 @@ func parseExit(raw string) (string, int, error) {
 		return "", 0, fmt.Errorf("出口地址不能为空")
 	}
 	return host, port, nil
+}
+
+// normalizeExitURI trims an optional custom-exit proxy URI and verifies it
+// parses. Empty is allowed (no proxy URI for this exit); a non-empty value that
+// doesn't parse is rejected so the user fixes the typo at save time rather than
+// silently losing the copy-relay-URI action.
+func normalizeExitURI(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if len(landing.ParseURIs([]string{raw})) == 0 {
+		return "", fmt.Errorf("代理 URI 无法解析")
+	}
+	return raw, nil
 }
 
 func validateCIDRList(s string) error {

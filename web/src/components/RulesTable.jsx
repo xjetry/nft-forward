@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ProtoBadge, SensText, CopyText, Tooltip, ProbeChainButton } from './ui'
+import { ProtoBadge, SensText, CopyText, Tooltip, ProbeChainButton, ExitKindBadge } from './ui'
 import { fmtBytes } from '../lib/fmt'
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
@@ -87,8 +87,14 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
                 {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
               </td>
-              <td className="font-mono text-xs text-ink-soft">
-                <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
+              <td className="font-mono text-xs text-ink-soft" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <ExitKindBadge kind={r.exit_kind} />
+                  <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
+                  {r.relay_uri && (
+                    <CopyText text={r.relay_uri}><span className="text-blue-600 font-sans">复制代理URI</span></CopyText>
+                  )}
+                </div>
               </td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
               {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}

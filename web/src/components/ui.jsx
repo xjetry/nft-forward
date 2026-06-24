@@ -71,6 +71,14 @@ export function NodeTypeBadge({ type }) {
   return <Badge color="green">{nodeTypeIcon.single}单点</Badge>
 }
 
+/* ---------- ExitKindBadge ---------- */
+// Distinguishes a landing-node exit (resolved from the user's subscription)
+// from a custom host:port exit.
+export function ExitKindBadge({ kind }) {
+  if (kind === 'landing') return <Badge color="blue">落地</Badge>
+  return <Badge color="gray">自定义</Badge>
+}
+
 /* ---------- ProtoBadge ---------- */
 export function ProtoBadge({ proto }) {
   if (!proto) return null

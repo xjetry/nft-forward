@@ -9,6 +9,7 @@ import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFor
 export default function MyRules() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [landingNodes, setLandingNodes] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState(null)
   const [editRule, setEditRule] = useState(null)
@@ -20,6 +21,7 @@ export default function MyRules() {
   const load = () => {
     setLoading(true)
     api.get('/my/rules').then(setData).catch(console.error).finally(() => setLoading(false))
+    api.get('/my/landing-nodes').then(d => setLandingNodes(d?.nodes || [])).catch(console.error)
   }
   useEffect(load, [])
 
@@ -63,22 +65,22 @@ export default function MyRules() {
 
       <RuleFormModal
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
-        nodes={nodes} initial={createInitial}
+        nodes={nodes} landingNodes={landingNodes} initial={createInitial}
         onSubmit={async (form) => {
           await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, comment: form.comment || undefined,
+            exit: form.exit, exit_uri: form.exit_uri || undefined, comment: form.comment || undefined,
           })
           toast('规则已创建'); setCreateOpen(false); load()
         }} />
 
       <RuleFormModal
         open={!!editRule} onClose={() => setEditRule(null)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} initial={editRule ? ruleToForm(editRule) : null}
+        nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null}
         onSubmit={async (form) => {
           await api.put(`/my/rules/${editRule.id}`, {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, comment: form.comment || undefined,
+            exit: form.exit, exit_uri: form.exit_uri || undefined, comment: form.comment || undefined,
           })
           toast('已保存并重下发'); setEditRule(null); load()
         }} />

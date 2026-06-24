@@ -19,6 +19,11 @@ type User struct {
 	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
 	ExpiresAt         sql.NullInt64  `json:"expires_at"`
+	// LandingSubURL is an optional subscription URL; LandingURIs is an optional
+	// newline-separated list of proxy URIs. They combine into the user's set of
+	// landing nodes (see internal/landing). Both empty means no landing source.
+	LandingSubURL string `json:"landing_sub_url"`
+	LandingURIs   string `json:"landing_uris"`
 	// RuleCount is not a users-table column; it is filled by FillUserRuleCounts
 	// so the user list can show used/total rule quota.
 	RuleCount int `json:"rule_count"`
@@ -56,6 +61,7 @@ type Rule struct {
 	Proto           string        `json:"proto"`
 	ExitHost        string        `json:"exit_host"`
 	ExitPort        int           `json:"exit_port"`
+	ExitURI         string        `json:"exit_uri"`
 	EntryListenPort int           `json:"entry_listen_port"`
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
@@ -104,14 +110,14 @@ func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
 func scanUser(r rowScanner) (*User, error) {
 	u := &User{}
 	var disabled int
-	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.ExpiresAt); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs); err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
 	return u, nil
 }
 
-const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, expires_at`
+const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, expires_at, landing_sub_url, landing_uris`
 
 func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
@@ -143,6 +149,13 @@ func CountUsers(d *sql.DB) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM users`)
 }
 
+// SetUserLandingSource stores a user's landing-node source. Either argument may
+// be empty; both empty means the user has no landing source configured.
+func SetUserLandingSource(d *sql.DB, id int64, subURL, uris string) error {
+	_, err := d.Exec(`UPDATE users SET landing_sub_url=?, landing_uris=? WHERE id=?`, subURL, uris, id)
+	return err
+}
+
 // UsersByID returns all users keyed by ID in a single query.
 func UsersByID(d *sql.DB) (map[int64]*User, error) {
 	all, err := ListUsers(d)
@@ -168,7 +181,7 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
-const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.expires_at`
+const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.expires_at, u.landing_sub_url, u.landing_uris`
 
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
@@ -366,12 +379,12 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,exit_uri,entry_listen_port,comment,disabled,created_at`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.ExitURI, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1

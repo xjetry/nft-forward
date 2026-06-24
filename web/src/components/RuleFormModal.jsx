@@ -2,21 +2,37 @@ import { useState, useEffect } from 'react'
 import { Modal, Select } from './ui'
 import { useToast } from './Layout'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', comment: '' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_uri: '', exit_kind: 'custom', comment: '' }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
    layout. The parent owns the API call via onSubmit(form) -> Promise (it knows
    create vs edit and admin vs user endpoint); this component only manages form
    state, the single/composite node grouping and validation. `initial` seeds the
-   fields for edit/copy prefills and is re-applied every time the modal opens. */
-export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], initial, onSubmit }) {
+   fields for edit/copy prefills and is re-applied every time the modal opens.
+
+   When `landingNodes` is provided (the user side passes the parsed landing-node
+   list, even when empty), the exit gains a custom/landing toggle: a landing
+   exit picks a node's host:port from the subscription, a custom exit takes a
+   host:port plus an optional proxy URI so the rules page can offer a relay URI.
+   Admin callers omit the prop and keep the plain host:port box. */
+export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit }) {
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const toast = useToast()
 
+  const landingEnabled = Array.isArray(landingNodes)
+
   useEffect(() => {
-    if (open) setForm({ ...EMPTY, ...(initial || {}) })
+    if (!open) return
+    const seed = { ...EMPTY, ...(initial || {}) }
+    // A landing exit whose node no longer resolves falls back to custom so its
+    // host:port stays editable instead of showing an empty picker.
+    if (seed.exit_kind === 'landing' && landingEnabled &&
+        !landingNodes.some(n => `${n.host}:${n.port}` === seed.exit)) {
+      seed.exit_kind = 'custom'
+    }
+    setForm(seed)
   }, [open])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -24,9 +40,12 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   const submit = async (e) => {
     e.preventDefault()
     if (!form.node_id) { toast('请选择节点'); return }
+    if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择落地节点'); return }
     setLoading(true)
     try {
-      await onSubmit(form)
+      // A landing exit is reference-based — its proxy URI is resolved at view
+      // time, so never persist an exit_uri for it.
+      await onSubmit({ ...form, exit_uri: form.exit_kind === 'landing' ? '' : form.exit_uri })
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
@@ -34,6 +53,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
     { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
   ]
+
+  const landingOptions = (landingNodes || []).map(n => ({
+    value: `${n.host}:${n.port}`,
+    label: `${n.name || '(未命名)'} — ${n.host}:${n.port}`,
+  }))
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
@@ -46,8 +70,45 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
           <label className="fl">协议</label>
           <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
             options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
-          <label className="fl">出口</label>
-          <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+
+          {landingEnabled ? (
+            <>
+              <label className="fl">出口类型</label>
+              <div className="inline-flex rounded-lg border border-line overflow-hidden w-fit text-xs">
+                {[['custom', '自定义'], ['landing', '落地节点']].map(([k, lbl]) => (
+                  <button key={k} type="button" onClick={() => set('exit_kind', k)}
+                    className={`px-3.5 py-1.5 font-semibold transition-colors ${form.exit_kind === k ? 'bg-blue-600 text-white' : 'bg-surface text-ink-soft hover:bg-raised'}`}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+
+              {form.exit_kind === 'landing' ? (
+                <>
+                  <label className="fl">落地节点</label>
+                  {landingOptions.length ? (
+                    <Select value={form.exit} onChange={v => set('exit', v)} placeholder="-- 选择落地节点 --" searchable options={landingOptions} />
+                  ) : (
+                    <div className="text-xs text-ink-mut">尚无可用落地节点，请联系管理员配置订阅地址。</div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <label className="fl">出口</label>
+                  <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+                  <label className="fl">代理 URI <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
+                  <input className="input-field font-mono" value={form.exit_uri} onChange={e => set('exit_uri', e.target.value)}
+                    placeholder="vless://… 填写后可在规则页复制中转 URI" />
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <label className="fl">出口</label>
+              <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+            </>
+          )}
+
           <label className="fl">备注 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field" value={form.comment} onChange={e => set('comment', e.target.value)} placeholder="备注" />
         </div>
@@ -60,9 +121,9 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   )
 }
 
-/* Map a rule into the form's five editable fields. The rule-list row carries
-   split exit_host/exit_port; the detail view a combined exit string — accept
-   either. Used to seed the edit modal. */
+/* Map a rule into the form's editable fields. The rule-list row carries split
+   exit_host/exit_port; the detail view a combined exit string — accept either.
+   exit_kind/exit_uri come from the API so edit prefills the right exit mode. */
 export function ruleToForm(rule) {
   const exit = rule.exit != null ? rule.exit
     : (rule.exit_host && rule.exit_port ? `${rule.exit_host}:${rule.exit_port}` : '')
@@ -71,6 +132,8 @@ export function ruleToForm(rule) {
     name: rule.name,
     proto: rule.proto,
     exit,
+    exit_uri: rule.exit_uri || '',
+    exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
     comment: rule.comment || '',
   }
 }

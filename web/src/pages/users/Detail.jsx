@@ -23,7 +23,7 @@ export default function UserDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="用户不存在" /></Layout>
 
-  const { user, nodes = [], grants = [], all_nodes = [], rules = [] } = data
+  const { user, nodes = [], grants = [], all_nodes = [], rules = [], landing_nodes = [] } = data
 
   const isRegularUser = user.role === 'user'
 
@@ -120,6 +120,11 @@ export default function UserDetail() {
         </div>
       )}
 
+      {/* Landing-node source (regular users only) */}
+      {isRegularUser && (
+        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} onDone={load} />
+      )}
+
       {/* Rules */}
       <div className="card mb-5">
         <div className="card-header">
@@ -211,6 +216,69 @@ function QuotaForm({ userId, quotaBytes, onDone }) {
       <span className="text-xs text-ink-mut">GB</span>
       <button type="submit" className="btn-secondary text-xs">设配额</button>
     </form>
+  )
+}
+
+// LandingSourceForm edits a user's landing-node source: a subscription URL
+// and/or a list of manual proxy URIs (one per line); the two combine. Saving
+// returns a fresh preview of the resolved nodes.
+function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
+  const [url, setUrl] = useState(subURL || '')
+  const [text, setText] = useState(uris || '')
+  const [preview, setPreview] = useState(nodes || [])
+  const [loading, setLoading] = useState(false)
+  const toast = useToast()
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const d = await api.post(`/users/${userId}/landing`, { landing_sub_url: url.trim(), landing_uris: text })
+      setPreview(d?.landing_nodes || [])
+      toast('已保存'); onDone()
+    } catch (err) { toast(err.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <div className="card mb-5">
+      <div className="card-header">
+        <h3 className="text-sm font-bold">落地节点来源</h3>
+        <span className="text-xs text-ink-mut">{preview.length} 个节点</span>
+      </div>
+      <div className="p-5">
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="fl block mb-1.5">订阅地址 <span className="text-ink-mut font-normal text-xs">(可选，任意面板的订阅链接)</span></label>
+            <input className="input-field font-mono w-full" value={url} onChange={e => setUrl(e.target.value)}
+              placeholder="https://example.com/api/sub/xxxx" />
+          </div>
+          <div>
+            <label className="fl block mb-1.5">手动节点 URI <span className="text-ink-mut font-normal text-xs">(可选，每行一条，可与订阅组合)</span></label>
+            <textarea className="input-field font-mono w-full" rows={4} value={text} onChange={e => setText(e.target.value)}
+              placeholder={'vless://…\ntrojan://…'} />
+          </div>
+          <button type="submit" disabled={loading} className="btn-primary text-xs">保存</button>
+        </form>
+
+        {preview.length > 0 && (
+          <div className="mt-4 border-t border-line-soft pt-4">
+            <div className="text-xs font-bold text-ink-mut uppercase tracking-wider mb-2">解析出的落地节点</div>
+            <table className="tbl">
+              <thead><tr><th>名称</th><th>协议</th><th>地址</th></tr></thead>
+              <tbody>
+                {preview.map((n, i) => (
+                  <tr key={i}>
+                    <td className="font-semibold">{n.name || '(未命名)'}</td>
+                    <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
+                    <td className="font-mono text-xs">{n.host}:{n.port}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
