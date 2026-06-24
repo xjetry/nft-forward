@@ -179,9 +179,18 @@ export default function NodeList() {
                   </td>
                   <td><NodeStatus node={n} /></td>
                   <td className="text-right whitespace-nowrap">
-                    <button onClick={() => toggleHidden(n)} title={n.hidden ? '在节点列表与规则列表中显示' : '从节点列表与规则列表中隐藏（不影响转发）'} className="btn-secondary text-xs mr-1.5">{n.hidden ? '显示' : '隐藏'}</button>
-                    {n.node_type !== 'composite' && <button onClick={() => resyncNode(n.id)} className="btn-secondary text-xs mr-1.5">重新同步</button>}
-                    <button onClick={() => deleteNode(n)} className="btn-danger-sm text-xs">删除</button>
+                    <div className="flex gap-2 justify-end">
+                      <button onClick={() => toggleHidden(n)} title={n.hidden ? '显示' : '隐藏'} className="icon-btn">
+                        {n.hidden ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/></svg>}
+                      </button>
+                      {n.node_type !== 'composite' && <button onClick={() => resyncNode(n.id)} title="重新同步" className="icon-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                      </button>}
+                      <button onClick={() => deleteNode(n)} title="删除" className="icon-btn-danger">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

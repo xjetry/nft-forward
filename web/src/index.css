@@ -70,6 +70,22 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 }
 .btn-danger-sm:hover { background: color-mix(in srgb, var(--color-red-500) 18%, transparent); }
 
+/* Icon button (34×34 square) */
+.icon-btn {
+  @apply w-[34px] h-[34px] inline-flex items-center justify-center rounded-lg transition-colors cursor-pointer;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  color: var(--color-ink-soft);
+}
+.icon-btn:hover { color: var(--color-ink); border-color: var(--color-ink-mut); }
+.icon-btn-danger {
+  @apply w-[34px] h-[34px] inline-flex items-center justify-center rounded-lg transition-colors cursor-pointer;
+  background: rgba(244,63,94,.08);
+  border: 1px solid rgba(244,63,94,.3);
+  color: #fb7185;
+}
+.icon-btn-danger:hover { background: rgba(244,63,94,.15); }
+
 /* Card */
 .card {
   @apply rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)];

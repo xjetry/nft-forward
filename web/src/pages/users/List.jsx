@@ -81,13 +81,20 @@ export default function UserList() {
                       {isSelf ? (
                         <span className="text-xs text-ink-mut">(当前用户)</span>
                       ) : (
-                        <>
-                          <Link to={`/users/${u.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>
-                          <button onClick={() => toggleUser(u)} className="btn-secondary text-xs mr-1.5">{u.disabled ? '启用' : '禁用'}</button>
-                          {/* Admin accounts can't be reset or deleted. */}
-                          {u.role !== 'admin' && <button onClick={() => resetPassword(u)} className="btn-secondary text-xs mr-1.5">重置密码</button>}
-                          {u.role !== 'admin' && <button onClick={() => deleteUser(u)} className="btn-danger-sm text-xs">删除</button>}
-                        </>
+                        <div className="flex gap-2 justify-end">
+                          <Link to={`/users/${u.id}`} title="详情" className="icon-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                          </Link>
+                          <button onClick={() => toggleUser(u)} title={u.disabled ? '启用' : '禁用'} className="icon-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>
+                          </button>
+                          {u.role !== 'admin' && <button onClick={() => resetPassword(u)} title="重置密码" className="icon-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.6-9.6"/><path d="m15.5 7.5 3 3"/><path d="m18 5 2.5 2.5"/></svg>
+                          </button>}
+                          {u.role !== 'admin' && <button onClick={() => deleteUser(u)} title="删除" className="icon-btn-danger">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                          </button>}
+                        </div>
                       )}
                     </td>
                   </tr>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ProtoBadge, SensText, CopyText, Tooltip, ProbeChainButton, ExitKindBadge } from './ui'
+import { ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
 import { fmtBytes } from '../lib/fmt'
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
@@ -103,11 +103,13 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
               {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                <span className="inline-flex items-center align-middle mr-1.5"><ProbeChainButton ruleId={r.id} /></span>
-                {isAdmin && <Link to={`/rules/${r.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>}
-                {onEdit && <button onClick={() => onEdit(r)} className="btn-secondary text-xs mr-1.5">编辑</button>}
-                {onCopy && <button onClick={() => onCopy(r)} className="btn-secondary text-xs mr-1.5">复制</button>}
-                <button onClick={() => onDelete(r)} className="btn-danger-sm text-xs">删除</button>
+                <div className="flex gap-2 justify-end">
+                  <ProbeIconButton ruleId={r.id} />
+                  {isAdmin && <Link to={`/rules/${r.id}`} title="详情" className="icon-btn"><IconEye /></Link>}
+                  {onEdit && <button onClick={() => onEdit(r)} title="编辑" className="icon-btn"><IconPencil /></button>}
+                  {onCopy && <button onClick={() => onCopy(r)} title="复制" className="icon-btn"><IconCopy /></button>}
+                  <button onClick={() => onDelete(r)} title="删除" className="icon-btn-danger"><IconTrash /></button>
+                </div>
               </td>
             </tr>
           )
@@ -116,3 +118,33 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
     </table>
   )
 }
+
+function ProbeIconButton({ ruleId }) {
+  const [state, setState] = useState('idle')
+  const [result, setResult] = useState('')
+  const probe = () => {
+    setState('loading')
+    fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json()).then(d => {
+      if (d.hops?.length) {
+        const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
+        setState(d.ok ? 'ok' : 'fail')
+        setResult(parts.join('+') + '=' + d.latency_ms + 'ms')
+      } else if (d.ok) { setState('ok'); setResult(d.latency_ms + 'ms') }
+      else { setState('fail'); setResult(d.error || '不通') }
+    }).catch(() => { setState('fail'); setResult('失败') })
+  }
+  const title = state === 'ok' ? result : state === 'fail' ? result : '测试连通性'
+  return (
+    <button onClick={probe} disabled={state === 'loading'} title={title}
+      className={`icon-btn ${state === 'ok' ? '!text-green-500 !border-green-500/30' : state === 'fail' ? '!text-red-400 !border-red-500/30' : ''}`}>
+      {state === 'loading' ? <Spinner className="w-4 h-4" /> : <IconPulse />}
+    </button>
+  )
+}
+
+const I = (d) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
+function IconPulse() { return I(<path d="M22 12h-4l-3 9L9 3l-3 9H2" />) }
+function IconEye() { return I(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>) }
+function IconPencil() { return I(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>) }
+function IconCopy() { return I(<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>) }
+function IconTrash() { return I(<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6" /><path d="M14 11v6" /></>) }
