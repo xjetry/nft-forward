@@ -88,7 +88,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		SELECT `+nodeCols+`,
 		       g.max_forwards, g.granted_at
 		FROM nodes n JOIN user_nodes g ON g.node_id = n.id
-		WHERE g.user_id = ? ORDER BY n.id`, userID)
+		WHERE g.user_id = ? ORDER BY n.sort_order, n.id`, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -109,7 +109,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&lastSeen, &n.LastApplyAt, &n.LastError,
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-			&hidden,
+			&hidden, &n.SortOrder,
 			&g.MaxForwards, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err

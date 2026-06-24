@@ -85,8 +85,9 @@ export default function UserDetail() {
             {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
-            <button onClick={resetPassword} className="btn-secondary text-xs">重置密码</button>
-            <button onClick={deleteUser} className="btn-danger-sm text-xs">删除用户</button>
+            {/* Admin accounts can't be reset or deleted here. */}
+            {isRegularUser && <button onClick={resetPassword} className="btn-secondary text-xs">重置密码</button>}
+            {isRegularUser && <button onClick={deleteUser} className="btn-danger-sm text-xs">删除用户</button>}
           </div>
         </div>
       </div>

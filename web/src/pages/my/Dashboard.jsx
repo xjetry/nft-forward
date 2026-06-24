@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
@@ -57,7 +56,6 @@ export default function MyDashboard() {
       <div className="card">
         <div className="card-header">
           <h3 className="text-sm font-bold">已授权节点</h3>
-          <Link to="/my/rules" className="btn-secondary text-xs ml-auto">前往「我的规则」</Link>
         </div>
         {nodes.length ? (
           <table className="tbl">

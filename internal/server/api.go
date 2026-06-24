@@ -657,6 +657,25 @@ func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// apiReorderNodes persists the manual node display order from a drag-and-drop
+// reorder in the admin node list.
+func (s *Server) apiReorderNodes(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := db.ReorderNodes(s.DB, body.IDs); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.reorder", "", "")
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, err := db.ListNodes(s.DB)
 	if err != nil {
@@ -1396,8 +1415,13 @@ func (s *Server) apiResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if _, err := db.GetUserByID(s.DB, id); err != nil {
+	target, err := db.GetUserByID(s.DB, id)
+	if err != nil {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if target.Role == "admin" {
+		jsonErr(w, http.StatusForbidden, "不支持重置管理员密码")
 		return
 	}
 	newPw := db.RandToken(8)
@@ -1426,8 +1450,13 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "不能删除自己")
 		return
 	}
-	if _, err := db.GetUserByID(s.DB, id); err != nil {
+	target, err := db.GetUserByID(s.DB, id)
+	if err != nil {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if target.Role == "admin" {
+		jsonErr(w, http.StatusForbidden, "不支持删除管理员")
 		return
 	}
 	affected, err := db.DeleteRulesForUser(s.DB, id)

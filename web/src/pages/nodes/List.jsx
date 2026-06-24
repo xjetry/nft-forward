@@ -14,6 +14,7 @@ export default function NodeList() {
   const [panelUrl, setPanelUrl] = useState('')
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('single')
+  const [dragIndex, setDragIndex] = useState(null)
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -61,6 +62,23 @@ export default function NodeList() {
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
   const q = search.trim().toLowerCase()
   const filtered = !q ? tabNodes : tabNodes.filter(n => (n.name || '').toLowerCase().includes(q))
+  // Drag-reorder is only offered on the unfiltered view so row indices line up
+  // with tabNodes. Persisting sends the full id order (the reordered tab plus
+  // the other tab in its current order) so sort_order stays a clean sequence.
+  const draggable = !q
+  const onDrop = async (toIndex) => {
+    if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
+    const list = [...tabNodes]
+    const [moved] = list.splice(dragIndex, 1)
+    list.splice(toIndex, 0, moved)
+    setDragIndex(null)
+    const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
+    const tabIds = list.map(n => n.id)
+    const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
+    const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
+    setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
+    try { await api.post('/nodes/reorder', { ids: allIds }); toast('顺序已保存') } catch (err) { toast(err.message); load() }
+  }
 
   return (
     <Layout>
@@ -112,9 +130,16 @@ export default function NodeList() {
           <table className="tbl">
             <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
             <tbody>
-              {filtered.map(n => (
-                <tr key={n.id}>
-                  <td className="font-mono text-xs text-ink-mut">#{n.id}</td>
+              {filtered.map((n, i) => (
+                <tr key={n.id}
+                  draggable={draggable}
+                  onDragStart={draggable ? () => setDragIndex(i) : undefined}
+                  onDragOver={draggable ? e => e.preventDefault() : undefined}
+                  onDrop={draggable ? () => onDrop(i) : undefined}
+                  className={`${draggable ? 'cursor-move' : ''} ${dragIndex === i ? 'opacity-50' : ''}`}>
+                  <td className="font-mono text-xs text-ink-mut">
+                    {draggable && <span className="text-ink-mut mr-1 select-none" title="拖拽排序">⠿</span>}#{n.id}
+                  </td>
                   <td>
                     <span className="inline-flex items-center gap-2 font-semibold">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />

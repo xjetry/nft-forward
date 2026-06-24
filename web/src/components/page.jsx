@@ -27,7 +27,7 @@ export function Panel({ children, className = '', fill = false }) {
    scroll, while the sticky table header (and the Panel toolbar above) stay
    fixed. */
 export function TableScroll({ children }) {
-  return <div className="flex-1 min-h-0 overflow-auto">{children}</div>
+  return <div className="table-scroll flex-1 min-h-0 overflow-auto">{children}</div>
 }
 
 /* Toolbar row inside a Panel — typically a SearchInput plus a primary action. */

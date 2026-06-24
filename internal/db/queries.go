@@ -46,6 +46,7 @@ type Node struct {
 	Hidden       bool         `json:"hidden"`
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
 	PortRange    string       `json:"port_range"`
+	SortOrder    int64        `json:"sort_order"`
 	CreatedAt    int64        `json:"created_at"`
 	LastUpgradeAt      sql.NullInt64 `json:"last_upgrade_at"`
 	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
@@ -222,7 +223,8 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	if secret == "" {
 		secret = RandToken(32)
 	}
-	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, created_at) VALUES (?,?,?,?)`,
+	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, sort_order, created_at)
+		VALUES (?,?,?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
 		name, address, secret, now())
 	if err != nil {
 		return nil, err
@@ -231,7 +233,9 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden`
+// NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
+// columns in this exact order — keep all three in lockstep when adding a column.
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -253,7 +257,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-		&hidden,
+		&hidden, &n.SortOrder,
 	); err != nil {
 		return nil, err
 	}
@@ -281,7 +285,24 @@ func scanNode(r rowScanner) (*Node, error) {
 }
 
 func ListNodes(d *sql.DB) ([]*Node, error) {
-	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY id`, scanNode)
+	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY sort_order, id`, scanNode)
+}
+
+// ReorderNodes assigns sort_order to match the given id sequence (1-based).
+// IDs absent from the list keep their previous order value, so a partial list
+// still places the listed nodes ahead in the given order.
+func ReorderNodes(d *sql.DB, ids []int64) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE nodes SET sort_order=? WHERE id=?`, i+1, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ResolveCompositeOnline derives the Online field of composite nodes from their

@@ -84,8 +84,9 @@ export default function UserList() {
                         <>
                           <Link to={`/users/${u.id}`} className="btn-secondary text-xs mr-1.5">详情</Link>
                           <button onClick={() => toggleUser(u)} className="btn-secondary text-xs mr-1.5">{u.disabled ? '启用' : '禁用'}</button>
-                          <button onClick={() => resetPassword(u)} className="btn-secondary text-xs mr-1.5">重置密码</button>
-                          <button onClick={() => deleteUser(u)} className="btn-danger-sm text-xs">删除</button>
+                          {/* Admin accounts can't be reset or deleted. */}
+                          {u.role !== 'admin' && <button onClick={() => resetPassword(u)} className="btn-secondary text-xs mr-1.5">重置密码</button>}
+                          {u.role !== 'admin' && <button onClick={() => deleteUser(u)} className="btn-danger-sm text-xs">删除</button>}
                         </>
                       )}
                     </td>

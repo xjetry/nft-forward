@@ -262,6 +262,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/toggle", s.apiToggleNode)
 			r.Post("/nodes/{id}/hidden", s.apiToggleNodeHidden)
 			r.Post("/nodes/{id}/owner", s.apiUpdateNodeOwner)
+			r.Post("/nodes/reorder", s.apiReorderNodes)
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
