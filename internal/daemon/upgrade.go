@@ -30,7 +30,8 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	if len(u.Data) == 0 && u.DownloadAt == "" {
 		if u.SHA256 != "" && u.SHA256 == agentSHA() {
 			writeAgentIdentity(u.Version, u.SHA256)
-			log.Printf("upgrade: already on sha %s, recorded version=%s (no restart)", u.SHA256, u.Version)
+			log.Printf("upgrade: already on sha %s, recorded version=%s — restarting to pick up label", u.SHA256, u.Version)
+			go restartSelf()
 			return wsproto.UpgradeAck{OK: true}
 		}
 		return wsproto.UpgradeAck{Error: "binary sha mismatch; full push required"}
