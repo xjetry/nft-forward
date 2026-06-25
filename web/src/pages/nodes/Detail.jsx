@@ -270,7 +270,7 @@ export default function NodeDetail() {
                     </td>
                     <td className="text-xs whitespace-nowrap">
                       {rh.total_hops > 1
-                        ? <span className="text-purple-600 font-semibold">组合 {rh.position + 1}/{rh.total_hops}</span>
+                        ? <Link to={`/nodes/${rh.rule_node_id}`} className="text-purple-600 font-semibold hover:underline">组合 {rh.position + 1}/{rh.total_hops}</Link>
                         : <span className="text-ink-mut">单点</span>}
                     </td>
                     <td><ProtoBadge proto={rh.proto} /></td>

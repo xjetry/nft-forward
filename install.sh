@@ -55,7 +55,7 @@ EOF
 }
 
 write_server_unit() {
-  local addr="${1:-:8080}"
+  local addr="${1:-:7788}"
   cat >"$SYSTEMD_DIR/nft-forward-server.service" <<EOF
 [Unit]
 Description=nft-forward web panel
@@ -242,7 +242,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
 选项 / 环境变量:
   --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
-  --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :8080
+  --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :7788
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
   --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；
                                    留空 = 直连。安装时持久化，后续自升级自动沿用
@@ -613,7 +613,13 @@ case "$mode" in
     [[ -n "$token" ]] || die "agent 模式需要 --token 或 AGENT_TOKEN"
     ;;
   server)
-    addr="${addr:-${PANEL_ADDR:-:8080}}"
+    if [[ -z "$addr" && -z "${PANEL_ADDR:-}" && -t 0 ]]; then
+      read -rp "面板绑定端口（直接回车使用默认 7788）: " _port
+      _port="${_port:-7788}"
+      addr=":$_port"
+    else
+      addr="${addr:-${PANEL_ADDR:-:7788}}"
+    fi
     ;;
   uninstall)
     if [[ -z "${UNINSTALL_TARGET:-}" && -t 0 ]]; then
@@ -719,15 +725,25 @@ EOF
     systemctl enable --now nft-forward-daemon.service
     systemctl enable --now nft-forward-server.service
     sleep 2
-    cat <<EOF
-
-$(ok "===== Server 安装完成 =====")
-面板:        http://$primary_ip$addr
-daemon unit: nft-forward-daemon.service (nft-agent daemon)
-server unit: nft-forward-server.service (nft-server)
-首次启动的 admin 密码: journalctl -u nft-forward-server.service | grep 密 \
-  （或查看 server 启动日志）
-EOF
+    local _admin_pw=""
+    _admin_pw="$(journalctl -u nft-forward-server.service --since '30 seconds ago' --no-pager -o cat 2>/dev/null \
+                 | sed -n 's/.*密  码: *//p' | head -1)"
+    echo ""
+    ok "===== Server 安装完成 ====="
+    echo "面板:        http://$primary_ip$addr"
+    echo "daemon unit: nft-forward-daemon.service (nft-agent daemon)"
+    echo "server unit: nft-forward-server.service (nft-server)"
+    if [[ -n "$_admin_pw" ]]; then
+      echo ""
+      echo "管理员账号:  admin"
+      echo "管理员密码:  $_admin_pw"
+      echo ""
+      echo "请妥善保存密码！可通过面板修改或 install.sh reset-password 重置。"
+    else
+      echo ""
+      echo "非首次安装，admin 密码沿用之前设置的密码。"
+      echo "如需重置: sudo $0 reset-password"
+    fi
     ;;
 
   agent)

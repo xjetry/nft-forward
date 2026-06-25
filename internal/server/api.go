@@ -299,24 +299,28 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 
 	type ruleHopView struct {
 		*db.RuleHop
-		TotalHops int    `json:"total_hops"`
-		NodeType  string `json:"node_type"`
+		TotalHops  int    `json:"total_hops"`
+		NodeType   string `json:"node_type"`
+		RuleNodeID int64  `json:"rule_node_id"`
 	}
 	views := make([]ruleHopView, len(ruleHops))
-	hopCounts := make(map[int64]int)
-	nodeTypes := make(map[int64]string)
+	type ruleMeta struct {
+		hopCount int
+		nodeType string
+		nodeID   int64
+	}
+	metaCache := make(map[int64]*ruleMeta)
 	for _, rh := range ruleHops {
-		if _, ok := hopCounts[rh.RuleID]; !ok {
-			var cnt int
-			var nt string
-			s.DB.QueryRow(`SELECT COUNT(*) FROM rule_hops WHERE rule_id=?`, rh.RuleID).Scan(&cnt)
-			s.DB.QueryRow(`SELECT COALESCE(n.node_type,'single') FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&nt)
-			hopCounts[rh.RuleID] = cnt
-			nodeTypes[rh.RuleID] = nt
+		if _, ok := metaCache[rh.RuleID]; !ok {
+			m := &ruleMeta{}
+			s.DB.QueryRow(`SELECT COUNT(*) FROM rule_hops WHERE rule_id=?`, rh.RuleID).Scan(&m.hopCount)
+			s.DB.QueryRow(`SELECT COALESCE(n.node_type,'single'), r.node_id FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&m.nodeType, &m.nodeID)
+			metaCache[rh.RuleID] = m
 		}
 	}
 	for i, rh := range ruleHops {
-		views[i] = ruleHopView{RuleHop: rh, TotalHops: hopCounts[rh.RuleID], NodeType: nodeTypes[rh.RuleID]}
+		m := metaCache[rh.RuleID]
+		views[i] = ruleHopView{RuleHop: rh, TotalHops: m.hopCount, NodeType: m.nodeType, RuleNodeID: m.nodeID}
 	}
 
 	resp := map[string]any{
