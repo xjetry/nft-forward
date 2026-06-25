@@ -47,7 +47,7 @@ export default function UserDetail() {
     } catch (err) { toast(err.message) }
   }
 
-  const expiresAt = user.expires_at?.Valid && user.expires_at.Int64 > 0 ? user.expires_at.Int64 : null
+  const expiresAt = user.expires_at && user.expires_at > 0 ? user.expires_at : null
 
   return (
     <Layout>
