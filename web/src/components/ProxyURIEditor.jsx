@@ -5,7 +5,7 @@ import { SensText } from './ui'
 import {
   loadLocalURIs, saveLocalURIs, parseURIs,
   loadSubURLs, saveSubURLs, loadSubCache, saveSubCache,
-  loadLandingMarks, loadDirectMarks, saveSubMarks, nodeKey,
+  nodeRoleKey, getNodeRole, setNodeRole, setNodeRoleBatch, loadNodeRoles,
 } from '../lib/landing'
 
 const MAX_H = 420
@@ -34,17 +34,17 @@ export function ProxyURIEditor({ username, blurred }) {
   const [text, setText] = useState(() => loadLocalURIs(username))
   const [subURLs, setSubURLs] = useState(() => loadSubURLs(username))
   const [subNodes, setSubNodes] = useState(() => loadSubCache(username))
-  const [landing, setLanding] = useState(() => loadLandingMarks(username))
-  const [direct, setDirect] = useState(() => loadDirectMarks(username))
+  const [roles, setRoles] = useState(() => loadNodeRoles())
   const [fetching, setFetching] = useState(false)
   const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
   const toast = useToast()
   const [subRef, subH] = usePersistedHeight(`nf-sub-textarea-h:${username}`)
   const [manualRef, manualH] = usePersistedHeight(`nf-manual-textarea-h:${username}`)
 
+  const roleOf = (n) => { const k = nodeRoleKey(n); return k && roles[k] ? roles[k] : 'none' }
   const manualCount = parseURIs(text).length
-  const landingCount = subNodes.filter(n => landing.has(nodeKey(n))).length
-  const directCount = subNodes.filter(n => direct.has(nodeKey(n))).length
+  const landingCount = subNodes.filter(n => roleOf(n) === 'landing').length
+  const directCount = subNodes.filter(n => roleOf(n) === 'direct').length
   const unconfiguredCount = subNodes.length - landingCount - directCount
 
   const saveManual = () => {
@@ -73,37 +73,14 @@ export function ProxyURIEditor({ username, blurred }) {
     } catch (err) { toast(err.message) } finally { setFetching(false) }
   }
 
-  const setMark = (n, kind) => {
-    const key = nodeKey(n)
-    if (!key) return
-    const nextL = new Set(landing)
-    const nextD = new Set(direct)
-    nextL.delete(key); nextD.delete(key)
-    if (kind === 'landing') nextL.add(key)
-    else if (kind === 'direct') nextD.add(key)
-    setLanding(nextL); setDirect(nextD)
-    saveSubMarks(username, nextL, nextD)
+  const handleSetRole = (n, role) => {
+    setNodeRole(n, role)
+    setRoles(loadNodeRoles())
   }
 
-  const markAll = (kind) => {
-    const nextL = new Set(landing)
-    const nextD = new Set(direct)
-    for (const n of subNodes) {
-      const key = nodeKey(n)
-      if (!key) continue
-      nextL.delete(key); nextD.delete(key)
-      if (kind === 'landing') nextL.add(key)
-      else if (kind === 'direct') nextD.add(key)
-    }
-    setLanding(nextL); setDirect(nextD)
-    saveSubMarks(username, nextL, nextD)
-  }
-
-  const nodeState = (n) => {
-    const key = nodeKey(n)
-    if (key && landing.has(key)) return 'landing'
-    if (key && direct.has(key)) return 'direct'
-    return 'none'
+  const handleMarkAll = (role) => {
+    setNodeRoleBatch(subNodes, role)
+    setRoles(loadNodeRoles())
   }
 
   const hasNodes = showSub && subNodes.length > 0
@@ -154,11 +131,11 @@ export function ProxyURIEditor({ username, blurred }) {
             <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
               <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
               <div className="flex gap-1.5">
-                <button onClick={() => markAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
+                <button onClick={() => handleMarkAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
                 <span className="text-ink-mut">|</span>
-                <button onClick={() => markAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
+                <button onClick={() => handleMarkAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
                 <span className="text-ink-mut">|</span>
-                <button onClick={() => markAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
+                <button onClick={() => handleMarkAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
               </div>
             </div>
             <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
@@ -169,10 +146,10 @@ export function ProxyURIEditor({ username, blurred }) {
                       <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
                       <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
                       <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
-                        <SensText blurred={blurred}>{nodeKey(n)}</SensText>
+                        <SensText blurred={blurred}>{nodeRoleKey(n)}</SensText>
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        <TriToggle state={nodeState(n)} onChange={(k) => setMark(n, k)} />
+                        <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
                       </td>
                     </tr>
                   ))}

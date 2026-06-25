@@ -4,8 +4,8 @@ import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/La
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
-  parseURIs, loadLocalURIs, loadSubCache, loadLandingMarks, loadDirectMarks,
-  nodeKey, landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
+  parseURIs, loadLocalURIs, loadSubCache, loadNodeRoles, nodeRoleKey,
+  landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
 } from '../lib/landing'
 import { uriToClashYaml } from '../lib/yaml-convert'
 
@@ -31,11 +31,10 @@ export default function Proxies() {
 
   const manualNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
   const subNodes = useMemo(() => loadSubCache(user?.username), [user])
-  const landingMarks = useMemo(() => loadLandingMarks(user?.username), [user])
-  const directMarks = useMemo(() => loadDirectMarks(user?.username), [user])
+  const roles = useMemo(() => loadNodeRoles(), [user])
 
-  const directSub = useMemo(() => subNodes.filter(n => directMarks.has(nodeKey(n))), [subNodes, directMarks])
-  const landingSub = useMemo(() => subNodes.filter(n => landingMarks.has(nodeKey(n))), [subNodes, landingMarks])
+  const directSub = useMemo(() => subNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [subNodes, roles])
+  const landingSub = useMemo(() => subNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [subNodes, roles])
 
   const allLanding = useMemo(() => mergeLanding(manualNodes, landingSub), [manualNodes, landingSub])
   const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])

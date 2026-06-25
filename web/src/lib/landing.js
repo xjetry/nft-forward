@@ -64,47 +64,57 @@ export function saveSubCache(username, nodes) {
   try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
 }
 
-const LS_MARKS_PREFIX = 'nf-landing-marks:'
-const LS_DIRECT_PREFIX = 'nf-direct-marks:'
+const LS_NODE_ROLES = 'nf-node-roles'
 
-export function loadLandingMarks(username) {
-  if (!username) return new Set()
-  try {
-    const raw = localStorage.getItem(LS_MARKS_PREFIX + username)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
-  } catch { return new Set() }
+export function nodeRoleKey(n) {
+  return n.protocol && n.host && n.port ? `${n.protocol}:${n.host}:${n.port}` : null
 }
 
-export function loadDirectMarks(username) {
-  if (!username) return new Set()
+export function loadNodeRoles() {
   try {
-    const raw = localStorage.getItem(LS_DIRECT_PREFIX + username)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
-  } catch { return new Set() }
+    const raw = localStorage.getItem(LS_NODE_ROLES)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
 }
 
-export function saveSubMarks(username, landing, direct) {
-  if (!username) return
-  const save = (prefix, marks) => {
-    try {
-      const arr = [...marks]
-      if (arr.length) localStorage.setItem(prefix + username, JSON.stringify(arr))
-      else localStorage.removeItem(prefix + username)
-    } catch {}
-  }
-  save(LS_MARKS_PREFIX, landing)
-  save(LS_DIRECT_PREFIX, direct)
-  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
-}
-
-export function saveLandingMarks(username, marks) {
-  if (!username) return
+function saveNodeRoles(roles) {
   try {
-    const arr = [...marks]
-    if (arr.length) localStorage.setItem(LS_MARKS_PREFIX + username, JSON.stringify(arr))
-    else localStorage.removeItem(LS_MARKS_PREFIX + username)
+    const clean = Object.fromEntries(Object.entries(roles).filter(([, v]) => v === 'landing' || v === 'direct'))
+    if (Object.keys(clean).length) localStorage.setItem(LS_NODE_ROLES, JSON.stringify(clean))
+    else localStorage.removeItem(LS_NODE_ROLES)
   } catch {}
   try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+}
+
+export function getNodeRole(n) {
+  const key = nodeRoleKey(n)
+  if (!key) return 'none'
+  return loadNodeRoles()[key] || 'none'
+}
+
+export function loadLandingMarks() {
+  const roles = loadNodeRoles()
+  return new Set(Object.entries(roles).filter(([, v]) => v === 'landing').map(([k]) => k))
+}
+
+export function loadDirectMarks() {
+  const roles = loadNodeRoles()
+  return new Set(Object.entries(roles).filter(([, v]) => v === 'direct').map(([k]) => k))
+}
+
+export function setNodeRoleBatch(nodes, role) {
+  const roles = loadNodeRoles()
+  for (const n of nodes) {
+    const key = nodeRoleKey(n)
+    if (!key) continue
+    if (role === 'none') delete roles[key]; else roles[key] = role
+  }
+  saveNodeRoles(roles)
+  return roles
+}
+
+export function setNodeRole(n, role) {
+  return setNodeRoleBatch([n], role)
 }
 
 export function nodeKey(n) {
