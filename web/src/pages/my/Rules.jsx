@@ -54,16 +54,21 @@ export default function MyRules() {
 
   const { rules = [], nodes = [], node_by_id = {} } = data || {}
 
-  // User's own URIs take precedence over admin-assigned ones on a host:port clash.
-  const landingNodes = mergeLanding(localNodes, serverLanding)
+  // Filter server-assigned nodes by global role table — only landing-marked ones
+  // appear in the exit picker (unconfigured/direct ones are excluded).
+  const roles = loadNodeRoles()
+  const serverLandingFiltered = serverLanding.filter(n => {
+    const k = nodeRoleKey(n); return k && roles[k] === 'landing'
+  })
+  const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
 
-  // Enrich a rule with a client-side relay URI when its exit host:port matches
-  // one of the user's local URIs (user overrides any server classification).
+  const allLandingIdx = landingIndex(landingNodes)
+
   const enrich = (r) => {
     const key = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : null
-    if (key && localIdx.has(key) && r.entry) {
+    if (key && allLandingIdx.has(key) && r.entry) {
       const ep = splitEndpoint(r.entry)
-      const node = localIdx.get(key)
+      const node = allLandingIdx.get(key)
       const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
       if (relay) return { ...r, exit_kind: 'landing', landing_name: node.name, relay_uri: relay }
     }

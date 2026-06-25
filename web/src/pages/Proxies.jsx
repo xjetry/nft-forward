@@ -11,30 +11,35 @@ import { uriToClashYaml } from '../lib/yaml-convert'
 
 export default function Proxies() {
   const [rules, setRules] = useState(null)
+  const [serverNodes, setServerNodes] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('all')
   const { copyFmt } = useCopyFmt()
-  const toast = useToast()
   const blurred = useBlur()
   const { user } = useUser()
 
   const isAdmin = user?.role === 'admin'
 
   useEffect(() => {
-    const endpoint = isAdmin ? `/rules?owner_ids=${user?.id}` : '/my/rules'
-    api.get(endpoint)
-      .then(d => setRules(d?.rules || []))
-      .catch(console.error)
-      .finally(() => setLoading(false))
+    const rulesEndpoint = isAdmin ? `/rules?owner_ids=${user?.id}` : '/my/rules'
+    const rulesP = api.get(rulesEndpoint).then(d => d?.rules || []).catch(() => [])
+    const serverP = !isAdmin
+      ? api.get('/my/landing-nodes').then(d => d?.nodes || []).catch(() => [])
+      : Promise.resolve([])
+    Promise.all([rulesP, serverP]).then(([r, s]) => {
+      setRules(r); setServerNodes(s)
+    }).finally(() => setLoading(false))
   }, [])
 
   const manualNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
-  const subNodes = useMemo(() => loadSubCache(user?.username), [user])
+  const localSubNodes = useMemo(() => loadSubCache(user?.username), [user])
   const roles = useMemo(() => loadNodeRoles(), [user])
 
-  const directSub = useMemo(() => subNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [subNodes, roles])
-  const landingSub = useMemo(() => subNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [subNodes, roles])
+  const allSubNodes = useMemo(() => mergeLanding(localSubNodes, serverNodes), [localSubNodes, serverNodes])
+
+  const directSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [allSubNodes, roles])
+  const landingSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [allSubNodes, roles])
 
   const allLanding = useMemo(() => mergeLanding(manualNodes, landingSub), [manualNodes, landingSub])
   const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])
@@ -90,7 +95,7 @@ export default function Proxies() {
         </div>
 
         {allProxies.length === 0 ? (
-          <Empty title="暂无可用代理" desc="在概览页添加代理 URI 或订阅地址。" />
+          <Empty title="暂无可用代理" desc="在概览页添加代理 URI 或订阅地址，并标记为直连或落地。" />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配" desc="试试别的关键词。" />
         ) : (
