@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '../lib/api'
-import { Layout, useToast, useBlur, useUser } from '../components/Layout'
+import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
@@ -14,7 +14,7 @@ export default function Proxies() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState('all')
-  const [copyFmt, setCopyFmt] = useState(() => localStorage.getItem('nf-copy-fmt') || 'uri')
+  const { copyFmt } = useCopyFmt()
   const toast = useToast()
   const blurred = useBlur()
   const { user } = useUser()
@@ -64,14 +64,6 @@ export default function Proxies() {
   const filtered = !q ? tabbed : tabbed.filter(n =>
     [n.name, n.protocol, `${n.host}:${n.port}`, n.ruleName].some(v => (v || '').toLowerCase().includes(q)))
 
-  const toggleFmt = () => {
-    setCopyFmt(f => {
-      const next = f === 'uri' ? 'yaml' : 'uri'
-      localStorage.setItem('nf-copy-fmt', next)
-      return next
-    })
-  }
-
   const copyText = (n) => {
     const uri = n.kind === 'relay' ? n.relay : n.uri
     if (!uri) return null
@@ -88,9 +80,6 @@ export default function Proxies() {
       <Panel>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
-          <button type="button" onClick={toggleFmt}
-            className="ml-auto text-[11px] font-mono px-2 py-1 rounded border border-line bg-surface text-ink-mut hover:text-ink hover:border-ink-mut transition-colors"
-            title="切换复制格式">{copyFmt.toUpperCase()}</button>
         </PanelToolbar>
         <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
           {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length]].map(([key, label, n]) => (

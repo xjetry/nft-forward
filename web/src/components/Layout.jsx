@@ -50,6 +50,7 @@ export function Layout({ children }) {
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
   const { blurred, toggleBlur } = useContext(BlurCtx)
+  const { copyFmt, toggleCopyFmt } = useContext(CopyFmtCtx)
   const [theme, setThemeState] = useState(getStoredTheme())
   const isDark = resolvedDark(theme)
 
@@ -163,6 +164,11 @@ export function Layout({ children }) {
               )}
               {isDark ? '浅色' : '深色'}
             </button>
+            <button onClick={toggleCopyFmt} title="切换复制代理连接的格式（URI / YAML）"
+              className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${copyFmt === 'yaml' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>
+              {copyFmt === 'yaml' ? 'YAML' : 'URI'}
+            </button>
             <button onClick={toggleBlur} title="模糊敏感信息"
               className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${blurred ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -199,6 +205,22 @@ export function BlurProvider({ children }) {
     })
   }, [])
   return <BlurCtx.Provider value={{ blurred, toggleBlur }}>{children}</BlurCtx.Provider>
+}
+
+/* ---------- Copy-format context ---------- */
+const CopyFmtCtx = createContext({ copyFmt: 'uri', toggleCopyFmt: () => {} })
+export function useCopyFmt() { return useContext(CopyFmtCtx) }
+
+export function CopyFmtProvider({ children }) {
+  const [copyFmt, setCopyFmt] = useState(() => localStorage.getItem('nf-copy-fmt') || 'uri')
+  const toggleCopyFmt = useCallback(() => {
+    setCopyFmt(f => {
+      const next = f === 'uri' ? 'yaml' : 'uri'
+      localStorage.setItem('nf-copy-fmt', next)
+      return next
+    })
+  }, [])
+  return <CopyFmtCtx.Provider value={{ copyFmt, toggleCopyFmt }}>{children}</CopyFmtCtx.Provider>
 }
 
 /* ---------- Nav helpers ---------- */

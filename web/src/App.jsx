@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { UserProvider, useUser, BlurProvider } from './components/Layout'
+import { UserProvider, useUser, BlurProvider, CopyFmtProvider } from './components/Layout'
 import { Loading, ConfirmProvider } from './components/ui'
 
 import Login from './pages/Login'
@@ -66,6 +66,7 @@ export default function App() {
       <UserProvider>
         <ConfirmProvider>
         <BlurProvider>
+        <CopyFmtProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
 
@@ -90,6 +91,7 @@ export default function App() {
 
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </CopyFmtProvider>
         </BlurProvider>
         </ConfirmProvider>
       </UserProvider>

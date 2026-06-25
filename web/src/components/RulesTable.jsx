@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
+import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
 
@@ -25,14 +26,7 @@ function SortArrow({ dir }) {
 export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick }) {
   const isAdmin = variant === 'admin'
   const [sort, setSort] = useState({ col: null, dir: null })
-  const [copyFmt, setCopyFmt] = useState(() => localStorage.getItem('nf-copy-fmt') || 'uri')
-  const toggleCopyFmt = () => {
-    setCopyFmt(f => {
-      const next = f === 'uri' ? 'yaml' : 'uri'
-      localStorage.setItem('nf-copy-fmt', next)
-      return next
-    })
-  }
+  const { copyFmt } = useCopyFmt()
 
   const cycleSort = (col) => {
     setSort(s => {
@@ -64,13 +58,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
           </th>
           <th>协议</th>
           <th>入口</th>
-          <th>
-            <span className="inline-flex items-center gap-1.5">出口
-              <button type="button" onClick={toggleCopyFmt}
-                className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-line bg-surface text-ink-mut hover:text-ink hover:border-ink-mut transition-colors"
-                title="切换复制代理连接的格式">{copyFmt.toUpperCase()}</button>
-            </span>
-          </th>
+          <th>出口</th>
           {isAdmin && (
             <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
               <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
