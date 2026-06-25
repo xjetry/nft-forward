@@ -38,6 +38,7 @@ export default function NodeDetail() {
   const { node, panel_url, panel_url_configured, latest_agent_version } = data
   const ruleHops = data.rule_hops || []
   const nodeHops = data.node_hops || []
+  const grantedUsers = data.granted_users || []
   const isComposite = node.node_type === 'composite'
   const agentOutdated = node.agent_version && node.agent_version !== latest_agent_version
   const up = data.upgrade || { status: 'none' }
@@ -283,6 +284,37 @@ export default function NodeDetail() {
               </tbody>
             </table>
           ) : <div className="pb-4"><Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty></div>}
+        </section>
+
+        {/* ===== 已授权用户 ===== */}
+        <section className={`${card} px-[26px] pt-[22px] pb-2`}>
+          <div className="flex items-baseline gap-2.5 mb-1.5">
+            <h2 className="m-0 text-[15px] font-bold">已授权用户</h2>
+            <span className="text-[12.5px] text-ink-mut">{grantedUsers.length} 人</span>
+          </div>
+          {grantedUsers.length ? (
+            <table className="tbl">
+              <thead><tr><th>用户</th><th>单节点配额</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
+              <tbody>
+                {grantedUsers.map(g => (
+                  <tr key={g.user_id}>
+                    <td className="font-semibold">
+                      <Link to={`/users/${g.user_id}`} className="text-blue-600 hover:underline">{g.username}</Link>
+                    </td>
+                    <td className="font-mono">{g.max_forwards}</td>
+                    <td className="text-xs text-ink-mut">{fmtTime(g.granted_at)}</td>
+                    <td className="text-right">
+                      <button onClick={async () => {
+                        if (!await confirm({ title: '取消授权', message: `确定取消 ${g.username} 对该节点的授权？`, confirmText: '取消授权', danger: true })) return
+                        try { await api.delete(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); load() }
+                        catch (e) { toast(e.message) }
+                      }} className="text-red-500 text-xs font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0">取消授权</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <div className="pb-4"><Empty title="尚无用户被授权使用此节点" /></div>}
         </section>
 
       </div>

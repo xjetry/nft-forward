@@ -146,6 +146,41 @@ func CountRulesForUserNode(d *sql.DB, userID, nodeID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM rules WHERE owner_id=? AND node_id=?`, userID, nodeID)
 }
 
+// ListUsersForNode returns grants for a specific node with user info.
+func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
+	UserID      int64  `json:"user_id"`
+	Username    string `json:"username"`
+	MaxForwards int    `json:"max_forwards"`
+	GrantedAt   int64  `json:"granted_at"`
+}, error) {
+	rows, err := d.Query(`SELECT g.user_id, u.username, g.max_forwards, g.granted_at
+		FROM user_nodes g JOIN users u ON u.id = g.user_id
+		WHERE g.node_id = ? ORDER BY g.granted_at`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		UserID      int64  `json:"user_id"`
+		Username    string `json:"username"`
+		MaxForwards int    `json:"max_forwards"`
+		GrantedAt   int64  `json:"granted_at"`
+	}
+	for rows.Next() {
+		var r struct {
+			UserID      int64  `json:"user_id"`
+			Username    string `json:"username"`
+			MaxForwards int    `json:"max_forwards"`
+			GrantedAt   int64  `json:"granted_at"`
+		}
+		if err := rows.Scan(&r.UserID, &r.Username, &r.MaxForwards, &r.GrantedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func ListAllGrants(d *sql.DB) ([]*UserNode, error) {
 	return queryAll(d, `SELECT user_id, node_id, max_forwards, granted_at FROM user_nodes`, scanUserNode)
 }

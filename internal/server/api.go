@@ -323,11 +323,13 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		views[i] = ruleHopView{RuleHop: rh, TotalHops: m.hopCount, NodeType: m.nodeType, RuleNodeID: m.nodeID}
 	}
 
+	grantedUsers, _ := db.ListUsersForNode(s.DB, n.ID)
 	resp := map[string]any{
 		"node": n, "rule_hops": views, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"latest_agent_version": serverVersion(),
 		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),
+		"granted_users":        grantedUsers,
 	}
 
 	// Include node_hops if composite, enriched with each child's name.

@@ -24,6 +24,7 @@ export default function UserDetail() {
   if (!data) return <Layout><Empty title="用户不存在" /></Layout>
 
   const { user, nodes = [], grants = [], all_nodes = [], rules = [], landing_nodes = [] } = data
+  const nodeMap = Object.fromEntries(all_nodes.map(n => [n.id, n]))
 
   const isRegularUser = user.role === 'user'
 
@@ -118,10 +119,10 @@ export default function UserDetail() {
                   <td className="font-semibold">
                     <Link to={`/rules/${r.id}`} className="text-blue-600 hover:underline">{r.name}</Link>
                   </td>
-                  <td className="font-mono text-ink-soft">{r.node_name || `#${r.node_id}`}</td>
+                  <td className="font-mono text-ink-soft">{nodeMap[r.node_id]?.name || `#${r.node_id}`}</td>
                   <td><ProtoBadge proto={r.proto} /></td>
-                  <td className="font-mono text-xs">{r.entry || '--'}</td>
-                  <td className="font-mono text-xs">{r.exit || '--'}</td>
+                  <td className="font-mono text-xs">{r.entry_listen_port ? `:${r.entry_listen_port}` : '--'}</td>
+                  <td className="font-mono text-xs">{r.exit_host ? `${r.exit_host}:${r.exit_port}` : '--'}</td>
                   <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
                 </tr>
               ))}
