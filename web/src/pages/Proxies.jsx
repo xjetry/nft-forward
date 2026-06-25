@@ -4,7 +4,7 @@ import { Layout, useToast, useBlur, useUser } from '../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
-  parseURIs, loadLocalURIs, loadSubCache, loadLandingMarks,
+  parseURIs, loadLocalURIs, loadSubCache, loadLandingMarks, loadDirectMarks,
   nodeKey, landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
 } from '../lib/landing'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -13,6 +13,7 @@ export default function Proxies() {
   const [rules, setRules] = useState(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [tab, setTab] = useState('all')
   const [copyFmt, setCopyFmt] = useState(() => localStorage.getItem('nf-copy-fmt') || 'uri')
   const toast = useToast()
   const blurred = useBlur()
@@ -30,10 +31,11 @@ export default function Proxies() {
 
   const manualNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
   const subNodes = useMemo(() => loadSubCache(user?.username), [user])
-  const marks = useMemo(() => loadLandingMarks(user?.username), [user])
+  const landingMarks = useMemo(() => loadLandingMarks(user?.username), [user])
+  const directMarks = useMemo(() => loadDirectMarks(user?.username), [user])
 
-  const directSub = useMemo(() => subNodes.filter(n => !marks.has(nodeKey(n))), [subNodes, marks])
-  const landingSub = useMemo(() => subNodes.filter(n => marks.has(nodeKey(n))), [subNodes, marks])
+  const directSub = useMemo(() => subNodes.filter(n => directMarks.has(nodeKey(n))), [subNodes, directMarks])
+  const landingSub = useMemo(() => subNodes.filter(n => landingMarks.has(nodeKey(n))), [subNodes, landingMarks])
 
   const allLanding = useMemo(() => mergeLanding(manualNodes, landingSub), [manualNodes, landingSub])
   const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])
@@ -57,8 +59,9 @@ export default function Proxies() {
   const directProxies = [...manualNodes, ...directSub]
   const allProxies = [...directProxies.map(n => ({ ...n, kind: 'direct' })), ...relayProxies.map(n => ({ ...n, kind: 'relay' }))]
 
+  const tabbed = tab === 'all' ? allProxies : allProxies.filter(n => n.kind === (tab === 'relay' ? 'relay' : 'direct'))
   const q = search.trim().toLowerCase()
-  const filtered = !q ? allProxies : allProxies.filter(n =>
+  const filtered = !q ? tabbed : tabbed.filter(n =>
     [n.name, n.protocol, `${n.host}:${n.port}`, n.ruleName].some(v => (v || '').toLowerCase().includes(q)))
 
   const toggleFmt = () => {
@@ -89,6 +92,14 @@ export default function Proxies() {
             className="ml-auto text-[11px] font-mono px-2 py-1 rounded border border-line bg-surface text-ink-mut hover:text-ink hover:border-ink-mut transition-colors"
             title="切换复制格式">{copyFmt.toUpperCase()}</button>
         </PanelToolbar>
+        <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+          {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length]].map(([key, label, n]) => (
+            <button key={key} onClick={() => setTab(key)}
+              className={`px-3 py-0.5 rounded text-xs border transition-colors ${
+                tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
+              }`}>{label} {n}</button>
+          ))}
+        </div>
 
         {allProxies.length === 0 ? (
           <Empty title="暂无可用代理" desc="在概览页添加代理 URI 或订阅地址。" />

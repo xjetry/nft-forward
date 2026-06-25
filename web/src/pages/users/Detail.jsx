@@ -212,13 +212,27 @@ function QuotaForm({ userId, quotaBytes, onDone }) {
   )
 }
 
-// LandingSourceForm edits a user's landing-node source: a subscription URL
-// and/or a list of manual proxy URIs (one per line); the two combine. Saving
-// returns a fresh preview of the resolved nodes.
+function loadAdminMarks(userId) {
+  try {
+    const raw = localStorage.getItem(`nf-admin-marks:${userId}`)
+    if (!raw) return {}
+    return JSON.parse(raw)
+  } catch { return {} }
+}
+function saveAdminMarks(userId, marks) {
+  try {
+    const clean = Object.fromEntries(Object.entries(marks).filter(([, v]) => v !== 'none'))
+    if (Object.keys(clean).length) localStorage.setItem(`nf-admin-marks:${userId}`, JSON.stringify(clean))
+    else localStorage.removeItem(`nf-admin-marks:${userId}`)
+  } catch {}
+}
+function nodeHP(n) { return n.host && n.port ? (n.host.includes(':') ? `[${n.host}]:${n.port}` : `${n.host}:${n.port}`) : null }
+
 function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
   const [preview, setPreview] = useState(nodes || [])
+  const [marks, setMarks] = useState(() => loadAdminMarks(userId))
   const [loading, setLoading] = useState(false)
   const toast = useToast()
 
@@ -231,6 +245,27 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
       toast('已保存'); onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
+
+  const setMark = (n, kind) => {
+    const key = nodeHP(n)
+    if (!key) return
+    const next = { ...marks }
+    if (kind === 'none') delete next[key]; else next[key] = kind
+    setMarks(next); saveAdminMarks(userId, next)
+  }
+  const markAllAs = (kind) => {
+    const next = { ...marks }
+    for (const n of preview) {
+      const key = nodeHP(n)
+      if (!key) continue
+      if (kind === 'none') delete next[key]; else next[key] = kind
+    }
+    setMarks(next); saveAdminMarks(userId, next)
+  }
+  const stateOf = (n) => { const key = nodeHP(n); return key && marks[key] ? marks[key] : 'none' }
+  const landingCount = preview.filter(n => stateOf(n) === 'landing').length
+  const directCount = preview.filter(n => stateOf(n) === 'direct').length
+  const unconfiguredCount = preview.length - landingCount - directCount
 
   return (
     <div className="card mb-5">
@@ -255,22 +290,60 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
 
         {preview.length > 0 && (
           <div className="mt-4 border-t border-line-soft pt-4">
-            <div className="text-xs font-bold text-ink-mut uppercase tracking-wider mb-2">解析出的落地节点</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-bold text-ink-mut uppercase tracking-wider">
+                解析出的节点
+                <span className="normal-case font-normal ml-2">{landingCount} 落地 · {directCount} 直连 · {unconfiguredCount} 未配置</span>
+              </div>
+              <div className="flex gap-1.5 text-[12px]">
+                <button type="button" onClick={() => markAllAs('landing')} className="text-emerald-600 hover:underline">全部落地</button>
+                <span className="text-ink-mut">|</span>
+                <button type="button" onClick={() => markAllAs('direct')} className="text-blue-600 hover:underline">全部直连</button>
+                <span className="text-ink-mut">|</span>
+                <button type="button" onClick={() => markAllAs('none')} className="text-ink-mut hover:underline">全部未配置</button>
+              </div>
+            </div>
             <table className="tbl">
-              <thead><tr><th>名称</th><th>协议</th><th>地址</th></tr></thead>
+              <thead><tr><th>名称</th><th>协议</th><th>地址</th><th className="text-right">用途</th></tr></thead>
               <tbody>
-                {preview.map((n, i) => (
-                  <tr key={i}>
-                    <td className="font-semibold">{n.name || '(未命名)'}</td>
-                    <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
-                    <td className="font-mono text-xs">{n.host}:{n.port}</td>
-                  </tr>
-                ))}
+                {preview.map((n, i) => {
+                  const st = stateOf(n)
+                  return (
+                    <tr key={i}>
+                      <td className="font-semibold">{n.name || '(未命名)'}</td>
+                      <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
+                      <td className="font-mono text-xs">{nodeHP(n)}</td>
+                      <td className="text-right">
+                        <AdminTriToggle state={st} onChange={k => setMark(n, k)} />
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function AdminTriToggle({ state, onChange }) {
+  const opts = [
+    ['landing', '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
+    ['direct', '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
+    ['none', '未配置', 'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800/40 dark:text-gray-400 dark:border-gray-600'],
+  ]
+  return (
+    <div className="inline-flex gap-px rounded-md overflow-hidden border border-line">
+      {opts.map(([key, label, cls]) => (
+        <button key={key} type="button" onClick={() => onChange(key)}
+          className={`px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+            state === key ? cls : 'bg-transparent text-ink-mut/40 hover:text-ink-mut'
+          }`}>
+          {label}
+        </button>
+      ))}
     </div>
   )
 }

@@ -65,6 +65,7 @@ export function saveSubCache(username, nodes) {
 }
 
 const LS_MARKS_PREFIX = 'nf-landing-marks:'
+const LS_DIRECT_PREFIX = 'nf-direct-marks:'
 
 export function loadLandingMarks(username) {
   if (!username) return new Set()
@@ -72,6 +73,28 @@ export function loadLandingMarks(username) {
     const raw = localStorage.getItem(LS_MARKS_PREFIX + username)
     return raw ? new Set(JSON.parse(raw)) : new Set()
   } catch { return new Set() }
+}
+
+export function loadDirectMarks(username) {
+  if (!username) return new Set()
+  try {
+    const raw = localStorage.getItem(LS_DIRECT_PREFIX + username)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch { return new Set() }
+}
+
+export function saveSubMarks(username, landing, direct) {
+  if (!username) return
+  const save = (prefix, marks) => {
+    try {
+      const arr = [...marks]
+      if (arr.length) localStorage.setItem(prefix + username, JSON.stringify(arr))
+      else localStorage.removeItem(prefix + username)
+    } catch {}
+  }
+  save(LS_MARKS_PREFIX, landing)
+  save(LS_DIRECT_PREFIX, direct)
+  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
 }
 
 export function saveLandingMarks(username, marks) {
