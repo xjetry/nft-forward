@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
-import { parseURIs, mergeLanding, loadLocalURIs } from '../../lib/landing'
+import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, nodeRoleKey } from '../../lib/landing'
 
 /* Landing-nodes nav: lists the nodes available to the user — the admin-assigned
    ones (resolved server-side from a subscription and/or URIs) plus the user's
@@ -14,6 +14,7 @@ import { parseURIs, mergeLanding, loadLocalURIs } from '../../lib/landing'
    edited on the overview page. */
 export default function MyLandingNodes() {
   const [serverNodes, setServerNodes] = useState(null)
+  const [roles, setRoles] = useState(null)
   const [hasDynamic, setHasDynamic] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [search, setSearch] = useState('')
@@ -32,14 +33,17 @@ export default function MyLandingNodes() {
       .catch(console.error)
       .finally(() => setRefreshing(false))
   }
-  useEffect(() => load(false), [])
+  useEffect(() => { load(false); fetchNodeRoles().then(setRoles) }, [])
 
-  if (serverNodes === null) return <Layout><Loading /></Layout>
+  if (serverNodes === null || roles === null) return <Layout><Loading /></Layout>
 
   const refresh = () => { load(true); toast('已刷新订阅') }
 
-  // User's own URIs take precedence over admin-assigned ones on a host:port clash.
-  const nodes = mergeLanding(localNodes, serverNodes)
+  const allNodes = mergeLanding(localNodes, serverNodes)
+  const nodes = allNodes.filter(n => {
+    const k = nodeRoleKey(n)
+    return k && roles[k] === 'landing'
+  })
 
   const q = search.trim().toLowerCase()
   const filtered = !q ? nodes : nodes.filter(n =>
