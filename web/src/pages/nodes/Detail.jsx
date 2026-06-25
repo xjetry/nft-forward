@@ -80,7 +80,7 @@ export default function NodeDetail() {
   const proxyPrefix = useGhProxy && ghProxy.trim()
     ? (ghProxy.trim().endsWith('/') ? ghProxy.trim() : ghProxy.trim() + '/')
     : ''
-  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh -o install.sh\nsudo bash install.sh agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
+  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
 
   return (
     <Layout>
@@ -243,9 +243,9 @@ export default function NodeDetail() {
                 onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
             )}
           </div>
-          <div className="relative bg-app border border-line rounded-[10px] px-5 py-[18px]">
+          <div className="relative bg-[#1e1e2e] dark:bg-app border border-line rounded-[10px] px-5 py-[18px]">
             <button onClick={() => { navigator.clipboard.writeText(installCmd); toast('已复制') }}
-              className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-ink-soft bg-raised border border-line px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-surface transition-colors">复制</button>
+              className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-[#a0a4b0] bg-[#2a2a3c] border border-[#3a3a4c] px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-[#33334a] transition-colors">复制</button>
             <pre className="m-0 font-mono text-[13px] leading-[1.75] text-[#e8ecf3] whitespace-pre-wrap break-all">
               <SensText blurred={blurred}>{installCmd}</SensText>
             </pre>
@@ -261,12 +261,17 @@ export default function NodeDetail() {
           </div>
           {ruleHops.length ? (
             <table className="tbl">
-              <thead><tr><th>规则</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
+              <thead><tr><th>规则</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
               <tbody>
                 {ruleHops.map((rh, i) => (
                   <tr key={i}>
                     <td className="font-semibold">
                       {rh.rule_id ? <Link to={`/rules/${rh.rule_id}`} className="text-blue-600 hover:underline">{rh.rule_name || `#${rh.rule_id}`}</Link> : '--'}
+                    </td>
+                    <td className="text-xs whitespace-nowrap">
+                      {rh.total_hops > 1
+                        ? <span className="text-purple-600 font-semibold">组合 {rh.position + 1}/{rh.total_hops}</span>
+                        : <span className="text-ink-mut">单点</span>}
                     </td>
                     <td><ProtoBadge proto={rh.proto} /></td>
                     <td><ModeBadge mode={rh.mode} /></td>

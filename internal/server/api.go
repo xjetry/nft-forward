@@ -297,8 +297,30 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	ruleHops, _ := db.ListRuleHopsByNode(s.DB, n.ID)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 
+	type ruleHopView struct {
+		*db.RuleHop
+		TotalHops int    `json:"total_hops"`
+		NodeType  string `json:"node_type"`
+	}
+	views := make([]ruleHopView, len(ruleHops))
+	hopCounts := make(map[int64]int)
+	nodeTypes := make(map[int64]string)
+	for _, rh := range ruleHops {
+		if _, ok := hopCounts[rh.RuleID]; !ok {
+			var cnt int
+			var nt string
+			s.DB.QueryRow(`SELECT COUNT(*) FROM rule_hops WHERE rule_id=?`, rh.RuleID).Scan(&cnt)
+			s.DB.QueryRow(`SELECT COALESCE(n.node_type,'single') FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&nt)
+			hopCounts[rh.RuleID] = cnt
+			nodeTypes[rh.RuleID] = nt
+		}
+	}
+	for i, rh := range ruleHops {
+		views[i] = ruleHopView{RuleHop: rh, TotalHops: hopCounts[rh.RuleID], NodeType: nodeTypes[rh.RuleID]}
+	}
+
 	resp := map[string]any{
-		"node": n, "rule_hops": ruleHops, "panel_url": panelURL,
+		"node": n, "rule_hops": views, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"latest_agent_version": serverVersion(),
 		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),

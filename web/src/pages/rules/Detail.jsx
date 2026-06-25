@@ -111,7 +111,7 @@ export default function RulesDetail() {
                 return (
                   <tr key={h.position}>
                     <td className="font-mono text-xs text-ink-mut">{h.position + 1}</td>
-                    <td className="font-semibold">{hopNode?.name || `#${h.node_id}`}</td>
+                    <td className="font-semibold"><Link to={`/nodes/${h.node_id}`} className="text-blue-600 hover:underline">{hopNode?.name || `#${h.node_id}`}</Link></td>
                     <td className="font-mono">:{h.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{h.target || '--'}</SensText></td>
                     <td><ModeBadge mode={h.mode} /></td>
