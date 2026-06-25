@@ -22,7 +22,7 @@ export default function Proxies() {
   const isAdmin = user?.role === 'admin'
 
   useEffect(() => {
-    const endpoint = isAdmin ? '/rules' : '/my/rules'
+    const endpoint = isAdmin ? `/rules?owner_ids=${user?.id}` : '/my/rules'
     api.get(endpoint)
       .then(d => setRules(d?.rules || []))
       .catch(console.error)

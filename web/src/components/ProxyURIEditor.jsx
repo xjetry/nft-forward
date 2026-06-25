@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
 import { useToast } from './Layout'
 import { SensText } from './ui'
@@ -10,6 +10,26 @@ import {
 
 const MAX_H = 420
 
+function usePersistedHeight(key) {
+  const ref = useRef(null)
+  const saved = useRef(null)
+  try { saved.current = localStorage.getItem(key) } catch {}
+  const initial = saved.current ? Number(saved.current) : undefined
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const h = el.offsetHeight
+      if (h > 0) try { localStorage.setItem(key, String(h)) } catch {}
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [key])
+
+  return [ref, initial]
+}
+
 export function ProxyURIEditor({ username, blurred }) {
   const [text, setText] = useState(() => loadLocalURIs(username))
   const [subURLs, setSubURLs] = useState(() => loadSubURLs(username))
@@ -19,6 +39,8 @@ export function ProxyURIEditor({ username, blurred }) {
   const [fetching, setFetching] = useState(false)
   const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
   const toast = useToast()
+  const [subRef, subH] = usePersistedHeight(`nf-sub-textarea-h:${username}`)
+  const [manualRef, manualH] = usePersistedHeight(`nf-manual-textarea-h:${username}`)
 
   const manualCount = parseURIs(text).length
   const landingCount = subNodes.filter(n => landing.has(nodeKey(n))).length
@@ -84,19 +106,7 @@ export function ProxyURIEditor({ username, blurred }) {
     return 'none'
   }
 
-  const sideBySide = showSub && subNodes.length > 0
-
-  const manualSection = (standalone) => (
-    <div className={`flex flex-col min-h-0 ${standalone ? '' : ''}`}>
-      <label className="text-[13px] font-semibold text-ink-soft mb-1.5 flex-shrink-0">手动填写</label>
-      <textarea
-        className={`input-field font-mono w-full overflow-y-auto !py-3 !px-3.5 text-[13px] ${sideBySide ? 'flex-1 resize-none min-h-0' : 'min-h-[80px] resize-y'}`}
-        style={!sideBySide ? { maxHeight: MAX_H } : undefined}
-        value={text} onChange={e => setText(e.target.value)}
-        placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
-      <button onClick={saveManual} className="btn-primary mt-3 self-start flex-shrink-0">保存</button>
-    </div>
-  )
+  const hasNodes = showSub && subNodes.length > 0
 
   return (
     <div className="card flex flex-col">
@@ -125,7 +135,9 @@ export function ProxyURIEditor({ username, blurred }) {
         </button>
         {showSub && (
           <div className="mb-3 pl-0.5">
-            <textarea className="input-field font-mono w-full min-h-[60px] resize-y !py-2.5 !px-3 text-[13px]" value={subURLs} onChange={e => setSubURLs(e.target.value)}
+            <textarea ref={subRef} className="input-field font-mono w-full min-h-[60px] resize-y !py-2.5 !px-3 text-[13px]"
+              style={subH ? { height: subH } : undefined}
+              value={subURLs} onChange={e => setSubURLs(e.target.value)}
               placeholder="https://example.com/subscribe?token=..." />
             <div className="flex items-center gap-2 mt-2">
               <button onClick={refreshSubs} disabled={fetching} className="btn-primary text-xs">
@@ -136,47 +148,47 @@ export function ProxyURIEditor({ username, blurred }) {
           </div>
         )}
 
-        {/* Side-by-side: node list + manual URIs */}
-        {sideBySide ? (
-          <div className="grid grid-cols-[1fr_1fr] gap-4" style={{ maxHeight: MAX_H }}>
-            {/* Left: node list */}
-            <div className="border border-line rounded-[10px] overflow-hidden flex flex-col min-h-0">
-              <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px] flex-shrink-0">
-                <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
-                <div className="flex gap-1.5">
-                  <button onClick={() => markAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                  <span className="text-ink-mut">|</span>
-                  <button onClick={() => markAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                  <span className="text-ink-mut">|</span>
-                  <button onClick={() => markAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
-                </div>
-              </div>
-              <div className="overflow-y-auto min-h-0">
-                <table className="w-full text-[13px]">
-                  <tbody>
-                    {subNodes.map((n, i) => (
-                      <tr key={i} className="border-t border-line-soft">
-                        <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
-                        <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
-                        <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
-                          <SensText blurred={blurred}>{nodeKey(n)}</SensText>
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          <TriToggle state={nodeState(n)} onChange={(k) => setMark(n, k)} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        {/* Node list */}
+        {hasNodes && (
+          <div className="mb-4 border border-line rounded-[10px] overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
+              <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
+              <div className="flex gap-1.5">
+                <button onClick={() => markAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
+                <span className="text-ink-mut">|</span>
+                <button onClick={() => markAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
+                <span className="text-ink-mut">|</span>
+                <button onClick={() => markAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
               </div>
             </div>
-
-            {/* Right: manual URIs */}
-            {manualSection(false)}
+            <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
+              <table className="w-full text-[13px]">
+                <tbody>
+                  {subNodes.map((n, i) => (
+                    <tr key={i} className="border-t border-line-soft">
+                      <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
+                      <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
+                      <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
+                        <SensText blurred={blurred}>{nodeKey(n)}</SensText>
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <TriToggle state={nodeState(n)} onChange={(k) => setMark(n, k)} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        ) : (
-          manualSection(true)
         )}
+
+        {/* Manual URIs */}
+        <label className="text-[13px] font-semibold text-ink-soft mb-1.5">手动填写</label>
+        <textarea ref={manualRef} className="input-field font-mono w-full min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]"
+          style={{ maxHeight: MAX_H, ...(manualH ? { height: manualH } : {}) }}
+          value={text} onChange={e => setText(e.target.value)}
+          placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
+        <button onClick={saveManual} className="btn-primary mt-3 self-start">保存</button>
       </div>
     </div>
   )
