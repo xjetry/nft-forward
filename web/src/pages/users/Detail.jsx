@@ -83,6 +83,7 @@ export default function UserDetail() {
 
           <div className="flex items-center gap-2 mt-5 flex-wrap">
             {isRegularUser && <ExpiryForm userId={id} expiresAt={expiresAt} onDone={load} />}
+            {isRegularUser && <MaxForwardsForm userId={id} maxForwards={user.max_forwards} onDone={load} />}
             {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
@@ -178,8 +179,22 @@ function ExpiryForm({ userId, expiresAt, onDone }) {
   )
 }
 
-// Quota is stored in bytes server-side but edited in GB here, matching the
-// read-only display above. Empty/0 means unlimited.
+function MaxForwardsForm({ userId, maxForwards, onDone }) {
+  const [val, setVal] = useState(String(maxForwards || 0))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const n = Math.max(0, Math.round(Number(val) || 0))
+    try { await api.post(`/users/${userId}/max-forwards`, { max_forwards: n }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" step="1" value={val} onChange={e => setVal(e.target.value)} style={{ width: 80 }} title="0 = 不限" />
+      <button type="submit" className="btn-secondary text-xs">设规则配额</button>
+    </form>
+  )
+}
+
 function QuotaForm({ userId, quotaBytes, onDone }) {
   const [gb, setGb] = useState(String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))))
   const toast = useToast()

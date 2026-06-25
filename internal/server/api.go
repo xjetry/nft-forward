@@ -1215,7 +1215,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
 	jsonOK(w, map[string]any{
-		"user": target, "nodes": grantedNodes,
+		"user": apiUserFullView(target), "nodes": grantedNodes,
 		"grants": grants, "all_nodes": allNodes,
 		"rules":         rules,
 		"landing_nodes": s.landingNodesFor(target, false),
@@ -1386,6 +1386,32 @@ func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(body.TrafficQuotaBytes, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetMaxForwards(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		MaxForwards int `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.MaxForwards < 0 {
+		jsonErr(w, http.StatusBadRequest, "配额数无效")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, body.MaxForwards, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_max_forwards", strconv.FormatInt(id, 10), strconv.Itoa(body.MaxForwards))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1857,13 +1883,14 @@ func apiUserView(u *db.User) map[string]any {
 	}
 }
 
-// apiUserFullView includes quota/traffic/expiry fields for /api/me.
+// apiUserFullView includes quota/traffic/expiry fields for /api/me and admin detail.
 func apiUserFullView(u *db.User) map[string]any {
 	m := apiUserView(u)
+	m["disabled"] = u.Disabled
 	m["max_forwards"] = u.MaxForwards
 	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
 	m["traffic_used_bytes"] = u.TrafficUsedBytes
-	if u.ExpiresAt.Valid {
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
 		m["expires_at"] = u.ExpiresAt.Int64
 	} else {
 		m["expires_at"] = nil
