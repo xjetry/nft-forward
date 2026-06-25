@@ -276,7 +276,7 @@ export default function NodeDetail() {
                     <td><ProtoBadge proto={rh.proto} /></td>
                     <td><ModeBadge mode={rh.mode} /></td>
                     <td className="font-mono">{rh.listen_port}</td>
-                    <td className="font-mono"><SensText blurred={blurred}>{rh.target || '--'}</SensText></td>
+                    <td className="font-mono"><SensText blurred={blurred}>{rh.target_host ? `${rh.target_host}:${rh.target_port}` : '--'}</SensText></td>
                     <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(rh.total_bytes)}</td>
                   </tr>
                 ))}

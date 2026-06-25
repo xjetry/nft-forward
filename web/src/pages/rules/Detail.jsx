@@ -113,7 +113,7 @@ export default function RulesDetail() {
                     <td className="font-mono text-xs text-ink-mut">{h.position + 1}</td>
                     <td className="font-semibold"><Link to={`/nodes/${h.node_id}`} className="text-blue-600 hover:underline">{hopNode?.name || `#${h.node_id}`}</Link></td>
                     <td className="font-mono">:{h.listen_port}</td>
-                    <td className="font-mono"><SensText blurred={blurred}>{h.target || '--'}</SensText></td>
+                    <td className="font-mono"><SensText blurred={blurred}>{h.target_host ? `${h.target_host}:${h.target_port}` : '--'}</SensText></td>
                     <td><ModeBadge mode={h.mode} /></td>
                     <td className="font-mono text-xs text-ink-mut">{fmtBytes(h.total_bytes)}</td>
                     <td className="text-right">
