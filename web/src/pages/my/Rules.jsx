@@ -5,7 +5,7 @@ import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
-import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, loadNodeRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, nodeRoleKey } from '../../lib/landing'
 
 export default function MyRules() {
   const [data, setData] = useState(null)
@@ -24,13 +24,14 @@ export default function MyRules() {
   // server). Parse them here to both feed the create picker and resolve a
   // client-side relay URI for rules whose exit matches one of them.
   const [localVer, setLocalVer] = useState(0)
+  const [nodeRoles, setNodeRoles] = useState({})
+  useEffect(() => { fetchNodeRoles().then(setNodeRoles) }, [])
   const localNodes = useMemo(() => {
     const manual = parseURIs(loadLocalURIs(user?.username))
     const sub = loadSubCache(user?.username)
-    const roles = loadNodeRoles()
-    const landingSub = sub.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' })
+    const landingSub = sub.filter(n => { const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing' })
     return mergeLanding(manual, landingSub)
-  }, [user, localVer])
+  }, [user, localVer, nodeRoles])
   const localIdx = useMemo(() => landingIndex(localNodes), [localNodes])
 
   const addProxyURI = (uri) => {
@@ -56,9 +57,8 @@ export default function MyRules() {
 
   // Filter server-assigned nodes by global role table — only landing-marked ones
   // appear in the exit picker (unconfigured/direct ones are excluded).
-  const roles = loadNodeRoles()
   const serverLandingFiltered = serverLanding.filter(n => {
-    const k = nodeRoleKey(n); return k && roles[k] === 'landing'
+    const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing'
   })
   const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
 

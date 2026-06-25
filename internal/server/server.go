@@ -245,6 +245,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/probe-chain", s.probeChainEndpoint)
 			r.Get("/dashboard", s.apiDashboard)
 			r.Post("/sub-fetch", s.apiSubFetch)
+			r.Get("/node-roles", s.apiGetNodeRoles)
 		})
 
 		// Admin routes
@@ -271,6 +272,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)
+			r.Post("/node-roles", s.apiSetNodeRoles)
 
 			r.Get("/rules", s.apiListRules)
 			r.Post("/rules", s.apiCreateRule)

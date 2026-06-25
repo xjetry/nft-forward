@@ -6,7 +6,7 @@ import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
-import { parseURIs, mergeLanding, landingIndex, rewriteEndpoint, splitEndpoint, loadLocalURIs, saveLocalURIs, loadSubCache, loadNodeRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, mergeLanding, landingIndex, rewriteEndpoint, splitEndpoint, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, nodeRoleKey } from '../../lib/landing'
 
 export default function RulesList() {
   const [data, setData] = useState(null)
@@ -25,13 +25,14 @@ export default function RulesList() {
   const { user } = useUser()
 
   const [localVer, setLocalVer] = useState(0)
+  const [nodeRoles, setNodeRoles] = useState({})
+  useEffect(() => { fetchNodeRoles().then(setNodeRoles) }, [])
   const localNodes = useMemo(() => {
     const manual = parseURIs(loadLocalURIs(user?.username))
     const sub = loadSubCache(user?.username)
-    const roles = loadNodeRoles()
-    const landingSub = sub.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' })
+    const landingSub = sub.filter(n => { const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing' })
     return mergeLanding(manual, landingSub)
-  }, [user, localVer])
+  }, [user, localVer, nodeRoles])
 
   const landingNodes = localNodes
   const localIdx = useMemo(() => landingIndex(localNodes), [localNodes])

@@ -4,7 +4,7 @@ import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/La
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
-  parseURIs, loadLocalURIs, loadSubCache, loadNodeRoles, nodeRoleKey,
+  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, nodeRoleKey,
   landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
 } from '../lib/landing'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -21,20 +21,22 @@ export default function Proxies() {
 
   const isAdmin = user?.role === 'admin'
 
+  const [roles, setRoles] = useState({})
+
   useEffect(() => {
     const rulesEndpoint = isAdmin ? `/rules?owner_ids=${user?.id}` : '/my/rules'
     const rulesP = api.get(rulesEndpoint).then(d => d?.rules || []).catch(() => [])
     const serverP = !isAdmin
       ? api.get('/my/landing-nodes').then(d => d?.nodes || []).catch(() => [])
       : Promise.resolve([])
-    Promise.all([rulesP, serverP]).then(([r, s]) => {
-      setRules(r); setServerNodes(s)
+    const rolesP = fetchNodeRoles()
+    Promise.all([rulesP, serverP, rolesP]).then(([r, s, ro]) => {
+      setRules(r); setServerNodes(s); setRoles(ro)
     }).finally(() => setLoading(false))
   }, [])
 
   const manualNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
   const localSubNodes = useMemo(() => loadSubCache(user?.username), [user])
-  const roles = useMemo(() => loadNodeRoles(), [user])
 
   const allSubNodes = useMemo(() => mergeLanding(localSubNodes, serverNodes), [localSubNodes, serverNodes])
 

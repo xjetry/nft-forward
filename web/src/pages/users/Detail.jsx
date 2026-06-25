@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal } from '../../components/ui'
-import { loadNodeRoles, nodeRoleKey, setNodeRole, setNodeRoleBatch } from '../../lib/landing'
+import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles } from '../../lib/landing'
 
 export default function UserDetail() {
   const { id } = useParams()
@@ -217,9 +217,11 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
   const [preview, setPreview] = useState(nodes || [])
-  const [roles, setRoles] = useState(() => loadNodeRoles())
+  const [roles, setRoles] = useState({})
   const [loading, setLoading] = useState(false)
   const toast = useToast()
+
+  useEffect(() => { fetchNodeRoles().then(setRoles) }, [])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -231,8 +233,14 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
-  const handleSetRole = (n, role) => { setNodeRole(n, role); setRoles(loadNodeRoles()) }
-  const handleMarkAll = (role) => { setNodeRoleBatch(preview, role); setRoles(loadNodeRoles()) }
+  const handleSetRole = (n, role) => {
+    const next = applyNodeRole(roles, n, role)
+    setRoles(next); saveNodeRoles(next)
+  }
+  const handleMarkAll = (role) => {
+    const next = applyNodeRoleBatch(roles, preview, role)
+    setRoles(next); saveNodeRoles(next)
+  }
   const roleOf = (n) => { const k = nodeRoleKey(n); return k && roles[k] ? roles[k] : 'none' }
   const landingCount = preview.filter(n => roleOf(n) === 'landing').length
   const directCount = preview.filter(n => roleOf(n) === 'direct').length

@@ -64,57 +64,48 @@ export function saveSubCache(username, nodes) {
   try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
 }
 
-const LS_NODE_ROLES = 'nf-node-roles'
-
 export function nodeRoleKey(n) {
   return n.protocol && n.host && n.port ? `${n.protocol}:${n.host}:${n.port}` : null
 }
 
-export function loadNodeRoles() {
+export async function fetchNodeRoles() {
   try {
-    const raw = localStorage.getItem(LS_NODE_ROLES)
-    return raw ? JSON.parse(raw) : {}
+    const res = await fetch('/api/node-roles')
+    if (!res.ok) return {}
+    const d = await res.json()
+    return d?.roles || {}
   } catch { return {} }
 }
 
-function saveNodeRoles(roles) {
-  try {
-    const clean = Object.fromEntries(Object.entries(roles).filter(([, v]) => v === 'landing' || v === 'direct'))
-    if (Object.keys(clean).length) localStorage.setItem(LS_NODE_ROLES, JSON.stringify(clean))
-    else localStorage.removeItem(LS_NODE_ROLES)
-  } catch {}
-  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+export async function saveNodeRoles(roles) {
+  const clean = {}
+  for (const [k, v] of Object.entries(roles)) {
+    if (v === 'landing' || v === 'direct') clean[k] = v
+  }
+  await fetch('/api/node-roles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roles: clean }),
+  })
+  return clean
 }
 
-export function getNodeRole(n) {
+export function applyNodeRole(roles, n, role) {
+  const next = { ...roles }
   const key = nodeRoleKey(n)
-  if (!key) return 'none'
-  return loadNodeRoles()[key] || 'none'
+  if (!key) return next
+  if (role === 'none') delete next[key]; else next[key] = role
+  return next
 }
 
-export function loadLandingMarks() {
-  const roles = loadNodeRoles()
-  return new Set(Object.entries(roles).filter(([, v]) => v === 'landing').map(([k]) => k))
-}
-
-export function loadDirectMarks() {
-  const roles = loadNodeRoles()
-  return new Set(Object.entries(roles).filter(([, v]) => v === 'direct').map(([k]) => k))
-}
-
-export function setNodeRoleBatch(nodes, role) {
-  const roles = loadNodeRoles()
+export function applyNodeRoleBatch(roles, nodes, role) {
+  const next = { ...roles }
   for (const n of nodes) {
     const key = nodeRoleKey(n)
     if (!key) continue
-    if (role === 'none') delete roles[key]; else roles[key] = role
+    if (role === 'none') delete next[key]; else next[key] = role
   }
-  saveNodeRoles(roles)
-  return roles
-}
-
-export function setNodeRole(n, role) {
-  return setNodeRoleBatch([n], role)
+  return next
 }
 
 export function nodeKey(n) {

@@ -780,6 +780,40 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiGetNodeRoles(w http.ResponseWriter, r *http.Request) {
+	val, _ := db.GetSetting(s.DB, "node_roles")
+	var roles map[string]string
+	if val != "" {
+		json.Unmarshal([]byte(val), &roles)
+	}
+	if roles == nil {
+		roles = map[string]string{}
+	}
+	jsonOK(w, map[string]any{"roles": roles})
+}
+
+func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Roles map[string]string `json:"roles"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	clean := make(map[string]string)
+	for k, v := range body.Roles {
+		if v == "landing" || v == "direct" {
+			clean[k] = v
+		}
+	}
+	b, _ := json.Marshal(clean)
+	if err := db.SetSetting(s.DB, "node_roles", string(b)); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 // --- Rules ---
 
 func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {

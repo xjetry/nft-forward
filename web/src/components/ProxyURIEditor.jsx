@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api'
 import { useToast } from './Layout'
 import { SensText } from './ui'
 import {
   loadLocalURIs, saveLocalURIs, parseURIs,
   loadSubURLs, saveSubURLs, loadSubCache, saveSubCache,
-  nodeRoleKey, getNodeRole, setNodeRole, setNodeRoleBatch, loadNodeRoles,
+  nodeRoleKey, fetchNodeRoles, saveNodeRoles, applyNodeRole, applyNodeRoleBatch,
 } from '../lib/landing'
 
 const MAX_H = 420
@@ -34,8 +34,10 @@ export function ProxyURIEditor({ username, blurred }) {
   const [text, setText] = useState(() => loadLocalURIs(username))
   const [subURLs, setSubURLs] = useState(() => loadSubURLs(username))
   const [subNodes, setSubNodes] = useState(() => loadSubCache(username))
-  const [roles, setRoles] = useState(() => loadNodeRoles())
+  const [roles, setRoles] = useState({})
   const [fetching, setFetching] = useState(false)
+
+  useEffect(() => { fetchNodeRoles().then(setRoles) }, [])
   const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
   const toast = useToast()
   const [subRef, subH] = usePersistedHeight(`nf-sub-textarea-h:${username}`)
@@ -74,13 +76,15 @@ export function ProxyURIEditor({ username, blurred }) {
   }
 
   const handleSetRole = (n, role) => {
-    setNodeRole(n, role)
-    setRoles(loadNodeRoles())
+    const next = applyNodeRole(roles, n, role)
+    setRoles(next)
+    saveNodeRoles(next)
   }
 
   const handleMarkAll = (role) => {
-    setNodeRoleBatch(subNodes, role)
-    setRoles(loadNodeRoles())
+    const next = applyNodeRoleBatch(roles, subNodes, role)
+    setRoles(next)
+    saveNodeRoles(next)
   }
 
   const hasNodes = showSub && subNodes.length > 0
