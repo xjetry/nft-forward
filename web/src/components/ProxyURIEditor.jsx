@@ -8,6 +8,8 @@ import {
   loadLandingMarks, loadDirectMarks, saveSubMarks, nodeKey,
 } from '../lib/landing'
 
+const MAX_H = 420
+
 export function ProxyURIEditor({ username, blurred }) {
   const [text, setText] = useState(() => loadLocalURIs(username))
   const [subURLs, setSubURLs] = useState(() => loadSubURLs(username))
@@ -82,6 +84,20 @@ export function ProxyURIEditor({ username, blurred }) {
     return 'none'
   }
 
+  const sideBySide = showSub && subNodes.length > 0
+
+  const manualSection = (standalone) => (
+    <div className={`flex flex-col min-h-0 ${standalone ? '' : ''}`}>
+      <label className="text-[13px] font-semibold text-ink-soft mb-1.5 flex-shrink-0">手动填写</label>
+      <textarea
+        className={`input-field font-mono w-full overflow-y-auto !py-3 !px-3.5 text-[13px] ${sideBySide ? 'flex-1 resize-none min-h-0' : 'min-h-[80px] resize-y'}`}
+        style={!sideBySide ? { maxHeight: MAX_H } : undefined}
+        value={text} onChange={e => setText(e.target.value)}
+        placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
+      <button onClick={saveManual} className="btn-primary mt-3 self-start flex-shrink-0">保存</button>
+    </div>
+  )
+
   return (
     <div className="card flex flex-col">
       <div className="px-6 py-[22px] flex-1 flex flex-col">
@@ -101,14 +117,14 @@ export function ProxyURIEditor({ username, blurred }) {
           <span className="text-amber-500 font-semibold"> 仅保存在本浏览器。</span>
         </p>
 
-        {/* Subscription */}
+        {/* Subscription URL input */}
         <button type="button" onClick={() => setShowSub(v => !v)}
           className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
           <svg className={`w-3 h-3 transition-transform ${showSub ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
           订阅地址{subNodes.length > 0 && <span className="text-ink-mut">（{subNodes.length} 个节点）</span>}
         </button>
         {showSub && (
-          <div className="mb-4 pl-0.5">
+          <div className="mb-3 pl-0.5">
             <textarea className="input-field font-mono w-full min-h-[60px] resize-y !py-2.5 !px-3 text-[13px]" value={subURLs} onChange={e => setSubURLs(e.target.value)}
               placeholder="https://example.com/subscribe?token=..." />
             <div className="flex items-center gap-2 mt-2">
@@ -117,50 +133,50 @@ export function ProxyURIEditor({ username, blurred }) {
               </button>
               <span className="text-[12px] text-ink-mut">通过服务器代理获取。</span>
             </div>
-
-            {subNodes.length > 0 && (
-              <div className="mt-3 border border-line rounded-[10px] overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-                  <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
-                  <div className="flex gap-1.5">
-                    <button onClick={() => markAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => markAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => markAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
-                  </div>
-                </div>
-                <div className="max-h-[280px] overflow-y-auto">
-                  <table className="w-full text-[13px]">
-                    <tbody>
-                      {subNodes.map((n, i) => {
-                        const st = nodeState(n)
-                        return (
-                          <tr key={i} className="border-t border-line-soft">
-                            <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
-                            <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
-                            <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
-                              <SensText blurred={blurred}>{nodeKey(n)}</SensText>
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <TriToggle state={st} onChange={(k) => setMark(n, k)} />
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Manual URIs */}
-        <label className="text-[13px] font-semibold text-ink-soft mb-1.5">手动填写</label>
-        <textarea className="input-field font-mono w-full flex-1 min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]" value={text} onChange={e => setText(e.target.value)}
-          placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
-        <button onClick={saveManual} className="btn-primary mt-3 self-start">保存</button>
+        {/* Side-by-side: node list + manual URIs */}
+        {sideBySide ? (
+          <div className="grid grid-cols-[1fr_1fr] gap-4" style={{ maxHeight: MAX_H }}>
+            {/* Left: node list */}
+            <div className="border border-line rounded-[10px] overflow-hidden flex flex-col min-h-0">
+              <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px] flex-shrink-0">
+                <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
+                <div className="flex gap-1.5">
+                  <button onClick={() => markAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
+                  <span className="text-ink-mut">|</span>
+                  <button onClick={() => markAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
+                  <span className="text-ink-mut">|</span>
+                  <button onClick={() => markAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
+                </div>
+              </div>
+              <div className="overflow-y-auto min-h-0">
+                <table className="w-full text-[13px]">
+                  <tbody>
+                    {subNodes.map((n, i) => (
+                      <tr key={i} className="border-t border-line-soft">
+                        <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
+                        <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
+                        <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
+                          <SensText blurred={blurred}>{nodeKey(n)}</SensText>
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          <TriToggle state={nodeState(n)} onChange={(k) => setMark(n, k)} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Right: manual URIs */}
+            {manualSection(false)}
+          </div>
+        ) : (
+          manualSection(true)
+        )}
       </div>
     </div>
   )
