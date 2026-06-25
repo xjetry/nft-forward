@@ -1529,10 +1529,9 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 			gn.Online = o
 		}
 	}
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"user": apiUserFullView(u), "nodes": grantedNodes, "grants": grants,
-		"rules": rules, "all_nodes": nodes, "node_by_id": nodeByID,
+		"rules": rules,
 	})
 }
 
@@ -1540,8 +1539,6 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	db.FillRuleTraffic(s.DB, rules)
-	nodes, _ := db.ListNodes(s.DB)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	idx := landingIndex(s.landingNodesFor(u, false))
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
@@ -1550,9 +1547,10 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		views = append(views, item)
 	}
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
+	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"rules": views, "nodes": grantedNodes,
-		"all_nodes": nodes, "node_by_id": nodeByID,
+		"node_by_id": grantedByID,
 	})
 }
 
