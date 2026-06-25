@@ -395,7 +395,7 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
           {hops.map((h, i) => (
             <tr key={i}>
               <td className="font-mono text-xs text-ink-mut">{i + 1}</td>
-              <td className="font-semibold">{h.node_name || `#${h.hop_node_id}`}</td>
+              <td className="font-semibold"><Link to={`/nodes/${h.hop_node_id}`} className="text-blue-600 hover:underline">{h.node_name || `#${h.hop_node_id}`}</Link></td>
               <td>
                 <Select value={modes[i]} onChange={v => setMode(i, v)} style={{ width: 130 }}
                   options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
