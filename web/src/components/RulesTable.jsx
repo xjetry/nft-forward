@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
 import { fmtBytes } from '../lib/fmt'
+import { uriToClashYaml } from '../lib/yaml-convert'
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
    variant drives the columns that differ: admin shows id/owner and links to a
@@ -24,6 +25,14 @@ function SortArrow({ dir }) {
 export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick }) {
   const isAdmin = variant === 'admin'
   const [sort, setSort] = useState({ col: null, dir: null })
+  const [copyFmt, setCopyFmt] = useState(() => localStorage.getItem('nf-copy-fmt') || 'uri')
+  const toggleCopyFmt = () => {
+    setCopyFmt(f => {
+      const next = f === 'uri' ? 'yaml' : 'uri'
+      localStorage.setItem('nf-copy-fmt', next)
+      return next
+    })
+  }
 
   const cycleSort = (col) => {
     setSort(s => {
@@ -55,7 +64,13 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
           </th>
           <th>协议</th>
           <th>入口</th>
-          <th>出口</th>
+          <th>
+            <span className="inline-flex items-center gap-1.5">出口
+              <button type="button" onClick={toggleCopyFmt}
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-line bg-surface text-ink-mut hover:text-ink hover:border-ink-mut transition-colors"
+                title="切换复制代理连接的格式">{copyFmt.toUpperCase()}</button>
+            </span>
+          </th>
           {isAdmin && (
             <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
               <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
@@ -95,9 +110,12 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                   {!isAdmin && r.exit_kind === 'landing' && r.landing_name
                     ? <span className="font-sans">{r.landing_name}</span>
                     : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
-                  {r.relay_uri && (
-                    <CopyText text={r.relay_uri}><span className="text-blue-600 font-sans">复制代理URI</span></CopyText>
-                  )}
+                  {r.relay_uri && (() => {
+                    const yaml = copyFmt === 'yaml' ? uriToClashYaml(r.relay_uri) : null
+                    const text = yaml || r.relay_uri
+                    const label = yaml ? '复制YAML' : '复制代理URI'
+                    return <CopyText text={text}><span className="text-blue-600 font-sans">{label}</span></CopyText>
+                  })()}
                 </div>
               </td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}

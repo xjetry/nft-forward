@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { resolvedDark, getStoredTheme, setStoredTheme } from '../lib/theme'
-import { hasLocalURIs } from '../lib/landing'
+import { hasLocalURIs, hasLocalProxies } from '../lib/landing'
 
 /* ---------- User context ---------- */
 const UserCtx = createContext(null)
@@ -111,6 +111,7 @@ export function Layout({ children }) {
                   <SideLink to="/nodes" icon={<IconNodes />}>节点</SideLink>
                   <SideLink to="/rules" icon={<IconForwards />}>规则</SideLink>
                   <SideLink to="/users" icon={<IconUserGroup />}>用户</SideLink>
+                  {hasLocalProxies(user.username) && <SideLink to="/proxies" icon={<IconProxy />}>我的代理</SideLink>}
                 </NavGroup>
               </>
             ) : (
@@ -120,6 +121,7 @@ export function Layout({ children }) {
                 </NavGroup>
                 <NavGroup label="转发">
                   <SideLink to="/my/rules" icon={<IconForwards />}>我的规则</SideLink>
+                  {hasLocalProxies(user.username) && <SideLink to="/proxies" icon={<IconProxy />}>我的代理</SideLink>}
                   {(user.has_landing_source || hasLocalURIs(user.username)) && <SideLink to="/my/landing" icon={<IconNodes />}>落地节点</SideLink>}
                 </NavGroup>
               </>
@@ -235,4 +237,7 @@ function IconUserGroup() {
 }
 function IconForwards() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h12"/><path d="M13 7l5 5-5 5"/><path d="M20 5v14"/></svg>
+}
+function IconProxy() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
 }

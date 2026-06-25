@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { fmtBytes, fmtTime } from '../lib/fmt'
-import { Layout, useBlur } from '../components/Layout'
+import { Layout, useBlur, useUser } from '../components/Layout'
 import { Loading, Empty, Badge, SensText, NodeTypeBadge } from '../components/ui'
+import { ProxyURIEditor } from '../components/ProxyURIEditor'
 
 export default function Dashboard() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const blurred = useBlur()
+  const { user } = useUser()
 
   useEffect(() => {
     api.get('/dashboard').then(setData).catch(console.error).finally(() => setLoading(false))
@@ -46,26 +48,31 @@ export default function Dashboard() {
           icon={<><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/></>} />
       </div>
 
-      {/* Node status */}
-      <div className="card">
-        <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
-        {nodes.length ? (
-          <table className="tbl">
-            <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>状态</th><th>心跳</th></tr></thead>
-            <tbody>
-              {nodes.map(n => (
-                <tr key={n.id}>
-                  <td><Link to={`/nodes/${n.id}`} className="font-semibold text-blue-600 hover:underline">{n.name}</Link></td>
-                  <td className="font-mono text-xs text-ink-soft"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></td>
-                  <td><NodeTypeBadge type={n.node_type} /></td>
-                  <td className="font-mono text-ink-soft">{ruleCount[n.id] || 0}</td>
-                  <td><NodeStatus node={n} /></td>
-                  <td className="font-mono text-ink-mut text-xs">{fmtTime(n.last_seen)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : <Empty title="暂无节点" />}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-[18px] mb-[22px]">
+        {/* Node status */}
+        <div className="card">
+          <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
+          {nodes.length ? (
+            <table className="tbl">
+              <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>状态</th><th>心跳</th></tr></thead>
+              <tbody>
+                {nodes.map(n => (
+                  <tr key={n.id}>
+                    <td><Link to={`/nodes/${n.id}`} className="font-semibold text-blue-600 hover:underline">{n.name}</Link></td>
+                    <td className="font-mono text-xs text-ink-soft"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></td>
+                    <td><NodeTypeBadge type={n.node_type} /></td>
+                    <td className="font-mono text-ink-soft">{ruleCount[n.id] || 0}</td>
+                    <td><NodeStatus node={n} /></td>
+                    <td className="font-mono text-ink-mut text-xs">{fmtTime(n.last_seen)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <Empty title="暂无节点" />}
+        </div>
+
+        {/* My proxy URIs (browser-local) */}
+        <ProxyURIEditor username={user?.username} blurred={blurred} />
       </div>
     </Layout>
   )

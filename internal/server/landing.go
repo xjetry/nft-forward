@@ -87,6 +87,28 @@ func (s *Server) apiSetUserLanding(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes})
 }
 
+// apiSubFetch proxies a subscription URL fetch so the browser avoids CORS.
+func (s *Server) apiSubFetch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	url := strings.TrimSpace(body.URL)
+	if url == "" || (!strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://")) {
+		jsonErr(w, http.StatusBadRequest, "订阅地址须以 http:// 或 https:// 开头")
+		return
+	}
+	nodes, err := s.Landing.Subscription(url, true)
+	if err != nil {
+		jsonErr(w, http.StatusBadGateway, "获取订阅失败: "+err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"nodes": nodes})
+}
+
 // apiMyLandingNodes returns the current user's landing nodes for the create-rule
 // picker and the landing-nodes nav page. ?refresh=1 bypasses the subscription
 // cache.

@@ -43,7 +43,7 @@ func ParseURIs(uris []string) []Node {
 func parseOne(uri string) (Node, bool) {
 	idx := strings.Index(uri, "://")
 	if idx <= 0 {
-		return Node{}, false
+		return parseSnell(uri)
 	}
 	scheme := strings.ToLower(uri[:idx])
 	switch scheme {
@@ -82,6 +82,27 @@ func parseAuthority(uri, proto string) (Node, bool) {
 		return Node{}, false
 	}
 	return Node{Name: u.Fragment, Protocol: proto, Host: host, Port: port, URI: uri}, true
+}
+
+// parseSnell handles Surge-style snell config lines:
+//   Name = snell, host, port, psk = xxx, version = 5, ...
+func parseSnell(line string) (Node, bool) {
+	eqIdx := strings.Index(line, "=")
+	if eqIdx < 0 {
+		return Node{}, false
+	}
+	name := strings.TrimSpace(line[:eqIdx])
+	rest := strings.TrimSpace(line[eqIdx+1:])
+	parts := strings.SplitN(rest, ",", -1)
+	if len(parts) < 3 || strings.TrimSpace(strings.ToLower(parts[0])) != "snell" {
+		return Node{}, false
+	}
+	host := strings.TrimSpace(parts[1])
+	port, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+	if err != nil || host == "" || port < 1 || port > 65535 {
+		return Node{}, false
+	}
+	return Node{Name: name, Protocol: "snell", Host: host, Port: port, URI: line}, true
 }
 
 func parseVMess(uri string) (Node, bool) {
@@ -145,7 +166,7 @@ func parseSS(uri string) (Node, bool) {
 func RewriteEndpoint(uri, newHost string, newPort int) (string, error) {
 	idx := strings.Index(uri, "://")
 	if idx <= 0 {
-		return "", errInvalid
+		return rewriteSnell(uri, newHost, newPort)
 	}
 	switch strings.ToLower(uri[:idx]) {
 	case "vmess":
@@ -177,6 +198,21 @@ func rewriteAuthority(uri, newHost string, newPort int) (string, error) {
 		userinfo = authority[:at+1]
 	}
 	return prefix + userinfo + net.JoinHostPort(newHost, strconv.Itoa(newPort)) + tail, nil
+}
+
+func rewriteSnell(line, newHost string, newPort int) (string, error) {
+	eqIdx := strings.Index(line, "=")
+	if eqIdx < 0 {
+		return "", errInvalid
+	}
+	rest := strings.TrimSpace(line[eqIdx+1:])
+	parts := strings.SplitN(rest, ",", -1)
+	if len(parts) < 3 || strings.TrimSpace(strings.ToLower(parts[0])) != "snell" {
+		return "", errInvalid
+	}
+	parts[1] = " " + newHost
+	parts[2] = " " + strconv.Itoa(newPort)
+	return line[:eqIdx+1] + " " + strings.Join(parts, ","), nil
 }
 
 func rewriteVMess(uri string, newHost string, newPort int) (string, error) {

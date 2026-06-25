@@ -16,6 +16,7 @@ import UserDetail from './pages/users/Detail'
 import MyDashboard from './pages/my/Dashboard'
 import MyRules from './pages/my/Rules'
 import MyLandingNodes from './pages/my/LandingNodes'
+import Proxies from './pages/Proxies'
 
 function ProtectedRoute({ children }) {
   const { user } = useUser()
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="/my/landing" element={<UserRoute><MyLandingNodes /></UserRoute>} />
 
           {/* Shared routes */}
+          <Route path="/proxies" element={<ProtectedRoute><Proxies /></ProtectedRoute>} />
           <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
 
           <Route path="*" element={<NotFound />} />

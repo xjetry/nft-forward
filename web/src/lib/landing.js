@@ -6,6 +6,8 @@
    winning on a host:port collision. */
 
 const LS_PREFIX = 'nf-landing-uris:'
+const LS_SUB_URL_PREFIX = 'nf-sub-urls:'
+const LS_SUB_CACHE_PREFIX = 'nf-sub-cache:'
 
 export function loadLocalURIs(username) {
   if (!username) return ''
@@ -25,6 +27,65 @@ export function saveLocalURIs(username, text) {
 
 export function hasLocalURIs(username) {
   return loadLocalURIs(username).trim() !== ''
+}
+
+export function hasLocalProxies(username) {
+  return hasLocalURIs(username) || loadSubURLs(username).trim() !== ''
+}
+
+export function loadSubURLs(username) {
+  if (!username) return ''
+  try { return localStorage.getItem(LS_SUB_URL_PREFIX + username) || '' } catch { return '' }
+}
+
+export function saveSubURLs(username, text) {
+  if (!username) return
+  try {
+    if (text.trim()) localStorage.setItem(LS_SUB_URL_PREFIX + username, text)
+    else localStorage.removeItem(LS_SUB_URL_PREFIX + username)
+  } catch {}
+  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+}
+
+export function loadSubCache(username) {
+  if (!username) return []
+  try {
+    const raw = localStorage.getItem(LS_SUB_CACHE_PREFIX + username)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+export function saveSubCache(username, nodes) {
+  if (!username) return
+  try {
+    if (nodes.length) localStorage.setItem(LS_SUB_CACHE_PREFIX + username, JSON.stringify(nodes))
+    else localStorage.removeItem(LS_SUB_CACHE_PREFIX + username)
+  } catch {}
+  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+}
+
+const LS_MARKS_PREFIX = 'nf-landing-marks:'
+
+export function loadLandingMarks(username) {
+  if (!username) return new Set()
+  try {
+    const raw = localStorage.getItem(LS_MARKS_PREFIX + username)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch { return new Set() }
+}
+
+export function saveLandingMarks(username, marks) {
+  if (!username) return
+  try {
+    const arr = [...marks]
+    if (arr.length) localStorage.setItem(LS_MARKS_PREFIX + username, JSON.stringify(arr))
+    else localStorage.removeItem(LS_MARKS_PREFIX + username)
+  } catch {}
+  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+}
+
+export function nodeKey(n) {
+  return n.host && n.port ? joinHostPort(n.host, n.port) : null
 }
 
 /* Parse a multiline blob of proxy URIs into landing nodes, skipping blank
@@ -76,18 +137,22 @@ export function mergeLanding(...lists) {
 /* Replace a proxy URI's connection host:port, preserving everything else. */
 export function rewriteEndpoint(uri, host, port) {
   const i = uri.indexOf('://')
-  if (i <= 0) return null
+  if (i <= 0) return rewriteSnell(uri, host, port)
   const scheme = uri.slice(0, i).toLowerCase()
   if (scheme === 'vmess') return rewriteVMess(uri, host, port)
   if (scheme === 'ss') return rewriteSS(uri, host, port)
   return rewriteAuthority(uri, host, port)
 }
 
+export function tryParseURI(uri) {
+  return parseOne((uri || '').trim())
+}
+
 /* ---------- internals ---------- */
 
 function parseOne(uri) {
   const i = uri.indexOf('://')
-  if (i <= 0) return null
+  if (i <= 0) return parseSnell(uri)
   const scheme = uri.slice(0, i).toLowerCase()
   if (scheme === 'vmess') return parseVMess(uri)
   if (scheme === 'ss') return parseSS(uri)
@@ -190,6 +255,30 @@ function rewriteSS(uri, newHost, newPort) {
   if (at < 0) return null
   const payload = dec.slice(0, at + 1) + joinHostPort(newHost, newPort)
   return 'ss://' + b64encode(payload) + query + frag
+}
+
+function parseSnell(line) {
+  const eq = line.indexOf('=')
+  if (eq < 0) return null
+  const name = line.slice(0, eq).trim()
+  const rest = line.slice(eq + 1).trim()
+  const parts = rest.split(',').map(s => s.trim())
+  if (parts.length < 3 || parts[0].toLowerCase() !== 'snell') return null
+  const host = parts[1]
+  const port = Number(parts[2])
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null
+  return { name, protocol: 'snell', host, port, uri: line }
+}
+
+function rewriteSnell(line, newHost, newPort) {
+  const eq = line.indexOf('=')
+  if (eq < 0) return null
+  const rest = line.slice(eq + 1).trim()
+  const parts = rest.split(',')
+  if (parts.length < 3 || parts[0].trim().toLowerCase() !== 'snell') return null
+  parts[1] = ' ' + newHost
+  parts[2] = ' ' + String(newPort)
+  return line.slice(0, eq + 1) + ' ' + parts.join(',')
 }
 
 function splitHostPort(authority) {

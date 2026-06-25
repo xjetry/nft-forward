@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Modal, Select } from './ui'
 import { useToast } from './Layout'
+import { tryParseURI } from '../lib/landing'
 
 const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', comment: '' }
 
@@ -18,7 +19,7 @@ const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custo
    the browser, so the modal only deals in host:port here; the rules page
    resolves the relay URI client-side. Admin callers omit the prop and keep the
    plain host:port box. */
-export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit }) {
+export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit, onAddProxyURI }) {
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const toast = useToast()
@@ -38,6 +39,18 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   }, [open])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleExitBlur = () => {
+    if (!landingEnabled || form.exit_kind !== 'custom') return
+    const val = form.exit.trim()
+    if (!val.includes('://')) return
+    const node = tryParseURI(val)
+    if (!node) return
+    const hp = node.host.includes(':') ? `[${node.host}]:${node.port}` : `${node.host}:${node.port}`
+    if (onAddProxyURI) onAddProxyURI(val)
+    setForm(f => ({ ...f, exit_kind: 'landing', exit: hp }))
+    toast(`已识别 ${node.protocol} 代理并保存`)
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -97,7 +110,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               ) : (
                 <>
                   <label className="fl">出口地址</label>
-                  <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+                  <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} onBlur={handleExitBlur} required placeholder="host:port 或代理 URI" />
                 </>
               )}
             </>

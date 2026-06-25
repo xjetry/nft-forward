@@ -244,6 +244,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/probe", s.probeEndpoint)
 			r.Get("/probe-chain", s.probeChainEndpoint)
 			r.Get("/dashboard", s.apiDashboard)
+			r.Post("/sub-fetch", s.apiSubFetch)
 		})
 
 		// Admin routes

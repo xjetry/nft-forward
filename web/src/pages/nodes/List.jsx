@@ -13,7 +13,7 @@ export default function NodeList() {
   const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
   const [search, setSearch] = useState('')
-  const [tab, setTab] = useState('single')
+  const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
   const [dragIndex, setDragIndex] = useState(null)
   // Default on, persisted per-browser: most of the time you want the working
   // set, but the preference is a local view choice, not server state.
@@ -21,6 +21,7 @@ export default function NodeList() {
   const toast = useToast()
   const confirm = useConfirm()
 
+  useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
 
   const load = () => {

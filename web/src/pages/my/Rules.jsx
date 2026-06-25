@@ -5,7 +5,7 @@ import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
-import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs } from '../../lib/landing'
+import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, loadLandingMarks, nodeKey } from '../../lib/landing'
 
 export default function MyRules() {
   const [data, setData] = useState(null)
@@ -23,8 +23,25 @@ export default function MyRules() {
   // The user's own proxy URIs live only in localStorage (never sent to the
   // server). Parse them here to both feed the create picker and resolve a
   // client-side relay URI for rules whose exit matches one of them.
-  const localNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
+  const [localVer, setLocalVer] = useState(0)
+  const localNodes = useMemo(() => {
+    const manual = parseURIs(loadLocalURIs(user?.username))
+    const sub = loadSubCache(user?.username)
+    const marks = loadLandingMarks(user?.username)
+    const landingSub = sub.filter(n => marks.has(nodeKey(n)))
+    return mergeLanding(manual, landingSub)
+  }, [user, localVer])
   const localIdx = useMemo(() => landingIndex(localNodes), [localNodes])
+
+  const addProxyURI = (uri) => {
+    if (!user?.username) return
+    const existing = loadLocalURIs(user.username)
+    const lines = existing.split('\n').map(l => l.trim()).filter(Boolean)
+    if (lines.includes(uri.trim())) return
+    lines.push(uri.trim())
+    saveLocalURIs(user.username, lines.join('\n'))
+    setLocalVer(v => v + 1)
+  }
 
   const load = () => {
     setLoading(true)
@@ -94,7 +111,7 @@ export default function MyRules() {
 
       <RuleFormModal
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
-        nodes={nodes} landingNodes={landingNodes} initial={createInitial}
+        nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
           await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
@@ -105,7 +122,7 @@ export default function MyRules() {
 
       <RuleFormModal
         open={!!editRule} onClose={() => setEditRule(null)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null}
+        nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
           await api.put(`/my/rules/${editRule.id}`, {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,

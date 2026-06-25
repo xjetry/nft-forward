@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
 import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
-import { Layout, useToast } from '../../components/Layout'
+import { Layout } from '../../components/Layout'
 import { Loading, Empty, Badge, NodeTypeBadge } from '../../components/ui'
-import { loadLocalURIs, saveLocalURIs, parseURIs } from '../../lib/landing'
+import { ProxyURIEditor } from '../../components/ProxyURIEditor'
 
 export default function MyDashboard() {
   const [data, setData] = useState(null)
@@ -54,7 +54,7 @@ export default function MyDashboard() {
         </div>
 
         {/* My proxy URIs (browser-local) */}
-        <MyProxyURIs username={user.username} />
+        <ProxyURIEditor username={user.username} />
       </div>
 
       {/* Granted nodes */}
@@ -89,35 +89,3 @@ function NodeOnline({ node }) {
   return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
 }
 
-// MyProxyURIs edits the user's own proxy URIs, kept only in this browser
-// (localStorage) and never uploaded. They feed the create-rule landing picker
-// and the relay-URI copy on the rules page.
-function MyProxyURIs({ username }) {
-  const [text, setText] = useState(() => loadLocalURIs(username))
-  const toast = useToast()
-  const count = parseURIs(text).length
-
-  const save = () => {
-    saveLocalURIs(username, text)
-    toast('已保存到本浏览器')
-  }
-
-  return (
-    <div className="card flex flex-col">
-      <div className="px-6 py-[22px] flex-1 flex flex-col">
-        <div className="flex items-baseline gap-2.5 mb-3.5">
-          <h3 className="text-[16px] font-bold">我的代理 URI</h3>
-          <span className="text-[13px] text-ink-mut">{count} 个节点</span>
-        </div>
-        <p className="text-[13px] leading-[1.7] text-ink-soft mb-3.5">
-          每行一条（vless:// / trojan:// / ss:// / vmess:// 等）。
-          <span className="text-amber-500 font-semibold">仅保存在本浏览器，不会上传服务器。</span>
-          创建规则时可从中选择落地出口；规则出口与某条 URI 的 host:port 一致时，规则页可一键复制中转代理 URI。
-        </p>
-        <textarea className="input-field font-mono w-full flex-1 min-h-[100px] resize-y !py-3 !px-3.5" value={text} onChange={e => setText(e.target.value)}
-          placeholder={'vless://…\ntrojan://…'} />
-        <button onClick={save} className="btn-primary mt-3.5 self-start">保存</button>
-      </div>
-    </div>
-  )
-}
