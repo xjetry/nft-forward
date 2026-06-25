@@ -739,9 +739,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var ok, fail int
 	for _, n := range nodes {
-		// Already on the target binary: nothing to push (single-node upgrade
-		// still reconciles a stale version label via upgradeFor).
-		if n.AgentSHA != "" && n.AgentSHA == art.SHA {
+		if n.NodeType == "composite" || n.Disabled {
 			continue
 		}
 		err := s.Hub.SendUpgrade(n.ID, upgradeFor(n, art, panelURL))
