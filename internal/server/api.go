@@ -1900,6 +1900,8 @@ func apiUserFullView(u *db.User) map[string]any {
 	} else {
 		m["disable_reason"] = nil
 	}
+	m["landing_sub_url"] = u.LandingSubURL
+	m["landing_uris"] = u.LandingURIs
 	// Lets the user-side nav decide whether to show the landing-nodes entry
 	// without an extra round-trip.
 	m["has_landing_source"] = hasLandingSource(u)
