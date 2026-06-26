@@ -37,6 +37,7 @@ func New(d *sql.DB) (*Server, error) {
 	disp := &Dispatcher{DB: d, Hub: hub}
 	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
+		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
@@ -94,6 +95,29 @@ func (s *Server) enforceUserQuota(userID int64) {
 	for _, n := range nodes {
 		if err := s.dispatchToNode(n); err != nil {
 			log.Printf("quota: re-dispatch node %d after disabling user %d: %v", n, userID, err)
+		}
+	}
+}
+
+// enforcePerNodeQuota re-dispatches nodes affected by any per-node quota
+// overrun for userID. Only nodes whose rules include a hop where quota > 0
+// and used >= quota are targeted, so unrelated nodes are never churned.
+func (s *Server) enforcePerNodeQuota(userID int64, nodeID int64) {
+	exceeded, err := db.NodesExceedingQuota(s.DB, userID)
+	if err != nil {
+		log.Printf("quota: per-node check user %d: %v", userID, err)
+		return
+	}
+	for _, excNode := range exceeded {
+		affectedNodes, err := db.RulesAffectedByNode(s.DB, userID, excNode)
+		if err != nil {
+			log.Printf("quota: affected nodes for user %d node %d: %v", userID, excNode, err)
+			continue
+		}
+		for _, n := range affectedNodes {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("quota: re-dispatch node %d after per-node quota user %d: %v", n, userID, err)
+			}
 		}
 	}
 }
