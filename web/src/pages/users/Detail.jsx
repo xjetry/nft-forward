@@ -462,7 +462,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
                   {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}
                 </td>
                 <td className="px-3 py-2">
-                  {grantByNode[n.id]?.traffic_used_bytes > 0 && (
+                  {grantByNode[n.id]?.traffic_quota_bytes > 0 && grantByNode[n.id]?.traffic_used_bytes > 0 && (
                     <button onClick={() => resetNodeTraffic(n.id)} className="btn-danger-sm text-xs">重置</button>
                   )}
                 </td>
