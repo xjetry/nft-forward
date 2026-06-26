@@ -67,6 +67,7 @@ export default function UserDetail() {
                 <span className="font-mono">
                   {fmtTrafficGB(user.traffic_used_bytes, user.traffic_quota_bytes)}
                   {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
+                  {user.traffic_reset_days > 0 && <span className="text-ink-mut text-xs ml-1">每{user.traffic_reset_days}天重置</span>}
                 </span>
                 <span className="fl">到期时间</span>
                 <span className="font-mono">
@@ -86,6 +87,7 @@ export default function UserDetail() {
             {isRegularUser && <ExpiryForm userId={id} expiresAt={expiresAt} onDone={load} />}
             {isRegularUser && <MaxForwardsForm userId={id} maxForwards={user.max_forwards} onDone={load} />}
             {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
+            {isRegularUser && <ResetDaysForm userId={id} resetDays={user.traffic_reset_days} onDone={load} />}
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
             {/* Admin accounts can't be reset or deleted here. */}
@@ -207,6 +209,50 @@ function QuotaForm({ userId, quotaBytes, onDone }) {
   return (
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
       <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb} onChange={e => setGb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
+      <span className="text-xs text-ink-mut">GB</span>
+      <button type="submit" className="btn-secondary text-xs">设配额</button>
+    </form>
+  )
+}
+
+function ResetDaysForm({ userId, resetDays, onDone }) {
+  const [val, setVal] = useState(String(resetDays || 0))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const days = Math.max(0, Math.round(Number(val) || 0))
+    try {
+      await api.post(`/users/${userId}/reset-days`, { traffic_reset_days: days })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" step="1" value={val}
+        onChange={e => setVal(e.target.value)} style={{ width: 80 }} title="0 = 永不重置" />
+      <span className="text-xs text-ink-mut">天</span>
+      <button type="submit" className="btn-secondary text-xs">设周期</button>
+    </form>
+  )
+}
+
+function PerNodeQuotaForm({ userId, nodeId, quotaBytes, onDone }) {
+  const [gb, setGb] = useState(String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const bytes = Math.max(0, Math.round((Number(gb) || 0) * 1073741824))
+    try {
+      await api.post(`/users/${userId}/nodes/${nodeId}/quota`, { traffic_quota_bytes: bytes })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb}
+        onChange={e => setGb(e.target.value)} style={{ width: 80 }} title="0 = 不限" />
       <span className="text-xs text-ink-mut">GB</span>
       <button type="submit" className="btn-secondary text-xs">设配额</button>
     </form>
@@ -369,6 +415,11 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
     try { await api.del(`/users/${userId}/grants/${nodeId}`); toast('已撤销'); onDone() } catch (err) { toast(err.message) }
   }
 
+  const resetNodeTraffic = async (nodeId) => {
+    if (!(await confirm({ title: '重置节点流量', message: '清零该用户在此节点上的已用流量？', confirmText: '清零', danger: true }))) return
+    try { await api.post(`/users/${userId}/nodes/${nodeId}/reset-traffic`); toast('已重置'); onDone() } catch (err) { toast(err.message) }
+  }
+
   return (
     <div className="card mb-5">
       <div className="card-header"><h3 className="text-sm font-bold">已授权节点</h3></div>
@@ -393,7 +444,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>本用户上限</th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>本用户上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -404,6 +455,17 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
                 </td>
                 <td><NodeTypeBadge type={n.node_type} /></td>
                 <td className="font-mono">{grantByNode[n.id]?.max_forwards ?? '--'}</td>
+                <td className="px-3 py-2">
+                  <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
+                </td>
+                <td className="px-3 py-2 font-mono text-sm">
+                  {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}
+                </td>
+                <td className="px-3 py-2">
+                  {grantByNode[n.id]?.traffic_used_bytes > 0 && (
+                    <button onClick={() => resetNodeTraffic(n.id)} className="btn-danger-sm text-xs">重置</button>
+                  )}
+                </td>
                 <td className="text-right">
                   <button onClick={() => revokeOne(n.id)} className="btn-danger-sm text-xs">撤销</button>
                 </td>
