@@ -127,24 +127,30 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
 
 function ProbeIconButton({ ruleId }) {
   const [state, setState] = useState('idle')
-  const [result, setResult] = useState('')
+  const [total, setTotal] = useState('')
+  const [detail, setDetail] = useState('')
   const probe = () => {
     setState('loading')
     fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json()).then(d => {
       if (d.hops?.length) {
         const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
         setState(d.ok ? 'ok' : 'fail')
-        setResult(parts.join('+') + '=' + d.latency_ms + 'ms')
-      } else if (d.ok) { setState('ok'); setResult(d.latency_ms + 'ms') }
-      else { setState('fail'); setResult(d.error || '不通') }
-    }).catch(() => { setState('fail'); setResult('失败') })
+        setTotal(d.latency_ms + 'ms')
+        setDetail(parts.join(' → ') + ' = ' + d.latency_ms + 'ms')
+      } else if (d.ok) { setState('ok'); setTotal(d.latency_ms + 'ms'); setDetail('') }
+      else { setState('fail'); setTotal(d.error || '不通'); setDetail('') }
+    }).catch(() => { setState('fail'); setTotal('失败'); setDetail('') })
   }
-  const title = state === 'ok' ? result : state === 'fail' ? result : '测试连通性'
+  const tip = detail || total || '测试连通性'
   return (
-    <button onClick={probe} disabled={state === 'loading'} title={title}
-      className={`icon-btn ${state === 'ok' ? '!text-green-500 !border-green-500/30' : state === 'fail' ? '!text-red-400 !border-red-500/30' : ''}`}>
-      {state === 'loading' ? <Spinner className="w-4 h-4" /> : <IconPulse />}
-    </button>
+    <span className="inline-flex items-center gap-1">
+      <button onClick={probe} disabled={state === 'loading'} title={tip}
+        className={`icon-btn ${state === 'ok' ? '!text-green-500 !border-green-500/30' : state === 'fail' ? '!text-red-400 !border-red-500/30' : ''}`}>
+        {state === 'loading' ? <Spinner className="w-4 h-4" /> : <IconPulse />}
+      </button>
+      {state === 'ok' && <span className="text-[11px] text-green-600 font-mono font-semibold">{total}</span>}
+      {state === 'fail' && <span className="text-[11px] text-red-500 font-mono">{total}</span>}
+    </span>
   )
 }
 

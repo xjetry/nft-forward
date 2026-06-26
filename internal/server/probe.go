@@ -44,6 +44,15 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(probeResult{Error: "invalid node id"})
 			return
 		}
+		n, err := db.GetNode(s.DB, nodeID)
+		if err != nil {
+			json.NewEncoder(w).Encode(probeResult{Error: "node not found"})
+			return
+		}
+		if n.NodeType == "composite" {
+			s.probeCompositeToTarget(w, nodeID, target)
+			return
+		}
 		ack, err := s.Hub.SendProbe(nodeID, target)
 		if err != nil {
 			json.NewEncoder(w).Encode(probeResult{Error: err.Error()})
@@ -62,6 +71,26 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.Close()
 	json.NewEncoder(w).Encode(probeResult{OK: true, Latency: int(elapsed.Milliseconds())})
+}
+
+func (s *Server) probeCompositeToTarget(w http.ResponseWriter, compositeID int64, target string) {
+	hops, err := db.ListNodeHops(s.DB, compositeID)
+	if err != nil || len(hops) == 0 {
+		json.NewEncoder(w).Encode(probeResult{Error: "no hops"})
+		return
+	}
+	lastHop := hops[len(hops)-1]
+	nodeName := fmt.Sprintf("#%d", lastHop.HopNodeID)
+	if n, err := db.GetNode(s.DB, lastHop.HopNodeID); err == nil {
+		nodeName = n.Name
+	}
+	ack, err := s.Hub.SendProbe(lastHop.HopNodeID, target)
+	if err != nil {
+		json.NewEncoder(w).Encode(probeResult{Error: err.Error(), Hops: []hopProbe{{Node: nodeName, Target: target, Error: err.Error()}}})
+		return
+	}
+	hp := hopProbe{Node: nodeName, Target: target, Latency: ack.Latency, Error: ack.Error}
+	json.NewEncoder(w).Encode(probeResult{OK: ack.OK, Latency: ack.Latency, Hops: []hopProbe{hp}, Error: ack.Error})
 }
 
 func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {

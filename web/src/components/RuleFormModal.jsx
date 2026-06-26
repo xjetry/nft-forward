@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Modal, Select } from './ui'
+import { Modal, Select, ProbeButton } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
@@ -127,6 +127,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
         <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">{submitLabel}</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
+          {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
         </div>
       </form>
     </Modal>
