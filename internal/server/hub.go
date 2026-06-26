@@ -432,18 +432,19 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 // id and the owning rule/user.
 //
 // Per-node usage accumulates raw bytes on every physical hop. Global usage
-// accumulates bytes weighted by the reporting node's traffic_multiplier so
-// low-cost relay nodes don't inflate the same data multiple times.
+// accumulates bytes weighted by the hop's traffic_multiplier so a physical
+// node in a high-cost chain is priced differently from the same node in a
+// low-cost chain.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	hopMap, err := db.RuleHopMapByNode(h.DB, nodeID)
 	if err != nil {
 		log.Printf("hub: node %d load rule hop map for counters: %v", nodeID, err)
 		return
 	}
-	multipliers, err := db.NodeMultipliers(h.DB)
+	hopMultipliers, err := db.HopMultipliers(h.DB)
 	if err != nil {
-		log.Printf("hub: load node multipliers: %v", err)
-		multipliers = map[int64]float64{}
+		log.Printf("hub: load hop multipliers: %v", err)
+		hopMultipliers = map[int64]map[int64]float64{}
 	}
 	ruleMap, _ := db.RulesByID(h.DB)
 	if ruleMap == nil {
@@ -504,8 +505,16 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}
 
-		// global: weighted by multiplier
-		mult := multipliers[nodeID]
+		// global: weighted by the hop's multiplier within its composite chain.
+		// Direct rules (r.NodeID == nodeID) have no node_hop row, so they use 1.0.
+		mult := 1.0
+		if r.NodeID != nodeID {
+			if hm, ok := hopMultipliers[r.NodeID]; ok {
+				if m, ok := hm[nodeID]; ok {
+					mult = m
+				}
+			}
+		}
 		weighted := int64(math.Round(float64(s.BytesDelta) * mult))
 		if weighted > 0 {
 			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {

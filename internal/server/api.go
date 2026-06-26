@@ -394,10 +394,12 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "非组合节点")
 		return
 	}
+	type hopUpdate struct {
+		Mode              string  `json:"mode"`
+		TrafficMultiplier float64 `json:"traffic_multiplier"`
+	}
 	var body struct {
-		Hops []struct {
-			Mode string `json:"mode"`
-		} `json:"hops"`
+		Hops []hopUpdate `json:"hops"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -414,7 +416,8 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	}
 	hops := make([]db.NodeHop, len(existing))
 	for i, h := range existing {
-		mode := strings.ToLower(strings.TrimSpace(body.Hops[i].Mode))
+		hu := body.Hops[i]
+		mode := strings.ToLower(strings.TrimSpace(hu.Mode))
 		if mode == "" {
 			mode = "userspace"
 		}
@@ -422,7 +425,11 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
 			return
 		}
-		hops[i] = db.NodeHop{NodeID: id, Position: h.Position, HopNodeID: h.HopNodeID, Mode: mode}
+		mult := hu.TrafficMultiplier
+		if mult <= 0 {
+			mult = 1.0
+		}
+		hops[i] = db.NodeHop{NodeID: id, Position: h.Position, HopNodeID: h.HopNodeID, Mode: mode, TrafficMultiplier: mult}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -2007,32 +2014,6 @@ func isValidRelayHost(host string) bool {
 		return true
 	}
 	return resolver.IsHostname(host)
-}
-
-func (s *Server) apiSetNodeMultiplier(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		TrafficMultiplier float64 `json:"traffic_multiplier"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	if body.TrafficMultiplier < 0 {
-		jsonErr(w, http.StatusBadRequest, "倍率不能为负")
-		return
-	}
-	if _, err := s.DB.Exec(`UPDATE nodes SET traffic_multiplier=? WHERE id=?`, body.TrafficMultiplier, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "node.set_multiplier", strconv.FormatInt(id, 10), fmt.Sprintf("%.2f", body.TrafficMultiplier))
-	jsonOK(w, map[string]any{"ok": true})
 }
 
 func (s *Server) apiSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {

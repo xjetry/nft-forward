@@ -58,21 +58,29 @@ func TestResetAllUserTraffic(t *testing.T) {
 	}
 }
 
-func TestNodeMultipliers(t *testing.T) {
+func TestHopMultipliers(t *testing.T) {
 	d := openTestDB(t)
-	n1 := createTestNode(t, d, "x")
-	n2 := createTestNode(t, d, "y")
-	d.Exec(`UPDATE nodes SET traffic_multiplier=0.5 WHERE id=?`, n2)
-
-	m, err := NodeMultipliers(d)
+	n1 := createTestNode(t, d, "entry")
+	n2 := createTestNode(t, d, "relay")
+	comp, err := CreateNode(d, "composite-"+RandToken(4), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m[n1] != 1.0 {
-		t.Fatalf("n1 want 1.0, got %f", m[n1])
+	d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, comp.ID)
+	CreateNodeHops(d, comp.ID, []NodeHop{
+		{NodeID: comp.ID, Position: 0, HopNodeID: n1, Mode: "kernel", TrafficMultiplier: 1.0},
+		{NodeID: comp.ID, Position: 1, HopNodeID: n2, Mode: "userspace", TrafficMultiplier: 0.5},
+	})
+
+	m, err := HopMultipliers(d)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m[n2] != 0.5 {
-		t.Fatalf("n2 want 0.5, got %f", m[n2])
+	if m[comp.ID][n1] != 1.0 {
+		t.Fatalf("entry hop want 1.0, got %f", m[comp.ID][n1])
+	}
+	if m[comp.ID][n2] != 0.5 {
+		t.Fatalf("relay hop want 0.5, got %f", m[comp.ID][n2])
 	}
 }
 

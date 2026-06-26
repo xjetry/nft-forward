@@ -56,9 +56,6 @@ type Node struct {
 	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
 	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
 	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
-	// TrafficMultiplier scales the global traffic price for rules on this node.
-	// A value of 1.0 (the default) means no adjustment.
-	TrafficMultiplier  float64       `json:"traffic_multiplier"`
 }
 
 type Rule struct {
@@ -242,7 +239,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,traffic_multiplier`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -265,7 +262,6 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder,
-		&n.TrafficMultiplier,
 	); err != nil {
 		return nil, err
 	}

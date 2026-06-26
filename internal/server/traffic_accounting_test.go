@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/wsproto"
@@ -93,26 +94,44 @@ func TestApplyCountersMultiplier(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 100)
 
+	// Composite node topology: comp → n1 (mult=1.0), n2 (mult=0.5)
+	comp, _ := db.CreateNode(d, "comp", "", "")
+	d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, comp.ID)
+
 	n1, _ := db.CreateNode(d, "entry", "", "")
 	db.UpdateNodeRelayHost(d, n1.ID, "1.1.1.1")
-	d.Exec(`UPDATE nodes SET traffic_multiplier=1.0 WHERE id=?`, n1.ID)
 
 	n2, _ := db.CreateNode(d, "relay", "", "")
 	db.UpdateNodeRelayHost(d, n2.ID, "2.2.2.2")
-	d.Exec(`UPDATE nodes SET traffic_multiplier=0.5 WHERE id=?`, n2.ID)
 
+	db.CreateNodeHops(d, comp.ID, []db.NodeHop{
+		{NodeID: comp.ID, Position: 0, HopNodeID: n1.ID, Mode: "kernel", TrafficMultiplier: 1.0},
+		{NodeID: comp.ID, Position: 1, HopNodeID: n2.ID, Mode: "kernel", TrafficMultiplier: 0.5},
+	})
+
+	db.GrantNode(d, uid, comp.ID, 10, 0)
 	db.GrantNode(d, uid, n1.ID, 10, 0)
 	db.GrantNode(d, uid, n2.ID, 10, 0)
 
-	ruleID := createTestRuleWithHops(t, d, uid, n1.ID, n2.ID)
+	// Create a rule on the composite node and manually insert rule_hops on physical nodes.
+	rl := &db.Rule{
+		NodeID:  comp.ID,
+		OwnerID: sql.NullInt64{Int64: uid, Valid: true},
+		Name:    "test-comp", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
+	}
+	ruleID, _ := db.CreateRule(d, rl)
+	now := time.Now().Unix()
+	_ = now
+	d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,0,?,'tcp',10001,'2.2.2.2',10002,'kernel','')`, ruleID, n1.ID)
+	d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,1,?,'tcp',10002,'8.8.8.8',443,'kernel','')`, ruleID, n2.ID)
 
 	s, _ := New(d)
 
 	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: getHopPort(t, d, ruleID, n1.ID), BytesDelta: 1000},
+		{Proto: "tcp", ListenPort: 10001, BytesDelta: 1000},
 	})
 	s.Hub.applyCounters(n2.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: getHopPort(t, d, ruleID, n2.ID), BytesDelta: 1000},
+		{Proto: "tcp", ListenPort: 10002, BytesDelta: 1000},
 	})
 
 	u, _ := db.GetUserByID(d, uid)
@@ -135,16 +154,31 @@ func TestApplyCountersZeroMultiplier(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 100)
 
+	// Composite node with a single free hop (multiplier=0, inserted directly).
+	comp, _ := db.CreateNode(d, "comp-free", "", "")
+	d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, comp.ID)
+
 	n1, _ := db.CreateNode(d, "free-relay", "", "")
 	db.UpdateNodeRelayHost(d, n1.ID, "3.3.3.3")
-	d.Exec(`UPDATE nodes SET traffic_multiplier=0 WHERE id=?`, n1.ID)
+
+	// Bypass CreateNodeHops (which coerces 0→1.0) to exercise the zero-mult path.
+	d.Exec(`INSERT INTO node_hops(node_id,position,hop_node_id,mode,traffic_multiplier) VALUES (?,0,?,'kernel',0.0)`, comp.ID, n1.ID)
+
+	db.GrantNode(d, uid, comp.ID, 10, 0)
 	db.GrantNode(d, uid, n1.ID, 10, 0)
 
-	ruleID := createTestRuleDirectNode(t, d, uid, n1.ID)
+	rl := &db.Rule{
+		NodeID:  comp.ID,
+		OwnerID: sql.NullInt64{Int64: uid, Valid: true},
+		Name:    "test-free", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
+	}
+	ruleID, _ := db.CreateRule(d, rl)
+	d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,0,?,'tcp',10001,'8.8.8.8',443,'kernel','')`, ruleID, n1.ID)
+
 	s, _ := New(d)
 
 	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: getHopPort(t, d, ruleID, n1.ID), BytesDelta: 5000},
+		{Proto: "tcp", ListenPort: 10001, BytesDelta: 5000},
 	})
 
 	u, _ := db.GetUserByID(d, uid)

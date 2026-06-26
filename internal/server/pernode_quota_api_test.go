@@ -16,28 +16,6 @@ func itoa(id int64) string {
 	return strconv.FormatInt(id, 10)
 }
 
-func TestAPISetNodeMultiplier(t *testing.T) {
-	d := openDB(t)
-	n, _ := db.CreateNode(d, "mnode", "", "")
-	s, _ := New(d)
-	cookie := loginAsAdmin(t, d)
-
-	body, _ := json.Marshal(map[string]any{"traffic_multiplier": 0.5})
-	req := httptest.NewRequest("POST", "/api/nodes/"+itoa(n.ID)+"/multiplier", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	node, _ := db.GetNode(d, n.ID)
-	if node.TrafficMultiplier != 0.5 {
-		t.Fatalf("want 0.5, got %f", node.TrafficMultiplier)
-	}
-}
-
 func TestAPISetPerNodeQuota(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 10)

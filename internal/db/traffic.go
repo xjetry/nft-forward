@@ -35,23 +35,26 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	return tx.Commit()
 }
 
-// NodeMultipliers returns a map of node ID to traffic_multiplier for all nodes.
-// A multiplier of 1.0 means traffic is charged at face value; values above or
-// below scale the effective cost applied by the accounting layer.
-func NodeMultipliers(d *sql.DB) (map[int64]float64, error) {
-	rows, err := d.Query(`SELECT id, traffic_multiplier FROM nodes`)
+// HopMultipliers returns per-hop multipliers keyed by (compositeNodeID, physicalNodeID).
+// Each hop can carry a different multiplier so a physical node can be priced
+// differently depending on which composite chain it participates in.
+func HopMultipliers(d *sql.DB) (map[int64]map[int64]float64, error) {
+	rows, err := d.Query(`SELECT node_id, hop_node_id, traffic_multiplier FROM node_hops`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	m := make(map[int64]float64)
+	m := make(map[int64]map[int64]float64)
 	for rows.Next() {
-		var id int64
+		var compositeID, hopID int64
 		var mult float64
-		if err := rows.Scan(&id, &mult); err != nil {
+		if err := rows.Scan(&compositeID, &hopID, &mult); err != nil {
 			return nil, err
 		}
-		m[id] = mult
+		if m[compositeID] == nil {
+			m[compositeID] = make(map[int64]float64)
+		}
+		m[compositeID][hopID] = mult
 	}
 	return m, rows.Err()
 }

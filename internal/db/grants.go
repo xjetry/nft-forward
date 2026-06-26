@@ -3,10 +3,11 @@ package db
 import "database/sql"
 
 type NodeHop struct {
-	NodeID    int64  `json:"node_id"`
-	Position  int    `json:"position"`
-	HopNodeID int64  `json:"hop_node_id"`
-	Mode      string `json:"mode"`
+	NodeID            int64   `json:"node_id"`
+	Position          int     `json:"position"`
+	HopNodeID         int64   `json:"hop_node_id"`
+	Mode              string  `json:"mode"`
+	TrafficMultiplier float64 `json:"traffic_multiplier"`
 }
 
 type UserNode struct {
@@ -22,8 +23,12 @@ type UserNode struct {
 // CreateNodeHops inserts ordered hops for a composite node.
 func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 	for _, h := range hops {
-		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode) VALUES (?,?,?,?)`,
-			nodeID, h.Position, h.HopNodeID, h.Mode); err != nil {
+		mult := h.TrafficMultiplier
+		if mult == 0 {
+			mult = 1.0
+		}
+		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode, traffic_multiplier) VALUES (?,?,?,?,?)`,
+			nodeID, h.Position, h.HopNodeID, h.Mode, mult); err != nil {
 			return err
 		}
 	}
@@ -32,20 +37,20 @@ func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 
 func scanNodeHop(r rowScanner) (*NodeHop, error) {
 	h := &NodeHop{}
-	if err := r.Scan(&h.NodeID, &h.Position, &h.HopNodeID, &h.Mode); err != nil {
+	if err := r.Scan(&h.NodeID, &h.Position, &h.HopNodeID, &h.Mode, &h.TrafficMultiplier); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
 func ListNodeHops(d *sql.DB, nodeID int64) ([]*NodeHop, error) {
-	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops WHERE node_id=? ORDER BY position`, scanNodeHop, nodeID)
+	return queryAll(d, `SELECT node_id, position, hop_node_id, mode, traffic_multiplier FROM node_hops WHERE node_id=? ORDER BY position`, scanNodeHop, nodeID)
 }
 
 // ListAllNodeHops returns every composite node's hops in one query, ordered so
 // callers can group by node_id without an N+1 fan-out.
 func ListAllNodeHops(d *sql.DB) ([]*NodeHop, error) {
-	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops ORDER BY node_id, position`, scanNodeHop)
+	return queryAll(d, `SELECT node_id, position, hop_node_id, mode, traffic_multiplier FROM node_hops ORDER BY node_id, position`, scanNodeHop)
 }
 
 func DeleteNodeHops(d DBTX, nodeID int64) error {
@@ -113,7 +118,6 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 			&hidden, &n.SortOrder,
-			&n.TrafficMultiplier,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err
