@@ -142,6 +142,62 @@ func TestNodesExceedingQuota(t *testing.T) {
 	}
 }
 
+// TestActiveRuleHopsForPushCompositeQuota verifies that a composite node's
+// per-grant quota is enforced in ActiveRuleHopsForPush. The quota is tracked
+// on the composite node's user_nodes row (keyed by rules.node_id), not on any
+// individual physical hop, so a dedicated NOT EXISTS clause is required.
+func TestActiveRuleHopsForPushCompositeQuota(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+
+	// Create a composite node and one physical hop node.
+	compID := createTestNode(t, d, "composite")
+	physID := createTestNode(t, d, "phys")
+	d.Exec(`UPDATE nodes SET node_type='composite', relay_host='10.0.0.1' WHERE id=?`, compID)
+	d.Exec(`UPDATE nodes SET relay_host='10.0.0.2' WHERE id=?`, physID)
+
+	// Grant both; set a quota on the composite node only.
+	if err := GrantNode(d, uid, compID, 10, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := GrantNode(d, uid, physID, 10, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a rule on the composite node with the physical node as its hop.
+	ownerID := sql.NullInt64{Valid: true, Int64: uid}
+	r := &Rule{NodeID: compID, OwnerID: ownerID, Name: "r", Proto: "tcp", ExitHost: "1.2.3.4", ExitPort: 80}
+	ruleID, err := CreateRule(d, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Insert a rule_hop manually on the physical node.
+	if _, err := d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,0,?,'tcp',12345,'1.2.3.4',80,'kernel','')`, ruleID, physID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before quota is hit: hop should be included.
+	hops, err := ActiveRuleHopsForPush(d, physID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hops) != 1 {
+		t.Fatalf("before quota: want 1 hop, got %d", len(hops))
+	}
+
+	// Exceed the composite node's quota.
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=1000 WHERE user_id=? AND node_id=?`, uid, compID)
+
+	// After quota is hit: hop must be excluded.
+	hops, err = ActiveRuleHopsForPush(d, physID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hops) != 0 {
+		t.Fatalf("after quota exceeded: want 0 hops, got %d", len(hops))
+	}
+}
+
 // --- test helpers ---
 
 func openTestDB(t *testing.T) *sql.DB {

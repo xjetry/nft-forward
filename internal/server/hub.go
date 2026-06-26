@@ -474,13 +474,17 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 		// Check billing cycle once per user per batch. If the window has
 		// rolled over, counters are reset; a user disabled for exceeding quota
-		// gets re-enabled so the fresh cycle starts clean.
+		// gets re-enabled and re-dispatched so the fresh cycle starts clean.
 		if !cycleChecked[userID] {
 			cycleChecked[userID] = true
 			if u, err := db.GetUserByID(h.DB, userID); err == nil {
 				if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
 					if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
 						_ = db.SetUserDisabled(h.DB, userID, false, "")
+						// Push the rules back to the kernel now that the user is active again.
+						if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {
+							go h.Redispatch(nodes)
+						}
 					}
 				}
 			}

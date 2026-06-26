@@ -1501,6 +1501,12 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// If the user was disabled for exceeding quota, lift the ban so the
+	// subsequent re-dispatch pushes their rules back to the kernel.
+	if target, err := db.GetUserByID(s.DB, id); err == nil &&
+		target.Disabled && target.DisableReason.Valid && target.DisableReason.String == "流量超额" {
+		_ = db.SetUserDisabled(s.DB, id, false, "")
+	}
 	// re-dispatch rules on nodes that may have been excluded by per-node quota
 	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
 		for _, n := range nodes {
