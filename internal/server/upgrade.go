@@ -43,10 +43,22 @@ var (
 )
 
 func serverVersion() string {
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
+		return "dev"
 	}
-	return "dev"
+	return stripPseudoVersion(bi.Main.Version)
+}
+
+// stripPseudoVersion normalises a Go pseudo-version (e.g.
+// v0.29.10-0.20260626041818-5dd657947da4) back to its base semver tag so the
+// download URL hits an existing GitHub release. A clean tag passes through
+// unchanged.
+func stripPseudoVersion(v string) string {
+	if i := strings.Index(v, "-0.2"); i > 0 {
+		return v[:i]
+	}
+	return v
 }
 
 // loadAgentArtifact returns the nft-agent for the panel's release version,
