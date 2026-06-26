@@ -255,7 +255,7 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	}
 
 	var notified []int64
-	hub.OnTrafficUpdate = func(userID int64) { notified = append(notified, userID) }
+	hub.OnTrafficUpdate = func(userID int64, nodeID int64) { notified = append(notified, userID) }
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,11 +31,11 @@ const (
 type Hub struct {
 	DB *sql.DB
 
-	// OnTrafficUpdate, when set, is invoked once per user whose usage was
-	// advanced by a counters batch. The Hub stays a pure transport: it knows
-	// how to accumulate bytes but delegates quota policy (and the re-dispatch
-	// it may trigger) to the owner that wires this callback.
-	OnTrafficUpdate func(userID int64)
+	// OnTrafficUpdate, when set, is invoked once per (user, node) pair whose
+	// usage was advanced by a counters batch. The Hub stays a pure transport:
+	// it knows how to accumulate bytes but delegates quota policy (and the
+	// re-dispatch it may trigger) to the owner that wires this callback.
+	OnTrafficUpdate func(userID int64, nodeID int64)
 
 	// Redispatch re-pushes kernel state to a set of nodes after the hub
 	// mutates rule state on their behalf. Keeps the hub transport-only.
@@ -429,24 +430,30 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 // owning user's usage. The (node_id, listen_port, proto) tuple identifies
 // the hop. Each sample is resolved to its rule_hop row so we learn the hop
 // id and the owning rule/user.
+//
+// Per-node usage accumulates raw bytes on every physical hop. Global usage
+// accumulates bytes weighted by the reporting node's traffic_multiplier so
+// low-cost relay nodes don't inflate the same data multiple times.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	hopMap, err := db.RuleHopMapByNode(h.DB, nodeID)
 	if err != nil {
 		log.Printf("hub: node %d load rule hop map for counters: %v", nodeID, err)
 		return
 	}
-	// Entry-hop set: only entry hops (position=0) count toward user traffic
-	// so the same bytes aren't billed once per relay node.
-	entryHops, err := db.EntryRuleHopIDs(h.DB, nodeID)
+	multipliers, err := db.NodeMultipliers(h.DB)
 	if err != nil {
-		log.Printf("hub: node %d load entry rule hops: %v", nodeID, err)
-		entryHops = nil // degrade: count all (over-bill rather than silently lose data)
+		log.Printf("hub: load node multipliers: %v", err)
+		multipliers = map[int64]float64{}
 	}
 	ruleMap, _ := db.RulesByID(h.DB)
 	if ruleMap == nil {
 		ruleMap = map[int64]*db.Rule{}
 	}
-	touched := map[int64]bool{}
+
+	type userNode struct{ userID, nodeID int64 }
+	touched := map[userNode]bool{}
+	cycleChecked := map[int64]bool{}
+
 	for _, s := range samples {
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
 		rh, ok := hopMap[key]
@@ -460,21 +467,55 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			continue
 		}
 		r := ruleMap[rh.RuleID]
-		if r != nil && r.OwnerID.Valid && s.BytesDelta > 0 {
-			// Only bill entry hops to avoid counting the same bytes at every relay
-			if !entryHops[rh.ID] {
-				continue
-			}
-			if err := db.AddUserTraffic(h.DB, r.OwnerID.Int64, s.BytesDelta); err != nil {
-				log.Printf("hub: user %d traffic add: %v", r.OwnerID.Int64, err)
-				continue
-			}
-			touched[r.OwnerID.Int64] = true
+		if r == nil || !r.OwnerID.Valid || s.BytesDelta <= 0 {
+			continue
 		}
+		userID := r.OwnerID.Int64
+
+		// Check billing cycle once per user per batch. If the window has
+		// rolled over, counters are reset; a user disabled for exceeding quota
+		// gets re-enabled so the fresh cycle starts clean.
+		if !cycleChecked[userID] {
+			cycleChecked[userID] = true
+			if u, err := db.GetUserByID(h.DB, userID); err == nil {
+				if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
+					if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
+						_ = db.SetUserDisabled(h.DB, userID, false, "")
+					}
+				}
+			}
+		}
+
+		// per-node: raw bytes on the physical node
+		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, s.BytesDelta); err != nil {
+			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
+		}
+
+		// composite node per-node quota: if this rule belongs to a composite
+		// node (r.NodeID != nodeID), only the entry hop (position=0) contributes
+		// to avoid counting the same traffic once per physical hop in the chain.
+		if r.NodeID != nodeID && rh.Position == 0 {
+			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, s.BytesDelta); err != nil {
+				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
+			}
+		}
+
+		// global: weighted by multiplier
+		mult := multipliers[nodeID]
+		weighted := int64(math.Round(float64(s.BytesDelta) * mult))
+		if weighted > 0 {
+			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
+				log.Printf("hub: user %d traffic add: %v", userID, err)
+				continue
+			}
+		}
+
+		touched[userNode{userID, nodeID}] = true
 	}
+
 	if h.OnTrafficUpdate != nil {
-		for tid := range touched {
-			h.OnTrafficUpdate(tid)
+		for un := range touched {
+			h.OnTrafficUpdate(un.userID, un.nodeID)
 		}
 	}
 }

@@ -36,7 +36,9 @@ func New(d *sql.DB) (*Server, error) {
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
 	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{})}
-	hub.OnTrafficUpdate = s.enforceUserQuota
+	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
+		s.enforceUserQuota(userID)
+	}
 	hub.Redispatch = s.redispatchNodes
 	go s.expiryEnforcer()
 	return s, nil
