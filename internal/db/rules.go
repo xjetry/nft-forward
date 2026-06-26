@@ -361,30 +361,6 @@ func RulesReferencingNode(d DBTX, nodeID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rule_id FROM rule_hops WHERE node_id=?`, nodeID)
 }
 
-// EntryRuleHopIDs returns the rule_hop IDs on nodeID that are entry hops
-// of their rule (position=0 and the rule's first hop node matches). Non-entry
-// hops should not count toward user traffic so the same bytes aren't billed
-// once per relay node.
-func EntryRuleHopIDs(d DBTX, nodeID int64) (map[int64]bool, error) {
-	rows, err := d.Query(`
-		SELECT rh.id FROM rule_hops rh
-		WHERE rh.node_id = ?
-		  AND rh.position = 0`, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	m := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		m[id] = true
-	}
-	return m, rows.Err()
-}
-
 // FillUserRuleCounts sets each user's RuleCount to the number of rules they own,
 // for showing used/total rule quota against MaxForwards.
 func FillUserRuleCounts(d DBTX, users []*User) error {
