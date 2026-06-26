@@ -768,7 +768,7 @@ EOF
     esac
     mkdir -p /etc/nft-forward
     install -m 0600 /dev/stdin /etc/nft-forward/panel.token <<<"$token"
-    local range_arg=""
+    range_arg=""
     [[ -n "$port_range" ]] && range_arg=" --port-range $port_range"
     write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}"
     systemctl daemon-reload
