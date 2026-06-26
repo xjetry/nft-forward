@@ -365,17 +365,21 @@ function HeaderStatus({ node }) {
 
 function CompositeHopsCard({ nodeId, hops, onDone }) {
   const [modes, setModes] = useState(hops.map(h => h.mode))
+  const [mults, setMults] = useState(hops.map(h => String(h.traffic_multiplier ?? 1)))
   const [saving, setSaving] = useState(false)
   const toast = useToast()
 
-  const dirty = hops.some((h, i) => h.mode !== modes[i])
+  const dirty = hops.some((h, i) => h.mode !== modes[i] || String(h.traffic_multiplier ?? 1) !== mults[i])
   const setMode = (i, v) => setModes(m => m.map((x, j) => (j === i ? v : x)))
+  const setMult = (i, v) => setMults(prev => prev.map((m, j) => j === i ? v : m))
 
   const save = async () => {
     setSaving(true)
     try {
-      await api.post(`/nodes/${nodeId}/hops`, { hops: modes.map(m => ({ mode: m })) })
-      toast('模式已保存')
+      await api.post(`/nodes/${nodeId}/hops`, {
+        hops: modes.map((m, i) => ({ mode: m, traffic_multiplier: Number(mults[i]) || 1 }))
+      })
+      toast('已保存')
       onDone()
     } catch (err) { toast(err.message) } finally { setSaving(false) }
   }
@@ -390,7 +394,7 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
         内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP（TCP+UDP 中的 UDP 自动走内核态）。修改对此后新建的规则生效。
       </p>
       <table className="tbl">
-        <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th></tr></thead>
+        <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-24">倍率</th></tr></thead>
         <tbody>
           {hops.map((h, i) => (
             <tr key={i}>
@@ -400,12 +404,17 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
                 <Select value={modes[i]} onChange={v => setMode(i, v)} style={{ width: 130 }}
                   options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
               </td>
+              <td className="px-3 py-2">
+                <input className="input-field font-mono" type="number" min="0" step="0.1"
+                  value={mults[i]} onChange={e => setMult(i, e.target.value)}
+                  style={{ width: 80 }} title="全局流量计费倍率" />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="pt-3">
-        <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存模式</button>
+        <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存</button>
       </div>
     </section>
   )
