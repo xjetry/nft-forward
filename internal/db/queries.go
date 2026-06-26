@@ -482,6 +482,13 @@ func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 		    AND un.traffic_quota_bytes > 0
 		    AND un.traffic_used_bytes >= un.traffic_quota_bytes
 		)
+		AND NOT EXISTS (
+		  SELECT 1 FROM rules r3
+		  JOIN user_nodes un2 ON un2.user_id = r3.owner_id AND un2.node_id = r3.node_id
+		  WHERE r3.id = rh.rule_id
+		    AND un2.traffic_quota_bytes > 0
+		    AND un2.traffic_used_bytes >= un2.traffic_quota_bytes
+		)
 		ORDER BY rh.listen_port`
 	return queryAll(d, q, scanRuleHop, nodeID)
 }

@@ -105,15 +105,18 @@ func NodesExceedingQuota(d *sql.DB, userID int64) ([]int64, error) {
 }
 
 // RulesAffectedByNode returns the distinct hop-node IDs of all rules owned by
-// userID that include nodeID as one of their hops. The caller uses this to
-// identify which nftables entries to block when a node quota is exceeded.
+// userID that include nodeID as one of their hops. Matching covers both physical
+// hops (rh2.node_id = nodeID) and composite nodes declared as the rule's entry
+// node (r.node_id = nodeID), since composite quotas are tracked on the composite
+// node ID rather than any individual physical hop.
 func RulesAffectedByNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
 	return queryInt64s(d, `
 		SELECT DISTINCT rh.node_id
 		FROM rule_hops rh
 		JOIN rules r ON r.id = rh.rule_id
 		WHERE r.owner_id = ?
-		  AND rh.rule_id IN (
-		      SELECT rh2.rule_id FROM rule_hops rh2 WHERE rh2.node_id = ?
-		  )`, userID, nodeID)
+		  AND (rh.rule_id IN (
+		          SELECT rh2.rule_id FROM rule_hops rh2 WHERE rh2.node_id = ?
+		      )
+		      OR r.node_id = ?)`, userID, nodeID, nodeID)
 }

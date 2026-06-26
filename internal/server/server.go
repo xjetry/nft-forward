@@ -27,6 +27,7 @@ type Server struct {
 	Dispatcher *Dispatcher
 	Landing    *landing.Fetcher
 	stopExpiry chan struct{}
+	stopCycle  chan struct{}
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -35,13 +36,14 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
 	go s.expiryEnforcer()
+	go s.cycleResetEnforcer()
 	return s, nil
 }
 
@@ -64,6 +66,57 @@ func (s *Server) expiryEnforcer() {
 			for _, n := range nodes {
 				if err := s.dispatchToNode(n); err != nil {
 					log.Printf("expiry: re-dispatch node %d: %v", n, err)
+				}
+			}
+		}
+	}
+}
+
+// cycleResetEnforcer periodically checks every user's traffic reset window.
+// When the window rolls over it re-enables any user who was disabled for
+// exceeding quota and re-dispatches their nodes, restoring their rules to
+// the kernel for the fresh cycle.
+//
+// This covers users who are globally disabled (all rules already removed from
+// the kernel) and therefore receive no traffic — without this goroutine they
+// would never reach the cycle-reset check in applyCounters.
+func (s *Server) cycleResetEnforcer() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCycle:
+			return
+		case <-ticker.C:
+			users, err := db.ListUsers(s.DB)
+			if err != nil {
+				log.Printf("cycle: list users: %v", err)
+				continue
+			}
+			for _, u := range users {
+				if u.TrafficResetDays <= 0 {
+					continue
+				}
+				reset, err := db.CheckAndResetTrafficCycle(s.DB, u)
+				if err != nil {
+					log.Printf("cycle: check reset for user %d: %v", u.ID, err)
+					continue
+				}
+				if !reset {
+					continue
+				}
+				if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
+					if err := db.SetUserDisabled(s.DB, u.ID, false, ""); err != nil {
+						log.Printf("cycle: re-enable user %d: %v", u.ID, err)
+						continue
+					}
+					if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
+						for _, n := range nodes {
+							if err := s.dispatchToNode(n); err != nil {
+								log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
+							}
+						}
+					}
 				}
 			}
 		}
