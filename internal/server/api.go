@@ -1320,9 +1320,10 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		NodeID      int64   `json:"node_id"`
-		NodeIDs     []int64 `json:"node_ids"`
-		MaxForwards int     `json:"max_forwards"`
+		NodeID            int64   `json:"node_id"`
+		NodeIDs           []int64 `json:"node_ids"`
+		MaxForwards       int     `json:"max_forwards"`
+		TrafficQuotaBytes int64   `json:"traffic_quota_bytes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1340,7 +1341,7 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, nid := range ids {
-		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards, 0); err != nil {
+		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards, body.TrafficQuotaBytes); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -1496,9 +1497,15 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := db.ResetUserTraffic(s.DB, id); err != nil {
+	if err := db.ResetAllUserTraffic(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// re-dispatch rules on nodes that may have been excluded by per-node quota
+	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
+		for _, n := range nodes {
+			_ = s.dispatchToNode(n)
+		}
 	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_traffic", strconv.FormatInt(id, 10), "")
 	jsonOK(w, map[string]any{"ok": true})
@@ -1947,6 +1954,8 @@ func apiUserFullView(u *db.User) map[string]any {
 	// Lets the user-side nav decide whether to show the landing-nodes entry
 	// without an extra round-trip.
 	m["has_landing_source"] = hasLandingSource(u)
+	m["traffic_reset_days"] = u.TrafficResetDays
+	m["last_traffic_reset_at"] = u.LastTrafficResetAt
 	return m
 }
 
@@ -1992,4 +2001,114 @@ func isValidRelayHost(host string) bool {
 		return true
 	}
 	return resolver.IsHostname(host)
+}
+
+func (s *Server) apiSetNodeMultiplier(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		TrafficMultiplier float64 `json:"traffic_multiplier"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.TrafficMultiplier < 0 {
+		jsonErr(w, http.StatusBadRequest, "倍率不能为负")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE nodes SET traffic_multiplier=? WHERE id=?`, body.TrafficMultiplier, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_multiplier", strconv.FormatInt(id, 10), fmt.Sprintf("%.2f", body.TrafficMultiplier))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad node id")
+		return
+	}
+	var body struct {
+		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.TrafficQuotaBytes < 0 {
+		jsonErr(w, http.StatusBadRequest, "字节数无效")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE user_nodes SET traffic_quota_bytes=? WHERE user_id=? AND node_id=?`,
+		body.TrafficQuotaBytes, userID, nodeID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_node_quota", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d bytes=%d", nodeID, body.TrafficQuotaBytes))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad node id")
+		return
+	}
+	if err := db.ResetUserNodeTraffic(s.DB, userID, nodeID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// re-dispatch rules that may have been excluded due to this node's quota
+	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	for _, n := range affected {
+		_ = s.dispatchToNode(n)
+	}
+	db.WriteAudit(s.DB, u.ID, "user.reset_node_traffic", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		TrafficResetDays int `json:"traffic_reset_days"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.TrafficResetDays < 0 {
+		jsonErr(w, http.StatusBadRequest, "天数无效")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET traffic_reset_days=? WHERE id=?`, body.TrafficResetDays, id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_reset_days", strconv.FormatInt(id, 10), strconv.Itoa(body.TrafficResetDays))
+	jsonOK(w, map[string]any{"ok": true})
 }

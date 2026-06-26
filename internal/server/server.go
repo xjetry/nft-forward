@@ -345,6 +345,11 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/landing", s.apiSetUserLanding)
 			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
 			r.Post("/users/{id}/reset-traffic", s.apiResetUserTraffic)
+			r.Post("/users/{id}/reset-days", s.apiSetResetDays)
+			r.Post("/users/{id}/nodes/{nodeID}/quota", s.apiSetPerNodeQuota)
+			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
+
+			r.Post("/nodes/{id}/multiplier", s.apiSetNodeMultiplier)
 
 			r.Get("/users", s.apiListUsers)
 			r.Post("/users/{id}/toggle", s.apiToggleUser)
