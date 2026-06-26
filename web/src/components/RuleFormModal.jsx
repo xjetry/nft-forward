@@ -101,23 +101,32 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               {form.exit_kind === 'landing' ? (
                 <>
                   <label className="fl">出口节点</label>
-                  {landingOptions.length ? (
-                    <Select value={form.exit} onChange={v => set('exit', v)} placeholder="-- 选择出口节点 --" searchable options={landingOptions} />
-                  ) : (
-                    <div className="text-xs text-ink-mut">尚无可用出口节点，请在概览页添加代理 URI 或联系管理员。</div>
-                  )}
+                  <div className="flex items-center gap-3">
+                    {landingOptions.length ? (
+                      <Select value={form.exit} onChange={v => set('exit', v)} placeholder="-- 选择出口节点 --" searchable options={landingOptions} className="flex-1" />
+                    ) : (
+                      <div className="text-xs text-ink-mut">尚无可用出口节点，请在概览页添加代理 URI 或联系管理员。</div>
+                    )}
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+                  </div>
                 </>
               ) : (
                 <>
                   <label className="fl">出口地址</label>
-                  <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} onBlur={handleExitBlur} required placeholder="host:port 或代理 URI" />
+                  <div className="flex items-center gap-3">
+                    <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} onBlur={handleExitBlur} required placeholder="host:port 或代理 URI" />
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+                  </div>
                 </>
               )}
             </>
           ) : (
             <>
               <label className="fl">出口</label>
-              <input className="input-field font-mono" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+              <div className="flex items-center gap-3">
+                <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
+                {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+              </div>
             </>
           )}
 
@@ -127,7 +136,6 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
         <div className="flex items-center gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">{submitLabel}</button>
           <button type="button" onClick={onClose} className="btn-secondary">取消</button>
-          {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
         </div>
       </form>
     </Modal>
