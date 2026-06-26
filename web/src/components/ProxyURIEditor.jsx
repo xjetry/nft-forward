@@ -5,7 +5,7 @@ import { SensText } from './ui'
 import {
   loadLocalURIs, saveLocalURIs, parseURIs,
   loadSubURLs, saveSubURLs, loadSubCache, saveSubCache,
-  nodeRoleKey, fetchNodeRoles, saveNodeRoles, applyNodeRole, applyNodeRoleBatch,
+  nodeRoleKey, fetchNodeRoles,
 } from '../lib/landing'
 
 const MAX_H = 420
@@ -86,24 +86,6 @@ export function ProxyURIEditor({ username, blurred }) {
     } catch (err) { toast(err.message) } finally { setFetching(false) }
   }
 
-  const handleSetRole = (n, role) => {
-    const next = applyNodeRole(roles, n, role)
-    setRoles(next)
-    saveNodeRoles(next)
-  }
-
-  const handleMarkAll = (role) => {
-    const next = applyNodeRoleBatch(roles, subNodes, role)
-    setRoles(next)
-    saveNodeRoles(next)
-  }
-
-  const handleMarkAllManual = (role) => {
-    const next = applyNodeRoleBatch(roles, manualParsed, role)
-    setRoles(next)
-    saveNodeRoles(next)
-  }
-
   const hasNodes = showSub && subNodes.length > 0
 
   return (
@@ -116,11 +98,10 @@ export function ProxyURIEditor({ username, blurred }) {
           </span>
         </div>
         <p className="text-[13px] leading-[1.7] text-ink-soft mb-3.5">
-          手动填写和订阅节点均可标记用途：
-          标为<span className="font-semibold text-emerald-600">落地</span>可作为规则出口；
-          标为<span className="font-semibold text-blue-600">直连</span>出现在「我的代理」；
-          <span className="font-semibold text-ink-mut">未配置</span>的节点不参与任何功能。
-          <span className="text-amber-500 font-semibold"> 仅保存在本浏览器。</span>
+          手动填写的 URI 保存在本浏览器，本地与服务器相同地址的节点以本地为准。
+          节点用途由管理员配置：<span className="font-semibold text-emerald-600">落地</span>可作为规则出口；
+          <span className="font-semibold text-blue-600">直连</span>出现在「我的代理」；
+          <span className="font-semibold text-ink-mut">未配置</span>不参与任何功能。
         </p>
 
         {/* Subscription URL input */}
@@ -147,15 +128,11 @@ export function ProxyURIEditor({ username, blurred }) {
         {/* Node list */}
         {hasNodes && (
           <div className="mb-4 border border-line rounded-[10px] overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-              <span className="text-ink-soft font-semibold">{subNodes.length} 个节点</span>
-              <div className="flex gap-1.5">
-                <button onClick={() => handleMarkAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                <span className="text-ink-mut">|</span>
-                <button onClick={() => handleMarkAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                <span className="text-ink-mut">|</span>
-                <button onClick={() => handleMarkAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
-              </div>
+            <div className="flex items-center px-3 py-2 bg-raised text-[12px]">
+              <span className="text-ink-soft font-semibold">
+                {subNodes.length} 个节点
+                <span className="font-normal ml-2">{landingCount} 落地 · {directCount} 直连 · {unconfiguredCount} 未配置</span>
+              </span>
             </div>
             <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
               <table className="w-full text-[13px]">
@@ -168,7 +145,7 @@ export function ProxyURIEditor({ username, blurred }) {
                         <SensText blurred={blurred}>{nodeRoleKey(n)}</SensText>
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
+                        <RoleBadge role={roleOf(n)} />
                       </td>
                     </tr>
                   ))}
@@ -195,18 +172,11 @@ export function ProxyURIEditor({ username, blurred }) {
             </button>
             {showManualConfig && (
               <div className="mt-2 border border-line rounded-[10px] overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
+                <div className="flex items-center px-3 py-2 bg-raised text-[12px]">
                   <span className="text-ink-soft font-semibold">
                     {manualParsed.length} 个节点
                     <span className="font-normal ml-2">{mLanding} 落地 · {mDirect} 直连 · {mUnconfigured} 未配置</span>
                   </span>
-                  <div className="flex gap-1.5">
-                    <button onClick={() => handleMarkAllManual('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => handleMarkAllManual('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => handleMarkAllManual('none')} className="text-ink-mut hover:underline">全部未配置</button>
-                  </div>
                 </div>
                 <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
                   <table className="w-full text-[13px]">
@@ -217,7 +187,7 @@ export function ProxyURIEditor({ username, blurred }) {
                           <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
                           <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.host}:{n.port}</td>
                           <td className="px-3 py-1.5 text-right">
-                            <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
+                            <RoleBadge role={roleOf(n)} />
                           </td>
                         </tr>
                       ))}
@@ -233,22 +203,12 @@ export function ProxyURIEditor({ username, blurred }) {
   )
 }
 
-function TriToggle({ state, onChange }) {
-  const opts = [
-    ['landing', '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
-    ['direct', '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
-    ['none', '未配置', 'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800/40 dark:text-gray-400 dark:border-gray-600'],
-  ]
-  return (
-    <div className="inline-flex gap-px rounded-md overflow-hidden border border-line">
-      {opts.map(([key, label, cls]) => (
-        <button key={key} onClick={() => onChange(key)}
-          className={`px-2 py-0.5 text-[11px] font-semibold transition-colors ${
-            state === key ? cls : 'bg-transparent text-ink-mut/40 hover:text-ink-mut'
-          }`}>
-          {label}
-        </button>
-      ))}
-    </div>
-  )
+function RoleBadge({ role }) {
+  const cls = role === 'landing'
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'
+    : role === 'direct'
+    ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'
+    : 'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800/40 dark:text-gray-400 dark:border-gray-600'
+  const label = role === 'landing' ? '落地' : role === 'direct' ? '直连' : '未配置'
+  return <span className={`inline-block px-2 py-0.5 text-[11px] font-semibold rounded border ${cls}`}>{label}</span>
 }
