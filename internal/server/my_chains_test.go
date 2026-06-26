@@ -37,7 +37,7 @@ func TestUserCreateRuleOnGrantedNode(t *testing.T) {
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	uid, cookie := loginAsUser(t, d, 10)
-	_ = db.GrantNode(d, uid, g.ID, 5)
+	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 
 	s, _ := New(d)
 	body, _ := json.Marshal(map[string]any{
@@ -90,7 +90,7 @@ func TestUserCreateRuleRejectsOverQuota(t *testing.T) {
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	uid, cookie := loginAsUser(t, d, 0) // max_forwards = 0
-	_ = db.GrantNode(d, uid, g.ID, 5)
+	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 
 	s, _ := New(d)
 	body, _ := json.Marshal(map[string]any{
@@ -116,7 +116,7 @@ func TestUserDeleteRuleBlocksCrossUser(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	uidA, cookieA := loginAsUser(t, d, 10)
 	_, cookieB := loginAsUser(t, d, 10)
-	_ = db.GrantNode(d, uidA, g.ID, 5)
+	_ = db.GrantNode(d, uidA, g.ID, 5, 0)
 
 	s, _ := New(d)
 

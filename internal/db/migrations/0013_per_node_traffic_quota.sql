@@ -1,0 +1,5 @@
+ALTER TABLE nodes ADD COLUMN traffic_multiplier REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE user_nodes ADD COLUMN traffic_quota_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE user_nodes ADD COLUMN traffic_used_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN traffic_reset_days INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN last_traffic_reset_at INTEGER NOT NULL DEFAULT 0;

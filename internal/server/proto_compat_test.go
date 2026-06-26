@@ -29,7 +29,7 @@ func TestCreateMyRuleAcceptsTCPUDP(t *testing.T) {
 	d := openDB(t)
 	g := mustNode(t, d, "edge")
 	uid, cookie := loginAsUser(t, d, 10)
-	_ = db.GrantNode(d, uid, g.ID, 5)
+	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 
 	s, _ := New(d)
 	for _, tc := range []struct {

@@ -26,7 +26,7 @@ func TestListNodesForUserAfterGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.GrantNode(d, uid, n.ID, 5); err != nil {
+	if err := db.GrantNode(d, uid, n.ID, 5, 0); err != nil {
 		t.Fatal(err)
 	}
 	nodes, grants, err := db.ListNodesForUser(d, uid)

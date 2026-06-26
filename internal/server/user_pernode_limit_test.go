@@ -14,7 +14,7 @@ func TestUserCreateRuleRespectsPerNodeLimit(t *testing.T) {
 	g, _ := db.CreateNode(d, "node", "", "")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	uid, cookie := loginAsUser(t, d, 100) // generous global max_forwards
-	_ = db.GrantNode(d, uid, g.ID, 1)     // per-node cap = 1
+	_ = db.GrantNode(d, uid, g.ID, 1, 0)     // per-node cap = 1
 
 	s, _ := New(d)
 	if rec := createMyRule(t, s, cookie, g.ID, "r1"); rec.Code != http.StatusOK {

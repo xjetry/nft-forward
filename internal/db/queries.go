@@ -16,9 +16,12 @@ type User struct {
 	Disabled          bool           `json:"disabled"`
 	DisableReason     sql.NullString `json:"disable_reason"`
 	MaxForwards       int            `json:"max_forwards"`
-	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
-	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
-	ExpiresAt         sql.NullInt64  `json:"expires_at"`
+	TrafficQuotaBytes  int64          `json:"traffic_quota_bytes"`
+	TrafficUsedBytes   int64          `json:"traffic_used_bytes"`
+	// TrafficResetDays is the rolling window length in days; 0 means never auto-reset.
+	TrafficResetDays   int            `json:"traffic_reset_days"`
+	LastTrafficResetAt int64          `json:"last_traffic_reset_at"`
+	ExpiresAt          sql.NullInt64  `json:"expires_at"`
 	// LandingSubURL is an optional subscription URL; LandingURIs is an optional
 	// newline-separated list of proxy URIs. They combine into the user's set of
 	// landing nodes (see internal/landing). Both empty means no landing source.
@@ -53,6 +56,9 @@ type Node struct {
 	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
 	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
 	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
+	// TrafficMultiplier scales the global traffic price for rules on this node.
+	// A value of 1.0 (the default) means no adjustment.
+	TrafficMultiplier  float64       `json:"traffic_multiplier"`
 }
 
 type Rule struct {
@@ -111,14 +117,14 @@ func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
 func scanUser(r rowScanner) (*User, error) {
 	u := &User{}
 	var disabled int
-	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.TrafficResetDays, &u.LastTrafficResetAt, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs); err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
 	return u, nil
 }
 
-const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, expires_at, landing_sub_url, landing_uris`
+const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris`
 
 func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
@@ -182,7 +188,7 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
-const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.expires_at, u.landing_sub_url, u.landing_uris`
+const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.traffic_reset_days, u.last_traffic_reset_at, u.expires_at, u.landing_sub_url, u.landing_uris`
 
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
@@ -236,7 +242,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,traffic_multiplier`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -259,6 +265,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder,
+		&n.TrafficMultiplier,
 	); err != nil {
 		return nil, err
 	}

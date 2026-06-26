@@ -56,7 +56,7 @@ func TestUserCreateRuleOnGrantedCompositeNode(t *testing.T) {
 	comp := makeComposite(t, d, "chain", a.ID, b.ID)
 
 	uid, cookie := loginAsUser(t, d, 10)
-	_ = db.GrantNode(d, uid, comp.ID, 5) // only the composite, not its sub-nodes
+	_ = db.GrantNode(d, uid, comp.ID, 5, 0) // only the composite, not its sub-nodes
 
 	s, _ := New(d)
 	rec := createMyRule(t, s, cookie, comp.ID, "vless")
@@ -80,7 +80,7 @@ func TestUserCreateRuleRejectsUngrantedCompositeNode(t *testing.T) {
 
 	uid, cookie := loginAsUser(t, d, 10)
 	// granted a sub-node but NOT the composite itself
-	_ = db.GrantNode(d, uid, a.ID, 5)
+	_ = db.GrantNode(d, uid, a.ID, 5, 0)
 
 	s, _ := New(d)
 	rec := createMyRule(t, s, cookie, comp.ID, "vless")
@@ -101,7 +101,7 @@ func TestMyListRulesItemShapeIsFlat(t *testing.T) {
 	g, _ := db.CreateNode(d, "node", "", "")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
 	uid, cookie := loginAsUser(t, d, 10)
-	_ = db.GrantNode(d, uid, g.ID, 5)
+	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 
 	s, _ := New(d)
 	if rec := createMyRule(t, s, cookie, g.ID, "r1"); rec.Code != http.StatusOK {

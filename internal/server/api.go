@@ -1340,7 +1340,7 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, nid := range ids {
-		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards); err != nil {
+		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards, 0); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}

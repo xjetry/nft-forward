@@ -18,7 +18,7 @@ func createOwnedRule(t *testing.T, s *Server, d *sql.DB, uid int64, cookie *http
 	t.Helper()
 	g, _ := db.CreateNode(d, fmt.Sprintf("node-%d", uid), "https://p", fmt.Sprintf("tok-%d", uid))
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	_ = db.GrantNode(d, uid, g.ID, 5)
+	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 	body, _ := json.Marshal(map[string]any{
 		"node_id": g.ID, "name": "r", "proto": "tcp", "exit": "9.9.9.9:8443",
 	})
