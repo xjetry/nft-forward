@@ -21,11 +21,18 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 // ResetAllUserTraffic zeroes the global traffic counter and all per-node counters
 // for a user. Both must be cleared together so accounting stays consistent.
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
-	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
+	tx, err := d.Begin()
+	if err != nil {
 		return err
 	}
-	_, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID)
-	return err
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // NodeMultipliers returns a map of node ID to traffic_multiplier for all nodes.
@@ -60,12 +67,12 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 	if u.TrafficResetDays <= 0 {
 		return false, nil
 	}
+	nowTs := time.Now().Unix()
+	period := int64(u.TrafficResetDays) * 86400
 	var createdAt int64
 	if err := d.QueryRow(`SELECT created_at FROM users WHERE id=?`, u.ID).Scan(&createdAt); err != nil {
 		return false, err
 	}
-	nowTs := time.Now().Unix()
-	period := int64(u.TrafficResetDays) * 86400
 	elapsed := nowTs - createdAt
 	if elapsed < 0 {
 		return false, nil
@@ -74,13 +81,18 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 	if u.LastTrafficResetAt >= cycleStart {
 		return false, nil
 	}
-	if err := ResetAllUserTraffic(d, u.ID); err != nil {
+	tx, err := d.Begin()
+	if err != nil {
 		return false, err
 	}
-	if _, err := d.Exec(`UPDATE users SET last_traffic_reset_at=? WHERE id=?`, nowTs, u.ID); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0, last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
 		return false, err
 	}
-	return true, nil
+	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // NodesExceedingQuota returns the IDs of nodes where the user's per-grant
