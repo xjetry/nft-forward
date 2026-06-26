@@ -242,6 +242,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
 选项 / 环境变量:
   --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
+  --port-range R                   agent 占用的中继端口范围，格式 START-END（默认 10001-20000）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :7788
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
   --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；
@@ -522,6 +523,7 @@ fi
 mode=""
 panel_url=""
 token=""
+port_range=""
 addr=""
 purge=0
 RESET_PW=""
@@ -532,6 +534,8 @@ while [[ $# -gt 0 ]]; do
     --panel-url=*) panel_url="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
     --token=*) token="${1#*=}"; shift ;;
+    --port-range) port_range="${2:?--port-range 需要值}"; shift 2 ;;
+    --port-range=*) port_range="${1#*=}"; shift ;;
     --addr) addr="${2:?--addr 需要值}"; shift 2 ;;
     --addr=*) addr="${1#*=}"; shift ;;
     --release) RELEASE="${2:?--release 需要值}"; RELEASE_EXPLICIT=1; shift 2 ;;
@@ -764,7 +768,9 @@ EOF
     esac
     mkdir -p /etc/nft-forward
     install -m 0600 /dev/stdin /etc/nft-forward/panel.token <<<"$token"
-    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token"
+    local range_arg=""
+    [[ -n "$port_range" ]] && range_arg=" --port-range $port_range"
+    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}"
     systemctl daemon-reload
     # enable --now 对已运行的 daemon 是 no-op，不会重启；装 agent 时 daemon 往往
     # 已在运行（纯 daemon 段或先前角色），必须 restart 才能让新写入的 --connect

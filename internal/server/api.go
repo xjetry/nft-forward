@@ -219,10 +219,11 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		Name     string `json:"name"`
-		Secret   string `json:"secret"`
-		NodeType string `json:"node_type"`
-		Hops     []struct {
+		Name      string `json:"name"`
+		Secret    string `json:"secret"`
+		NodeType  string `json:"node_type"`
+		PortRange string `json:"port_range"`
+		Hops      []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
@@ -277,6 +278,17 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if body.PortRange != "" {
+		if err := db.ValidatePortRange(body.PortRange); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := db.UpdateNodePortRange(s.DB, n.ID, body.PortRange); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ = db.GetNode(s.DB, n.ID)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
 	_ = s.apiDispatch(n.ID)

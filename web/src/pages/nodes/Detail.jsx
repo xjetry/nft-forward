@@ -81,7 +81,10 @@ export default function NodeDetail() {
   const proxyPrefix = useGhProxy && ghProxy.trim()
     ? (ghProxy.trim().endsWith('/') ? ghProxy.trim() : ghProxy.trim() + '/')
     : ''
-  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
+  const portRangePart = node.port_range && node.port_range !== '10001-20000'
+    ? ` \\\n  --port-range ${node.port_range}`
+    : ''
+  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${portRangePart}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
 
   return (
     <Layout>

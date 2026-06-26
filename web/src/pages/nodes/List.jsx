@@ -210,6 +210,8 @@ export default function NodeList() {
 function AddNodeModal({ open, onClose, onDone }) {
   const [name, setName] = useState('')
   const [secret, setSecret] = useState('')
+  const [portStart, setPortStart] = useState('10001')
+  const [portEnd, setPortEnd] = useState('20000')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
   const navigate = useNavigate()
@@ -218,9 +220,10 @@ function AddNodeModal({ open, onClose, onDone }) {
     e.preventDefault()
     setLoading(true)
     try {
-      const res = await api.post('/nodes', { name, secret: secret || undefined })
+      const portRange = `${portStart || '10001'}-${portEnd || '20000'}`
+      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange })
       toast('节点已添加')
-      setName(''); setSecret('')
+      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000')
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
@@ -234,6 +237,18 @@ function AddNodeModal({ open, onClose, onDone }) {
           <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-1" />
           <label className="text-[13px] font-semibold text-ink-soft">Token <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field font-mono" value={secret} onChange={e => setSecret(e.target.value)} placeholder="留空则随机生成 64 位 hex" />
+        </div>
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-[13px] font-semibold text-ink-soft block mb-1">起始端口</label>
+            <input className="input-field w-full font-mono" type="number" min="1" max="65535"
+              value={portStart} onChange={e => setPortStart(e.target.value)} placeholder="10001" />
+          </div>
+          <div className="flex-1">
+            <label className="text-[13px] font-semibold text-ink-soft block mb-1">结束端口</label>
+            <input className="input-field w-full font-mono" type="number" min="1" max="65535"
+              value={portEnd} onChange={e => setPortEnd(e.target.value)} placeholder="20000" />
+          </div>
         </div>
         <div className="flex gap-3 pt-4 border-t border-line-soft">
           <button type="submit" disabled={loading} className="btn-primary">添加节点</button>
