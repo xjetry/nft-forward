@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -25,6 +26,7 @@ type Server struct {
 	Hub        *Hub
 	Dispatcher *Dispatcher
 	Landing    *landing.Fetcher
+	stopExpiry chan struct{}
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -33,10 +35,36 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher()}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{})}
 	hub.OnTrafficUpdate = s.enforceUserQuota
 	hub.Redispatch = s.redispatchNodes
+	go s.expiryEnforcer()
 	return s, nil
+}
+
+// expiryEnforcer periodically scans for users whose expires_at has passed
+// and re-dispatches the affected nodes so their forwarding rules are
+// removed from the kernel.
+func (s *Server) expiryEnforcer() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopExpiry:
+			return
+		case <-ticker.C:
+			nodes, err := db.ExpiredUserNodeIDs(s.DB)
+			if err != nil {
+				log.Printf("expiry: query expired-user nodes: %v", err)
+				continue
+			}
+			for _, n := range nodes {
+				if err := s.dispatchToNode(n); err != nil {
+					log.Printf("expiry: re-dispatch node %d: %v", n, err)
+				}
+			}
+		}
+	}
 }
 
 // enforceUserQuota disables a user that has reached its traffic quota and

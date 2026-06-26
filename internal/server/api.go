@@ -1478,6 +1478,14 @@ func (s *Server) apiSetUserExpiry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_expiry", strconv.FormatInt(id, 10), raw)
+	// Re-dispatch so expiry (or extension) takes effect immediately in the kernel.
+	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
+		for _, n := range nodes {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, id, err)
+			}
+		}
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 

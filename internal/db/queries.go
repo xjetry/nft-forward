@@ -440,6 +440,21 @@ func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=?`, userID)
 }
 
+// ExpiredUserNodeIDs returns the distinct node IDs that have rule_hops
+// owned by users whose expires_at is in the past. Only non-disabled users
+// are included — disabled users are already filtered by other paths.
+func ExpiredUserNodeIDs(d *sql.DB) ([]int64, error) {
+	return queryInt64s(d, `
+		SELECT DISTINCT rh.node_id
+		FROM rule_hops rh
+		JOIN rules r ON r.id = rh.rule_id
+		JOIN users u ON u.id = r.owner_id
+		WHERE u.disabled = 0
+		  AND u.expires_at IS NOT NULL
+		  AND u.expires_at > 0
+		  AND u.expires_at < strftime('%s','now')`)
+}
+
 func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 	q := `SELECT ` + ruleHopCols + ` FROM rule_hops rh
 		WHERE rh.node_id=?
