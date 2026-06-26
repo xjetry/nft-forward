@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
-import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
 
 /* Landing-nodes nav: lists the nodes available to the user — the admin-assigned
    ones (resolved server-side from a subscription and/or URIs) plus the user's
@@ -33,7 +33,10 @@ export default function MyLandingNodes() {
       .catch(console.error)
       .finally(() => setRefreshing(false))
   }
-  useEffect(() => { load(false); fetchNodeRoles().then(setRoles) }, [])
+  useEffect(() => {
+    load(false)
+    fetchNodeRoles().then(sr => setRoles({ ...sr, ...loadLocalRoles(user?.username) }))
+  }, [])
 
   if (serverNodes === null || roles === null) return <Layout><Loading /></Layout>
 

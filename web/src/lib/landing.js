@@ -90,6 +90,28 @@ export async function saveNodeRoles(roles) {
   return clean
 }
 
+const LS_LOCAL_ROLES_PREFIX = 'nf-local-roles:'
+
+export function loadLocalRoles(username) {
+  if (!username) return {}
+  try {
+    const raw = localStorage.getItem(LS_LOCAL_ROLES_PREFIX + username)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+
+export function saveLocalRoles(username, roles) {
+  if (!username) return
+  const clean = {}
+  for (const [k, v] of Object.entries(roles)) {
+    if (v === 'landing' || v === 'direct') clean[k] = v
+  }
+  try {
+    if (Object.keys(clean).length) localStorage.setItem(LS_LOCAL_ROLES_PREFIX + username, JSON.stringify(clean))
+    else localStorage.removeItem(LS_LOCAL_ROLES_PREFIX + username)
+  } catch {}
+}
+
 export function applyNodeRole(roles, n, role) {
   const next = { ...roles }
   const key = nodeRoleKey(n)

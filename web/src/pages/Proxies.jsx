@@ -4,7 +4,7 @@ import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/La
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
-  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, nodeRoleKey,
+  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey,
   landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
 } from '../lib/landing'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -30,8 +30,8 @@ export default function Proxies() {
       ? api.get('/my/landing-nodes').then(d => d?.nodes || []).catch(() => [])
       : Promise.resolve([])
     const rolesP = fetchNodeRoles()
-    Promise.all([rulesP, serverP, rolesP]).then(([r, s, ro]) => {
-      setRules(r); setServerNodes(s); setRoles(ro)
+    Promise.all([rulesP, serverP, rolesP]).then(([r, s, sr]) => {
+      setRules(r); setServerNodes(s); setRoles({ ...sr, ...loadLocalRoles(user?.username) })
     }).finally(() => setLoading(false))
   }, [])
 
