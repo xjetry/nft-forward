@@ -261,7 +261,11 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			if mode == "" {
 				mode = "userspace"
 			}
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode}
+			mult := 0.0
+			if i == 0 {
+				mult = 1.0
+			}
+			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: mult}
 		}
 		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
