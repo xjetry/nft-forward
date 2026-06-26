@@ -36,6 +36,8 @@ export function ProxyURIEditor({ username, blurred }) {
   const [subNodes, setSubNodes] = useState(() => loadSubCache(username))
   const [roles, setRoles] = useState({})
   const [fetching, setFetching] = useState(false)
+  const [manualParsed, setManualParsed] = useState(() => parseURIs(loadLocalURIs(username)))
+  const [showManualConfig, setShowManualConfig] = useState(() => parseURIs(loadLocalURIs(username)).length > 0)
 
   useEffect(() => { fetchNodeRoles().then(setRoles) }, [])
   const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
@@ -45,13 +47,22 @@ export function ProxyURIEditor({ username, blurred }) {
 
   const roleOf = (n) => { const k = nodeRoleKey(n); return k && roles[k] ? roles[k] : 'none' }
   const manualCount = parseURIs(text).length
+  const mLanding = manualParsed.filter(n => roleOf(n) === 'landing').length
+  const mDirect = manualParsed.filter(n => roleOf(n) === 'direct').length
+  const mUnconfigured = manualParsed.length - mLanding - mDirect
   const landingCount = subNodes.filter(n => roleOf(n) === 'landing').length
   const directCount = subNodes.filter(n => roleOf(n) === 'direct').length
   const unconfiguredCount = subNodes.length - landingCount - directCount
 
   const saveManual = () => {
     saveLocalURIs(username, text)
-    toast('已保存到本浏览器')
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    const parsed = parseURIs(text)
+    setManualParsed(parsed)
+    const failed = lines.length - parsed.length
+    if (failed > 0) toast(`已保存 · ${failed} 行无法解析，已跳过`)
+    else toast('已保存到本浏览器')
+    if (parsed.length > 0) setShowManualConfig(true)
   }
 
   const refreshSubs = async () => {
@@ -87,6 +98,12 @@ export function ProxyURIEditor({ username, blurred }) {
     saveNodeRoles(next)
   }
 
+  const handleMarkAllManual = (role) => {
+    const next = applyNodeRoleBatch(roles, manualParsed, role)
+    setRoles(next)
+    saveNodeRoles(next)
+  }
+
   const hasNodes = showSub && subNodes.length > 0
 
   return (
@@ -95,15 +112,13 @@ export function ProxyURIEditor({ username, blurred }) {
         <div className="flex items-baseline gap-2.5 mb-3.5">
           <h3 className="text-[16px] font-bold">我的代理 URI</h3>
           <span className="text-[13px] text-ink-mut">
-            {manualCount > 0 && `${manualCount} 手动`}
-            {manualCount > 0 && subNodes.length > 0 && ' · '}
-            {subNodes.length > 0 && `${landingCount} 落地 · ${directCount} 直连 · ${unconfiguredCount} 未配置`}
+            {(manualParsed.length + subNodes.length > 0) && `${mLanding + landingCount} 落地 · ${mDirect + directCount} 直连 · ${mUnconfigured + unconfiguredCount} 未配置`}
           </span>
         </div>
         <p className="text-[13px] leading-[1.7] text-ink-soft mb-3.5">
-          手动填写的 URI 可作为转发出口，也出现在「我的代理」。
-          订阅节点标记为<span className="font-semibold text-emerald-600">落地</span>后可作为规则出口；
-          标为<span className="font-semibold text-blue-600">直连</span>则出现在「我的代理」；
+          手动填写和订阅节点均可标记用途：
+          标为<span className="font-semibold text-emerald-600">落地</span>可作为规则出口；
+          标为<span className="font-semibold text-blue-600">直连</span>出现在「我的代理」；
           <span className="font-semibold text-ink-mut">未配置</span>的节点不参与任何功能。
           <span className="text-amber-500 font-semibold"> 仅保存在本浏览器。</span>
         </p>
@@ -170,6 +185,49 @@ export function ProxyURIEditor({ username, blurred }) {
           value={text} onChange={e => setText(e.target.value)}
           placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
         <button onClick={saveManual} className="btn-primary mt-3 self-start">保存</button>
+
+        {manualParsed.length > 0 && (
+          <>
+            <button type="button" onClick={() => setShowManualConfig(v => !v)}
+              className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mt-3 self-start transition-colors">
+              <svg className={`w-3 h-3 transition-transform ${showManualConfig ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              配置表<span className="text-ink-mut">（{manualParsed.length} 个节点）</span>
+            </button>
+            {showManualConfig && (
+              <div className="mt-2 border border-line rounded-[10px] overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
+                  <span className="text-ink-soft font-semibold">
+                    {manualParsed.length} 个节点
+                    <span className="font-normal ml-2">{mLanding} 落地 · {mDirect} 直连 · {mUnconfigured} 未配置</span>
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => handleMarkAllManual('landing')} className="text-emerald-600 hover:underline">全部落地</button>
+                    <span className="text-ink-mut">|</span>
+                    <button onClick={() => handleMarkAllManual('direct')} className="text-blue-600 hover:underline">全部直连</button>
+                    <span className="text-ink-mut">|</span>
+                    <button onClick={() => handleMarkAllManual('none')} className="text-ink-mut hover:underline">全部未配置</button>
+                  </div>
+                </div>
+                <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
+                  <table className="w-full text-[13px]">
+                    <tbody>
+                      {manualParsed.map((n, i) => (
+                        <tr key={i} className="border-t border-line-soft">
+                          <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
+                          <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
+                          <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.host}:{n.port}</td>
+                          <td className="px-3 py-1.5 text-right">
+                            <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )

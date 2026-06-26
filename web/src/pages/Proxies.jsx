@@ -42,8 +42,10 @@ export default function Proxies() {
 
   const directSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [allSubNodes, roles])
   const landingSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [allSubNodes, roles])
+  const directManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [manualNodes, roles])
+  const landingManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [manualNodes, roles])
 
-  const allLanding = useMemo(() => mergeLanding(manualNodes, landingSub), [manualNodes, landingSub])
+  const allLanding = useMemo(() => mergeLanding(landingManual, landingSub), [landingManual, landingSub])
   const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])
 
   const relayProxies = useMemo(() => {
@@ -62,7 +64,7 @@ export default function Proxies() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const directProxies = [...manualNodes, ...directSub]
+  const directProxies = [...directManual, ...directSub]
   const allProxies = [...directProxies.map(n => ({ ...n, kind: 'direct' })), ...relayProxies.map(n => ({ ...n, kind: 'relay' }))]
 
   const tabbed = tab === 'all' ? allProxies : allProxies.filter(n => n.kind === (tab === 'relay' ? 'relay' : 'direct'))
