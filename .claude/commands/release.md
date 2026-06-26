@@ -16,6 +16,17 @@
    - 修复/改进：patch bump（如 v0.10.0 → v0.10.1）
    - 小修补：micro bump（如 v0.10.1 → v0.10.1.1）
 
+## 打 Tag 并推送
+
+**必须先打 tag 再编译 nft-server**，否则 Go 的 VCS stamping 拿不到正确版本号（会生成 pseudo-version，如 v0.29.14 之后变成 v0.29.15）。
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z — 英文单行摘要"
+git push origin main --tags
+```
+
+Tag message 用英文单行。
+
 ## 编译
 
 先重建前端，nft-server 会 embed `web/dist`：
@@ -28,6 +39,7 @@ cd web && npm run build && cd ..
 
 ```bash
 # 面板：正常 buildinfo（版本号经 VCS stamping 进 nft-server）
+# 必须在 git tag 之后执行，否则版本号不正确
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/nft-server ./cmd/nft-server
 
 # 节点：-buildvcs=false 让构建字节与 git 状态无关，相同源码跨次发布得到相同 sha
@@ -37,15 +49,6 @@ upx -9 --lzma build/nft-agent
 
 (cd build && shasum -a 256 nft-server nft-agent > SHA256SUMS)
 ```
-
-## 打 Tag 并推送
-
-```bash
-git tag -a vX.Y.Z -m "vX.Y.Z — 英文单行摘要"
-git push origin main --tags
-```
-
-Tag message 用英文单行。
 
 ## 创建 GitHub Release
 
