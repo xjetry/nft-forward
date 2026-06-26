@@ -380,7 +380,7 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
     setSaving(true)
     try {
       await api.post(`/nodes/${nodeId}/hops`, {
-        hops: modes.map((m, i) => ({ mode: m, traffic_multiplier: Number(mults[i]) || 1 }))
+        hops: modes.map((m, i) => ({ mode: m, traffic_multiplier: parseFloat(mults[i]) >= 0 ? parseFloat(mults[i]) : 1 }))
       })
       toast('已保存')
       onDone()

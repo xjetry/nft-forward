@@ -24,7 +24,7 @@ type UserNode struct {
 func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 	for _, h := range hops {
 		mult := h.TrafficMultiplier
-		if mult == 0 {
+		if mult < 0 {
 			mult = 1.0
 		}
 		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode, traffic_multiplier) VALUES (?,?,?,?,?)`,

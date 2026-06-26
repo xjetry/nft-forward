@@ -438,7 +438,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mult := hu.TrafficMultiplier
-		if mult <= 0 {
+		if mult < 0 {
 			mult = 1.0
 		}
 		hops[i] = db.NodeHop{NodeID: id, Position: h.Position, HopNodeID: h.HopNodeID, Mode: mode, TrafficMultiplier: mult}
