@@ -39,7 +39,8 @@ type Node struct {
 	OwnerID   *int64         `json:"owner_id,omitempty"`
 	Address   string         `json:"address"`
 	Secret    string         `json:"secret"`
-	RelayHost string         `json:"relay_host"`
+	RelayHost   string       `json:"relay_host"`
+	RelayHostV6 string       `json:"relay_host_v6"`
 	Online    int            `json:"online"`
 	AgentVersion string      `json:"agent_version"`
 	AgentSHA     string      `json:"agent_sha"`
@@ -239,7 +240,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -257,7 +258,7 @@ func scanNode(r rowScanner) (*Node, error) {
 	var luVersion, luStatus, luError sql.NullString
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
-		&n.RelayHost, &n.Online, &agentVersion, &n.AgentSHA,
+		&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
@@ -377,6 +378,11 @@ func DeleteNode(d *sql.DB, id int64) error {
 // it). Validation of the value (IPv4 / hostname) is the caller's job.
 func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
 	_, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, relayHost, id)
+	return err
+}
+
+func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
+	_, err := d.Exec(`UPDATE nodes SET relay_host_v6=? WHERE id=?`, relayHostV6, id)
 	return err
 }
 

@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN relay_host_v6 TEXT NOT NULL DEFAULT '';

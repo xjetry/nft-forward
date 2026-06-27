@@ -364,6 +364,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/nodes/{id}", s.apiGetNode)
 			r.Post("/nodes/{id}/rename", s.apiRenameNode)
 			r.Post("/nodes/{id}/relay-host", s.apiSetNodeRelayHost)
+			r.Post("/nodes/{id}/relay-host-v6", s.apiSetNodeRelayHostV6)
 			r.Post("/nodes/{id}/port-range", s.apiUpdateNodePortRange)
 			r.Post("/nodes/{id}/resync", s.apiResyncNode)
 			r.Post("/nodes/{id}/upgrade", s.apiUpgradeNode)

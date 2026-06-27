@@ -16,7 +16,7 @@ import (
 
 const (
 	TableName   = "nft_forward"
-	TableFamily = "ip"
+	TableFamily = "inet"
 
 	ModeKernel    = "kernel"
 	ModeUserspace = "userspace"
@@ -68,14 +68,19 @@ func (r Rule) Display() string {
 	if r.Comment != "" {
 		suffix = "  # " + r.Comment
 	}
-	return fmt.Sprintf("%s  %5d  →  %s:%d%s",
-		strings.ToUpper(r.Proto), r.SrcPort, target, r.DestPort, suffix)
+	return fmt.Sprintf("%s  %5d  →  %s%s",
+		strings.ToUpper(r.Proto), r.SrcPort, net.JoinHostPort(target, fmt.Sprintf("%d", r.DestPort)), suffix)
 }
 
 func NewRuleID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+func IsIPv6(addr string) bool {
+	ip := net.ParseIP(addr)
+	return ip != nil && ip.To4() == nil
 }
 
 func Validate(r Rule) error {
@@ -93,12 +98,11 @@ func Validate(r Rule) error {
 	hasHost := r.DestHost != ""
 	hasIP := r.DestIP != ""
 	if !hasHost && !hasIP {
-		return fmt.Errorf("目标必须填 IPv4 或域名")
+		return fmt.Errorf("目标必须填 IP 或域名")
 	}
 	if hasIP {
-		ip := net.ParseIP(r.DestIP)
-		if ip == nil || ip.To4() == nil {
-			return fmt.Errorf("目标 IP 必须为有效的 IPv4")
+		if net.ParseIP(r.DestIP) == nil {
+			return fmt.Errorf("目标 IP 格式非法")
 		}
 	}
 	if hasHost {
@@ -127,32 +131,38 @@ func ProtoDportMatch(proto string, port int) string {
 	return fmt.Sprintf("%s dport %d", proto, port)
 }
 
+// dnatTarget formats the nft DNAT target for an inet-family table.
+// IPv4: "dnat ip to 1.2.3.4:port"  —  IPv6: "dnat ip6 to [addr]:port"
+func dnatTarget(ip string, port int) string {
+	if IsIPv6(ip) {
+		return fmt.Sprintf("dnat ip6 to [%s]:%d", ip, port)
+	}
+	return fmt.Sprintf("dnat ip to %s:%d", ip, port)
+}
+
+// daddrMatch returns "ip daddr <addr>" or "ip6 daddr <addr>" per IP family.
+func daddrMatch(ip string) string {
+	if IsIPv6(ip) {
+		return "ip6 daddr " + ip
+	}
+	return "ip daddr " + ip
+}
+
 func RenderRuleset(rules []Rule) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("table %s %s {\n", TableFamily, TableName))
 	b.WriteString("\tchain prerouting {\n")
 	b.WriteString("\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
 	for _, r := range rules {
-		// A rule whose DestHost failed to resolve carries an empty DestIP;
-		// rendering "dnat to :port" is invalid syntax and would make nft reject
-		// the whole table, taking every other rule down with it. Skip it here
-		// (and symmetrically in postrouting) so the rule stays inactive until
-		// DNS resolves on a later cycle.
 		if r.DestIP == "" {
 			continue
 		}
 		mark := ""
 		if r.BandwidthMbps > 0 {
-			// Mark = listen port. The tc HTB tree uses the same value as the
-			// minor class id, so packets are routed to the rate-limited class.
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
-		// No counter here: a nat chain is only traversed by the first packet of
-		// each connection (conntrack fast-paths the rest), so a counter would see
-		// connection setups, not throughput. Byte accounting lives in the
-		// forward-hook `account` chain below.
-		b.WriteString(fmt.Sprintf("\t\t%s %sdnat to %s:%d\n",
-			ProtoDportMatch(r.Proto, r.SrcPort), mark, r.DestIP, r.DestPort))
+		b.WriteString(fmt.Sprintf("\t\t%s %s%s\n",
+			ProtoDportMatch(r.Proto, r.SrcPort), mark, dnatTarget(r.DestIP, r.DestPort)))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("\tchain postrouting {\n")
@@ -161,19 +171,10 @@ func RenderRuleset(rules []Rule) string {
 		if r.DestIP == "" {
 			continue
 		}
-		// ct status dnat limits masquerade to connections this table actually
-		// DNAT'd. Without it the daddr+dport match is a catch-all that would
-		// also SNAT unrelated forward traffic to the same backend (containers,
-		// tunnels, other paths); using conntrack state instead of an interface
-		// name keeps this correct regardless of the host's NIC layout.
-		b.WriteString(fmt.Sprintf("\t\tip daddr %s %s ct status dnat masquerade\n",
-			r.DestIP, ProtoDportMatch(r.Proto, r.DestPort)))
+		b.WriteString(fmt.Sprintf("\t\t%s %s ct status dnat masquerade\n",
+			daddrMatch(r.DestIP), ProtoDportMatch(r.Proto, r.DestPort)))
 	}
 	b.WriteString("\t}\n")
-	// The forward hook sees every forwarded packet in both directions. Keying on
-	// the conntrack original tuple's destination port recovers the listen port
-	// after DNAT has rewritten daddr/dport, so one counter per rule measures the
-	// real bidirectional byte total — matching the userspace backend's accounting.
 	b.WriteString("\tchain account {\n")
 	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
 	for _, r := range rules {
@@ -230,20 +231,31 @@ func Probe() error {
 	return nil
 }
 
-func IPForwardEnabled() bool {
-	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+func sysctl(path string) bool {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
 	return strings.TrimSpace(string(data)) == "1"
 }
 
+func IPForwardEnabled() bool {
+	return sysctl("/proc/sys/net/ipv4/ip_forward")
+}
+
+func IPv6ForwardEnabled() bool {
+	return sysctl("/proc/sys/net/ipv6/conf/all/forwarding")
+}
+
 func EnableIPForward() error {
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
-		return err
+	for _, p := range []struct{ proc, sysctl string }{
+		{"/proc/sys/net/ipv4/ip_forward", "net.ipv4.ip_forward = 1"},
+		{"/proc/sys/net/ipv6/conf/all/forwarding", "net.ipv6.conf.all.forwarding = 1"},
+	} {
+		_ = os.WriteFile(p.proc, []byte("1\n"), 0o644)
 	}
 	conf := "/etc/sysctl.d/99-nft-forward.conf"
-	body := "net.ipv4.ip_forward = 1\n"
+	body := "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n"
 	return os.WriteFile(conf, []byte(body), 0o644)
 }
 

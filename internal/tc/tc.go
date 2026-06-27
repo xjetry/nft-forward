@@ -63,11 +63,12 @@ func Apply(rules []nft.Rule, iface string) error {
 			"htb", "rate", rate, "ceil", rate); err != nil {
 			return fmt.Errorf("class %s: %w", classid, err)
 		}
-		// Filter handle holds the mark value set by nft. We pass it as hex
-		// with explicit 0x prefix to keep the base unambiguous.
-		if err := run("tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", "ip",
-			"handle", fmt.Sprintf("0x%x", r.SrcPort), "fw", "classid", classid); err != nil {
-			return fmt.Errorf("filter %d: %w", r.SrcPort, err)
+		handle := fmt.Sprintf("0x%x", r.SrcPort)
+		for _, proto := range []string{"ip", "ipv6"} {
+			if err := run("tc", "filter", "add", "dev", iface, "parent", "1:", "protocol", proto,
+				"handle", handle, "fw", "classid", classid); err != nil {
+				return fmt.Errorf("filter %s/%d: %w", proto, r.SrcPort, err)
+			}
 		}
 	}
 	return nil

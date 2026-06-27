@@ -145,7 +145,7 @@ func buildInputs() []textinput.Model {
 	return []textinput.Model{
 		mk("", 0), // fProto placeholder
 		mk("监听端口（空=自动）", 12),
-		mk("目标 IPv4 或域名", 32),
+		mk("目标 IP 或域名", 32),
 		mk("目标端口", 12),
 		mk("可选备注", 40),
 		mk("", 0), // fMode placeholder

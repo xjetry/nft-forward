@@ -516,7 +516,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	}
 	host := strings.TrimSpace(body.RelayHost)
 	if host != "" && !isValidRelayHost(host) {
-		jsonErr(w, http.StatusBadRequest, "中继地址须为 IPv4 或域名")
+		jsonErr(w, http.StatusBadRequest, "中继地址须为 IP 或域名")
 		return
 	}
 	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
@@ -528,6 +528,40 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	if len(ruleIDs) > 0 {
 		s.apiRewireRules(ruleIDs)
 	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	var body struct {
+		RelayHostV6 string `json:"relay_host_v6"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	host := strings.TrimSpace(body.RelayHostV6)
+	if host != "" {
+		ip := net.ParseIP(host)
+		if ip == nil || ip.To4() != nil {
+			jsonErr(w, http.StatusBadRequest, "IPv6 中继地址须为有效的 IPv6 地址")
+			return
+		}
+	}
+	if err := db.UpdateNodeRelayHostV6(s.DB, id, host); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_relay_host_v6", strconv.FormatInt(id, 10), host)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2024,7 +2058,7 @@ func toInt64(v any) (int64, error) {
 	}
 }
 
-// isValidRelayHost checks that a string is a valid IPv4 or hostname.
+// isValidRelayHost checks that a string is a valid IP or hostname.
 func isValidRelayHost(host string) bool {
 	if ip := net.ParseIP(host); ip != nil {
 		return true

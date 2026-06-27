@@ -53,7 +53,7 @@ func setKeepAlive(c net.Conn) {
 // dialUpstream is the single entry point for opening an upstream leg, so every
 // pooled or on-demand connection gets the same dial timeout and keepalive.
 func dialUpstream(addr string) (net.Conn, error) {
-	c, err := net.DialTimeout("tcp4", addr, dialTimeout)
+	c, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
 		return nil, err
 	}

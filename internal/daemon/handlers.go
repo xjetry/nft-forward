@@ -323,10 +323,7 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		Comment:  req.Comment,
 		Mode:     req.Mode,
 	}
-	// Classify the exit target: if it parses as an IPv4 address,
-	// store it as DestIP (applied directly to the kernel); otherwise
-	// treat it as a hostname that the DNS resolver will resolve.
-	if ip := net.ParseIP(req.ExitHost); ip != nil && ip.To4() != nil {
+	if ip := net.ParseIP(req.ExitHost); ip != nil {
 		rule.DestIP = req.ExitHost
 	} else {
 		rule.DestHost = req.ExitHost
@@ -392,8 +389,7 @@ func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id str
 						rules[i].Proto = req.Proto
 					}
 					if req.ExitHost != "" {
-						// Same IP/hostname classification as create.
-						if ip := net.ParseIP(req.ExitHost); ip != nil && ip.To4() != nil {
+						if ip := net.ParseIP(req.ExitHost); ip != nil {
 							rules[i].DestIP = req.ExitHost
 							rules[i].DestHost = ""
 						} else {

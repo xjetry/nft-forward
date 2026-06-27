@@ -36,7 +36,7 @@ type listener struct {
 }
 
 func openListener(r nft.Rule, poolSize int) (*listener, error) {
-	ln, err := net.Listen("tcp4", fmt.Sprintf(":%d", r.SrcPort))
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", r.SrcPort))
 	if err != nil {
 		return nil, err
 	}

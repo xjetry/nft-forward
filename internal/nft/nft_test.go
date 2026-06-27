@@ -87,7 +87,7 @@ func TestRenderRulesetUsesDestIP(t *testing.T) {
 		Proto: "tcp", SrcPort: 80, DestHost: "home.example.net",
 		DestIP: "10.0.0.5", DestPort: 80,
 	}})
-	if !contains(out, "dnat to 10.0.0.5:80") {
+	if !contains(out, "dnat ip to 10.0.0.5:80") {
 		t.Fatalf("renderer must use DestIP, got:\n%s", out)
 	}
 	if contains(out, "home.example.net") {
@@ -104,6 +104,50 @@ func TestRenderRulesetMasqueradeScopedToDNAT(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsIPv6(t *testing.T) {
+	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "2001:db8::1", DestPort: 80}
+	if err := Validate(r); err != nil {
+		t.Fatalf("expected ok for IPv6 address, got %v", err)
+	}
+}
+
+func TestRenderRulesetIPv6DNAT(t *testing.T) {
+	out := RenderRuleset([]Rule{{
+		Proto: "tcp", SrcPort: 8080, DestIP: "2001:db8::1", DestPort: 80,
+	}})
+	if !contains(out, "dnat ip6 to [2001:db8::1]:80") {
+		t.Fatalf("expected IPv6 dnat syntax, got:\n%s", out)
+	}
+	if !contains(out, "ip6 daddr 2001:db8::1 tcp dport 80 ct status dnat masquerade") {
+		t.Fatalf("expected IPv6 masquerade syntax, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetInetFamily(t *testing.T) {
+	out := RenderRuleset(nil)
+	if !contains(out, "table inet nft_forward") {
+		t.Fatalf("expected inet family table, got:\n%s", out)
+	}
+}
+
+func TestIsIPv6(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"2001:db8::1", true},
+		{"::1", true},
+		{"10.0.0.1", false},
+		{"not-an-ip", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsIPv6(c.addr); got != c.want {
+			t.Errorf("IsIPv6(%q)=%v want %v", c.addr, got, c.want)
+		}
+	}
+}
+
 func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
 	// An unresolved DestHost leaves DestIP empty; the rule must be skipped in
 	// both chains rather than emitting invalid syntax that fails the whole table.
@@ -117,7 +161,7 @@ func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
 	if contains(out, "dnat to :443") || contains(out, "ip daddr  ") {
 		t.Fatalf("must not emit invalid syntax for empty DestIP, got:\n%s", out)
 	}
-	if !contains(out, "tcp dport 9443 dnat to 10.0.0.6:443") {
+	if !contains(out, "tcp dport 9443 dnat ip to 10.0.0.6:443") {
 		t.Fatalf("sibling rule with valid DestIP must still render, got:\n%s", out)
 	}
 	if !contains(out, "ip daddr 10.0.0.6 tcp dport 443 ct status dnat masquerade") {

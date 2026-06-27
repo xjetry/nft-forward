@@ -14,6 +14,7 @@ export default function NodeDetail() {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
   const [relayHost, setRelayHost] = useState('')
+  const [relayHostV6, setRelayHostV6] = useState('')
   const [portRange, setPortRange] = useState('')
   const [useGhProxy, setUseGhProxy] = useState(false)
   const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
@@ -27,6 +28,7 @@ export default function NodeDetail() {
       setData(d)
       setName(d.node?.name || '')
       setRelayHost(d.node?.relay_host || '')
+      setRelayHostV6(d.node?.relay_host_v6 || '')
       setPortRange(d.node?.port_range || '')
     }).catch(console.error).finally(() => setLoading(false))
   }
@@ -51,6 +53,10 @@ export default function NodeDetail() {
   const saveRelay = async (e) => {
     e.preventDefault()
     try { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); load() } catch (err) { toast(err.message) }
+  }
+  const saveRelayV6 = async (e) => {
+    e.preventDefault()
+    try { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); load() } catch (err) { toast(err.message) }
   }
   const savePortRange = async (e) => {
     e.preventDefault()
@@ -169,6 +175,9 @@ export default function NodeDetail() {
               <InfoRow label="中继地址（数据面）" mono>
                 {node.relay_host ? <SensText blurred={blurred}>{node.relay_host}</SensText> : <span className="text-ink-mut">未设置（设置后才能进链路）</span>}
               </InfoRow>
+              <InfoRow label="IPv6 中继地址" mono>
+                {node.relay_host_v6 ? <SensText blurred={blurred}>{node.relay_host_v6}</SensText> : <span className="text-ink-mut">未设置</span>}
+              </InfoRow>
               <InfoRow label="Token" mono valueClass="text-[12.5px] break-all leading-relaxed">
                 <SensText blurred={blurred}>{node.secret}</SensText>
               </InfoRow>
@@ -205,7 +214,14 @@ export default function NodeDetail() {
 
             <ConfigField label="中继地址（数据面）" hint="中继链路用它作为上一跳打向本节点的目标地址">
               <form onSubmit={saveRelay} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IPv4 或域名" />
+                <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IP 或域名" />
+                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+              </form>
+            </ConfigField>
+
+            <ConfigField label="IPv6 中继地址" hint="设置后该节点可转发 IPv6 目标，留空表示不支持 IPv6">
+              <form onSubmit={saveRelayV6} className="flex gap-2">
+                <input className="input-field font-mono flex-1" value={relayHostV6} onChange={e => setRelayHostV6(e.target.value)} placeholder="数据面公网 IPv6 地址" />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
               </form>
             </ConfigField>

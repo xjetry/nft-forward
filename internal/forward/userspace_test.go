@@ -391,7 +391,7 @@ func TestUserspace_BindConflictRollback(t *testing.T) {
 	defer be.Close()
 
 	taken := freePort(t)
-	blocker, err := net.Listen("tcp4", fmt.Sprintf(":%d", taken))
+	blocker, err := net.Listen("tcp", fmt.Sprintf(":%d", taken))
 	if err != nil {
 		t.Fatalf("pre-bind: %v", err)
 	}
@@ -408,8 +408,7 @@ func TestUserspace_BindConflictRollback(t *testing.T) {
 	if len(be.listeners) != 0 {
 		t.Fatalf("rollback incomplete, listeners=%d", len(be.listeners))
 	}
-	// The port the failed Reconcile opened for the good rule must be released.
-	probe, err := net.Listen("tcp4", fmt.Sprintf(":%d", free))
+	probe, err := net.Listen("tcp", fmt.Sprintf(":%d", free))
 	if err != nil {
 		t.Fatalf("port %d not rolled back: %v", free, err)
 	}

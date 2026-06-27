@@ -206,6 +206,11 @@ func OccupiedPortsOnNode(d DBTX, nodeID int64, proto string, excludeRuleID int64
 }
 
 // hostPort joins a relay host / exit host with a port for display + targets.
+func exitIsIPv6(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
 func hostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
@@ -407,6 +412,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	type resolved struct {
 		nodeID      int64
 		relayHost   string
+		relayHostV6 string
 		mode        string
 		desiredPort int
 		comment     string
@@ -420,8 +426,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		}
 		seen[hop.NodeID] = true
 
-		var name, relay, portRange string
-		if err := tx.QueryRow(`SELECT name, relay_host, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &portRange); err != nil {
+		var name, relay, relayV6, portRange string
+		if err := tx.QueryRow(`SELECT name, relay_host, relay_host_v6, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &relayV6, &portRange); err != nil {
 			return "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
 		}
 		if relay == "" {
@@ -435,7 +441,13 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if r.Proto == "udp" {
 			mode = "kernel" // userspace relay is TCP-only
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs}
+	}
+
+	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
+		var name string
+		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[len(rs)-1].nodeID).Scan(&name)
+		return "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
