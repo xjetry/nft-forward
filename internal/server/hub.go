@@ -145,6 +145,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if node.RelayHost == "" && connectIP != "" {
 		_ = db.UpdateNodeRelayHost(h.DB, node.ID, connectIP)
 	}
+	if hello.PortRange != "" {
+		if err := db.ValidatePortRange(hello.PortRange); err == nil {
+			_ = db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange)
+		}
+	}
 
 	go h.writerLoop(ac)
 	h.readerLoop(ctx, ac, hello.LastAppliedRev)

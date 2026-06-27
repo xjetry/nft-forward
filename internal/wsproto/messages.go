@@ -79,6 +79,7 @@ type Hello struct {
 	OS             string `json:"os"`
 	Arch           string `json:"arch"`
 	LastAppliedRev string `json:"last_applied_rev,omitempty"`
+	PortRange      string `json:"port_range,omitempty"`
 }
 
 // HelloAck is the panel's response to Hello. Error == "" means the

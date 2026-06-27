@@ -38,6 +38,7 @@ type DialerConfig struct {
 	Token        string
 	AgentVersion string
 	AgentSHA     string
+	PortRange    string
 
 	GetState func() (OwnerRuleset, AgentMeta)
 	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) error
@@ -275,6 +276,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		OS:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
 		LastAppliedRev: currentMeta.LastAppliedRev,
+		PortRange:      d.cfg.PortRange,
 	})
 	if err != nil {
 		return false, fmt.Errorf("marshal hello: %w", err)

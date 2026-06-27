@@ -36,6 +36,7 @@ func runDaemon(args []string) int {
 		iface          string
 		connectURL     string
 		panelTokenFile string
+		portRange      string
 	)
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
@@ -44,7 +45,7 @@ func runDaemon(args []string) int {
 	fs.StringVar(&iface, "iface", "", "tc data-plane iface (auto-detect if empty)")
 	fs.StringVar(&connectURL, "connect", "", "panel WebSocket URL (e.g. wss://panel/v1/agents); empty = tui/standalone mode")
 	fs.StringVar(&panelTokenFile, "panel-token-file", "/etc/nft-forward/panel.token", "bearer token file (required when --connect is set)")
-	fs.String("port-range", "", "(ignored; port range is managed by the panel)")
+	fs.StringVar(&portRange, "port-range", "", "端口范围（如 10001-20000），上报给面板")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -74,6 +75,7 @@ func runDaemon(args []string) int {
 		GroupName:  groupName,
 		Iface:      iface,
 		ConnectURL: connectURL,
+		PortRange:  portRange,
 	}
 	if connectURL != "" {
 		tok, err := os.ReadFile(panelTokenFile)

@@ -50,6 +50,7 @@ type Config struct {
 	// frame; required when ConnectURL is set.
 	ConnectURL   string
 	ConnectToken string
+	PortRange    string
 }
 
 // New constructs a Daemon ready to Bootstrap and Run. Dataplane defaults to
@@ -92,6 +93,7 @@ func New(cfg Config) (*Daemon, error) {
 		resolveFn:   defaultResolver(resolver.New()),
 		connectURL:  cfg.ConnectURL,
 		connectTok:  cfg.ConnectToken,
+		portRange:   cfg.PortRange,
 	}, nil
 }
 
@@ -198,6 +200,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			Token:        d.connectTok,
 			AgentVersion: agentVersion(),
 			AgentSHA:     agentSHA(),
+			PortRange:    d.portRange,
 			GetState:     d.SnapshotForDialer,
 			OnApply:      d.SetPanelRuleset,
 			OnMigrated:   d.clearTuiSegment,

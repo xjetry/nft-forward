@@ -41,6 +41,7 @@ type Daemon struct {
 	// without coordinating with Run's lifecycle code.
 	connectURL string
 	connectTok string
+	portRange  string
 	dialer     atomic.Pointer[Dialer]
 
 	// reconcileMu serializes the data-plane reconcile/close calls against the
