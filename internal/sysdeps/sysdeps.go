@@ -42,12 +42,23 @@ func Ensure(pkgs ...string) error {
 
 	fmt.Fprintf(os.Stderr, "[sysdeps] 自动安装缺失依赖: %s\n", strings.Join(missing, " "))
 
-	if err := run(map[string]string{"DEBIAN_FRONTEND": "noninteractive"}, "apt-get", "update"); err != nil {
-		return fmt.Errorf("apt-get update: %w", err)
-	}
+	env := map[string]string{"DEBIAN_FRONTEND": "noninteractive"}
+	_ = run(env, "apt-get", "update")
 	args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
-	if err := run(map[string]string{"DEBIAN_FRONTEND": "noninteractive"}, "apt-get", args...); err != nil {
-		return fmt.Errorf("apt-get install %s: %w", strings.Join(missing, " "), err)
+	if err := run(env, "apt-get", args...); err != nil {
+		// apt may fail for reasons unrelated to the package (e.g. interrupted
+		// dpkg). Check whether the needed binaries landed anyway before giving up.
+		allOK := true
+		for _, pkg := range missing {
+			if _, lerr := exec.LookPath(pkgCommands[pkg]); lerr != nil {
+				allOK = false
+				break
+			}
+		}
+		if !allOK {
+			return fmt.Errorf("apt-get install %s: %w", strings.Join(missing, " "), err)
+		}
+		fmt.Fprintf(os.Stderr, "[sysdeps] apt-get 报错但依赖已就绪，继续\n")
 	}
 
 	// Loading nf_tables may be required on minimal images where the module
