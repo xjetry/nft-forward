@@ -7,6 +7,15 @@ import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, 
 
 const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
+function semverLT(a, b) {
+  const pa = (a || '').replace(/^v/, '').split('.').map(Number)
+  const pb = (b || '').replace(/^v/, '').split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0)
+  }
+  return false
+}
+
 export default function NodeDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -42,7 +51,7 @@ export default function NodeDetail() {
   const nodeHops = data.node_hops || []
   const grantedUsers = data.granted_users || []
   const isComposite = node.node_type === 'composite'
-  const agentOutdated = node.agent_version && node.agent_version !== latest_agent_version
+  const agentOutdated = node.agent_version && semverLT(node.agent_version, latest_agent_version)
   const up = data.upgrade || { status: 'none' }
   const showUpgrade = up.status !== 'none'
 
