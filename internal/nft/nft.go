@@ -199,9 +199,9 @@ func l4protoMatch(proto string) string {
 }
 
 func Apply(rules []Rule) error {
-	// Single nft -f input wraps flush + redefine so the kernel either accepts
-	// the whole set or keeps the previous state intact.
 	var script strings.Builder
+	// Remove leftover ip-family table from pre-v0.32 installations.
+	script.WriteString(fmt.Sprintf("add table ip %s\ndelete table ip %s\n", TableName, TableName))
 	script.WriteString(fmt.Sprintf("add table %s %s\n", TableFamily, TableName))
 	script.WriteString(fmt.Sprintf("delete table %s %s\n", TableFamily, TableName))
 	script.WriteString(RenderRuleset(rules))
