@@ -38,7 +38,7 @@ func runDaemon(args []string) int {
 		panelTokenFile string
 		portRange      string
 	)
-	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
 	fs.StringVar(&statePath, "state", daemon.DefaultStatePath, "持久化 state 文件路径")
 	fs.StringVar(&groupName, "group", daemon.DefaultGroupName, "socket 文件 group（不存在时回落到默认 group）")
@@ -47,7 +47,14 @@ func runDaemon(args []string) int {
 	fs.StringVar(&panelTokenFile, "panel-token-file", "/etc/nft-forward/panel.token", "bearer token file (required when --connect is set)")
 	fs.StringVar(&portRange, "port-range", "", "端口范围（如 10001-20000），上报给面板")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		// Tolerate unknown flags so a binary upgrade that predates a
+		// newly-added install.sh flag doesn't crash the daemon.
+		known := filterKnownArgs(fs, args)
+		if err2 := fs.Parse(known); err2 != nil {
+			fmt.Fprintln(os.Stderr, err2)
+			return 2
+		}
+		fmt.Fprintf(os.Stderr, "警告: 忽略了部分未识别的命令行参数\n")
 	}
 
 	if err := sysdeps.Ensure("nftables"); err != nil {
@@ -119,4 +126,33 @@ func runTUI() int {
 		return 1
 	}
 	return 0
+}
+
+// filterKnownArgs strips flags the FlagSet doesn't recognise so an older
+// binary can start even when the systemd unit carries flags from a newer
+// install.sh.
+func filterKnownArgs(fs *flag.FlagSet, args []string) []string {
+	known := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) { known[f.Name] = true })
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+			continue
+		}
+		name := strings.TrimLeft(a, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		if known[name] {
+			out = append(out, a)
+			continue
+		}
+		// Unknown flag: skip its value arg if present (--foo bar form).
+		if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+		}
+	}
+	return out
 }
