@@ -76,7 +76,21 @@ export default function NodeDetail() {
   }
   const upgrade = async () => {
     if (!(await confirm({ title: '升级节点', message: '推送 agent 二进制到此节点并重启？', confirmText: '升级' }))) return
-    try { await api.post(`/nodes/${id}/upgrade`); toast('已发起升级') } catch (err) { toast(err.message) }
+    try {
+      await api.post(`/nodes/${id}/upgrade`); toast('已发起升级')
+      const poll = setInterval(async () => {
+        try {
+          const d = await api.get(`/nodes/${id}`)
+          const st = d?.upgrade?.status
+          if (st === 'ok' || st === 'error') {
+            clearInterval(poll)
+            toast(st === 'ok' ? '升级成功' : '升级失败: ' + (d.upgrade.error || ''))
+            load()
+          }
+        } catch { clearInterval(poll) }
+      }, 2000)
+      setTimeout(() => clearInterval(poll), 120000)
+    } catch (err) { toast(err.message) }
   }
   const toggle = async () => {
     try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
