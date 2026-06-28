@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
-import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal } from '../../components/ui'
+import { Layout, useToast, useBlur } from '../../components/Layout'
+import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
 import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles } from '../../lib/landing'
 
 export default function UserDetail() {
@@ -14,6 +14,7 @@ export default function UserDetail() {
   const [loading, setLoading] = useState(true)
   const [newPassword, setNewPassword] = useState(null)
   const confirm = useConfirm()
+  const blurred = useBlur()
 
   const load = () => {
     setLoading(true)
@@ -111,7 +112,7 @@ export default function UserDetail() {
 
       {/* Landing-node source (regular users only) */}
       {isRegularUser && (
-        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} onDone={load} />
+        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
       )}
 
       {/* Rules */}
@@ -132,8 +133,8 @@ export default function UserDetail() {
                   </td>
                   <td className="font-mono text-ink-soft">{nodeMap[r.node_id]?.name || `#${r.node_id}`}</td>
                   <td><ProtoBadge proto={r.proto} /></td>
-                  <td className="font-mono text-xs">{r.entry_listen_port ? `:${r.entry_listen_port}` : '--'}</td>
-                  <td className="font-mono text-xs">{r.exit_host ? `${r.exit_host}:${r.exit_port}` : '--'}</td>
+                  <td className="font-mono text-xs"><SensText blurred={blurred}>{r.entry_listen_port ? `:${r.entry_listen_port}` : '--'}</SensText></td>
+                  <td className="font-mono text-xs"><SensText blurred={blurred}>{r.exit_host ? `${r.exit_host}:${r.exit_port}` : '--'}</SensText></td>
                   <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
                 </tr>
               ))}
@@ -281,7 +282,7 @@ function PerNodeQuotaForm({ userId, nodeId, quotaBytes, onDone }) {
   )
 }
 
-function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
+function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
   const [preview, setPreview] = useState(nodes || [])
@@ -324,12 +325,12 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
         <form onSubmit={submit} className="space-y-3">
           <div>
             <label className="fl block mb-1.5">订阅地址 <span className="text-ink-mut font-normal text-xs">(可选，支持 Remnawave 等面板的订阅链接)</span></label>
-            <input className="input-field font-mono w-full" value={url} onChange={e => setUrl(e.target.value)}
+            <input className={`input-field font-mono w-full ${blurred ? 'blur-[5px]' : ''}`} value={url} onChange={e => setUrl(e.target.value)}
               placeholder="https://example.com/api/sub/xxxx" />
           </div>
           <div>
             <label className="fl block mb-1.5">手动节点 URI <span className="text-ink-mut font-normal text-xs">(可选，每行一条，可与订阅组合)</span></label>
-            <textarea className="input-field font-mono w-full" rows={10} value={text} onChange={e => setText(e.target.value)}
+            <textarea className={`input-field font-mono w-full ${blurred ? 'blur-[5px]' : ''}`} rows={10} value={text} onChange={e => setText(e.target.value)}
               placeholder={'vless://…\ntrojan://…'} />
           </div>
           <button type="submit" disabled={loading} className="btn-primary text-xs">保存</button>
@@ -359,7 +360,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, onDone }) {
                     <tr key={i}>
                       <td className="font-semibold">{n.name || '(未命名)'}</td>
                       <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
-                      <td className="font-mono text-xs">{n.host}:{n.port}</td>
+                      <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
                       <td className="text-right">
                         <AdminTriToggle state={st} onChange={k => handleSetRole(n, k)} />
                       </td>
