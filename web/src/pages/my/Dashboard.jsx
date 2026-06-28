@@ -12,6 +12,7 @@ export default function MyDashboard() {
   const [tab, setTab] = useState('single')
   const [editingUsername, setEditingUsername] = useState(false)
   const [newUsername, setNewUsername] = useState('')
+  const speeds = useSpeed()
 
   useEffect(() => {
     api.get('/my').then(setData).catch(console.error).finally(() => setLoading(false))
@@ -19,8 +20,6 @@ export default function MyDashboard() {
 
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
-
-  const speeds = useSpeed()
   const { user, nodes = [], grants = [], rules = [] } = data
 
   const expiresAt = user.expires_at && user.expires_at > 0 ? user.expires_at : null
