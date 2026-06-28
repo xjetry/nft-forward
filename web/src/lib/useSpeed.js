@@ -10,7 +10,7 @@ export function useSpeed() {
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const ws = new WebSocket(proto + '//' + location.host + '/api/v1/ws/speed')
+      const ws = new WebSocket(proto + '//' + location.host + '/api/ws/speed')
       wsRef.current = ws
 
       ws.onmessage = (e) => {
