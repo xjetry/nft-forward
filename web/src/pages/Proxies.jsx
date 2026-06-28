@@ -17,6 +17,7 @@ export default function Proxies() {
   const [tab, setTab] = useState('all')
   const { copyFmt } = useCopyFmt()
   const blurred = useBlur()
+  const toast = useToast()
   const { user } = useUser()
 
   const isAdmin = user?.role === 'admin'
@@ -96,6 +97,14 @@ export default function Proxies() {
                 tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
               }`}>{label} {n}</button>
           ))}
+          {filtered.length > 0 && (
+            <button onClick={() => {
+              const all = filtered.map(n => copyText(n)).filter(Boolean).join('\n')
+              navigator.clipboard.writeText(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败'))
+            }} className="ml-auto px-3 py-0.5 rounded text-xs border border-line bg-surface text-ink-soft hover:border-ink-mut transition-colors">
+              复制全部
+            </button>
+          )}
         </div>
 
         {allProxies.length === 0 ? (
