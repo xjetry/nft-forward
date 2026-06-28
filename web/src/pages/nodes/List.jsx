@@ -13,6 +13,7 @@ export default function NodeList() {
   const [showAdd, setShowAdd] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
+  const [panelName, setPanelName] = useState('')
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
   const [dragIndex, setDragIndex] = useState(null)
@@ -31,6 +32,7 @@ export default function NodeList() {
     api.get('/nodes').then(d => {
       setData(d)
       setPanelUrl(d.panel_url || '')
+      setPanelName(d.panel_name || '')
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [])
@@ -40,6 +42,14 @@ export default function NodeList() {
     try {
       await api.post('/settings', { panel_url: panelUrl })
       toast('面板地址已保存')
+    } catch (err) { toast(err.message) }
+  }
+
+  const savePanelName = async (e) => {
+    e.preventDefault()
+    try {
+      await api.post('/settings', { panel_url: panelUrl, panel_name: panelName })
+      toast('面板名称已保存')
     } catch (err) { toast(err.message) }
   }
 
@@ -100,19 +110,23 @@ export default function NodeList() {
     <Layout>
       <PageHeader title="节点" count={nodes.length} unit="个节点" />
 
-      {/* Panel URL settings */}
-      <Panel className="mb-5">
+      {/* Panel URL settings — desktop only */}
+      <Panel className="mb-5 hidden md:block">
         <div className="flex items-center gap-3 px-[22px] py-4 border-b border-line-soft">
-          <h3 className="text-sm font-bold text-ink">面板地址</h3>
-          <span className="text-xs text-ink-mut">agent 反向连接面板用的公网地址，会写进各节点的安装命令</span>
+          <h3 className="text-sm font-bold text-ink">面板设置</h3>
         </div>
-        <div className="p-5">
+        <div className="p-5 space-y-4">
+          <form onSubmit={savePanelName} className="flex items-center gap-3 max-w-xl">
+            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap w-[80px]">面板名称</label>
+            <input className="input-field flex-1" value={panelName} onChange={e => setPanelName(e.target.value)} placeholder="nft-forward" />
+            <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
+          </form>
           <form onSubmit={savePanelUrl} className="flex items-center gap-3 max-w-xl">
-            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap">Panel 地址</label>
+            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap w-[80px]">面板地址</label>
             <input className="input-field font-mono flex-1" value={panelUrl} onChange={e => setPanelUrl(e.target.value)} placeholder="例如 https://panel.example.com" />
             <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
           </form>
-          <p className="text-xs text-ink-mut mt-2">留空则安装命令回退使用你当前访问的域名。</p>
+          <p className="text-xs text-ink-mut">面板名称留空则默认为 nft-forward；面板地址留空则安装命令回退使用当前域名。</p>
         </div>
       </Panel>
 
@@ -121,7 +135,7 @@ export default function NodeList() {
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索节点名称…" />
           {latest_agent_version && <span className="text-xs text-ink-mut whitespace-nowrap">agent {latest_agent_version}</span>}
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto hidden md:flex gap-2">
             <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">+ 添加节点</button>
             <button onClick={() => setShowComposite(true)} className="btn-primary text-xs">+ 组合节点</button>
             <button onClick={resyncAll} className="btn-secondary text-xs">同步所有</button>
@@ -150,8 +164,9 @@ export default function NodeList() {
           q
             ? <Empty title="无匹配节点" desc="试试别的关键词。" />
             : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
-        ) : (
-          <table className="tbl">
+        ) : (<>
+          {/* Desktop table */}
+          <table className="tbl hidden md:table">
             <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th>速度</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map((n, i) => (
@@ -210,7 +225,30 @@ export default function NodeList() {
               ))}
             </tbody>
           </table>
-        )}
+          {/* Mobile cards */}
+          <div className="md:hidden">
+            {filtered.map(n => (
+              <Link key={n.id} to={`/nodes/${n.id}`} className="mobile-card block no-underline text-ink">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500' : 'bg-gray-400'}`} />
+                    {n.name}
+                    {n.hidden && <Badge color="gray">已隐藏</Badge>}
+                  </span>
+                  <NodeStatus node={n} />
+                </div>
+                <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
+                  <NodeTypeBadge type={n.node_type} />
+                  {speeds[n.id] && <>
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
+                    <span className="font-mono text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
+                  </>}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </>)}
         </TableScroll>
       </Panel>
 

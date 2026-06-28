@@ -178,6 +178,14 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 }
 
 /* Animation */
+/* Mobile card: replaces table rows on narrow screens */
+.mobile-card {
+  @apply px-4 py-3.5 transition-colors;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+.mobile-card:last-child { border-bottom: 0; }
+.mobile-card:active { background: color-mix(in srgb, var(--color-raised) 60%, transparent); }
+
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }

@@ -87,8 +87,10 @@ export default function MyDashboard() {
           </div>
         </div>
 
-        {/* My proxy URIs (browser-local) */}
-        <ProxyURIEditor username={user.username} />
+        {/* My proxy URIs (browser-local) — desktop only */}
+        <div className="hidden md:block">
+          <ProxyURIEditor username={user.username} />
+        </div>
       </div>
 
       {/* Granted nodes */}
@@ -106,32 +108,61 @@ export default function MyDashboard() {
             ))}
           </div>
         )}
-        {tabNodes.length > 0 ? (
-          <table className="tbl">
-            <thead><tr><th>节点</th><th>类型</th><th>状态</th><th>速度</th><th>本节点上限</th></tr></thead>
+        {tabNodes.length > 0 ? (<>
+          {/* Desktop table */}
+          <table className="tbl hidden md:table">
+            <thead><tr><th>节点</th><th>类型</th><th>状态</th><th>速度</th><th>已用流量</th><th>本节点上限</th></tr></thead>
             <tbody>
-              {tabNodes.map(n => (
-                <tr key={n.id}>
-                  <td className="font-semibold">{n.name}</td>
-                  <td><NodeTypeBadge type={n.node_type} /></td>
-                  <td><NodeOnline node={n} /></td>
-                  <td className="font-mono text-xs whitespace-nowrap">
-                    {speeds[n.id] ? (
-                      <>
-                        <span className="text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
-                        {' '}
-                        <span className="text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
-                      </>
-                    ) : (
-                      <span className="text-ink-mut">--</span>
-                    )}
-                  </td>
-                  <td className="font-mono">{grantByNode[n.id]?.max_forwards ?? '--'}</td>
-                </tr>
-              ))}
+              {tabNodes.map(n => {
+                const g = grantByNode[n.id]
+                return (
+                  <tr key={n.id}>
+                    <td className="font-semibold">{n.name}</td>
+                    <td><NodeTypeBadge type={n.node_type} /></td>
+                    <td><NodeOnline node={n} /></td>
+                    <td className="font-mono text-xs whitespace-nowrap">
+                      {speeds[n.id] ? (
+                        <>
+                          <span className="text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
+                          {' '}
+                          <span className="text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
+                        </>
+                      ) : (
+                        <span className="text-ink-mut">--</span>
+                      )}
+                    </td>
+                    <td className="font-mono text-xs">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</td>
+                    <td className="font-mono">{g?.max_forwards ?? '--'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
-        ) : nodes.length > 0 ? (
+          {/* Mobile cards */}
+          <div className="md:hidden">
+            {tabNodes.map(n => {
+              const g = grantByNode[n.id]
+              return (
+                <div key={n.id} className="mobile-card">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold">{n.name}</span>
+                    <NodeOnline node={n} />
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
+                    <NodeTypeBadge type={n.node_type} />
+                    {speeds[n.id] && <>
+                      <span className="text-ink-mut">·</span>
+                      <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
+                      <span className="font-mono text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
+                    </>}
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>) : nodes.length > 0 ? (
           <Empty title={tab === 'composite' ? '暂无已授权的组合节点' : '暂无已授权的单点节点'} />
         ) : <Empty title="管理员尚未为您授权任何节点" desc="请联系管理员。" />}
       </div>

@@ -42,7 +42,7 @@ export function PanelToolbar({ children }) {
 /* Search box with a leading magnifier; controlled via value/onChange. */
 export function SearchInput({ value, onChange, placeholder }) {
   return (
-    <div className="relative flex-1 min-w-[240px] max-w-[340px]">
+    <div className="relative flex-1 min-w-0 md:min-w-[240px] md:max-w-[340px]">
       <svg className="w-4 h-4 absolute left-[13px] top-1/2 -translate-y-1/2 text-ink-mut pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         className="w-full text-[13.5px] pl-[38px] pr-3.5 py-[10px] bg-surface border border-line rounded-[9px] outline-none text-ink focus:border-blue-600 focus:ring-3 focus:ring-blue-600/10 transition-colors" />

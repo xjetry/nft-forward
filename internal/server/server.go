@@ -343,6 +343,7 @@ func (s *Server) Router() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/login", s.apiLogin)
 		r.Post("/logout", s.apiLogout)
+		r.Get("/branding", s.apiBranding)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth)

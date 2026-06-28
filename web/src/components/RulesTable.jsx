@@ -47,8 +47,9 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
     return sort.dir === 'asc' ? c : -c
   })
 
-  return (
-    <table className="tbl">
+  return (<>
+    {/* Desktop table */}
+    <table className="tbl hidden md:table">
       <thead>
         <tr>
           {isAdmin && <th className="w-12">ID</th>}
@@ -93,8 +94,6 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td className="font-mono text-xs text-ink-soft" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <ExitKindBadge kind={r.exit_kind} />
-                  {/* On the user list, a landing exit shows the node remark
-                      instead of its real address. Admin keeps the address. */}
                   {!isAdmin && r.exit_kind === 'landing' && r.landing_name
                     ? <span className="font-sans">{r.landing_name}</span>
                     : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
@@ -122,7 +121,36 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
         })}
       </tbody>
     </table>
-  )
+    {/* Mobile cards */}
+    <div className="md:hidden">
+      {sorted.map(r => {
+        const node = nodeMap[r.node_id]
+        return (
+          <div key={r.id} className="mobile-card"
+            onClick={isAdmin && onRowClick ? () => onRowClick(r) : undefined}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-semibold text-[14px]">{r.name}</span>
+              <ProtoBadge proto={r.proto} />
+            </div>
+            <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
+              <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
+              {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
+              {!isAdmin && <><span className="text-ink-mut">·</span><span className="font-mono text-ink-mut">{fmtBytes(r.total_bytes)}</span></>}
+            </div>
+            <div className="text-xs text-ink-mut font-mono truncate">
+              {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}
+              <span className="mx-1.5">→</span>
+              <span className="text-ink-soft">
+                {!isAdmin && r.exit_kind === 'landing' && r.landing_name
+                  ? <span className="font-sans">{r.landing_name}</span>
+                  : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
+              </span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  </>)
 }
 
 function ProbeIconButton({ ruleId }) {

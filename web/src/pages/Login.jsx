@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 
@@ -7,7 +7,12 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [panelName, setPanelName] = useState('')
   const navigate = useNavigate()
+
+  useEffect(() => {
+    api.get('/branding').then(d => setPanelName(d?.panel_name || '')).catch(() => {})
+  }, [])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -32,7 +37,7 @@ export default function Login() {
             <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
           </div>
           <div>
-            <div className="text-[16px] font-bold">nft-forward</div>
+            <div className="text-[16px] font-bold">{panelName || 'nft-forward'}</div>
             <div className="text-[12px] text-ink-mut mt-0.5">转发管理面板</div>
           </div>
         </div>

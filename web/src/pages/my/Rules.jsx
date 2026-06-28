@@ -100,7 +100,7 @@ export default function MyRules() {
       <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
-          <ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton>
+          <div className="hidden md:block ml-auto"><ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton></div>
         </PanelToolbar>
 
         {rules.length === 0 ? (

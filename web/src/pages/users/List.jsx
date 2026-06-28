@@ -51,7 +51,7 @@ export default function UserList() {
       <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索用户名…" />
-          <ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton>
+          <div className="hidden md:block ml-auto"><ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton></div>
         </PanelToolbar>
 
         {users.length === 0 ? (
@@ -60,7 +60,8 @@ export default function UserList() {
           <Empty title="无匹配用户" desc="试试别的关键词。" />
         ) : (
           <TableScroll>
-          <table className="tbl">
+          {/* Desktop table */}
+          <table className="tbl hidden md:table">
             <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th>备注</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map(u => {
@@ -103,6 +104,28 @@ export default function UserList() {
               })}
             </tbody>
           </table>
+          {/* Mobile cards */}
+          <div className="md:hidden">
+            {filtered.map(u => (
+              <Link key={u.id} to={`/users/${u.id}`} className="mobile-card block no-underline text-ink">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold text-blue-600">{u.username}</span>
+                  {u.disabled
+                    ? <Badge color="amber">已禁用</Badge>
+                    : <Badge color="green">正常</Badge>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
+                  <span className="font-mono bg-raised px-1.5 py-0.5 rounded">{u.role}</span>
+                  {u.role === 'user' && <>
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono">{u.rule_count || 0}/{u.max_forwards} 规则</span>
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono">{fmtTrafficGB(u.traffic_used_bytes, u.traffic_quota_bytes)}</span>
+                  </>}
+                </div>
+              </Link>
+            ))}
+          </div>
           </TableScroll>
         )}
       </Panel>

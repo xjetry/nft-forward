@@ -13,11 +13,15 @@ export function useToast() { return useContext(ToastCtx) }
 
 export function UserProvider({ children }) {
   const [user, setUser] = useState(undefined) // undefined = loading, null = not logged in
+  const [panelName, setPanelName] = useState('')
   const [toasts, setToasts] = useState([])
   const idRef = useRef(0)
 
   useEffect(() => {
-    api.get('/me').then(data => setUser(data?.user ?? null)).catch(() => setUser(null))
+    api.get('/me').then(data => {
+      setUser(data?.user ?? null)
+      setPanelName(data?.panel_name || '')
+    }).catch(() => setUser(null))
   }, [])
 
   const toast = useCallback((msg) => {
@@ -27,7 +31,7 @@ export function UserProvider({ children }) {
   }, [])
 
   return (
-    <UserCtx.Provider value={{ user, setUser }}>
+    <UserCtx.Provider value={{ user, setUser, panelName }}>
       <ToastCtx.Provider value={toast}>
         {children}
         {/* Toast stack */}
@@ -46,13 +50,17 @@ export function UserProvider({ children }) {
 
 /* ---------- Layout (sidebar + content) ---------- */
 export function Layout({ children }) {
-  const { user } = useUser()
+  const { user, panelName } = useUser()
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
   const { blurred, toggleBlur } = useContext(BlurCtx)
   const { copyFmt, toggleCopyFmt } = useContext(CopyFmtCtx)
   const [theme, setThemeState] = useState(getStoredTheme())
   const isDark = resolvedDark(theme)
+
+  useEffect(() => {
+    if (panelName) document.title = panelName
+  }, [panelName])
 
   // The landing-nodes entry shows when the user has an admin-assigned source or
   // their own browser-local URIs. Local URIs change in the same tab, which the
@@ -96,7 +104,7 @@ export function Layout({ children }) {
               <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
             </div>
             <div>
-              <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">nft-forward</div>
+              <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">{panelName || 'nft-forward'}</div>
               <div className="text-[12px] text-[#6b7280] mt-0.5">{isAdmin ? '管理面板' : '用户面板'}</div>
             </div>
           </div>
@@ -162,17 +170,17 @@ export function Layout({ children }) {
               ) : (
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
               )}
-              {isDark ? '浅色' : '深色'}
+              <span className="hidden sm:inline">{isDark ? '浅色' : '深色'}</span>
             </button>
             <button onClick={toggleCopyFmt} title="切换复制代理连接的格式（URI / YAML）"
-              className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${copyFmt === 'yaml' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
+              className={`hidden md:inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${copyFmt === 'yaml' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>
               {copyFmt === 'yaml' ? 'YAML' : 'URI'}
             </button>
             <button onClick={toggleBlur} title="模糊敏感信息"
               className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${blurred ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              脱敏
+              <span className="hidden sm:inline">脱敏</span>
             </button>
           </div>
 

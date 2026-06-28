@@ -144,9 +144,15 @@ func (s *Server) apiLogout(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiBranding(w http.ResponseWriter, r *http.Request) {
+	panelName, _ := db.GetSetting(s.DB, "panel_name")
+	jsonOK(w, map[string]any{"panel_name": panelName})
+}
+
 func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	jsonOK(w, map[string]any{"user": apiUserFullView(u)})
+	panelName, _ := db.GetSetting(s.DB, "panel_name")
+	jsonOK(w, map[string]any{"user": apiUserFullView(u), "panel_name": panelName})
 }
 
 func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -241,8 +247,9 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	db.ResolveCompositeOnline(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
+	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	jsonOK(w, map[string]any{
-		"nodes": nodes, "panel_url": panelURL,
+		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
 		"latest_agent_version": serverVersion(),
 	})
 }
@@ -848,13 +855,15 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiGetSettings(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
-	jsonOK(w, map[string]any{"panel_url": panelURL})
+	panelName, _ := db.GetSetting(s.DB, "panel_name")
+	jsonOK(w, map[string]any{"panel_url": panelURL, "panel_name": panelName})
 }
 
 func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		PanelURL string `json:"panel_url"`
+		PanelURL  string  `json:"panel_url"`
+		PanelName *string `json:"panel_name"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -865,6 +874,14 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "settings.panel_url", strings.TrimSpace(body.PanelURL), "")
+	if body.PanelName != nil {
+		name := strings.TrimSpace(*body.PanelName)
+		if err := db.SetSetting(s.DB, "panel_name", name); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "settings.panel_name", name, "")
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 

@@ -52,8 +52,9 @@ export default function Dashboard() {
         {/* Node status */}
         <div className="card">
           <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
-          {nodes.length ? (
-            <table className="tbl">
+          {nodes.length ? (<>
+            {/* Desktop table */}
+            <table className="tbl hidden md:table">
               <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>状态</th><th>心跳</th></tr></thead>
               <tbody>
                 {nodes.map(n => (
@@ -68,11 +69,31 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
-          ) : <Empty title="暂无节点" />}
+            {/* Mobile cards */}
+            <div className="md:hidden">
+              {nodes.map(n => (
+                <Link key={n.id} to={`/nodes/${n.id}`} className="mobile-card block no-underline text-ink">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-semibold text-blue-600">{n.name}</span>
+                    <NodeStatus node={n} />
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-ink-soft">
+                    <NodeTypeBadge type={n.node_type} />
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono">{ruleCount[n.id] || 0} 条规则</span>
+                    <span className="text-ink-mut">·</span>
+                    <span className="font-mono text-ink-mut">{fmtTime(n.last_seen)}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </>) : <Empty title="暂无节点" />}
         </div>
 
-        {/* My proxy URIs (browser-local) */}
-        <ProxyURIEditor username={user?.username} blurred={blurred} />
+        {/* My proxy URIs (browser-local) — desktop only */}
+        <div className="hidden md:block">
+          <ProxyURIEditor username={user?.username} blurred={blurred} />
+        </div>
       </div>
     </Layout>
   )
@@ -86,7 +107,7 @@ function StatCard({ label, value, unit, sub, accent, icon }) {
         {icon && <svg className="w-[18px] h-[18px] text-ink-mut opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg>}
       </div>
       <div className="mt-3.5 flex items-baseline gap-0.5">
-        <span className={`text-[38px] font-bold leading-[1.05] tracking-tight ${accent ? 'text-green-600 dark:text-green-400' : 'text-ink'}`}>{value}</span>
+        <span className={`text-[28px] sm:text-[38px] font-bold leading-[1.05] tracking-tight ${accent ? 'text-green-600 dark:text-green-400' : 'text-ink'}`}>{value}</span>
         {unit && <span className="text-[18px] font-semibold text-ink-mut">{unit}</span>}
       </div>
       <div className="stat-sub text-[12.5px] text-ink-mut truncate">{sub || ' '}</div>
