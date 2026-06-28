@@ -54,7 +54,7 @@ func TestDataplane_KernelFailureRollsBackUserspace(t *testing.T) {
 }
 
 func TestDataplane_CountersMerged(t *testing.T) {
-	dp := newTestDataplane(&fakeKernel{counts: []Counter{{Proto: "udp", ListenPort: 53, Bytes: 100}}})
+	dp := newTestDataplane(&fakeKernel{counts: []Counter{{Proto: "udp", ListenPort: 53, BytesUp: 60, BytesDown: 40}}})
 	defer dp.Close(context.Background())
 	cs, err := dp.Counters()
 	if err != nil {

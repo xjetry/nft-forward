@@ -41,12 +41,13 @@ type Hub struct {
 	// mutates rule state on their behalf. Keeps the hub transport-only.
 	Redispatch func(nodeIDs []int64)
 
-	mu    sync.RWMutex
-	conns map[int64]*agentConn
+	mu         sync.RWMutex
+	conns      map[int64]*agentConn
+	speedCache *speedCache
 }
 
 func NewHub(d *sql.DB) *Hub {
-	return &Hub{DB: d, conns: make(map[int64]*agentConn)}
+	return &Hub{DB: d, conns: make(map[int64]*agentConn), speedCache: newSpeedCache()}
 }
 
 type agentConn struct {
@@ -461,19 +462,20 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	cycleChecked := map[int64]bool{}
 
 	for _, s := range samples {
+		totalDelta := s.BytesUp + s.BytesDown
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
 		rh, ok := hopMap[key]
 		if !ok {
 			log.Printf("hub: node %d counters sample for %s/%d matched no rule_hop row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 			continue
 		}
-		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, total_bytes=total_bytes+? WHERE id=?`,
-			s.BytesDelta, s.BytesDelta, rh.ID); err != nil {
+		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
+			totalDelta, s.BytesUp, s.BytesDown, totalDelta, rh.ID); err != nil {
 			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
 			continue
 		}
 		r := ruleMap[rh.RuleID]
-		if r == nil || !r.OwnerID.Valid || s.BytesDelta <= 0 {
+		if r == nil || !r.OwnerID.Valid || totalDelta <= 0 {
 			continue
 		}
 		userID := r.OwnerID.Int64
@@ -497,7 +499,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		}
 
 		// per-node: raw bytes on the physical node
-		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, s.BytesDelta); err != nil {
+		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, totalDelta); err != nil {
 			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
 		}
 
@@ -505,7 +507,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		// node (r.NodeID != nodeID), only the entry hop (position=0) contributes
 		// to avoid counting the same traffic once per physical hop in the chain.
 		if r.NodeID != nodeID && rh.Position == 0 {
-			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, s.BytesDelta); err != nil {
+			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, totalDelta); err != nil {
 				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
 			}
 		}
@@ -520,7 +522,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 			}
 		}
-		weighted := int64(math.Round(float64(s.BytesDelta) * mult))
+		weighted := int64(math.Round(float64(totalDelta) * mult))
 		if weighted > 0 {
 			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
 				log.Printf("hub: user %d traffic add: %v", userID, err)
@@ -530,6 +532,17 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 		touched[userNode{userID, nodeID}] = true
 	}
+
+	deltas := make([]counterDelta, 0, len(samples))
+	for _, s := range samples {
+		deltas = append(deltas, counterDelta{
+			proto:         s.Proto,
+			listenPortStr: strconv.Itoa(s.ListenPort),
+			bytesUp:       s.BytesUp,
+			bytesDown:     s.BytesDown,
+		})
+	}
+	h.speedCache.update(nodeID, deltas)
 
 	if h.OnTrafficUpdate != nil {
 		for un := range touched {

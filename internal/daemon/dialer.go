@@ -22,7 +22,7 @@ import (
 
 const (
 	dialerPingInterval     = 10 * time.Second
-	dialerCountersInterval = 30 * time.Second
+	dialerCountersInterval = 5 * time.Second
 	dialerReadTimeout      = 30 * time.Second
 	dialerWriteTimeout     = 10 * time.Second
 	dialerBackoffInitial   = 1 * time.Second

@@ -167,7 +167,7 @@ func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
 	if !contains(out, "ip daddr 10.0.0.6 tcp dport 443 ct status dnat masquerade") {
 		t.Fatalf("sibling masquerade must still render, got:\n%s", out)
 	}
-	if !contains(out, "meta l4proto tcp ct original proto-dst 9443 counter") {
+	if !contains(out, "meta l4proto tcp ct original proto-dst 9443 ct direction original counter") {
 		t.Fatalf("sibling accounting counter must render, got:\n%s", out)
 	}
 }

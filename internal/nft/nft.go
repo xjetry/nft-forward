@@ -181,7 +181,9 @@ func RenderRuleset(rules []Rule) string {
 		if r.DestIP == "" {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d counter\n",
+		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct direction original counter\n",
+			l4protoMatch(r.Proto), r.SrcPort))
+		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct direction reply counter\n",
 			l4protoMatch(r.Proto), r.SrcPort))
 	}
 	b.WriteString("\t}\n")

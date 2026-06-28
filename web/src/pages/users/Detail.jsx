@@ -79,6 +79,12 @@ export default function UserDetail() {
                     <><Badge color="amber">已禁用</Badge> <span className="text-ink-soft text-xs ml-1">原因：{nullStr(user.disable_reason)}</span></>
                   ) : <Badge color="green">正常</Badge>}
                 </span>
+                {user.admin_note && (
+                  <>
+                    <span className="fl">管理备注</span>
+                    <span className="text-ink-soft text-[13px]">{user.admin_note}</span>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -88,6 +94,7 @@ export default function UserDetail() {
             {isRegularUser && <MaxForwardsForm userId={id} maxForwards={user.max_forwards} onDone={load} />}
             {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
             {isRegularUser && <ResetDaysForm userId={id} resetDays={user.traffic_reset_days} onDone={load} />}
+            {isRegularUser && <AdminNoteForm userId={id} adminNote={user.admin_note || ''} onDone={load} />}
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
             {/* Admin accounts can't be reset or deleted here. */}
@@ -233,6 +240,21 @@ function ResetDaysForm({ userId, resetDays, onDone }) {
         onChange={e => setVal(e.target.value)} style={{ width: 80 }} title="0 = 永不重置" />
       <span className="text-xs text-ink-mut">天</span>
       <button type="submit" className="btn-secondary text-xs">设周期</button>
+    </form>
+  )
+}
+
+function AdminNoteForm({ userId, adminNote, onDone }) {
+  const [val, setVal] = useState(adminNote)
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    try { await api.post(`/users/${userId}/admin-note`, { admin_note: val }); toast('已保存'); onDone() } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field" value={val} onChange={e => setVal(e.target.value)} placeholder="管理备注" style={{ width: 200 }} />
+      <button type="submit" className="btn-secondary text-xs">设备注</button>
     </form>
   )
 }

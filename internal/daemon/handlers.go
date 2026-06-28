@@ -32,7 +32,7 @@ type Daemon struct {
 	// countersMu guards lastCounters, the per-rule byte total observed on the
 	// previous counterSamples call. The sampler computes deltas against it.
 	countersMu   sync.Mutex
-	lastCounters map[string]int64
+	lastCounters map[string][2]int64
 
 	// connectURL/connectTok configure the outbound WebSocket dialer to
 	// the panel. Empty connectURL = tui/server-local mode (no dialer).

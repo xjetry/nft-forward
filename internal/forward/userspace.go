@@ -24,7 +24,8 @@ type listener struct {
 	ln       net.Listener
 	tgt      atomic.Pointer[target]
 	lim      atomic.Pointer[rate.Limiter]
-	bytes    atomic.Int64
+	bytesUp   atomic.Int64
+	bytesDown atomic.Int64
 	pool     atomic.Pointer[connPool]
 	poolSize int
 
@@ -124,13 +125,13 @@ func (l *listener) handle(client net.Conn) {
 	done := make(chan struct{}, 2)
 	// Inbound (client→upstream): rate-limited + counted.
 	go func() {
-		relayCopy(l.ctx, upstream, client, &l.lim, &l.bytes)
+		relayCopy(l.ctx, upstream, client, &l.lim, &l.bytesUp)
 		halfCloseWrite(upstream)
 		done <- struct{}{}
 	}()
 	// Return path (upstream→client): counted but unshaped.
 	go func() {
-		relayCopy(l.ctx, client, upstream, nil, &l.bytes)
+		relayCopy(l.ctx, client, upstream, nil, &l.bytesDown)
 		halfCloseWrite(client)
 		done <- struct{}{}
 	}()
@@ -234,7 +235,7 @@ func (b *userspaceBackend) Counters() []Counter {
 	defer b.mu.Unlock()
 	out := make([]Counter, 0, len(b.listeners))
 	for _, l := range b.listeners {
-		out = append(out, Counter{Proto: "tcp", ListenPort: l.port, Bytes: l.bytes.Load()})
+		out = append(out, Counter{Proto: "tcp", ListenPort: l.port, BytesUp: l.bytesUp.Load(), BytesDown: l.bytesDown.Load()})
 	}
 	return out
 }

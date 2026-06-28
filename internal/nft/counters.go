@@ -11,6 +11,7 @@ import (
 type Counter struct {
 	Proto      string `json:"proto"`
 	ListenPort int    `json:"listen_port"`
+	Direction  string `json:"direction"` // "original" (upload) or "reply" (download)
 	Bytes      int64  `json:"bytes"`
 	Packets    int64  `json:"packets"`
 }
@@ -133,6 +134,12 @@ func extractMatch(m *nftMatch, c *Counter) {
 		var port float64
 		if json.Unmarshal(m.Right, &port) == nil {
 			c.ListenPort = int(port)
+		}
+	}
+	if m.Left.Ct != nil && m.Left.Ct.Key == "direction" {
+		var dir string
+		if json.Unmarshal(m.Right, &dir) == nil {
+			c.Direction = dir
 		}
 	}
 }

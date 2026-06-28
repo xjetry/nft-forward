@@ -109,13 +109,14 @@ type ApplyAck struct {
 }
 
 // CounterSample is a per-rule traffic delta since the last counters
-// frame. The server adds BytesDelta to forwards.total_bytes; the rule
-// is located by (node_id, listen_port, proto) — there is no explicit
-// rule_id on the wire because agent restarts re-key the same rule.
+// frame. The server adds BytesUp/BytesDown to the directional totals;
+// the rule is located by (node_id, listen_port, proto) — there is no
+// explicit rule_id on the wire because agent restarts re-key the same rule.
 type CounterSample struct {
 	ListenPort int    `json:"listen_port"`
 	Proto      string `json:"proto"`
-	BytesDelta int64  `json:"bytes_delta"`
+	BytesUp    int64  `json:"up"`
+	BytesDown  int64  `json:"down"`
 }
 
 type Counters struct {

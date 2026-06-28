@@ -229,7 +229,7 @@ func TestUserspace_LoopbackEchoAndCounter(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		cs := b.Counters()
-		if len(cs) == 1 && cs[0].ListenPort == listen && cs[0].Bytes >= int64(len(msg)) {
+		if len(cs) == 1 && cs[0].ListenPort == listen && (cs[0].BytesUp+cs[0].BytesDown) >= int64(len(msg)) {
 			break
 		}
 		if time.Now().After(deadline) {

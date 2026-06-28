@@ -61,7 +61,7 @@ export default function UserList() {
         ) : (
           <TableScroll>
           <table className="tbl">
-            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th>备注</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map(u => {
                 const isSelf = u.id === currentUser?.id
@@ -77,6 +77,7 @@ export default function UserList() {
                         <Badge color="amber" title={nullStr(u.disable_reason)}>已禁用</Badge>
                       ) : <Badge color="green">正常</Badge>}
                     </td>
+                    <td className="text-ink-soft text-xs max-w-[200px] truncate" title={u.admin_note}>{u.admin_note}</td>
                     <td className="text-right whitespace-nowrap">
                       {isSelf ? (
                         <span className="text-xs text-ink-mut">(当前用户)</span>
@@ -126,7 +127,7 @@ function genPassword(len = 16) {
   crypto.getRandomValues(arr)
   return [...arr].map(n => chars[n % chars.length]).join('')
 }
-const emptyForm = () => ({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: todayStr() })
+const emptyForm = () => ({ username: '', password: '', role: 'user', max_forwards: '100', traffic_quota_gb: '0', expires_at: todayStr(), landing_sub_url: '', admin_note: '' })
 
 function CreateUserModal({ open, onClose, onDone }) {
   const [form, setForm] = useState(emptyForm)
@@ -166,6 +167,8 @@ function CreateUserModal({ open, onClose, onDone }) {
           max_forwards: Number(form.max_forwards),
           traffic_quota_bytes: Math.max(0, Math.round((Number(form.traffic_quota_gb) || 0) * 1073741824)),
           expires_at: form.expires_at || undefined,
+          landing_sub_url: form.landing_sub_url.trim() || undefined,
+          admin_note: form.admin_note.trim() || undefined,
         } : {}),
       })
       // Copy login info before resetting the form (the password is only here in
@@ -209,6 +212,10 @@ function CreateUserModal({ open, onClose, onDone }) {
                   ))}
                 </div>
               </div>
+              <label className="fl">订阅地址 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
+              <input className="input-field font-mono" value={form.landing_sub_url} onChange={e => set('landing_sub_url', e.target.value)} placeholder="https://example.com/api/sub/xxxx" />
+              <label className="fl">管理备注 <span className="text-ink-mut font-normal text-xs">(可选，仅管理员可见)</span></label>
+              <input className="input-field" value={form.admin_note} onChange={e => set('admin_note', e.target.value)} placeholder="仅管理员可见的备注" />
             </>
           )}
         </div>

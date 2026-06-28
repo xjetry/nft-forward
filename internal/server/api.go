@@ -188,6 +188,37 @@ func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	username := strings.TrimSpace(body.Username)
+	if username == "" {
+		jsonErr(w, http.StatusBadRequest, "用户名不能为空")
+		return
+	}
+	if username == u.Username {
+		jsonOK(w, map[string]any{"ok": true})
+		return
+	}
+	existing, _ := db.GetUserByUsername(s.DB, username)
+	if existing != nil {
+		jsonErr(w, http.StatusConflict, "用户名已存在")
+		return
+	}
+	if err := db.RenameUser(s.DB, u.ID, username); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.rename", strconv.FormatInt(u.ID, 10), username)
+	jsonOK(w, map[string]any{"ok": true, "username": username})
+}
+
 // --- Dashboard ---
 
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
@@ -1322,6 +1353,8 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		MaxForwards       int    `json:"max_forwards"`
 		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 		ExpiresAt         string `json:"expires_at"`
+		LandingSubURL     string `json:"landing_sub_url"`
+		AdminNote         string `json:"admin_note"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1363,6 +1396,9 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		if et, err := time.Parse("2006-01-02", raw); err == nil {
 			s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, et.Unix(), id)
 		}
+	}
+	if body.LandingSubURL != "" || body.AdminNote != "" {
+		s.DB.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`, strings.TrimSpace(body.LandingSubURL), strings.TrimSpace(body.AdminNote), id)
 	}
 	db.WriteAudit(s.DB, u.ID, "user.create", strconv.FormatInt(id, 10), username)
 	created, _ := db.GetUserByID(s.DB, id)
@@ -1981,6 +2017,28 @@ func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiSetAdminNote(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		AdminNote string `json:"admin_note"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET admin_note=? WHERE id=?`, strings.TrimSpace(body.AdminNote), id); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_admin_note", strconv.FormatInt(id, 10), "")
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 // --- Helpers ---
 
 // withUser injects *db.User into ctx (same key as requireAuth).
@@ -2019,6 +2077,7 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["has_landing_source"] = hasLandingSource(u)
 	m["traffic_reset_days"] = u.TrafficResetDays
 	m["last_traffic_reset_at"] = u.LastTrafficResetAt
+	m["admin_note"] = u.AdminNote
 	return m
 }
 

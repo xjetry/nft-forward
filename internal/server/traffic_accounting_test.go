@@ -128,10 +128,10 @@ func TestApplyCountersMultiplier(t *testing.T) {
 	s, _ := New(d)
 
 	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: 10001, BytesDelta: 1000},
+		{Proto: "tcp", ListenPort: 10001, BytesUp: 500, BytesDown: 500},
 	})
 	s.Hub.applyCounters(n2.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: 10002, BytesDelta: 1000},
+		{Proto: "tcp", ListenPort: 10002, BytesUp: 500, BytesDown: 500},
 	})
 
 	u, _ := db.GetUserByID(d, uid)
@@ -178,7 +178,7 @@ func TestApplyCountersZeroMultiplier(t *testing.T) {
 	s, _ := New(d)
 
 	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: 10001, BytesDelta: 5000},
+		{Proto: "tcp", ListenPort: 10001, BytesUp: 2500, BytesDown: 2500},
 	})
 
 	u, _ := db.GetUserByID(d, uid)

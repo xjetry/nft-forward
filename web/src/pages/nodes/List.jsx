@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, nullStr } from '../../lib/fmt'
+import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
@@ -18,6 +19,7 @@ export default function NodeList() {
   // Default on, persisted per-browser: most of the time you want the working
   // set, but the preference is a local view choice, not server state.
   const [onlyVisible, setOnlyVisible] = useState(() => localStorage.getItem('nodes.onlyVisible') !== '0')
+  const speeds = useSpeed()
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -150,7 +152,7 @@ export default function NodeList() {
             : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
         ) : (
           <table className="tbl">
-            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th>速度</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={n.id}
@@ -179,6 +181,17 @@ export default function NodeList() {
                     {fmtTime(n.last_apply_at?.Valid ? n.last_apply_at.Int64 : null)}
                   </td>
                   <td><NodeStatus node={n} /></td>
+                  <td className="font-mono text-xs whitespace-nowrap">
+                    {speeds[n.id] ? (
+                      <>
+                        <span className="text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
+                        {' '}
+                        <span className="text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
+                      </>
+                    ) : (
+                      <span className="text-ink-mut">--</span>
+                    )}
+                  </td>
                   <td className="text-right whitespace-nowrap">
                     <div className="flex gap-2 justify-end">
                       <button onClick={() => toggleHidden(n)} title={n.hidden ? '显示' : '隐藏'} className="icon-btn">

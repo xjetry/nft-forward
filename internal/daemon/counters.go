@@ -49,7 +49,7 @@ func (d *Daemon) counterSamples() []wsproto.CounterSample {
 	d.countersMu.Lock()
 	defer d.countersMu.Unlock()
 	if d.lastCounters == nil {
-		d.lastCounters = map[string]int64{}
+		d.lastCounters = map[string][2]int64{}
 	}
 	seen := make(map[string]bool, len(cur))
 	var out []wsproto.CounterSample
@@ -57,18 +57,22 @@ func (d *Daemon) counterSamples() []wsproto.CounterSample {
 		key := c.Proto + "/" + strconv.Itoa(c.ListenPort)
 		seen[key] = true
 		last := d.lastCounters[key]
-		delta := c.Bytes - last
-		if c.Bytes < last {
-			delta = c.Bytes // counter reset
+		deltaUp := c.BytesUp - last[0]
+		if c.BytesUp < last[0] {
+			deltaUp = c.BytesUp
 		}
-		d.lastCounters[key] = c.Bytes
-		if delta > 0 {
-			out = append(out, wsproto.CounterSample{ListenPort: c.ListenPort, Proto: c.Proto, BytesDelta: delta})
+		deltaDown := c.BytesDown - last[1]
+		if c.BytesDown < last[1] {
+			deltaDown = c.BytesDown
+		}
+		d.lastCounters[key] = [2]int64{c.BytesUp, c.BytesDown}
+		if deltaUp > 0 || deltaDown > 0 {
+			out = append(out, wsproto.CounterSample{ListenPort: c.ListenPort, Proto: c.Proto, BytesUp: deltaUp, BytesDown: deltaDown})
 		}
 	}
 	for key := range d.lastCounters {
 		if !seen[key] {
-			delete(d.lastCounters, key) // a removed rule restarts from 0 if re-created
+			delete(d.lastCounters, key)
 		}
 	}
 	return out

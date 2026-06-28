@@ -7,12 +7,14 @@ package forward
 
 // Counter is the unified per-rule traffic counter across both backends. It is
 // the data plane's public counter contract (the kernel backend maps
-// nft.Counter into it; the userspace backend produces it directly). Bytes
-// counts the inbound (client->target) direction only, matching nft prerouting
-// counter semantics so both modes accrue tenant quota identically.
+// nft.Counter into it; the userspace backend produces it directly). BytesUp
+// tracks the client-to-target (original) direction and BytesDown tracks the
+// target-to-client (reply) direction. Packets is the sum across both
+// directions.
 type Counter struct {
 	Proto      string `json:"proto"`
 	ListenPort int    `json:"listen_port"`
-	Bytes      int64  `json:"bytes"`
+	BytesUp    int64  `json:"bytes_up"`
+	BytesDown  int64  `json:"bytes_down"`
 	Packets    int64  `json:"packets"`
 }

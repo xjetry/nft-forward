@@ -404,6 +404,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
 
 			r.Get("/users", s.apiListUsers)
+			r.Post("/users/{id}/admin-note", s.apiSetAdminNote)
 			r.Post("/users/{id}/toggle", s.apiToggleUser)
 			r.Post("/users/{id}/reset-password", s.apiResetUserPassword)
 			r.Delete("/users/{id}", s.apiDeleteUser)
@@ -413,11 +414,19 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth, s.requireRole("user"))
 			r.Get("/my", s.apiMyDashboard)
+			r.Post("/my/username", s.apiChangeUsername)
 			r.Get("/my/landing-nodes", s.apiMyLandingNodes)
 			r.Get("/my/rules", s.apiMyListRules)
 			r.Post("/my/rules", s.apiMyCreateRule)
 			r.Put("/my/rules/{id}", s.apiMyUpdateRule)
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
+		})
+
+		// Speed endpoints accessible to any authenticated role
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAPIAuth)
+			r.Get("/stats/speed", s.apiSpeedSnapshot)
+			r.Get("/ws/speed", s.apiSpeedWS)
 		})
 	})
 

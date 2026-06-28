@@ -27,6 +27,7 @@ type User struct {
 	// landing nodes (see internal/landing). Both empty means no landing source.
 	LandingSubURL string `json:"landing_sub_url"`
 	LandingURIs   string `json:"landing_uris"`
+	AdminNote     string `json:"admin_note"`
 	// RuleCount is not a users-table column; it is filled by FillUserRuleCounts
 	// so the user list can show used/total rule quota.
 	RuleCount int `json:"rule_count"`
@@ -87,8 +88,10 @@ type RuleHop struct {
 	TargetPort int    `json:"target_port"`
 	Mode       string `json:"mode"`
 	Comment    string `json:"comment"`
-	LastBytes  int64  `json:"last_bytes"`
-	TotalBytes int64  `json:"total_bytes"`
+	LastBytes     int64  `json:"last_bytes"`
+	LastBytesUp   int64  `json:"last_bytes_up"`
+	LastBytesDown int64  `json:"last_bytes_down"`
+	TotalBytes    int64  `json:"total_bytes"`
 }
 
 func RandToken(n int) string {
@@ -115,14 +118,14 @@ func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
 func scanUser(r rowScanner) (*User, error) {
 	u := &User{}
 	var disabled int
-	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.TrafficResetDays, &u.LastTrafficResetAt, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.TrafficResetDays, &u.LastTrafficResetAt, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs, &u.AdminNote); err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
 	return u, nil
 }
 
-const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris`
+const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris, admin_note`
 
 func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
@@ -161,6 +164,12 @@ func SetUserLandingSource(d *sql.DB, id int64, subURL, uris string) error {
 	return err
 }
 
+// RenameUser changes a user's username.
+func RenameUser(d *sql.DB, id int64, newUsername string) error {
+	_, err := d.Exec(`UPDATE users SET username=? WHERE id=?`, newUsername, id)
+	return err
+}
+
 // UsersByID returns all users keyed by ID in a single query.
 func UsersByID(d *sql.DB) (map[int64]*User, error) {
 	all, err := ListUsers(d)
@@ -186,7 +195,7 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
-const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.traffic_reset_days, u.last_traffic_reset_at, u.expires_at, u.landing_sub_url, u.landing_uris`
+const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.traffic_reset_days, u.last_traffic_reset_at, u.expires_at, u.landing_sub_url, u.landing_uris, u.admin_note`
 
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
@@ -424,11 +433,11 @@ func scanRule(r rowScanner) (*Rule, error) {
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,total_bytes`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.TotalBytes); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes); err != nil {
 		return nil, err
 	}
 	return h, nil

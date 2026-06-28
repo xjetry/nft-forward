@@ -210,11 +210,11 @@ func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
 	_ = recvEnvelope(t, c)
 
 	cf, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{
-		{ListenPort: listenPort, Proto: "tcp", BytesDelta: 1024},
+		{ListenPort: listenPort, Proto: "tcp", BytesUp: 512, BytesDown: 512},
 	}})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf})
 	cf2, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{
-		{ListenPort: listenPort, Proto: "tcp", BytesDelta: 512},
+		{ListenPort: listenPort, Proto: "tcp", BytesUp: 256, BytesDown: 256},
 	}})
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf2})
 	syncByPing(t, c)
@@ -259,7 +259,7 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{
-		{ListenPort: listenPort, Proto: "tcp", BytesDelta: delta},
+		{ListenPort: listenPort, Proto: "tcp", BytesUp: delta / 2, BytesDown: delta / 2},
 	})
 
 	gotUser, err := db.GetUserByID(hub.DB, uid)

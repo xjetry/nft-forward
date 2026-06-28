@@ -37,9 +37,31 @@ func (k kernelBackend) Counters() ([]Counter, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Counter, 0, len(cs))
+	type key struct {
+		proto string
+		port  int
+	}
+	m := map[key]*Counter{}
 	for _, c := range cs {
-		out = append(out, Counter{Proto: c.Proto, ListenPort: c.ListenPort, Bytes: c.Bytes, Packets: c.Packets})
+		k := key{c.Proto, c.ListenPort}
+		fc, ok := m[k]
+		if !ok {
+			fc = &Counter{Proto: c.Proto, ListenPort: c.ListenPort}
+			m[k] = fc
+		}
+		switch c.Direction {
+		case "original":
+			fc.BytesUp = c.Bytes
+		case "reply":
+			fc.BytesDown = c.Bytes
+		default:
+			fc.BytesUp += c.Bytes
+		}
+		fc.Packets += c.Packets
+	}
+	out := make([]Counter, 0, len(m))
+	for _, fc := range m {
+		out = append(out, *fc)
 	}
 	return out, nil
 }

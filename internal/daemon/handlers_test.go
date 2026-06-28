@@ -303,7 +303,7 @@ func TestHandler_DeleteRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
 func TestHandleCounters(t *testing.T) {
 	d := newTestDaemon(t)
 	d.countersFn = func() ([]forward.Counter, error) {
-		return []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100, Packets: 2}}, nil
+		return []forward.Counter{{Proto: "tcp", ListenPort: 80, BytesUp: 60, BytesDown: 40, Packets: 2}}, nil
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/counters", nil)
@@ -635,20 +635,20 @@ func TestCleanupIsSerializedAgainstApply(t *testing.T) {
 }
 
 func TestCounterSamples_DeltasAndReset(t *testing.T) {
-	d := &Daemon{dp: &fakeDataplane{counters: []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 100}}}}
+	d := &Daemon{dp: &fakeDataplane{counters: []forward.Counter{{Proto: "tcp", ListenPort: 80, BytesUp: 60, BytesDown: 40}}}}
 	s1 := d.counterSamples()
-	if len(s1) != 1 || s1[0].BytesDelta != 100 {
-		t.Fatalf("first sample want delta 100, got %+v", s1)
+	if len(s1) != 1 || s1[0].BytesUp != 60 || s1[0].BytesDown != 40 {
+		t.Fatalf("first sample want up=60 down=40, got %+v", s1)
 	}
-	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 250}}
+	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, BytesUp: 160, BytesDown: 90}}
 	s2 := d.counterSamples()
-	if len(s2) != 1 || s2[0].BytesDelta != 150 {
-		t.Fatalf("second sample want delta 150, got %+v", s2)
+	if len(s2) != 1 || s2[0].BytesUp != 100 || s2[0].BytesDown != 50 {
+		t.Fatalf("second sample want up=100 down=50, got %+v", s2)
 	}
-	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, Bytes: 30}} // reset
+	d.dp.(*fakeDataplane).counters = []forward.Counter{{Proto: "tcp", ListenPort: 80, BytesUp: 20, BytesDown: 10}} // reset
 	s3 := d.counterSamples()
-	if len(s3) != 1 || s3[0].BytesDelta != 30 {
-		t.Fatalf("after reset want delta 30, got %+v", s3)
+	if len(s3) != 1 || s3[0].BytesUp != 20 || s3[0].BytesDown != 10 {
+		t.Fatalf("after reset want up=20 down=10, got %+v", s3)
 	}
 }
 
