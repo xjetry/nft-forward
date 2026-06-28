@@ -178,6 +178,19 @@ html, body { background: var(--color-app); color: var(--color-ink); }
 }
 
 /* Animation */
+/* Horizontally scrollable table wrapper with sticky first column on mobile */
+.tbl-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 767px) {
+  .tbl-scroll .tbl th:first-child,
+  .tbl-scroll .tbl td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--color-surface);
+  }
+  .tbl-scroll .tbl thead th:first-child { background: var(--color-raised); z-index: 3; }
+}
+
 /* Mobile card: replaces table rows on narrow screens */
 .mobile-card {
   @apply px-4 py-3.5 transition-colors;

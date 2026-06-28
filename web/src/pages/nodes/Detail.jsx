@@ -307,6 +307,7 @@ export default function NodeDetail() {
             <span className="text-[12.5px] text-ink-mut">{ruleHops.length} 条</span>
           </div>
           {ruleHops.length ? (
+            <div className="tbl-scroll">
             <table className="tbl">
               <thead><tr><th>规则</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
               <tbody>
@@ -329,6 +330,7 @@ export default function NodeDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : <div className="pb-4"><Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty></div>}
         </section>
 
@@ -339,6 +341,7 @@ export default function NodeDetail() {
             <span className="text-[12.5px] text-ink-mut">{grantedUsers.length} 人</span>
           </div>
           {grantedUsers.length ? (
+            <div className="tbl-scroll">
             <table className="tbl">
               <thead><tr><th>用户</th><th>单节点配额</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
               <tbody>
@@ -360,6 +363,7 @@ export default function NodeDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : <div className="pb-4"><Empty title="尚无用户被授权使用此节点" /></div>}
         </section>
 
@@ -439,6 +443,7 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
       <p className="text-[12.5px] text-ink-mut mb-2.5">
         内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP（TCP+UDP 中的 UDP 自动走内核态）。修改对此后新建的规则生效。
       </p>
+      <div className="tbl-scroll">
       <table className="tbl">
         <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-24">倍率</th></tr></thead>
         <tbody>
@@ -459,6 +464,7 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
           ))}
         </tbody>
       </table>
+      </div>
       <div className="pt-3">
         <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存</button>
       </div>

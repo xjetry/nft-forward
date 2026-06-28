@@ -103,6 +103,7 @@ export default function RulesDetail() {
           <span className="text-xs text-ink-mut">{hops.length} 跳</span>
         </div>
         {hops.length ? (
+          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th className="w-10">#</th><th>节点</th><th>监听端口</th><th>目标</th><th>模式</th><th>流量</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -124,6 +125,7 @@ export default function RulesDetail() {
               })}
             </tbody>
           </table>
+          </div>
         ) : <Empty title="暂无跳数据" />}
       </div>
 

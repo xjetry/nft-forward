@@ -122,6 +122,7 @@ export default function UserDetail() {
           <span className="text-[13px] text-ink-mut">{rules.length} 条</span>
         </div>
         {rules.length ? (
+          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th>ID</th><th>名称</th><th>节点</th><th>协议</th><th>入口</th><th>出口</th><th className="text-right">流量</th></tr></thead>
             <tbody>
@@ -140,6 +141,7 @@ export default function UserDetail() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : <Empty title="该用户尚无规则" />}
       </div>
 
@@ -351,6 +353,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
                 <button type="button" onClick={() => handleMarkAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
               </div>
             </div>
+            <div className="tbl-scroll">
             <table className="tbl">
               <thead><tr><th>名称</th><th>协议</th><th>地址</th><th className="text-right">用途</th></tr></thead>
               <tbody>
@@ -369,6 +372,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
@@ -462,6 +466,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
         </div>
       )}
       {tabNodes.length > 0 ? (
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr>
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
@@ -496,6 +501,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
             ))}
           </tbody>
         </table>
+        </div>
       ) : nodes.length > 0 ? (
         <Empty title={tab === 'composite' ? '暂无已授权的组合节点' : '暂无已授权的单点节点'} />
       ) : (
