@@ -422,10 +422,8 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
 		})
 
-		// Speed endpoints accessible to any authenticated role
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth)
-			r.Get("/stats/speed", s.apiSpeedSnapshot)
 			r.Get("/ws/speed", s.apiSpeedWS)
 		})
 	})

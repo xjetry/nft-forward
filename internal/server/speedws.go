@@ -8,11 +8,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-func (s *Server) apiSpeedSnapshot(w http.ResponseWriter, r *http.Request) {
-	snap := s.Hub.speedCache.snapshot()
-	jsonOK(w, map[string]any{"speeds": snap})
-}
-
 func (s *Server) apiSpeedWS(w http.ResponseWriter, r *http.Request) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
