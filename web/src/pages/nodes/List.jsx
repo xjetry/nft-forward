@@ -175,14 +175,15 @@ export default function NodeList() {
                   onDragStart={draggable ? () => setDragIndex(i) : undefined}
                   onDragOver={draggable ? e => e.preventDefault() : undefined}
                   onDrop={draggable ? () => onDrop(i) : undefined}
-                  className={`${draggable ? 'cursor-move' : ''} ${dragIndex === i ? 'opacity-50' : ''}`}>
+                  onClick={() => navigate(`/nodes/${n.id}`)}
+                  className={`cursor-pointer ${draggable ? 'cursor-move' : ''} ${dragIndex === i ? 'opacity-50' : ''}`}>
                   <td className="font-mono text-xs text-ink-mut">
                     {draggable && <span className="text-ink-mut mr-1 select-none" title="拖拽排序">⠿</span>}#{n.id}
                   </td>
                   <td>
-                    <span className="inline-flex items-center gap-2 font-semibold">
+                    <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
-                      <Link to={`/nodes/${n.id}`} className="text-blue-600 font-semibold hover:underline">{n.name}</Link>
+                      {n.name}
                       {n.hidden && <Badge color="gray">已隐藏</Badge>}
                     </span>
                   </td>
@@ -208,7 +209,7 @@ export default function NodeList() {
                       <span className="text-ink-mut">--</span>
                     )}
                   </td>
-                  <td className="text-right whitespace-nowrap">
+                  <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                     <div className="flex gap-2 justify-end">
                       <button onClick={() => toggleHidden(n)} title={n.hidden ? '显示' : '隐藏'} className="icon-btn">
                         {n.hidden ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>

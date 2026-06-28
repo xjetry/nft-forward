@@ -112,7 +112,6 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                 <div className="flex gap-2 justify-end items-center">
                   <ProbeIconButton ruleId={r.id} />
                   <MoreMenu items={[
-                    isAdmin && { label: '详情', href: `/rules/${r.id}` },
                     onEdit && { label: '编辑', onClick: () => onEdit(r) },
                     onCopy && { label: '复制', onClick: () => onCopy(r) },
                     { label: '删除', onClick: () => onDelete(r), danger: true },

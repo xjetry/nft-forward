@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTrafficGB, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
@@ -14,6 +14,7 @@ export default function UserList() {
   const { user: currentUser } = useUser()
   const toast = useToast()
   const confirm = useConfirm()
+  const navigate = useNavigate()
 
   const load = () => {
     setLoading(true)
@@ -67,9 +68,9 @@ export default function UserList() {
               {filtered.map(u => {
                 const isSelf = u.id === currentUser?.id
                 return (
-                  <tr key={u.id}>
+                  <tr key={u.id} className="cursor-pointer" onClick={() => navigate(`/users/${u.id}`)}>
                     <td className="font-mono text-xs text-ink-mut">{u.id}</td>
-                    <td><Link to={`/users/${u.id}`} className="text-blue-600 font-semibold hover:underline">{u.username}</Link></td>
+                    <td className="text-blue-600 font-semibold">{u.username}</td>
                     <td><span className="inline-flex items-center font-mono text-xs bg-raised text-ink-soft px-1.5 py-0.5 rounded">{u.role}</span></td>
                     <td className="font-mono">{u.role === 'user' ? `${u.rule_count || 0} / ${u.max_forwards}` : '--'}</td>
                     <td className="font-mono">{u.role === 'user' ? fmtTrafficGB(u.traffic_used_bytes, u.traffic_quota_bytes) : '--'}</td>
@@ -79,14 +80,11 @@ export default function UserList() {
                       ) : <Badge color="green">正常</Badge>}
                     </td>
                     <td className="text-ink-soft text-xs max-w-[200px] truncate" title={u.admin_note}>{u.admin_note}</td>
-                    <td className="text-right whitespace-nowrap">
+                    <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {isSelf ? (
                         <span className="text-xs text-ink-mut">(当前用户)</span>
                       ) : (
                         <div className="flex gap-2 justify-end">
-                          <Link to={`/users/${u.id}`} title="详情" className="icon-btn">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-                          </Link>
                           <button onClick={() => toggleUser(u)} title={u.disabled ? '启用' : '禁用'}
                             className={u.disabled ? 'icon-btn !text-green-600 !border-green-500/30' : 'icon-btn'}>
                             {u.disabled
