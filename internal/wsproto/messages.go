@@ -117,6 +117,9 @@ type CounterSample struct {
 	Proto      string `json:"proto"`
 	BytesUp    int64  `json:"up"`
 	BytesDown  int64  `json:"down"`
+	// BytesDelta is the legacy field sent by pre-v0.33 agents that do not
+	// distinguish direction. The server falls back to it when up+down is zero.
+	BytesDelta int64 `json:"bytes_delta,omitempty"`
 }
 
 type Counters struct {

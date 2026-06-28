@@ -462,6 +462,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	cycleChecked := map[int64]bool{}
 
 	for _, s := range samples {
+		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
+		// so traffic accounting continues while the node upgrades.
+		if s.BytesUp == 0 && s.BytesDown == 0 && s.BytesDelta > 0 {
+			s.BytesUp = s.BytesDelta
+		}
 		totalDelta := s.BytesUp + s.BytesDown
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
 		rh, ok := hopMap[key]
