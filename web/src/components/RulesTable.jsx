@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
+import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
 import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -88,11 +88,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td><ProtoBadge proto={r.proto} /></td>
               <td className="font-mono text-xs !whitespace-normal" onClick={e => e.stopPropagation()}>
-                <div className="mb-0.5">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Badge color="gray">入口</Badge>
                   {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
-                  <span className="text-ink-mut">→</span>
                   <ExitKindBadge kind={r.exit_kind} />
                   {!isAdmin && r.exit_kind === 'landing' && r.landing_name
                     ? <span className="font-sans">{r.landing_name}</span>
@@ -100,8 +100,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                   {r.relay_uri && (() => {
                     const yaml = copyFmt === 'yaml' ? uriToClashYaml(r.relay_uri) : null
                     const text = yaml || r.relay_uri
-                    const label = yaml ? '复制YAML' : '复制代理URI'
-                    return <CopyText text={text}><span className="text-blue-600 font-sans">{label}</span></CopyText>
+                    return <CopyText text={text}><svg className="w-3.5 h-3.5 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></CopyText>
                   })()}
                 </div>
               </td>
