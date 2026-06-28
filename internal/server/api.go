@@ -234,7 +234,8 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	users, _ := db.ListUsers(s.DB)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	jsonOK(w, map[string]any{"nodes": nodes, "rules": rules, "users": users, "node_by_id": nodeByID})
+	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
+	jsonOK(w, map[string]any{"nodes": nodes, "rules": rules, "users": users, "node_by_id": nodeByID, "node_traffic": nodeTraffic})
 }
 
 // --- Nodes ---
@@ -248,8 +249,10 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	db.ResolveCompositeOnline(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
+	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
+		"node_traffic": nodeTraffic,
 		"latest_agent_version": serverVersion(),
 	})
 }

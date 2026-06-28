@@ -19,7 +19,7 @@ export default function Dashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { nodes = [], rules = [], users = [] } = data
+  const { nodes = [], rules = [], users = [], node_traffic = {} } = data
   const onlineCount = nodes.filter(n => !n.disabled && n.online === 1).length
   const offline = nodes.filter(n => n.disabled || n.online !== 1).map(n => n.name)
   const totalBytes = rules.reduce((s, r) => s + (r.total_bytes || 0), 0)
@@ -55,7 +55,7 @@ export default function Dashboard() {
           {nodes.length ? (<>
             {/* Desktop table */}
             <table className="tbl hidden md:table">
-              <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>状态</th><th>心跳</th></tr></thead>
+              <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>流量</th><th>状态</th><th>心跳</th></tr></thead>
               <tbody>
                 {nodes.map(n => (
                   <tr key={n.id}>
@@ -63,6 +63,7 @@ export default function Dashboard() {
                     <td className="font-mono text-xs text-ink-soft"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
                     <td className="font-mono text-ink-soft">{ruleCount[n.id] || 0}</td>
+                    <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</td>
                     <td><NodeStatus node={n} /></td>
                     <td className="font-mono text-ink-mut text-xs">{fmtTime(n.last_seen)}</td>
                   </tr>
@@ -77,12 +78,12 @@ export default function Dashboard() {
                     <span className="font-semibold text-blue-600">{n.name}</span>
                     <NodeStatus node={n} />
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-ink-soft">
+                  <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
                     <NodeTypeBadge type={n.node_type} />
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono">{ruleCount[n.id] || 0} 条规则</span>
                     <span className="text-ink-mut">·</span>
-                    <span className="font-mono text-ink-mut">{fmtTime(n.last_seen)}</span>
+                    <span className="font-mono text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</span>
                   </div>
                 </Link>
               ))}

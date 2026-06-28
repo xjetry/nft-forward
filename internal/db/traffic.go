@@ -35,6 +35,24 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	return tx.Commit()
 }
 
+// NodeTrafficSums returns total traffic_used_bytes per node across all users.
+func NodeTrafficSums(d *sql.DB) (map[int64]int64, error) {
+	rows, err := d.Query(`SELECT node_id, SUM(traffic_used_bytes) FROM user_nodes GROUP BY node_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]int64)
+	for rows.Next() {
+		var nodeID, total int64
+		if err := rows.Scan(&nodeID, &total); err != nil {
+			return nil, err
+		}
+		m[nodeID] = total
+	}
+	return m, rows.Err()
+}
+
 // HopMultipliers returns per-hop multipliers keyed by (compositeNodeID, physicalNodeID).
 // Each hop can carry a different multiplier so a physical node can be priced
 // differently depending on which composite chain it participates in.

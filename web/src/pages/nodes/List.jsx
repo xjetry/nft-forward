@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTime, nullStr } from '../../lib/fmt'
+import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
@@ -78,7 +78,7 @@ export default function NodeList() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { nodes = [], latest_agent_version } = data || {}
+  const { nodes = [], latest_agent_version, node_traffic = {} } = data || {}
   const singleNodes = nodes.filter(n => n.node_type !== 'composite')
   const compositeNodes = nodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
@@ -167,7 +167,7 @@ export default function NodeList() {
         ) : (<>
           {/* Desktop table */}
           <table className="tbl hidden md:table">
-            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th>速度</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th>流量</th><th>速度</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={n.id}
@@ -196,6 +196,7 @@ export default function NodeList() {
                     {fmtTime(n.last_apply_at?.Valid ? n.last_apply_at.Int64 : null)}
                   </td>
                   <td><NodeStatus node={n} /></td>
+                  <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</td>
                   <td className="font-mono text-xs whitespace-nowrap">
                     {speeds[n.id] ? (
                       <>
@@ -239,6 +240,8 @@ export default function NodeList() {
                 </div>
                 <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
                   <NodeTypeBadge type={n.node_type} />
+                  <span className="text-ink-mut">·</span>
+                  <span className="font-mono text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</span>
                   {speeds[n.id] && <>
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>

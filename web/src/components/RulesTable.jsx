@@ -58,8 +58,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <span className="inline-flex items-center">节点<SortArrow dir={sort.col === 'node' ? sort.dir : null} /></span>
           </th>
           <th>协议</th>
-          <th>入口</th>
-          <th>出口</th>
+          <th>入口 / 出口</th>
           {isAdmin && (
             <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
               <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
@@ -88,11 +87,12 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td><ProtoBadge proto={r.proto} /></td>
-              <td className="font-mono text-xs" onClick={e => e.stopPropagation()}>
-                {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
-              </td>
-              <td className="font-mono text-xs text-ink-soft" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center gap-1.5 flex-wrap">
+              <td className="font-mono text-xs !whitespace-normal" onClick={e => e.stopPropagation()}>
+                <div className="mb-0.5">
+                  {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                  <span className="text-ink-mut">→</span>
                   <ExitKindBadge kind={r.exit_kind} />
                   {!isAdmin && r.exit_kind === 'landing' && r.landing_name
                     ? <span className="font-sans">{r.landing_name}</span>
