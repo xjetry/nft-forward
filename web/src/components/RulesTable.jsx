@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
 import { useCopyFmt } from './Layout'
@@ -109,12 +109,14 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
               {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                <div className="flex gap-2 justify-end">
+                <div className="flex gap-2 justify-end items-center">
                   <ProbeIconButton ruleId={r.id} />
-                  {isAdmin && <Link to={`/rules/${r.id}`} title="详情" className="icon-btn"><IconEye /></Link>}
-                  {onEdit && <button onClick={() => onEdit(r)} title="编辑" className="icon-btn"><IconPencil /></button>}
-                  {onCopy && <button onClick={() => onCopy(r)} title="复制" className="icon-btn"><IconCopy /></button>}
-                  <button onClick={() => onDelete(r)} title="删除" className="icon-btn-danger"><IconTrash /></button>
+                  <MoreMenu items={[
+                    isAdmin && { label: '详情', href: `/rules/${r.id}` },
+                    onEdit && { label: '编辑', onClick: () => onEdit(r) },
+                    onCopy && { label: '复制', onClick: () => onCopy(r) },
+                    { label: '删除', onClick: () => onDelete(r), danger: true },
+                  ].filter(Boolean)} />
                 </div>
               </td>
             </tr>
@@ -183,9 +185,33 @@ function ProbeIconButton({ ruleId }) {
   )
 }
 
+function MoreMenu({ items }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(o => !o)} className="icon-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[100px] bg-surface border border-line rounded-lg shadow-[0_8px_30px_-8px_rgba(0,0,0,0.5)] py-1">
+          {items.map((item, i) => item.href ? (
+            <Link key={i} to={item.href} className="block px-3.5 py-2 text-[13px] text-ink hover:bg-raised transition-colors no-underline">{item.label}</Link>
+          ) : (
+            <button key={i} onClick={() => { setOpen(false); item.onClick() }}
+              className={`block w-full text-left px-3.5 py-2 text-[13px] transition-colors bg-transparent border-0 cursor-pointer ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-ink hover:bg-raised'}`}>{item.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const I = (d) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 function IconPulse() { return I(<path d="M22 12h-4l-3 9L9 3l-3 9H2" />) }
-function IconEye() { return I(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>) }
-function IconPencil() { return I(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>) }
-function IconCopy() { return I(<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>) }
-function IconTrash() { return I(<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6" /><path d="M14 11v6" /></>) }

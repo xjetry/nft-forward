@@ -87,8 +87,11 @@ export default function UserList() {
                           <Link to={`/users/${u.id}`} title="详情" className="icon-btn">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
                           </Link>
-                          <button onClick={() => toggleUser(u)} title={u.disabled ? '启用' : '禁用'} className="icon-btn">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>
+                          <button onClick={() => toggleUser(u)} title={u.disabled ? '启用' : '禁用'}
+                            className={u.disabled ? 'icon-btn !text-green-600 !border-green-500/30' : 'icon-btn'}>
+                            {u.disabled
+                              ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                              : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>}
                           </button>
                           {u.role !== 'admin' && <button onClick={() => resetPassword(u)} title="重置密码" className="icon-btn">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.6-9.6"/><path d="m15.5 7.5 3 3"/><path d="m18 5 2.5 2.5"/></svg>

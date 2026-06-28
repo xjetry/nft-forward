@@ -53,6 +53,7 @@ export function Layout({ children }) {
   const { user, panelName } = useUser()
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('nf-sidebar') === '1')
   const { blurred, toggleBlur } = useContext(BlurCtx)
   const { copyFmt, toggleCopyFmt } = useContext(CopyFmtCtx)
   const [theme, setThemeState] = useState(getStoredTheme())
@@ -72,6 +73,10 @@ export function Layout({ children }) {
     window.addEventListener('storage', h)
     return () => { window.removeEventListener('nf-landing-changed', h); window.removeEventListener('storage', h) }
   }, [])
+
+  const toggleCollapse = () => {
+    setCollapsed(v => { localStorage.setItem('nf-sidebar', v ? '0' : '1'); return !v })
+  }
 
   const toggleTheme = () => {
     const next = isDark ? 'light' : 'dark'
@@ -94,23 +99,24 @@ export function Layout({ children }) {
         {sideOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={() => setSideOpen(false)} />}
 
         {/* Sidebar */}
-        <aside className={`fixed inset-y-0 left-0 z-40 w-[248px] flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto ${sideOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col transition-all lg:translate-x-0 lg:static lg:z-auto ${sideOpen ? 'translate-x-0 w-[248px]' : '-translate-x-full w-[248px]'} ${collapsed ? 'lg:w-[68px]' : 'lg:w-[248px]'}`}
           style={{ background: '#0c0e13', borderRight: '1px solid #181b22' }}>
 
           {/* Brand */}
-          <div className="flex items-center gap-3 px-5 pt-5 pb-5">
+          <div className={`flex items-center gap-3 pt-5 pb-5 ${collapsed ? 'px-3 justify-center' : 'px-5'}`}>
             <div className="w-[42px] h-[42px] rounded-[11px] flex-none grid place-items-center text-white shadow-[0_6px_18px_-6px_rgba(74,108,247,0.7)]"
               style={{ background: 'linear-gradient(150deg, #5b7cfa, #3a5bef)' }}>
               <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
             </div>
-            <div>
+            {!collapsed && <div>
               <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">{panelName || 'nft-forward'}</div>
               <div className="text-[12px] text-[#6b7280] mt-0.5">{isAdmin ? '管理面板' : '用户面板'}</div>
-            </div>
+            </div>}
           </div>
 
           {/* Nav */}
-          <nav className="flex-1 overflow-y-auto px-4 py-2">
+          <SidebarCtx.Provider value={collapsed}>
+          <nav className={`flex-1 overflow-y-auto py-2 ${collapsed ? 'px-2' : 'px-4'}`}>
             {isAdmin ? (
               <>
                 <NavGroup label="监控">
@@ -136,22 +142,39 @@ export function Layout({ children }) {
               </>
             )}
           </nav>
+          </SidebarCtx.Provider>
 
           {/* Footer */}
-          <div className="border-t border-[#181b22] p-4 pt-3.5">
-            <div className="flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
-              <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd] flex-none">
-                {user.username?.charAt(0).toUpperCase()}
+          <div className={`border-t border-[#181b22] pt-3.5 ${collapsed ? 'p-2' : 'p-4'}`}>
+            {collapsed ? (
+              <div className="flex flex-col items-center gap-2">
+                <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd]" title={user.username}>
+                  {user.username?.charAt(0).toUpperCase()}
+                </div>
+                <button onClick={handleLogout} title="退出登录" className="w-[34px] h-[34px] rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors grid place-items-center">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
               </div>
-              <div className="min-w-0">
-                <div className="text-[13.5px] text-[#e7eaf0] font-semibold leading-tight truncate">{user.username}</div>
-                <div className="text-[12px] text-[#6b7280] mt-px">{user.role}</div>
+            ) : (<>
+              <div className="flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
+                <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd] flex-none">
+                  {user.username?.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[13.5px] text-[#e7eaf0] font-semibold leading-tight truncate">{user.username}</div>
+                  <div className="text-[12px] text-[#6b7280] mt-px">{user.role}</div>
+                </div>
               </div>
-            </div>
-            <div className="flex gap-2">
-              <NavLink to="/change-password" className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
-              <button onClick={handleLogout} className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
-            </div>
+              <div className="flex gap-2">
+                <NavLink to="/change-password" className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
+                <button onClick={handleLogout} className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
+              </div>
+            </>)}
+            {/* Collapse toggle — desktop only */}
+            <button onClick={toggleCollapse} title={collapsed ? '展开侧栏' : '收起侧栏'}
+              className={`hidden lg:flex items-center justify-center w-full mt-2.5 py-1.5 rounded-lg text-[#6b7280] hover:text-[#cdd6e2] hover:bg-[#161d27] transition-colors`}>
+              <svg className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>
+            </button>
           </div>
         </aside>
 
@@ -232,25 +255,29 @@ export function CopyFmtProvider({ children }) {
 }
 
 /* ---------- Nav helpers ---------- */
+const SidebarCtx = createContext(false)
+
 function NavGroup({ label, children }) {
+  const collapsed = useContext(SidebarCtx)
   return (
     <div className="mt-4">
-      <div className="px-[10px] pb-2 text-[11px] font-semibold tracking-[1px] uppercase text-[#5a616d]">{label}</div>
+      {!collapsed && <div className="px-[10px] pb-2 text-[11px] font-semibold tracking-[1px] uppercase text-[#5a616d]">{label}</div>}
       <div className="flex flex-col gap-1">{children}</div>
     </div>
   )
 }
 
 function SideLink({ to, icon, end, children }) {
+  const collapsed = useContext(SidebarCtx)
   return (
-    <NavLink to={to} end={end}
+    <NavLink to={to} end={end} title={collapsed ? children : undefined}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 rounded-[9px] text-[14px] font-medium transition-colors relative ${isActive
+        `flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-[9px] text-[14px] font-medium transition-colors relative ${isActive
           ? 'bg-[#181c24] text-[#f3f5f8] border border-[#262b35] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]'
           : 'text-[#8b93a0] border border-transparent hover:bg-[#161d27] hover:text-[#cdd6e2]'}`
       }>
       <span className="w-5 h-5 flex-none opacity-85">{icon}</span>
-      <span>{children}</span>
+      {!collapsed && <span>{children}</span>}
     </NavLink>
   )
 }
