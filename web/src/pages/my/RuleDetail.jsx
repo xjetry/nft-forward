@@ -40,7 +40,7 @@ export default function MyRuleDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="规则不存在" /></Layout>
 
-  const { rule, nodes = [], node_by_id = {} } = data
+  const { rule, nodes = [], node_by_id = {}, show_rate } = data
   const node = node_by_id[rule.node_id]
 
   const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
@@ -121,8 +121,10 @@ export default function MyRuleDetail() {
                 ? <span className="font-sans">{rule.landing_name}</span>
                 : <SensText blurred={blurred}>{exitOf(rule) || '--'}</SensText>}
             </span>
-            <span className="text-ink-soft font-semibold">倍率</span>
-            <span className="font-mono text-ink-mut">×{rule.rate_multiplier ?? 1}</span>
+            {show_rate && <>
+              <span className="text-ink-soft font-semibold">倍率</span>
+              <span className="font-mono text-ink-mut">×{rule.rate_multiplier ?? 1}</span>
+            </>}
             <span className="text-ink-soft font-semibold">流量</span>
             <span className="font-mono text-ink-mut">{fmtBytes(Math.round((rule.total_bytes || 0) * (rule.rate_multiplier || 1)))}</span>
             {rule.comment && <>
@@ -142,7 +144,7 @@ export default function MyRuleDetail() {
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
         nodes={nodes} landingNodes={landingNodes} initial={showEdit ? ruleToForm(rule) : null}
-        onSubmit={saveEdit} />
+        onSubmit={saveEdit} showRate={show_rate} />
     </Layout>
   )
 }

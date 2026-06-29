@@ -56,7 +56,7 @@ export default function MyRules() {
 
   if (loading) return <Layout><Loading /></Layout>
 
-  const { rules = [], nodes = [], node_by_id = {} } = data || {}
+  const { rules = [], nodes = [], node_by_id = {}, show_rate } = data || {}
 
   // Filter server-assigned nodes by global role table — only landing-marked ones
   // appear in the exit picker (unconfigured/direct ones are excluded).
@@ -119,7 +119,7 @@ export default function MyRules() {
 
       <RuleFormModal
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
-        nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI}
+        nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI} showRate={show_rate}
         onSubmit={async (form) => {
           await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,

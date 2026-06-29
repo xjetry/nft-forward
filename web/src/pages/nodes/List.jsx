@@ -14,6 +14,7 @@ export default function NodeList() {
   const [showComposite, setShowComposite] = useState(false)
   const [panelUrl, setPanelUrl] = useState('')
   const [panelName, setPanelName] = useState('')
+  const [showRateToUser, setShowRateToUser] = useState(false)
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
   const [dragIndex, setDragIndex] = useState(null)
@@ -36,6 +37,7 @@ export default function NodeList() {
       setData(d)
       setPanelUrl(d.panel_url || '')
       setPanelName(d.panel_name || '')
+      setShowRateToUser(!!d.show_rate_to_user)
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [])
@@ -150,6 +152,14 @@ export default function NodeList() {
             <input className="input-field font-mono flex-1" value={panelUrl} onChange={e => setPanelUrl(e.target.value)} placeholder="例如 https://panel.example.com" />
             <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
           </form>
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" className="accent-blue-600" checked={showRateToUser} onChange={async e => {
+              const v = e.target.checked
+              setShowRateToUser(v)
+              try { await api.post('/settings', { panel_url: panelUrl, show_rate_to_user: v }); toast(v ? '用户侧倍率已开启' : '用户侧倍率已关闭') } catch (err) { toast(err.message); setShowRateToUser(!v) }
+            }} />
+            <span className="text-[13px] font-semibold text-ink-soft">向用户展示倍率</span>
+          </label>
           <p className="text-xs text-ink-mut">面板名称留空则默认为 nft-forward；面板地址留空则安装命令回退使用当前域名。</p>
         </div>
       </Panel>

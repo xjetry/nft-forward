@@ -250,11 +250,13 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
+	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
 		"node_traffic": nodeTraffic,
 		"latest_agent_version": serverVersion(),
+		"show_rate_to_user": showRate == "1",
 	})
 }
 
@@ -900,14 +902,16 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiGetSettings(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
-	jsonOK(w, map[string]any{"panel_url": panelURL, "panel_name": panelName})
+	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
+	jsonOK(w, map[string]any{"panel_url": panelURL, "panel_name": panelName, "show_rate_to_user": showRate == "1"})
 }
 
 func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		PanelURL  string  `json:"panel_url"`
-		PanelName *string `json:"panel_name"`
+		PanelURL       string  `json:"panel_url"`
+		PanelName      *string `json:"panel_name"`
+		ShowRateToUser *bool   `json:"show_rate_to_user"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -925,6 +929,16 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		db.WriteAudit(s.DB, u.ID, "settings.panel_name", name, "")
+	}
+	if body.ShowRateToUser != nil {
+		val := ""
+		if *body.ShowRateToUser {
+			val = "1"
+		}
+		if err := db.SetSetting(s.DB, "show_rate_to_user", val); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -1809,9 +1823,10 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 			gn.RateMultiplier = r
 		}
 	}
+	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"user": apiUserFullView(u), "nodes": grantedNodes, "grants": grants,
-		"rules": rules,
+		"rules": rules, "show_rate": showRate == "1",
 	})
 }
 
@@ -1834,9 +1849,10 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, item)
 	}
+	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"rules": views, "nodes": grantedNodes,
-		"node_by_id": grantedByID,
+		"node_by_id": grantedByID, "show_rate": showRate == "1",
 	})
 }
 
@@ -1864,8 +1880,10 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	} else {
 		item.RateMultiplier = 1
 	}
+	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"rule": item, "nodes": grantedNodes, "node_by_id": grantedByID,
+		"show_rate": showRate == "1",
 	})
 }
 

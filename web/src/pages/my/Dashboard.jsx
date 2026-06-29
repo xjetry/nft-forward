@@ -20,7 +20,7 @@ export default function MyDashboard() {
 
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
-  const { user, nodes = [], grants = [], rules = [] } = data
+  const { user, nodes = [], grants = [], rules = [], show_rate } = data
 
   const expiresAt = user.expires_at && user.expires_at > 0 ? user.expires_at : null
 
@@ -111,7 +111,7 @@ export default function MyDashboard() {
         {tabNodes.length > 0 ? (<>
           {/* Desktop table */}
           <table className="tbl hidden md:table">
-            <thead><tr><th>节点</th><th>类型</th><th>倍率</th><th>状态</th><th>速度</th><th>已用流量</th><th>本节点上限</th></tr></thead>
+            <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>本节点上限</th></tr></thead>
             <tbody>
               {tabNodes.map(n => {
                 const g = grantByNode[n.id]
@@ -119,7 +119,7 @@ export default function MyDashboard() {
                   <tr key={n.id}>
                     <td className="font-semibold">{n.name}</td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
-                    <td className="font-mono text-xs text-ink-mut">×{n.rate_multiplier ?? 1}</td>
+                    {show_rate && <td className="font-mono text-xs text-ink-mut">×{n.rate_multiplier ?? 1}</td>}
                     <td><NodeOnline node={n} /></td>
                     <td className="font-mono text-xs whitespace-nowrap">
                       {speeds[n.id] ? (
@@ -151,7 +151,7 @@ export default function MyDashboard() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
                     <NodeTypeBadge type={n.node_type} />
-                    <span className="font-mono text-ink-mut">×{n.rate_multiplier ?? 1}</span>
+                    {show_rate && <span className="font-mono text-ink-mut">×{n.rate_multiplier ?? 1}</span>}
                     {speeds[n.id] && <>
                       <span className="text-ink-mut">·</span>
                       <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>

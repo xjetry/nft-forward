@@ -19,7 +19,7 @@ const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custo
    the browser, so the modal only deals in host:port here; the rules page
    resolves the relay URI client-side. Admin callers omit the prop and keep the
    plain host:port box. */
-export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit, onAddProxyURI }) {
+export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit, onAddProxyURI, showRate }) {
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const toast = useToast()
@@ -63,6 +63,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   }
 
   const fmtRate = (n) => {
+    if (showRate === false) return n.name
     const r = n.rate_multiplier ?? 1
     return r !== 1 ? `${n.name} (×${r})` : n.name
   }
