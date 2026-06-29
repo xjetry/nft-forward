@@ -247,6 +247,7 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.ResolveCompositeOnline(s.DB, nodes)
+	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
@@ -260,11 +261,12 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		Name      string `json:"name"`
-		Secret    string `json:"secret"`
-		NodeType  string `json:"node_type"`
-		PortRange string `json:"port_range"`
-		Hops      []struct {
+		Name           string  `json:"name"`
+		Secret         string  `json:"secret"`
+		NodeType       string  `json:"node_type"`
+		PortRange      string  `json:"port_range"`
+		RateMultiplier float64 `json:"rate_multiplier"`
+		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
@@ -303,8 +305,8 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 				mode = "userspace"
 			}
 			mult := 0.0
-			if i == 0 {
-				mult = 1.0
+			if child, err := db.GetNode(s.DB, h.NodeID); err == nil {
+				mult = child.RateMultiplier
 			}
 			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: mult}
 		}
@@ -324,6 +326,9 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
+		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
+	}
 	if body.PortRange != "" {
 		if err := db.ValidatePortRange(body.PortRange); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
@@ -333,6 +338,8 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+	}
+	if body.RateMultiplier > 0 || body.PortRange != "" {
 		n, _ = db.GetNode(s.DB, n.ID)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
@@ -642,6 +649,40 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.NodeType == "composite" {
+		jsonErr(w, http.StatusBadRequest, "组合节点的倍率由各跳子节点决定")
+		return
+	}
+	var body struct {
+		RateMultiplier float64 `json:"rate_multiplier"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.RateMultiplier < 0 {
+		body.RateMultiplier = 0
+	}
+	if err := db.UpdateNodeRateMultiplier(s.DB, id, body.RateMultiplier); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_rate_multiplier", strconv.FormatInt(id, 10), fmt.Sprintf("%.2f", body.RateMultiplier))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResyncNode(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -939,6 +980,8 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	}
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeRateMultiplier(s.DB, nodes)
+	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
 	byID := make(map[int64]*db.User, len(allUsers))
 	userList := make([]map[string]any, 0, len(allUsers))
@@ -973,6 +1016,11 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		}
 		item := s.buildRuleListItem(rl, oname)
 		item.classifyExit(idx, false)
+		if n := nodeByID[rl.NodeID]; n != nil {
+			item.RateMultiplier = n.RateMultiplier
+		} else {
+			item.RateMultiplier = 1
+		}
 		views = append(views, item)
 	}
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
@@ -1111,6 +1159,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
 	var idx map[string]landing.Node
@@ -1122,6 +1171,11 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	item := s.buildRuleListItem(rl, ownerName)
 	item.classifyExit(idx, true)
+	if n := nodeByID[rl.NodeID]; n != nil {
+		item.RateMultiplier = n.RateMultiplier
+	} else {
+		item.RateMultiplier = 1
+	}
 	jsonOK(w, map[string]any{
 		"rule": item, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
@@ -1740,13 +1794,19 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	// in the user's granted set — resolve over the full node list, then project
 	// the result onto the granted nodes so the dashboard shows accurate status.
 	db.ResolveCompositeOnline(s.DB, nodes)
+	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	onlineByID := make(map[int64]int, len(nodes))
+	rateByID := make(map[int64]float64, len(nodes))
 	for _, n := range nodes {
 		onlineByID[n.ID] = n.Online
+		rateByID[n.ID] = n.RateMultiplier
 	}
 	for _, gn := range grantedNodes {
 		if o, ok := onlineByID[gn.ID]; ok {
 			gn.Online = o
+		}
+		if r, ok := rateByID[gn.ID]; ok {
+			gn.RateMultiplier = r
 		}
 	}
 	jsonOK(w, map[string]any{
@@ -1760,17 +1820,52 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	db.FillRuleTraffic(s.DB, rules)
 	idx := landingIndex(s.landingNodesFor(u, false))
+	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
+	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
+	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
 		item := s.buildRuleListItem(rl, "")
 		item.classifyExit(idx, true)
+		if n := grantedByID[rl.NodeID]; n != nil {
+			item.RateMultiplier = n.RateMultiplier
+		} else {
+			item.RateMultiplier = 1
+		}
 		views = append(views, item)
 	}
-	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
-	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	jsonOK(w, map[string]any{
 		"rules": views, "nodes": grantedNodes,
 		"node_by_id": grantedByID,
+	})
+}
+
+func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	rl, err := db.GetRule(s.DB, id)
+	if err != nil || !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+		jsonErr(w, http.StatusNotFound, "规则不存在")
+		return
+	}
+	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
+	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
+	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
+	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
+	idx := landingIndex(s.landingNodesFor(u, false))
+	item := s.buildRuleListItem(rl, "")
+	item.classifyExit(idx, true)
+	if n := grantedByID[rl.NodeID]; n != nil {
+		item.RateMultiplier = n.RateMultiplier
+	} else {
+		item.RateMultiplier = 1
+	}
+	jsonOK(w, map[string]any{
+		"rule": item, "nodes": grantedNodes, "node_by_id": grantedByID,
 	})
 }
 

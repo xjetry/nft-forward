@@ -117,7 +117,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&lastSeen, &n.LastApplyAt, &n.LastError,
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-			&hidden, &n.SortOrder,
+			&hidden, &n.SortOrder, &n.RateMultiplier,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err

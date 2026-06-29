@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN rate_multiplier REAL NOT NULL DEFAULT 1.0;

@@ -51,10 +51,11 @@ type ruleListItem struct {
 	// landing directly. RelayURI is populated only where the copy action is
 	// offered (detail and the user's own list). Matches against the user's own
 	// browser-local URIs happen client-side, not here.
-	ExitKind    string `json:"exit_kind"`
-	LandingName string `json:"landing_name,omitempty"`
-	LandingURI  string `json:"landing_uri,omitempty"`
-	RelayURI    string `json:"relay_uri,omitempty"`
+	ExitKind       string  `json:"exit_kind"`
+	LandingName    string  `json:"landing_name,omitempty"`
+	LandingURI     string  `json:"landing_uri,omitempty"`
+	RelayURI       string  `json:"relay_uri,omitempty"`
+	RateMultiplier float64 `json:"rate_multiplier"`
 }
 
 // nodeHopView adds the resolved child node name to a composite node's hop so

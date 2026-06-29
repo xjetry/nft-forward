@@ -38,7 +38,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
 
   const sorted = !sort.col ? rules : [...rules].sort((a, b) => {
     if (sort.col === 'traffic') {
-      const d = (a.total_bytes || 0) - (b.total_bytes || 0)
+      const d = (a.total_bytes || 0) * (a.rate_multiplier || 1) - (b.total_bytes || 0) * (b.rate_multiplier || 1)
       return sort.dir === 'asc' ? d : -d
     }
     const va = sort.col === 'node' ? (nodeMap[a.node_id]?.name || '') : (a.owner_name || '')
@@ -77,8 +77,8 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
           const node = nodeMap[r.node_id]
           return (
             <tr key={r.id}
-              className={isAdmin ? 'cursor-pointer' : ''}
-              onClick={isAdmin && onRowClick ? () => onRowClick(r) : undefined}>
+              className={onRowClick ? 'cursor-pointer' : ''}
+              onClick={onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
               <td className="font-semibold">
                 {r.comment
@@ -107,7 +107,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                 </div>
               </td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
-              {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes)}</td>}
+              {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</td>}
               <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                 <div className="flex gap-2 justify-end items-center">
                   <ProbeIconButton ruleId={r.id} />
@@ -128,8 +128,8 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
       {sorted.map(r => {
         const node = nodeMap[r.node_id]
         return (
-          <div key={r.id} className="mobile-card"
-            onClick={isAdmin && onRowClick ? () => onRowClick(r) : undefined}>
+          <div key={r.id} className={`mobile-card ${onRowClick ? 'cursor-pointer' : ''}`}
+            onClick={onRowClick ? () => onRowClick(r) : undefined}>
             <div className="flex items-center justify-between mb-1">
               <span className="font-semibold text-[14px]">{r.name}</span>
               <ProtoBadge proto={r.proto} />
@@ -137,7 +137,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
               <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
               {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
-              {!isAdmin && <><span className="text-ink-mut">·</span><span className="font-mono text-ink-mut">{fmtBytes(r.total_bytes)}</span></>}
+              {!isAdmin && <><span className="text-ink-mut">·</span><span className="font-mono text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</span></>}
             </div>
             <div className="text-xs text-ink-mut font-mono truncate">
               {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}

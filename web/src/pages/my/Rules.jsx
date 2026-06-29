@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
-import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
+import { RuleFormModal, copyInitial } from '../../components/RuleFormModal'
 import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
 
 export default function MyRules() {
@@ -13,8 +14,8 @@ export default function MyRules() {
   const [serverLanding, setServerLanding] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState(null)
-  const [editRule, setEditRule] = useState(null)
   const [search, setSearch] = useState('')
+  const navigate = useNavigate()
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -110,7 +111,7 @@ export default function MyRules() {
         ) : (
           <TableScroll>
             <RulesTable variant="my" rules={filtered} nodeMap={node_by_id} blurred={blurred}
-              onDelete={deleteRule} onEdit={setEditRule} onCopy={copyRule} />
+              onDelete={deleteRule} onCopy={copyRule} onRowClick={r => navigate(`/my/rules/${r.id}`)} />
           </TableScroll>
         )}
       </Panel>
@@ -127,16 +128,6 @@ export default function MyRules() {
           toast('规则已创建'); setCreateOpen(false); load()
         }} />
 
-      <RuleFormModal
-        open={!!editRule} onClose={() => setEditRule(null)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null} onAddProxyURI={addProxyURI}
-        onSubmit={async (form) => {
-          await api.put(`/my/rules/${editRule.id}`, {
-            node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, comment: form.comment || undefined,
-          })
-          toast('已保存并重下发'); setEditRule(null); load()
-        }} />
     </Layout>
   )
 }

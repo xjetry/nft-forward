@@ -58,6 +58,7 @@ type Node struct {
 	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
 	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
 	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
+	RateMultiplier     float64       `json:"rate_multiplier"`
 }
 
 type Rule struct {
@@ -249,7 +250,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -271,7 +272,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-		&hidden, &n.SortOrder,
+		&hidden, &n.SortOrder, &n.RateMultiplier,
 	); err != nil {
 		return nil, err
 	}
@@ -342,6 +343,24 @@ func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
 	resolveCompositeOnline(nodes, hops)
 }
 
+// ResolveCompositeRateMultiplier sets each composite node's RateMultiplier to
+// the sum of its hops' TrafficMultiplier values.
+func ResolveCompositeRateMultiplier(d *sql.DB, nodes []*Node) {
+	hops, err := ListAllNodeHops(d)
+	if err != nil {
+		return
+	}
+	sums := make(map[int64]float64)
+	for _, h := range hops {
+		sums[h.NodeID] += h.TrafficMultiplier
+	}
+	for _, n := range nodes {
+		if n.NodeType == "composite" {
+			n.RateMultiplier = sums[n.ID]
+		}
+	}
+}
+
 // resolveCompositeOnline is the pure aggregation: a composite is online only
 // when it has children and every child is reachable (online and not disabled).
 func resolveCompositeOnline(nodes []*Node, hops []*NodeHop) {
@@ -392,6 +411,11 @@ func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
 
 func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
 	_, err := d.Exec(`UPDATE nodes SET relay_host_v6=? WHERE id=?`, relayHostV6, id)
+	return err
+}
+
+func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
+	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
 	return err
 }
 

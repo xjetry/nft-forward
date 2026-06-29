@@ -376,6 +376,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/reorder", s.apiReorderNodes)
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
+			r.Post("/nodes/{id}/rate-multiplier", s.apiSetNodeRateMultiplier)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
 
@@ -418,6 +419,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/my/username", s.apiChangeUsername)
 			r.Get("/my/landing-nodes", s.apiMyLandingNodes)
 			r.Get("/my/rules", s.apiMyListRules)
+			r.Get("/my/rules/{id}", s.apiMyGetRule)
 			r.Post("/my/rules", s.apiMyCreateRule)
 			r.Put("/my/rules/{id}", s.apiMyUpdateRule)
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)

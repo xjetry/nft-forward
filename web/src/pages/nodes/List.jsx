@@ -310,6 +310,7 @@ function AddNodeModal({ open, onClose, onDone }) {
   const [secret, setSecret] = useState('')
   const [portStart, setPortStart] = useState('10001')
   const [portEnd, setPortEnd] = useState('20000')
+  const [rateMult, setRateMult] = useState('1')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
   const navigate = useNavigate()
@@ -319,9 +320,10 @@ function AddNodeModal({ open, onClose, onDone }) {
     setLoading(true)
     try {
       const portRange = `${portStart || '10001'}-${portEnd || '20000'}`
-      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange })
+      const rm = parseFloat(rateMult)
+      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1 })
       toast('节点已添加')
-      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000')
+      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1')
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
     } catch (err) { toast(err.message) } finally { setLoading(false) }
@@ -335,6 +337,8 @@ function AddNodeModal({ open, onClose, onDone }) {
           <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-1" />
           <label className="text-[13px] font-semibold text-ink-soft">Token <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field font-mono" value={secret} onChange={e => setSecret(e.target.value)} placeholder="留空则随机生成 64 位 hex" />
+          <label className="text-[13px] font-semibold text-ink-soft">倍率</label>
+          <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
         </div>
         <div className="flex gap-2">
           <div className="flex-1">

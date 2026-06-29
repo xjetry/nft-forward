@@ -25,6 +25,7 @@ export default function NodeDetail() {
   const [relayHost, setRelayHost] = useState('')
   const [relayHostV6, setRelayHostV6] = useState('')
   const [portRange, setPortRange] = useState('')
+  const [rateMult, setRateMult] = useState('1')
   const [useGhProxy, setUseGhProxy] = useState(false)
   const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
   const toast = useToast()
@@ -39,6 +40,7 @@ export default function NodeDetail() {
       setRelayHost(d.node?.relay_host || '')
       setRelayHostV6(d.node?.relay_host_v6 || '')
       setPortRange(d.node?.port_range || '')
+      setRateMult(String(d.node?.rate_multiplier ?? 1))
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [id])
@@ -70,6 +72,11 @@ export default function NodeDetail() {
   const savePortRange = async (e) => {
     e.preventDefault()
     try { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); load() } catch (err) { toast(err.message) }
+  }
+  const saveRateMult = async (e) => {
+    e.preventDefault()
+    const rm = parseFloat(rateMult)
+    try { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm >= 0 ? rm : 1 }); toast('倍率已保存'); load() } catch (err) { toast(err.message) }
   }
   const resync = async () => {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
@@ -254,6 +261,13 @@ export default function NodeDetail() {
             <ConfigField label="端口范围" hint="规则自动分配监听端口时从该范围中选取">
               <form onSubmit={savePortRange} className="flex gap-2">
                 <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
+                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+              </form>
+            </ConfigField>
+
+            <ConfigField label="倍率" hint="创建组合节点时默认继承此值，影响流量计费">
+              <form onSubmit={saveRateMult} className="flex gap-2">
+                <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
               </form>
             </ConfigField>

@@ -62,9 +62,13 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     } catch (err) { toast(err.message) } finally { setLoading(false) }
   }
 
+  const fmtRate = (n) => {
+    const r = n.rate_multiplier ?? 1
+    return r !== 1 ? `${n.name} (×${r})` : n.name
+  }
   const groups = [
-    { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
-    { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
+    { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
+    { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
   ]
 
   // Show protocol + node remark only — the real connection address is hidden
