@@ -3,6 +3,7 @@ import { UserProvider, useUser, BlurProvider, CopyFmtProvider } from './componen
 import { Loading, ConfirmProvider } from './components/ui'
 
 import Login from './pages/Login'
+import Settings from './pages/Settings'
 import Dashboard from './pages/Dashboard'
 import ChangePassword from './pages/ChangePassword'
 
@@ -80,6 +81,7 @@ export default function App() {
           <Route path="/rules/:id" element={<AdminRoute><RulesDetail /></AdminRoute>} />
           <Route path="/users" element={<AdminRoute><UserList /></AdminRoute>} />
           <Route path="/users/:id" element={<AdminRoute><UserDetail /></AdminRoute>} />
+          <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />
 
           {/* Regular user routes */}
           <Route path="/my" element={<UserRoute><MyDashboard /></UserRoute>} />
