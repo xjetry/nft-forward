@@ -71,6 +71,7 @@ export default function MyLandingNodes() {
         ) : filtered.length === 0 ? (
           <Empty title="无匹配节点" desc="试试别的关键词。" />
         ) : (
+          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>来源</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -87,6 +88,7 @@ export default function MyLandingNodes() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Panel>
     </Layout>

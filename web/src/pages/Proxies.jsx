@@ -112,6 +112,7 @@ export default function Proxies() {
         ) : filtered.length === 0 ? (
           <Empty title="无匹配" desc="试试别的关键词。" />
         ) : (
+          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>类型</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -148,6 +149,7 @@ export default function Proxies() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </Panel>
     </Layout>
