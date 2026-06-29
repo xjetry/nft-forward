@@ -636,9 +636,13 @@ case "$mode" in
     ;;
   server)
     if [[ -z "$addr" && -z "${PANEL_ADDR:-}" && -t 0 ]]; then
-      read -rp "面板绑定端口（直接回车使用默认 7788）: " _port
+      read -rp "面板绑定地址（端口或 地址:端口，默认 :7788）: " _port
       _port="${_port:-7788}"
-      addr=":$_port"
+      if [[ "$_port" == *:* ]]; then
+        addr="$_port"
+      else
+        addr=":$_port"
+      fi
     else
       addr="${addr:-${PANEL_ADDR:-:7788}}"
     fi
@@ -751,7 +755,11 @@ EOF
                  | sed -n 's/.*密  码: *//p' | head -1)"
     echo ""
     ok "===== Server 安装完成 ====="
-    echo "面板:        http://$primary_ip$addr"
+    if [[ "$addr" == :* ]]; then
+      echo "面板:        http://$primary_ip$addr"
+    else
+      echo "面板:        http://$addr"
+    fi
     echo "daemon unit: nft-forward-daemon.service (nft-agent daemon)"
     echo "server unit: nft-forward-server.service (nft-server)"
     if [[ -n "$_admin_pw" ]]; then
