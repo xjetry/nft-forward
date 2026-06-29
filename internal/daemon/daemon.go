@@ -155,13 +155,21 @@ func (d *Daemon) Bootstrap() error {
 		var err error
 		resolved, _, err = d.resolveFn(ctx, merged)
 		if err != nil {
-			return fmt.Errorf("bootstrap resolve: %w", err)
+			log.Printf("bootstrap: partial DNS failure (will retry in refresh loop): %v", err)
 		}
-		if err := requireResolvedHosts(resolved); err != nil {
-			return fmt.Errorf("bootstrap: %w", err)
+		// Apply only rules that resolved successfully; unresolved hosts
+		// will be picked up by the periodic refresh loop.
+		var applyable []nft.Rule
+		for _, r := range resolved {
+			if r.DestHost == "" || r.DestIP != "" {
+				applyable = append(applyable, r)
+			}
 		}
-		if err := d.applySerialized(ctx, resolved); err != nil {
-			return fmt.Errorf("bootstrap apply: %w", err)
+		resolved = applyable
+		if len(resolved) > 0 {
+			if err := d.applySerialized(ctx, resolved); err != nil {
+				return fmt.Errorf("bootstrap apply: %w", err)
+			}
 		}
 	}
 	d.mu.Lock()

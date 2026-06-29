@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -286,6 +287,90 @@ func TestBootstrap_ResolvesHostnamesBeforeApply(t *testing.T) {
 	}
 	if fa.nftCalls[0][0].DestIP != "10.0.0.5" {
 		t.Fatalf("expected DestIP=10.0.0.5 after resolution, got %q", fa.nftCalls[0][0].DestIP)
+	}
+}
+
+func TestBootstrap_PartialDNSFailureAppliesResolvableRules(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{
+			{ID: "r1", Proto: "tcp", SrcPort: 80, DestHost: "ok.example.com", DestPort: 80},
+			{ID: "r2", Proto: "tcp", SrcPort: 81, DestHost: "bad.example.com", DestPort: 81},
+		},
+	}, AgentMeta{}); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeDataplane{}
+	d, err := New(Config{
+		StatePath:  statePath,
+		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
+		Dataplane:  fa,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d.resolveFn = func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+		resolved := make([]nft.Rule, len(rules))
+		copy(resolved, rules)
+		var errs []string
+		for i := range resolved {
+			if resolved[i].DestHost == "ok.example.com" {
+				resolved[i].DestIP = "10.0.0.1"
+			} else if resolved[i].DestHost == "bad.example.com" {
+				errs = append(errs, "bad.example.com: no such host")
+			}
+		}
+		if len(errs) > 0 {
+			return resolved, true, fmt.Errorf("dns: %s", errs[0])
+		}
+		return resolved, true, nil
+	}
+
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap should succeed on partial DNS failure: %v", err)
+	}
+	if len(fa.nftCalls) != 1 {
+		t.Fatalf("expected 1 Apply call, got %d", len(fa.nftCalls))
+	}
+	if len(fa.nftCalls[0]) != 1 {
+		t.Fatalf("expected 1 rule applied (skipping unresolved), got %d", len(fa.nftCalls[0]))
+	}
+	if fa.nftCalls[0][0].DestHost != "ok.example.com" {
+		t.Fatalf("expected ok.example.com rule, got %q", fa.nftCalls[0][0].DestHost)
+	}
+}
+
+func TestBootstrap_AllDNSFailureStartsEmpty(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(statePath, OwnerRuleset{
+		"tui": []nft.Rule{
+			{ID: "r1", Proto: "tcp", SrcPort: 80, DestHost: "bad.example.com", DestPort: 80},
+		},
+	}, AgentMeta{}); err != nil {
+		t.Fatal(err)
+	}
+
+	fa := &fakeDataplane{}
+	d, err := New(Config{
+		StatePath:  statePath,
+		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
+		Dataplane:  fa,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d.resolveFn = func(ctx context.Context, rules []nft.Rule) ([]nft.Rule, bool, error) {
+		return rules, false, fmt.Errorf("dns: bad.example.com: no such host")
+	}
+
+	if err := d.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap should succeed even when all DNS fails: %v", err)
+	}
+	if len(fa.nftCalls) != 0 {
+		t.Fatalf("expected 0 Apply calls when no rules resolved, got %d", len(fa.nftCalls))
 	}
 }
 
