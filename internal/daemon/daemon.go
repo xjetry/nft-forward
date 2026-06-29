@@ -213,6 +213,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			OnApply:      d.SetPanelRuleset,
 			OnMigrated:   d.clearTuiSegment,
 			CountersFn:   d.counterSamples,
+			OnConfigUpdate: func(poolSize int) {
+				if dp, ok := d.dp.(*forward.Dataplane); ok {
+					dp.SetPoolSize(poolSize)
+				}
+			},
 		})
 		d.dialer.Store(dl)
 		go dl.Run(ctx)
