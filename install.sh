@@ -219,6 +219,24 @@ do_uninstall() {
         ok "已卸载 daemon（state.json 保留在 /var/lib/nft-forward/）"
       fi
       ;;
+    all)
+      systemctl disable --now nft-forward-server.service 2>/dev/null || true
+      systemctl disable --now nft-forward-daemon.service 2>/dev/null || true
+      rm -f "$SYSTEMD_DIR/nft-forward-server.service" \
+            "$SYSTEMD_DIR/nft-forward-daemon.service"
+      rm -f "$INSTALL_DIR/nft-server" "$INSTALL_DIR/nft-agent" \
+            "$INSTALL_DIR/nft-forward-upgrade"
+      systemctl daemon-reload
+      nft delete table ip nft_forward 2>/dev/null || true
+      rm -f /etc/sysctl.d/99-nft-forward.conf
+      rm -rf /etc/nft-forward/
+      # 保留 panel.db，清其他 state
+      rm -f /var/lib/nft-forward/state.json
+      if getent group nft-forward >/dev/null; then
+        groupdel nft-forward 2>/dev/null || true
+      fi
+      ok "已卸载所有角色（panel.db 保留在 /var/lib/nft-forward/）"
+      ;;
     *) die "未知卸载目标: $target" ;;
   esac
 }
@@ -236,7 +254,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   agent            受控节点（装 nft-agent；daemon 主动 dial panel WebSocket 反向纳管）
   update           拉 latest 二进制原子替换 + restart + 失败回滚（按已装角色拉对应二进制）
   update-script    从 GitHub main 分支拉取最新 install.sh 覆盖本地升级脚本
-  uninstall <角色> 卸载指定角色（server / agent / daemon）；daemon 单独卸载前请先卸 server/agent
+  uninstall <角色> 卸载指定角色（server / agent / daemon / all）；daemon 单独卸载前请先卸 server/agent
   reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
 
 选项 / 环境变量:
@@ -627,7 +645,7 @@ case "$mode" in
     ;;
   uninstall)
     if [[ -z "${UNINSTALL_TARGET:-}" && -t 0 ]]; then
-      read -rp "卸载哪个角色 [server/agent/daemon]: " UNINSTALL_TARGET
+      read -rp "卸载哪个角色 [server/agent/daemon/all]: " UNINSTALL_TARGET
     fi
     UNINSTALL_TARGET="${UNINSTALL_TARGET:-}"
     [[ -n "$UNINSTALL_TARGET" ]] || die "uninstall 需要指定角色"
