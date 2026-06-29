@@ -46,7 +46,11 @@ export default function Proxies() {
   const directManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [manualNodes, roles])
   const landingManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [manualNodes, roles])
 
-  const allLanding = useMemo(() => mergeLanding(landingManual, landingSub), [landingManual, landingSub])
+  const allLanding = useMemo(() => {
+    const manual = landingManual.map(n => ({ ...n, source: 'local' }))
+    const sub = landingSub.map(n => ({ ...n, source: serverNodes.some(s => s.host === n.host && s.port === n.port) ? 'admin' : 'local' }))
+    return mergeLanding(manual, sub)
+  }, [landingManual, landingSub, serverNodes])
   const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])
 
   const relayProxies = useMemo(() => {
@@ -91,13 +95,13 @@ export default function Proxies() {
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
         </PanelToolbar>
         <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
-          {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length]].map(([key, label, n]) => (
+          {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length], ['landing', '落地节点', allLanding.length]].map(([key, label, n]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`px-3 py-0.5 rounded text-xs border transition-colors ${
                 tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
               }`}>{label} {n}</button>
           ))}
-          {filtered.length > 0 && (
+          {tab !== 'landing' && filtered.length > 0 && (
             <button onClick={() => {
               const all = filtered.map(n => copyText(n)).filter(Boolean).join('\n')
               navigator.clipboard.writeText(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败'))
@@ -107,7 +111,23 @@ export default function Proxies() {
           )}
         </div>
 
-        {allProxies.length === 0 ? (
+        {tab === 'landing' ? (
+          allLanding.length === 0 ? (
+            <Empty title="暂无落地节点" desc="联系管理员配置订阅或在概览页添加代理 URI。" />
+          ) : (
+            <div className="px-[22px] py-5 flex flex-wrap gap-2.5">
+              {allLanding.filter(n => !q || [n.name, n.protocol].some(v => (v || '').toLowerCase().includes(q))).map((n, i) => (
+                <div key={i} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full border border-line bg-surface text-[13px]">
+                  <span className="font-semibold text-ink">{n.name || '(未命名)'}</span>
+                  <span className="text-ink-mut font-mono text-[11px]">{n.protocol}</span>
+                  {n.source === 'admin'
+                    ? <Badge color="gray">分配</Badge>
+                    : <Badge color="blue">本地</Badge>}
+                </div>
+              ))}
+            </div>
+          )
+        ) : allProxies.length === 0 ? (
           <Empty title="暂无可用代理" desc="在概览页添加代理 URI 或订阅地址，并标记为直连或落地。" />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配" desc="试试别的关键词。" />
