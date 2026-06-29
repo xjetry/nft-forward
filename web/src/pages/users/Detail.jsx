@@ -90,15 +90,21 @@ export default function UserDetail() {
             )}
           </div>
 
+          {isRegularUser && (
+            <UserProfileForm
+              userId={id}
+              expiresAt={expiresAt}
+              maxForwards={user.max_forwards}
+              quotaBytes={user.traffic_quota_bytes}
+              resetDays={user.traffic_reset_days}
+              adminNote={user.admin_note || ''}
+              onDone={load}
+            />
+          )}
+
           <div className="flex items-center gap-2 mt-5 flex-wrap">
-            {isRegularUser && <ExpiryForm userId={id} expiresAt={expiresAt} onDone={load} />}
-            {isRegularUser && <MaxForwardsForm userId={id} maxForwards={user.max_forwards} onDone={load} />}
-            {isRegularUser && <QuotaForm userId={id} quotaBytes={user.traffic_quota_bytes} onDone={load} />}
-            {isRegularUser && <ResetDaysForm userId={id} resetDays={user.traffic_reset_days} onDone={load} />}
-            {isRegularUser && <AdminNoteForm userId={id} adminNote={user.admin_note || ''} onDone={load} />}
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
-            {/* Admin accounts can't be reset or deleted here. */}
             {isRegularUser && <button onClick={resetPassword} className="btn-secondary text-xs">重置密码</button>}
             {isRegularUser && <button onClick={deleteUser} className="btn-danger-sm text-xs">删除用户</button>}
           </div>
@@ -177,87 +183,60 @@ function CopyButton({ text }) {
   )
 }
 
-function ExpiryForm({ userId, expiresAt, onDone }) {
-  const [val, setVal] = useState(expiresAt ? fmtDateInput(expiresAt) : '')
+function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays, adminNote, onDone }) {
+  const [form, setForm] = useState({
+    expiresAt: expiresAt ? fmtDateInput(expiresAt) : '',
+    maxForwards: String(maxForwards || 0),
+    quotaGB: String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))),
+    resetDays: String(resetDays || 0),
+    adminNote: adminNote,
+  })
+  const [saving, setSaving] = useState(false)
   const toast = useToast()
-  const submit = async (e) => {
-    e.preventDefault()
-    try { await api.post(`/users/${userId}/expiry`, { expires_at: val || undefined }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
-  }
-  return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="date" value={val} onChange={e => setVal(e.target.value)} style={{ width: 160 }} />
-      <button type="submit" className="btn-secondary text-xs">设到期</button>
-    </form>
-  )
-}
 
-function MaxForwardsForm({ userId, maxForwards, onDone }) {
-  const [val, setVal] = useState(String(maxForwards || 0))
-  const toast = useToast()
-  const submit = async (e) => {
-    e.preventDefault()
-    const n = Math.max(0, Math.round(Number(val) || 0))
-    try { await api.post(`/users/${userId}/max-forwards`, { max_forwards: n }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
-  }
-  return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="number" min="0" step="1" value={val} onChange={e => setVal(e.target.value)} style={{ width: 80 }} title="0 = 不限" />
-      <button type="submit" className="btn-secondary text-xs">设规则配额</button>
-    </form>
-  )
-}
+  const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }))
 
-function QuotaForm({ userId, quotaBytes, onDone }) {
-  const [gb, setGb] = useState(String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))))
-  const toast = useToast()
   const submit = async (e) => {
     e.preventDefault()
-    const bytes = Math.max(0, Math.round((Number(gb) || 0) * 1073741824))
-    try { await api.post(`/users/${userId}/quota`, { traffic_quota_bytes: bytes }); toast('已设置'); onDone() } catch (err) { toast(err.message) }
-  }
-  return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb} onChange={e => setGb(e.target.value)} style={{ width: 120 }} title="0 = 不限" />
-      <span className="text-xs text-ink-mut">GB</span>
-      <button type="submit" className="btn-secondary text-xs">设配额</button>
-    </form>
-  )
-}
-
-function ResetDaysForm({ userId, resetDays, onDone }) {
-  const [val, setVal] = useState(String(resetDays || 0))
-  const toast = useToast()
-  const submit = async (e) => {
-    e.preventDefault()
-    const days = Math.max(0, Math.round(Number(val) || 0))
+    setSaving(true)
     try {
-      await api.post(`/users/${userId}/reset-days`, { traffic_reset_days: days })
-      toast('已设置')
+      await api.patch(`/users/${userId}/profile`, {
+        expires_at: form.expiresAt || '',
+        max_forwards: Math.max(0, Math.round(Number(form.maxForwards) || 0)),
+        traffic_quota_gb: Math.max(0, Number(form.quotaGB) || 0),
+        traffic_reset_days: Math.max(0, Math.round(Number(form.resetDays) || 0)),
+        admin_note: form.adminNote,
+      })
+      toast('已保存')
       onDone()
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message) } finally { setSaving(false) }
   }
-  return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="number" min="0" step="1" value={val}
-        onChange={e => setVal(e.target.value)} style={{ width: 80 }} title="0 = 永不重置" />
-      <span className="text-xs text-ink-mut">天</span>
-      <button type="submit" className="btn-secondary text-xs">设周期</button>
-    </form>
-  )
-}
 
-function AdminNoteForm({ userId, adminNote, onDone }) {
-  const [val, setVal] = useState(adminNote)
-  const toast = useToast()
-  const submit = async (e) => {
-    e.preventDefault()
-    try { await api.post(`/users/${userId}/admin-note`, { admin_note: val }); toast('已保存'); onDone() } catch (err) { toast(err.message) }
-  }
   return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field" value={val} onChange={e => setVal(e.target.value)} placeholder="管理备注" style={{ width: 200 }} />
-      <button type="submit" className="btn-secondary text-xs">设备注</button>
+    <form onSubmit={submit} className="mt-5">
+      <div className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-3 items-center max-w-lg">
+        <label className="fl">到期时间</label>
+        <input className="input-field font-mono" type="date" value={form.expiresAt} onChange={set('expiresAt')} />
+
+        <label className="fl">规则配额</label>
+        <input className="input-field font-mono" type="number" min="0" step="1" value={form.maxForwards} onChange={set('maxForwards')} title="0 = 不限" />
+
+        <label className="fl">流量配额</label>
+        <div className="flex items-center gap-1.5">
+          <input className="input-field font-mono flex-1" type="number" min="0" step="0.1" value={form.quotaGB} onChange={set('quotaGB')} title="0 = 不限" />
+          <span className="text-xs text-ink-mut">GB</span>
+        </div>
+
+        <label className="fl">重置周期</label>
+        <div className="flex items-center gap-1.5">
+          <input className="input-field font-mono flex-1" type="number" min="0" step="1" value={form.resetDays} onChange={set('resetDays')} title="0 = 永不重置" />
+          <span className="text-xs text-ink-mut">天</span>
+        </div>
+
+        <label className="fl">管理备注</label>
+        <input className="input-field" value={form.adminNote} onChange={set('adminNote')} placeholder="管理备注" />
+      </div>
+      <button type="submit" disabled={saving} className="btn-primary text-xs mt-4">{saving ? '保存中…' : '保存'}</button>
     </form>
   )
 }

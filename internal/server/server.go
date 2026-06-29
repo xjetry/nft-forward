@@ -406,6 +406,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
 
 			r.Get("/users", s.apiListUsers)
+			r.Patch("/users/{id}/profile", s.apiUpdateUserProfile)
 			r.Post("/users/{id}/admin-note", s.apiSetAdminNote)
 			r.Post("/users/{id}/toggle", s.apiToggleUser)
 			r.Post("/users/{id}/reset-password", s.apiResetUserPassword)

@@ -207,7 +207,7 @@ export function Layout({ children }) {
           </div>
 
           {/* Page content */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-7 py-7 pb-12">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-7 py-7 pb-12">
             <div className="max-w-[1680px] mx-auto">
               {children}
             </div>

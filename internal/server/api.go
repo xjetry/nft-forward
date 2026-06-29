@@ -1709,6 +1709,70 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		ExpiresAt        string `json:"expires_at"`
+		MaxForwards      int    `json:"max_forwards"`
+		TrafficQuotaGB   float64 `json:"traffic_quota_gb"`
+		TrafficResetDays int    `json:"traffic_reset_days"`
+		AdminNote        string `json:"admin_note"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.MaxForwards < 0 {
+		jsonErr(w, http.StatusBadRequest, "配额数无效")
+		return
+	}
+	if body.TrafficQuotaGB < 0 {
+		jsonErr(w, http.StatusBadRequest, "流量配额无效")
+		return
+	}
+	if body.TrafficResetDays < 0 {
+		jsonErr(w, http.StatusBadRequest, "天数无效")
+		return
+	}
+
+	var expiresAt int64
+	raw := strings.TrimSpace(body.ExpiresAt)
+	if raw != "" {
+		t, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "日期格式无效（需 YYYY-MM-DD）")
+			return
+		}
+		expiresAt = t.Unix()
+	}
+
+	trafficQuotaBytes := int64(body.TrafficQuotaGB * 1073741824)
+	if trafficQuotaBytes < 0 {
+		trafficQuotaBytes = 0
+	}
+
+	if _, err := s.DB.Exec(
+		`UPDATE users SET expires_at=?, max_forwards=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=? WHERE id=?`,
+		expiresAt, body.MaxForwards, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), id,
+	); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	db.WriteAudit(s.DB, u.ID, "user.update_profile", strconv.FormatInt(id, 10), "")
+	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
+		for _, n := range nodes {
+			_ = s.dispatchToNode(n)
+		}
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
