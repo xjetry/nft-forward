@@ -23,6 +23,7 @@ export default function NodeList() {
   const speeds = useSpeed()
   const toast = useToast()
   const confirm = useConfirm()
+  const navigate = useNavigate()
 
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
