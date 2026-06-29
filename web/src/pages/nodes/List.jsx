@@ -155,12 +155,10 @@ export default function NodeList() {
       if (!p.entered) return
     }
     e.preventDefault()
-    const el = listRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const mid = (rect.top + rect.bottom) / 2
-    const zone = e.clientY < mid - 15 ? 'top' : e.clientY > mid + 15 ? 'bottom' : null
-    setPinMode({ idx: p.idx, zone })
+    const zone = (e.clientY - p.y0) < -20 ? 'top' : (e.clientY - p.y0) > 20 ? 'bottom' : null
+    const rowEl = e.currentTarget
+    const rr = rowEl.getBoundingClientRect()
+    setPinMode({ idx: p.idx, zone, rowTop: rr.top, rowH: rr.height, rowLeft: rr.left })
   }
   const onPinUp = () => {
     const p = pinRef.current
@@ -314,17 +312,18 @@ export default function NodeList() {
               ))}
             </tbody>
           </table>
-          {pinMode && (
-            <div className="absolute inset-0 z-40 flex pointer-events-none">
-              <div className="w-[120px] flex flex-col gap-px">
-                <div className={`flex-1 flex items-center justify-center rounded-l-lg text-[14px] font-bold transition-colors ${
-                  pinMode.zone === 'top' ? 'bg-blue-500 text-white shadow-lg' : 'bg-blue-100/80 text-blue-400'}`}>↑ 置顶</div>
-                <div className={`flex-1 flex items-center justify-center rounded-l-lg text-[14px] font-bold transition-colors ${
-                  pinMode.zone === 'bottom' ? 'bg-amber-500 text-white shadow-lg' : 'bg-amber-100/80 text-amber-400'}`}>置底 ↓</div>
-              </div>
-              <div className="flex-1 bg-black/5 rounded-r-lg" />
+          {pinMode && (<>
+            <div className={`fixed z-50 pointer-events-none flex items-center justify-center rounded-lg px-5 py-2.5 text-[13px] font-bold shadow-lg transition-colors ${
+              pinMode.zone === 'top' ? 'bg-blue-500 text-white scale-110' : 'bg-blue-100 text-blue-400'}`}
+              style={{ left: pinMode.rowLeft - 10, top: pinMode.rowTop - 48, transform: `translateX(-100%) ${pinMode.zone === 'top' ? 'scale(1.08)' : ''}` }}>
+              ↑ 置顶
             </div>
-          )}
+            <div className={`fixed z-50 pointer-events-none flex items-center justify-center rounded-lg px-5 py-2.5 text-[13px] font-bold shadow-lg transition-colors ${
+              pinMode.zone === 'bottom' ? 'bg-amber-500 text-white scale-110' : 'bg-amber-100 text-amber-400'}`}
+              style={{ left: pinMode.rowLeft - 10, top: pinMode.rowTop + pinMode.rowH + 8, transform: `translateX(-100%) ${pinMode.zone === 'bottom' ? 'scale(1.08)' : ''}` }}>
+              置底 ↓
+            </div>
+          </>)}
           </div>
           {/* Mobile cards */}
           <div className="md:hidden">
