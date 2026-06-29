@@ -729,7 +729,6 @@ EOF
     systemctl enable --now nft-forward-daemon.service
     systemctl enable --now nft-forward-server.service
     sleep 2
-    local _admin_pw=""
     _admin_pw="$(journalctl -u nft-forward-server.service --since '30 seconds ago' --no-pager -o cat 2>/dev/null \
                  | sed -n 's/.*密  码: *//p' | head -1)"
     echo ""
