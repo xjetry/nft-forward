@@ -263,6 +263,27 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
   )
 }
 
+function PerNodeMaxForwardsForm({ userId, nodeId, maxForwards, onDone }) {
+  const [val, setVal] = useState(String(maxForwards ?? 10))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const n = Math.max(1, Number(val) || 1)
+    try {
+      await api.post(`/users/${userId}/nodes/${nodeId}/max-forwards`, { max_forwards: n })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message) }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="1" value={val}
+        onChange={e => setVal(e.target.value)} style={{ width: 64 }} />
+      <button type="submit" className="btn-secondary text-xs">设上限</button>
+    </form>
+  )
+}
+
 function PerNodeQuotaForm({ userId, nodeId, quotaBytes, onDone }) {
   const [gb, setGb] = useState(String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))))
   const toast = useToast()
@@ -473,7 +494,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>本用户上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -483,7 +504,9 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
                   <Link to={`/nodes/${n.id}`} className="text-blue-600 hover:underline">{n.name}</Link>
                 </td>
                 <td><NodeTypeBadge type={n.node_type} /></td>
-                <td className="font-mono">{grantByNode[n.id]?.max_forwards ?? '--'}</td>
+                <td className="px-3 py-2">
+                  <PerNodeMaxForwardsForm userId={userId} nodeId={n.id} maxForwards={grantByNode[n.id]?.max_forwards} onDone={onDone} />
+                </td>
                 <td className="px-3 py-2">
                   <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
                 </td>
@@ -540,14 +563,14 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
       <div className="text-xs font-bold text-ink-mut uppercase tracking-wider mb-3">授权新节点</div>
       <form onSubmit={submit} className="space-y-3 max-w-xl">
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
+          <label className="fl">节点规则数上限</label>
+          <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />
           <label className="fl">节点 <span className="text-ink-mut font-normal text-xs">(可多选)</span></label>
           <Select value={nodeIds} onChange={setNodeIds} placeholder="-- 选择 --" searchable multiple tabs
             groups={[
               { label: '单点', options: available.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: n.name })) },
               { label: '组合', options: available.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: n.name })) },
             ]} />
-          <label className="fl">本用户上限</label>
-          <input className="input-field font-mono" type="number" min="1" value={max} onChange={e => setMax(e.target.value)} style={{ maxWidth: 160 }} />
         </div>
         <button type="submit" disabled={loading} className="btn-primary text-xs">授权</button>
       </form>

@@ -2333,6 +2333,39 @@ func isValidRelayHost(host string) bool {
 	return resolver.IsHostname(host)
 }
 
+func (s *Server) apiSetPerNodeMaxForwards(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad node id")
+		return
+	}
+	var body struct {
+		MaxForwards int `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.MaxForwards < 1 {
+		jsonErr(w, http.StatusBadRequest, "规则数上限至少为 1")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE user_nodes SET max_forwards=? WHERE user_id=? AND node_id=?`,
+		body.MaxForwards, userID, nodeID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_node_max_forwards", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d max=%d", nodeID, body.MaxForwards))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")

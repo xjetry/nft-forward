@@ -402,6 +402,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/expiry", s.apiSetUserExpiry)
 			r.Post("/users/{id}/reset-traffic", s.apiResetUserTraffic)
 			r.Post("/users/{id}/reset-days", s.apiSetResetDays)
+			r.Post("/users/{id}/nodes/{nodeID}/max-forwards", s.apiSetPerNodeMaxForwards)
 			r.Post("/users/{id}/nodes/{nodeID}/quota", s.apiSetPerNodeQuota)
 			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
 
