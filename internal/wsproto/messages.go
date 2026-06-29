@@ -32,6 +32,7 @@ const (
 	TypePing             = "ping"
 	TypePong             = "pong"
 	TypeError            = "error"
+	TypeConfigUpdate     = "config_update"
 )
 
 // Envelope wraps every frame. ID is required for req/resp pairs
@@ -86,9 +87,10 @@ type Hello struct {
 // node_token was accepted and NodeID/Name are populated; a non-empty
 // Error means the daemon should not proceed (token revoked or unknown).
 type HelloAck struct {
-	NodeID int64  `json:"node_id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Error  string `json:"error,omitempty"`
+	NodeID   int64  `json:"node_id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Error    string `json:"error,omitempty"`
+	PoolSize int    `json:"pool_size,omitempty"`
 }
 
 type ApplyRuleset struct {
@@ -197,4 +199,8 @@ type Pong struct {
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+type ConfigUpdate struct {
+	PoolSize int `json:"pool_size"`
 }
