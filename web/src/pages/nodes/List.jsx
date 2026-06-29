@@ -24,6 +24,8 @@ export default function NodeList() {
   const toast = useToast()
   const confirm = useConfirm()
   const navigate = useNavigate()
+  const [sort, setSort] = useState({ col: null, dir: null })
+  const [speedSnap, setSpeedSnap] = useState(null)
 
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
@@ -85,14 +87,35 @@ export default function NodeList() {
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
   const q = search.trim().toLowerCase()
   const visibleNodes = onlyVisible ? tabNodes.filter(n => !n.hidden) : tabNodes
-  const filtered = !q ? visibleNodes : visibleNodes.filter(n => (n.name || '').toLowerCase().includes(q))
+  const filtered0 = !q ? visibleNodes : visibleNodes.filter(n => (n.name || '').toLowerCase().includes(q))
   const hiddenCount = tabNodes.length - tabNodes.filter(n => !n.hidden).length
+
+  const cycleSort = (col) => {
+    setSort(s => {
+      if (col === 'speed') setSpeedSnap({ ...speeds })
+      if (s.col !== col) return { col, dir: 'desc' }
+      if (s.dir === 'desc') return { col, dir: 'asc' }
+      return { col: null, dir: null }
+    })
+  }
+  const filtered = !sort.col ? filtered0 : [...filtered0].sort((a, b) => {
+    let d = 0
+    if (sort.col === 'traffic') {
+      d = (node_traffic[a.id] || 0) - (node_traffic[b.id] || 0)
+    } else if (sort.col === 'speed') {
+      const sa = speedSnap || speeds
+      const va = sa[a.id] ? (sa[a.id].up + sa[a.id].down) : 0
+      const vb = sa[b.id] ? (sa[b.id].up + sa[b.id].down) : 0
+      d = va - vb
+    }
+    return sort.dir === 'asc' ? d : -d
+  })
   // Drag-reorder is only offered when the shown rows are exactly tabNodes in
   // order — no search and no hidden rows filtered out — so a dropped row's
   // index maps straight onto tabNodes. Persisting sends the full id order (the
   // reordered tab plus the other tab in its current order) so sort_order stays
   // a clean sequence.
-  const draggable = filtered.length === tabNodes.length
+  const draggable = !sort.col && filtered.length === tabNodes.length
   const onDrop = async (toIndex) => {
     if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
     const list = [...tabNodes]
@@ -168,7 +191,16 @@ export default function NodeList() {
         ) : (<>
           {/* Desktop table */}
           <table className="tbl hidden md:table">
-            <thead><tr><th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th><th>流量</th><th>速度</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr>
+              <th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th>
+              <th className="cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
+                <span className="inline-flex items-center">流量<SortArrow col="traffic" sort={sort} /></span>
+              </th>
+              <th className="cursor-pointer select-none" onClick={() => cycleSort('speed')}>
+                <span className="inline-flex items-center">速度<SortArrow col="speed" sort={sort} /></span>
+              </th>
+              <th className="text-right">操作</th>
+            </tr></thead>
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={n.id}
@@ -260,6 +292,16 @@ export default function NodeList() {
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />
       <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes.filter(n => n.node_type !== 'composite')} onDone={() => { setShowComposite(false); load() }} />
     </Layout>
+  )
+}
+
+function SortArrow({ col, sort }) {
+  const active = sort.col === col
+  return (
+    <span className="inline-flex flex-col leading-[0.55] text-[9px] ml-1">
+      <span className={active && sort.dir === 'asc' ? 'text-blue-600' : 'text-ink-mut opacity-50'}>▲</span>
+      <span className={active && sort.dir === 'desc' ? 'text-blue-600' : 'text-ink-mut opacity-50'}>▼</span>
+    </span>
   )
 }
 
