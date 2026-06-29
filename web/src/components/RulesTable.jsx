@@ -132,7 +132,10 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             onClick={onRowClick ? () => onRowClick(r) : undefined}>
             <div className="flex items-center justify-between mb-1">
               <span className="font-semibold text-[14px]">{r.name}</span>
-              <ProtoBadge proto={r.proto} />
+              <div className="flex items-center gap-2">
+                <ProbeIconButton ruleId={r.id} />
+                <ProtoBadge proto={r.proto} />
+              </div>
             </div>
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
               <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
