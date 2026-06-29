@@ -112,20 +112,16 @@ export default function NodeList() {
     }
     return sort.dir === 'asc' ? d : -d
   })
-  // Drag-reorder is only offered when the shown rows are exactly tabNodes in
-  // order — no search and no hidden rows filtered out — so a dropped row's
-  // index maps straight onto tabNodes. Persisting sends the full id order (the
-  // reordered tab plus the other tab in its current order) so sort_order stays
-  // a clean sequence.
-  const draggable = !sort.col && filtered.length === tabNodes.length
+  const draggable = !sort.col && !q
   const onDrop = async (toIndex) => {
     if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
-    const list = [...tabNodes]
+    const list = [...filtered]
     const [moved] = list.splice(dragIndex, 1)
     list.splice(toIndex, 0, moved)
     setDragIndex(null)
+    const hiddenIds = tabNodes.filter(n => n.hidden).map(n => n.id)
     const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
-    const tabIds = list.map(n => n.id)
+    const tabIds = [...list.map(n => n.id), ...hiddenIds]
     const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
     const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
     setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
