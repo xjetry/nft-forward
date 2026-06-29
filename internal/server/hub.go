@@ -133,7 +133,13 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.registerConn(ac)
 	defer h.unregisterConn(ac)
 
-	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name})
+	poolSize := 4
+	if psStr, err := db.GetSetting(h.DB, "pool_size"); err == nil {
+		if n, err := strconv.Atoi(psStr); err == nil && n >= 0 {
+			poolSize = n
+		}
+	}
+	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name, PoolSize: poolSize})
 	if err := writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ackPayload}); err != nil {
 		ws.Close(websocket.StatusInternalError, "ack write failed")
 		return
@@ -366,6 +372,20 @@ func (h *Hub) SendProbe(nodeID int64, target string) (wsproto.ProbeAck, error) {
 		return wsproto.ProbeAck{}, errors.New("probe timeout")
 	case <-ac.closed:
 		return wsproto.ProbeAck{}, errors.New("connection closed")
+	}
+}
+
+func (h *Hub) BroadcastConfigUpdate(poolSize int) {
+	payload, _ := json.Marshal(wsproto.ConfigUpdate{PoolSize: poolSize})
+	env := wsproto.Envelope{Type: wsproto.TypeConfigUpdate, Payload: payload}
+	h.mu.RLock()
+	conns := make([]*agentConn, 0, len(h.conns))
+	for _, ac := range h.conns {
+		conns = append(conns, ac)
+	}
+	h.mu.RUnlock()
+	for _, ac := range conns {
+		ac.enqueueWrite(env)
 	}
 }
 
