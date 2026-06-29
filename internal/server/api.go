@@ -914,7 +914,12 @@ func (s *Server) apiGetSettings(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
-	jsonOK(w, map[string]any{"panel_url": panelURL, "panel_name": panelName, "show_rate_to_user": showRate == "1"})
+	poolSizeStr, _ := db.GetSetting(s.DB, "pool_size")
+	poolSize := 4
+	if n, err := strconv.Atoi(poolSizeStr); err == nil && n >= 0 {
+		poolSize = n
+	}
+	jsonOK(w, map[string]any{"panel_url": panelURL, "panel_name": panelName, "show_rate_to_user": showRate == "1", "pool_size": poolSize})
 }
 
 func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
@@ -923,6 +928,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		PanelURL       string  `json:"panel_url"`
 		PanelName      *string `json:"panel_name"`
 		ShowRateToUser *bool   `json:"show_rate_to_user"`
+		PoolSize       *int    `json:"pool_size"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -950,6 +956,18 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+	}
+	if body.PoolSize != nil {
+		ps := *body.PoolSize
+		if ps < 0 || ps > 64 {
+			jsonErr(w, http.StatusBadRequest, "pool_size 必须在 0-64 之间")
+			return
+		}
+		if err := db.SetSetting(s.DB, "pool_size", strconv.Itoa(ps)); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.Hub.BroadcastConfigUpdate(ps)
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
