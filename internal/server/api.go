@@ -361,6 +361,10 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ruleHops, _ := db.ListRuleHopsByNode(s.DB, n.ID)
+	if n.NodeType == "composite" {
+		compositeHops, _ := db.ListRuleHopsByCompositeNode(s.DB, n.ID)
+		ruleHops = append(ruleHops, compositeHops...)
+	}
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 
 	type ruleHopView struct {
@@ -412,6 +416,13 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 			views[i] = nodeHopView{NodeHop: h, NodeName: nm}
 		}
 		resp["node_hops"] = views
+		singleNodes := make([]*db.Node, 0)
+		for _, nd := range all {
+			if nd.NodeType != "composite" {
+				singleNodes = append(singleNodes, nd)
+			}
+		}
+		resp["single_nodes"] = singleNodes
 		// Online is aggregated from children; reuse the same node list.
 		db.ResolveCompositeOnline(s.DB, all)
 		for _, c := range all {
@@ -461,6 +472,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type hopUpdate struct {
+		NodeID            int64   `json:"node_id"`
 		Mode              string  `json:"mode"`
 		TrafficMultiplier float64 `json:"traffic_multiplier"`
 	}
@@ -471,18 +483,12 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	existing, err := db.ListNodeHops(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if len(body.Hops) < 2 {
+		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 		return
 	}
-	if len(body.Hops) != len(existing) {
-		jsonErr(w, http.StatusBadRequest, "跳数与现有不一致")
-		return
-	}
-	hops := make([]db.NodeHop, len(existing))
-	for i, h := range existing {
-		hu := body.Hops[i]
+	hops := make([]db.NodeHop, len(body.Hops))
+	for i, hu := range body.Hops {
 		mode := strings.ToLower(strings.TrimSpace(hu.Mode))
 		if mode == "" {
 			mode = "userspace"
@@ -491,11 +497,16 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
 			return
 		}
+		hopNodeID := hu.NodeID
+		if hopNodeID == 0 {
+			jsonErr(w, http.StatusBadRequest, "子节点 ID 不能为空")
+			return
+		}
 		mult := hu.TrafficMultiplier
 		if mult < 0 {
 			mult = 1.0
 		}
-		hops[i] = db.NodeHop{NodeID: id, Position: h.Position, HopNodeID: h.HopNodeID, Mode: mode, TrafficMultiplier: mult}
+		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: mult}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

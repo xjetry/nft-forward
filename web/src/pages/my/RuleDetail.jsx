@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
 import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
 import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
@@ -123,7 +123,7 @@ export default function MyRuleDetail() {
             </span>
             {show_rate && <>
               <span className="text-ink-soft font-semibold">倍率</span>
-              <span className="font-mono text-ink-mut">×{rule.rate_multiplier ?? 1}</span>
+              <span><Badge color="blue">×{rule.rate_multiplier ?? 1}</Badge></span>
             </>}
             <span className="text-ink-soft font-semibold">流量</span>
             <span className="font-mono text-ink-mut">{fmtBytes(Math.round((rule.total_bytes || 0) * (rule.rate_multiplier || 1)))}</span>

@@ -580,6 +580,10 @@ func ListRuleHopsByNode(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 	return queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE node_id=? ORDER BY rule_id, position`, scanRuleHop, nodeID)
 }
 
+func ListRuleHopsByCompositeNode(d *sql.DB, compositeNodeID int64) ([]*RuleHop, error) {
+	return queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE rule_id IN (SELECT id FROM rules WHERE node_id=?) ORDER BY rule_id, position`, scanRuleHop, compositeNodeID)
+}
+
 // AddUserTraffic increments a user's traffic_used_bytes by delta.
 func AddUserTraffic(d *sql.DB, id int64, delta int64) error {
 	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, id)

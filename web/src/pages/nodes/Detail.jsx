@@ -276,9 +276,9 @@ export default function NodeDetail() {
         )}
 
         {/* ===== 组合节点跳序 — desktop only ===== */}
-        {isComposite && nodeHops.length > 0 && (
+        {isComposite && (
           <div className="hidden md:block">
-            <CompositeHopsCard nodeId={id} hops={nodeHops} onDone={load} />
+            <CompositeHopsCard nodeId={id} hops={nodeHops} singleNodes={data.single_nodes || []} onDone={load} />
           </div>
         )}
 
@@ -427,21 +427,45 @@ function HeaderStatus({ node }) {
   )
 }
 
-function CompositeHopsCard({ nodeId, hops, onDone }) {
-  const [modes, setModes] = useState(hops.map(h => h.mode))
-  const [mults, setMults] = useState(hops.map(h => String(h.traffic_multiplier ?? 1)))
+function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
+  const [rows, setRows] = useState(initHops.map(h => ({
+    node_id: h.hop_node_id, node_name: h.node_name || `#${h.hop_node_id}`,
+    mode: h.mode, mult: String(h.traffic_multiplier ?? 1),
+  })))
   const [saving, setSaving] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
   const toast = useToast()
 
-  const dirty = hops.some((h, i) => h.mode !== modes[i] || String(h.traffic_multiplier ?? 1) !== mults[i])
-  const setMode = (i, v) => setModes(m => m.map((x, j) => (j === i ? v : x)))
-  const setMult = (i, v) => setMults(prev => prev.map((m, j) => j === i ? v : m))
+  const nodeById = Object.fromEntries(singleNodes.map(n => [n.id, n]))
+  const dirty = rows.length !== initHops.length || rows.some((r, i) => {
+    const h = initHops[i]
+    return !h || r.node_id !== h.hop_node_id || r.mode !== h.mode || r.mult !== String(h.traffic_multiplier ?? 1)
+  })
+
+  const setField = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r))
+  const addHop = () => setRows(rs => [...rs, { node_id: '', node_name: '', mode: 'userspace', mult: '1' }])
+  const removeHop = (i) => setRows(rs => rs.filter((_, j) => j !== i))
+  const onDrop = (toIdx) => {
+    if (dragIdx === null || dragIdx === toIdx) { setDragIdx(null); return }
+    setRows(rs => {
+      const arr = [...rs]
+      const [moved] = arr.splice(dragIdx, 1)
+      arr.splice(toIdx, 0, moved)
+      return arr
+    })
+    setDragIdx(null)
+  }
 
   const save = async () => {
+    if (rows.length < 2) { toast('至少需要 2 个子节点'); return }
+    if (rows.some(r => !r.node_id)) { toast('请选择所有节点'); return }
     setSaving(true)
     try {
       await api.post(`/nodes/${nodeId}/hops`, {
-        hops: modes.map((m, i) => ({ mode: m, traffic_multiplier: parseFloat(mults[i]) >= 0 ? parseFloat(mults[i]) : 1 }))
+        hops: rows.map(r => ({
+          node_id: Number(r.node_id), mode: r.mode,
+          traffic_multiplier: parseFloat(r.mult) >= 0 ? parseFloat(r.mult) : 1,
+        }))
       })
       toast('已保存')
       onDone()
@@ -452,34 +476,38 @@ function CompositeHopsCard({ nodeId, hops, onDone }) {
     <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
       <div className="flex items-baseline gap-2.5 mb-1.5">
         <h2 className="m-0 text-[15px] font-bold">组合节点跳序</h2>
-        <span className="text-[12.5px] text-ink-mut">{hops.length} 跳</span>
+        <span className="text-[12.5px] text-ink-mut">{rows.length} 跳</span>
       </div>
       <p className="text-[12.5px] text-ink-mut mb-2.5">
-        内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP（TCP+UDP 中的 UDP 自动走内核态）。修改对此后新建的规则生效。
+        拖拽 ⠿ 调整顺序。内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP。修改对此后新建的规则生效。
       </p>
-      <div className="tbl-scroll">
-      <table className="tbl">
-        <thead><tr><th className="w-10">#</th><th>节点</th><th>模式</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-24">倍率</th></tr></thead>
-        <tbody>
-          {hops.map((h, i) => (
-            <tr key={i}>
-              <td className="font-mono text-xs text-ink-mut">{i + 1}</td>
-              <td className="font-semibold"><Link to={`/nodes/${h.hop_node_id}`} className="text-blue-600 hover:underline">{h.node_name || `#${h.hop_node_id}`}</Link></td>
-              <td>
-                <Select value={modes[i]} onChange={v => setMode(i, v)} style={{ width: 130 }}
-                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-              </td>
-              <td className="px-3 py-2">
-                <input className="input-field font-mono" type="number" min="0" step="0.1"
-                  value={mults[i]} onChange={e => setMult(i, e.target.value)}
-                  style={{ width: 80 }} title="全局流量计费倍率" />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="space-y-2">
+        {rows.map((r, i) => (
+          <div key={i}
+            draggable onDragStart={() => setDragIdx(i)} onDragOver={e => e.preventDefault()} onDrop={() => onDrop(i)}
+            className={`flex items-center gap-2 bg-raised rounded-lg px-3 py-2 ${dragIdx === i ? 'opacity-50' : ''}`}>
+            <span className="text-ink-mut cursor-move select-none" title="拖拽排序">⠿</span>
+            <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
+            <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={r.node_id}
+              onChange={v => {
+                const nd = nodeById[v]
+                setField(i, 'node_id', v)
+                if (nd) setField(i, 'node_name', nd.name)
+              }}
+              options={singleNodes.filter(n => n.id === Number(r.node_id) || !rows.some((rr, j) => j !== i && Number(rr.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
+            <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
+              options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+            <input className="input-field font-mono" type="number" min="0" step="0.1"
+              value={r.mult} onChange={e => setField(i, 'mult', e.target.value)}
+              style={{ width: 80 }} title="倍率" />
+            {rows.length > 2 && (
+              <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
+            )}
+          </div>
+        ))}
       </div>
-      <div className="pt-3">
+      <div className="flex items-center gap-3 pt-3">
+        <button type="button" onClick={addHop} className="btn-secondary text-xs">+ 添加一跳</button>
         <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存</button>
       </div>
     </section>
