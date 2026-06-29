@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTrafficGB, nullStr } from '../../lib/fmt'
+import { fmtTrafficGB, nullStr, nullInt } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
@@ -11,6 +11,7 @@ export default function UserList() {
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState(null) // null | 'expires_asc' | 'expires_desc'
   const { user: currentUser } = useUser()
   const toast = useToast()
   const confirm = useConfirm()
@@ -42,7 +43,17 @@ export default function UserList() {
   }
 
   const q = search.trim().toLowerCase()
-  const filtered = !q ? users : users.filter(u => (u.username || '').toLowerCase().includes(q))
+  const searched = !q ? users : users.filter(u => (u.username || '').toLowerCase().includes(q))
+
+  const toggleExpirySort = () => setSortBy(s => s === 'expires_asc' ? 'expires_desc' : s === 'expires_desc' ? null : 'expires_asc')
+  const filtered = !sortBy ? searched : [...searched].sort((a, b) => {
+    const ea = nullInt(a.expires_at) || 0
+    const eb = nullInt(b.expires_at) || 0
+    if (!ea && !eb) return 0
+    if (!ea) return 1  // no expiry → push to end
+    if (!eb) return -1
+    return sortBy === 'expires_asc' ? ea - eb : eb - ea
+  })
 
   return (
     <Layout>
@@ -63,7 +74,7 @@ export default function UserList() {
           <TableScroll>
           {/* Desktop table */}
           <table className="tbl hidden md:table">
-            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th>备注</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="cursor-pointer select-none whitespace-nowrap" onClick={toggleExpirySort}>到期{sortBy === 'expires_asc' ? ' ↑' : sortBy === 'expires_desc' ? ' ↓' : ''}</th><th>备注</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map(u => {
                 const isSelf = u.id === currentUser?.id
@@ -79,6 +90,7 @@ export default function UserList() {
                         <Badge color="amber" title={nullStr(u.disable_reason)}>已禁用</Badge>
                       ) : <Badge color="green">正常</Badge>}
                     </td>
+                    <ExpiryCell unix={nullInt(u.expires_at)} />
                     <td className="text-ink-soft text-xs max-w-[200px] truncate" title={u.admin_note}>{u.admin_note}</td>
                     <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {isSelf ? (
@@ -122,6 +134,10 @@ export default function UserList() {
                     <span className="font-mono">{u.rule_count || 0}/{u.max_forwards} 规则</span>
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono">{fmtTrafficGB(u.traffic_used_bytes, u.traffic_quota_bytes)}</span>
+                    {nullInt(u.expires_at) ? <>
+                      <span className="text-ink-mut">·</span>
+                      <ExpiryInline unix={nullInt(u.expires_at)} />
+                    </> : null}
                   </>}
                 </div>
               </Link>
@@ -134,6 +150,44 @@ export default function UserList() {
 
       <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load() }} />
     </Layout>
+  )
+}
+
+function fmtExpiry(unix) {
+  if (!unix) return '--'
+  const d = new Date(unix * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function expiryDaysLeft(unix) {
+  if (!unix) return null
+  return Math.ceil((unix - Date.now() / 1000) / 86400)
+}
+
+function ExpiryCell({ unix }) {
+  if (!unix) return <td className="text-xs text-ink-mut">--</td>
+  const days = expiryDaysLeft(unix)
+  const expired = days <= 0
+  const soon = !expired && days <= 7
+  const cls = expired ? 'text-red-500' : soon ? 'text-amber-500' : 'text-ink-soft'
+  return (
+    <td className={`text-xs font-mono whitespace-nowrap ${cls}`}>
+      {fmtExpiry(unix)}
+      {expired ? <span className="ml-1 text-[10px]">已过期</span>
+       : soon ? <span className="ml-1 text-[10px]">{days}天</span> : null}
+    </td>
+  )
+}
+
+function ExpiryInline({ unix }) {
+  const days = expiryDaysLeft(unix)
+  const expired = days <= 0
+  const soon = !expired && days <= 7
+  const cls = expired ? 'text-red-500' : soon ? 'text-amber-500' : 'text-ink-soft'
+  return (
+    <span className={`font-mono ${cls}`}>
+      {expired ? '已过期' : soon ? `${days}天到期` : fmtExpiry(unix)}
+    </span>
   )
 }
 
