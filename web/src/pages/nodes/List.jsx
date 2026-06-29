@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
@@ -27,6 +27,9 @@ export default function NodeList() {
   const navigate = useNavigate()
   const [sort, setSort] = useState({ col: null, dir: null })
   const [speedSnap, setSpeedSnap] = useState(null)
+  const [swipe, setSwipe] = useState(null)
+  const swipeRef = useRef(null)
+  const swipedRef = useRef(false)
 
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
@@ -113,19 +116,59 @@ export default function NodeList() {
     return sort.dir === 'asc' ? d : -d
   })
   const draggable = !sort.col && !q
+  const saveOrder = async (visibleList) => {
+    const hiddenIds = tabNodes.filter(n => n.hidden).map(n => n.id)
+    const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
+    const tabIds = [...visibleList.map(n => n.id), ...hiddenIds]
+    const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
+    const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
+    setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
+    try { await api.post('/nodes/reorder', { ids: allIds }); toast('顺序已保存') } catch (err) { toast(err.message); load() }
+  }
   const onDrop = async (toIndex) => {
     if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
     const list = [...filtered]
     const [moved] = list.splice(dragIndex, 1)
     list.splice(toIndex, 0, moved)
     setDragIndex(null)
-    const hiddenIds = tabNodes.filter(n => n.hidden).map(n => n.id)
-    const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
-    const tabIds = [...list.map(n => n.id), ...hiddenIds]
-    const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
-    const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
-    setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
-    try { await api.post('/nodes/reorder', { ids: allIds }); toast('顺序已保存') } catch (err) { toast(err.message); load() }
+    saveOrder(list)
+  }
+  const moveToEdge = (idx, edge) => {
+    const list = [...filtered]
+    const [moved] = list.splice(idx, 1)
+    if (edge === 'top') list.unshift(moved); else list.push(moved)
+    saveOrder(list)
+  }
+  const onSwipeDown = (e, idx) => {
+    if (e.button !== 0 || e.target.closest('[draggable], button, a')) return
+    swipeRef.current = { idx, x0: e.clientX, y0: e.clientY, locked: null }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onSwipeMove = (e) => {
+    const s = swipeRef.current
+    if (!s) return
+    const dx = e.clientX - s.x0, dy = e.clientY - s.y0
+    if (s.locked === null) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+      if (Math.abs(dx) > Math.abs(dy) && dx < -10) { s.locked = true } else { swipeRef.current = null; return }
+    }
+    if (!s.locked) return
+    e.preventDefault()
+    const offset = Math.min(0, Math.max(-180, dx))
+    const rect = e.currentTarget.getBoundingClientRect()
+    const zoneMid = rect.right + offset / 2
+    const zone = Math.abs(offset) < 40 ? null : (e.clientX < zoneMid ? 'top' : 'bottom')
+    setSwipe({ idx: s.idx, offset, zone, rect: { top: rect.top, right: rect.right, height: rect.height } })
+  }
+  const onSwipeUp = () => {
+    const s = swipeRef.current
+    swipeRef.current = null
+    if (!s?.locked || !swipe) { setSwipe(null); return }
+    swipedRef.current = true
+    setTimeout(() => { swipedRef.current = false }, 100)
+    const { idx, zone } = swipe
+    setSwipe(null)
+    if (zone) moveToEdge(idx, zone)
   }
 
   return (
@@ -210,14 +253,17 @@ export default function NodeList() {
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={n.id}
-                  draggable={draggable}
-                  onDragStart={draggable ? () => setDragIndex(i) : undefined}
                   onDragOver={draggable ? e => e.preventDefault() : undefined}
                   onDrop={draggable ? () => onDrop(i) : undefined}
-                  onClick={() => navigate(`/nodes/${n.id}`)}
-                  className={`cursor-pointer ${draggable ? 'cursor-move' : ''} ${dragIndex === i ? 'opacity-50' : ''}`}>
+                  onPointerDown={e => onSwipeDown(e, i)}
+                  onPointerMove={onSwipeMove}
+                  onPointerUp={onSwipeUp}
+                  onClick={() => { if (!swipedRef.current) navigate(`/nodes/${n.id}`) }}
+                  style={swipe?.idx === i ? { transform: `translateX(${swipe.offset}px)`, position: 'relative', zIndex: 10 } : undefined}
+                  className={`cursor-pointer ${dragIndex === i ? 'opacity-50' : ''}`}>
                   <td className="font-mono text-xs text-ink-mut">
-                    {draggable && <span className="text-ink-mut mr-1 select-none" title="拖拽排序">⠿</span>}#{n.id}
+                    {draggable && <span className="text-ink-mut mr-1 select-none cursor-move" title="拖拽排序"
+                      draggable onDragStart={() => setDragIndex(i)}>⠿</span>}#{n.id}
                   </td>
                   <td>
                     <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
@@ -266,6 +312,17 @@ export default function NodeList() {
               ))}
             </tbody>
           </table>
+          {swipe && Math.abs(swipe.offset) > 40 && (
+            <div className="fixed z-50 flex overflow-hidden rounded-lg shadow-lg" style={{
+              top: swipe.rect.top, height: swipe.rect.height,
+              left: swipe.rect.right + swipe.offset, width: Math.abs(swipe.offset),
+            }}>
+              <div className={`flex-1 flex items-center justify-center text-[13px] font-bold transition-colors ${
+                swipe.zone === 'top' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-500'}`}>↑ 置顶</div>
+              <div className={`flex-1 flex items-center justify-center text-[13px] font-bold transition-colors ${
+                swipe.zone === 'bottom' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-500'}`}>置底 ↓</div>
+            </div>
+          )}
           {/* Mobile cards */}
           <div className="md:hidden">
             {filtered.map(n => (
