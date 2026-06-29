@@ -27,9 +27,10 @@ export default function NodeList() {
   const navigate = useNavigate()
   const [sort, setSort] = useState({ col: null, dir: null })
   const [speedSnap, setSpeedSnap] = useState(null)
-  const [swipe, setSwipe] = useState(null)
-  const swipeRef = useRef(null)
-  const swipedRef = useRef(false)
+  const [pinMode, setPinMode] = useState(null)
+  const pinRef = useRef(null)
+  const pinClickGuard = useRef(false)
+  const listRef = useRef(null)
 
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
@@ -139,35 +140,36 @@ export default function NodeList() {
     if (edge === 'top') list.unshift(moved); else list.push(moved)
     saveOrder(list)
   }
-  const onSwipeDown = (e, idx) => {
+  const onPinDown = (e, idx) => {
     if (e.button !== 0 || e.target.closest('[draggable], button, a')) return
-    swipeRef.current = { idx, x0: e.clientX, y0: e.clientY, locked: null }
+    pinRef.current = { idx, x0: e.clientX, y0: e.clientY, entered: false }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
-  const onSwipeMove = (e) => {
-    const s = swipeRef.current
-    if (!s) return
-    const dx = e.clientX - s.x0, dy = e.clientY - s.y0
-    if (s.locked === null) {
+  const onPinMove = (e) => {
+    const p = pinRef.current
+    if (!p) return
+    const dx = e.clientX - p.x0, dy = e.clientY - p.y0
+    if (!p.entered) {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
-      if (Math.abs(dx) > Math.abs(dy) && dx < -10) { s.locked = true } else { swipeRef.current = null; return }
+      if (dx < -40 && Math.abs(dx) > Math.abs(dy) * 1.5) { p.entered = true } else if (Math.abs(dy) > 20 || dx > 10) { pinRef.current = null; return }
+      if (!p.entered) return
     }
-    if (!s.locked) return
     e.preventDefault()
-    const offset = Math.min(0, Math.max(-180, dx))
-    const rect = e.currentTarget.getBoundingClientRect()
-    const zoneMid = rect.right + offset / 2
-    const zone = Math.abs(offset) < 40 ? null : (e.clientX < zoneMid ? 'top' : 'bottom')
-    setSwipe({ idx: s.idx, offset, zone, rect: { top: rect.top, right: rect.right, height: rect.height } })
+    const el = listRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const mid = (rect.top + rect.bottom) / 2
+    const zone = e.clientY < mid - 15 ? 'top' : e.clientY > mid + 15 ? 'bottom' : null
+    setPinMode({ idx: p.idx, zone })
   }
-  const onSwipeUp = () => {
-    const s = swipeRef.current
-    swipeRef.current = null
-    if (!s?.locked || !swipe) { setSwipe(null); return }
-    swipedRef.current = true
-    setTimeout(() => { swipedRef.current = false }, 100)
-    const { idx, zone } = swipe
-    setSwipe(null)
+  const onPinUp = () => {
+    const p = pinRef.current
+    pinRef.current = null
+    if (!p?.entered || !pinMode) { setPinMode(null); return }
+    pinClickGuard.current = true
+    setTimeout(() => { pinClickGuard.current = false }, 100)
+    const { idx, zone } = pinMode
+    setPinMode(null)
     if (zone) moveToEdge(idx, zone)
   }
 
@@ -239,7 +241,8 @@ export default function NodeList() {
             : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
         ) : (<>
           {/* Desktop table */}
-          <table className="tbl hidden md:table">
+          <div ref={listRef} className="relative hidden md:block">
+          <table className="tbl">
             <thead><tr>
               <th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th>
               <th className="cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
@@ -255,12 +258,11 @@ export default function NodeList() {
                 <tr key={n.id}
                   onDragOver={draggable ? e => e.preventDefault() : undefined}
                   onDrop={draggable ? () => onDrop(i) : undefined}
-                  onPointerDown={e => onSwipeDown(e, i)}
-                  onPointerMove={onSwipeMove}
-                  onPointerUp={onSwipeUp}
-                  onClick={() => { if (!swipedRef.current) navigate(`/nodes/${n.id}`) }}
-                  style={swipe?.idx === i ? { transform: `translateX(${swipe.offset}px)`, position: 'relative', zIndex: 10 } : undefined}
-                  className={`cursor-pointer ${dragIndex === i ? 'opacity-50' : ''}`}>
+                  onPointerDown={e => onPinDown(e, i)}
+                  onPointerMove={onPinMove}
+                  onPointerUp={onPinUp}
+                  onClick={() => { if (!pinClickGuard.current) navigate(`/nodes/${n.id}`) }}
+                  className={`cursor-pointer ${dragIndex === i ? 'opacity-50' : ''} ${pinMode?.idx === i ? 'opacity-40' : ''}`}>
                   <td className="font-mono text-xs text-ink-mut">
                     {draggable && <span className="text-ink-mut mr-1 select-none cursor-move" title="拖拽排序"
                       draggable onDragStart={() => setDragIndex(i)}>⠿</span>}#{n.id}
@@ -312,17 +314,18 @@ export default function NodeList() {
               ))}
             </tbody>
           </table>
-          {swipe && Math.abs(swipe.offset) > 40 && (
-            <div className="fixed z-50 flex overflow-hidden rounded-lg shadow-lg" style={{
-              top: swipe.rect.top, height: swipe.rect.height,
-              left: swipe.rect.right + swipe.offset, width: Math.abs(swipe.offset),
-            }}>
-              <div className={`flex-1 flex items-center justify-center text-[13px] font-bold transition-colors ${
-                swipe.zone === 'top' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-500'}`}>↑ 置顶</div>
-              <div className={`flex-1 flex items-center justify-center text-[13px] font-bold transition-colors ${
-                swipe.zone === 'bottom' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-500'}`}>置底 ↓</div>
+          {pinMode && (
+            <div className="absolute inset-0 z-40 flex pointer-events-none">
+              <div className="w-[120px] flex flex-col gap-px">
+                <div className={`flex-1 flex items-center justify-center rounded-l-lg text-[14px] font-bold transition-colors ${
+                  pinMode.zone === 'top' ? 'bg-blue-500 text-white shadow-lg' : 'bg-blue-100/80 text-blue-400'}`}>↑ 置顶</div>
+                <div className={`flex-1 flex items-center justify-center rounded-l-lg text-[14px] font-bold transition-colors ${
+                  pinMode.zone === 'bottom' ? 'bg-amber-500 text-white shadow-lg' : 'bg-amber-100/80 text-amber-400'}`}>置底 ↓</div>
+              </div>
+              <div className="flex-1 bg-black/5 rounded-r-lg" />
             </div>
           )}
+          </div>
           {/* Mobile cards */}
           <div className="md:hidden">
             {filtered.map(n => (
