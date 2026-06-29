@@ -49,6 +49,10 @@ type DialerConfig struct {
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
 	CountersFn func() []wsproto.CounterSample
+
+	// OnConfigUpdate is called when the panel pushes a pool_size change,
+	// either via HelloAck on connect or via a config_update frame at runtime.
+	OnConfigUpdate func(poolSize int)
 }
 
 type upgradeResult struct {
@@ -307,6 +311,10 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	d.nodeName = ha.Name
 	d.nodeMu.Unlock()
 
+	if ha.PoolSize > 0 && d.cfg.OnConfigUpdate != nil {
+		d.cfg.OnConfigUpdate(ha.PoolSize)
+	}
+
 	// Migrate local tui rules to the server on first connect so they become
 	// server-managed. On success, the callback clears the tui segment locally.
 	owners, _ := d.cfg.GetState()
@@ -436,6 +444,15 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				// reset is implicit; readOne uses fresh deadline each call
 			case wsproto.TypeError:
 				log.Printf("dialer: server error frame: %s", string(env.Payload))
+			case wsproto.TypeConfigUpdate:
+				var cu wsproto.ConfigUpdate
+				if err := json.Unmarshal(env.Payload, &cu); err != nil {
+					log.Printf("dialer: unmarshal %s: %v", env.Type, err)
+					continue
+				}
+				if d.cfg.OnConfigUpdate != nil {
+					d.cfg.OnConfigUpdate(cu.PoolSize)
+				}
 			case wsproto.TypeRuleCmdAck:
 				var ack wsproto.RuleCmdAck
 				if err := json.Unmarshal(env.Payload, &ack); err != nil {
