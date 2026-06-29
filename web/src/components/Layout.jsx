@@ -195,7 +195,7 @@ export function Layout({ children }) {
               <span className="hidden sm:inline">{isDark ? '浅色' : '深色'}</span>
             </button>
             <button onClick={toggleCopyFmt} title="切换复制代理连接的格式（URI / YAML）"
-              className={`hidden md:inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${copyFmt === 'yaml' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
+              className={`inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border transition-colors ${copyFmt === 'yaml' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-ink-mut border-transparent hover:bg-raised'}`}>
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>
               {copyFmt === 'yaml' ? 'YAML' : 'URI'}
             </button>
