@@ -122,6 +122,9 @@ func (m model) rowAt(i int) nft.Rule {
 // editable. Multi-hop chain rows lock proto+target (the relay skeleton owned
 // by the server) but free listen_port/mode/comment.
 func (m model) lockedFields() map[int]bool {
+	if m.cursor >= len(m.rules) {
+		return nil
+	}
 	r := m.rowAt(m.cursor)
 	if r.HopCount > 1 {
 		return map[int]bool{fProto: true, fDestIP: true, fDestPort: true}
