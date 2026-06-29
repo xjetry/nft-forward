@@ -248,3 +248,9 @@ func (b *userspaceBackend) Close() {
 		delete(b.listeners, port)
 	}
 }
+
+func (b *userspaceBackend) SetPoolSize(n int) {
+	b.mu.Lock()
+	b.poolSize = n
+	b.mu.Unlock()
+}

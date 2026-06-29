@@ -94,6 +94,10 @@ func (d *Dataplane) DetectedShims() []string {
 	return d.fw.DetectedNames()
 }
 
+func (d *Dataplane) SetPoolSize(n int) {
+	d.userspace.SetPoolSize(n)
+}
+
 func listenPortsOf(rules []nft.Rule) []shim.ListenPort {
 	out := make([]shim.ListenPort, 0, len(rules))
 	for _, r := range rules {
