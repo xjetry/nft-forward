@@ -56,7 +56,10 @@ func serverVersion() string {
 // unchanged.
 func stripPseudoVersion(v string) string {
 	if i := strings.Index(v, "-0.2"); i > 0 {
-		return v[:i]
+		v = v[:i]
+	}
+	if i := strings.Index(v, "+"); i > 0 {
+		v = v[:i]
 	}
 	return v
 }
