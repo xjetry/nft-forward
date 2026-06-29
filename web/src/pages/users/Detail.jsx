@@ -195,6 +195,16 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
   const toast = useToast()
 
   const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }))
+  const initExpiry = expiresAt ? fmtDateInput(expiresAt) : ''
+
+  const addDays = (days) => {
+    const base = form.expiresAt ? new Date(form.expiresAt + 'T00:00:00') : new Date()
+    base.setDate(base.getDate() + days)
+    const y = base.getFullYear()
+    const m = String(base.getMonth() + 1).padStart(2, '0')
+    const d = String(base.getDate()).padStart(2, '0')
+    setForm(f => ({ ...f, expiresAt: `${y}-${m}-${d}` }))
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -216,7 +226,19 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
     <form onSubmit={submit} className="mt-5">
       <div className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-3 items-center max-w-lg">
         <label className="fl">到期时间</label>
-        <input className="input-field font-mono" type="date" value={form.expiresAt} onChange={set('expiresAt')} />
+        <div>
+          <input className="input-field font-mono" type="date" value={form.expiresAt} onChange={set('expiresAt')} />
+          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+            {[[1,'1天'],[7,'7天'],[30,'30天'],[365,'1年']].map(([d, l]) => (
+              <button key={d} type="button" onClick={() => addDays(d)}
+                className="text-[11px] px-2 py-0.5 rounded border border-line bg-surface text-ink-soft hover:border-blue-500 hover:text-blue-600 transition-colors cursor-pointer">+{l}</button>
+            ))}
+            {form.expiresAt !== initExpiry && (
+              <button type="button" onClick={() => setForm(f => ({ ...f, expiresAt: initExpiry }))}
+                className="text-[11px] px-2 py-0.5 rounded border border-line bg-surface text-ink-mut hover:text-ink-soft transition-colors cursor-pointer">还原</button>
+            )}
+          </div>
+        </div>
 
         <label className="fl">规则配额</label>
         <input className="input-field font-mono" type="number" min="0" step="1" value={form.maxForwards} onChange={set('maxForwards')} title="0 = 不限" />
