@@ -225,8 +225,14 @@ export function ProbeChainButton({ chainId, ruleId }) {
     fetch(`/api/probe-chain?${param}`).then(r => r.json()).then(d => {
       if (d.hops && d.hops.length) {
         const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
-        setState(d.ok ? 'ok' : 'fail')
-        setResult(parts.join(' + ') + ' = ' + d.latency_ms + 'ms')
+        const joined = parts.join(' + ')
+        if (d.ok) {
+          setState('ok')
+          setResult(d.hops.length > 1 ? joined + ' = ' + d.latency_ms + 'ms' : d.latency_ms + 'ms')
+        } else {
+          setState('fail')
+          setResult(joined)
+        }
       } else if (d.ok) {
         setState('ok'); setResult(d.latency_ms + 'ms')
       } else {
