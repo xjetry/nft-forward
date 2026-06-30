@@ -252,7 +252,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   tui              单机 TUI（装 nft-agent；host daemon 已被自动安装为 systemd 服务）
   server           控制面板（装 nft-server + nft-agent；依赖 daemon；自动叠加安装）
   agent            受控节点（装 nft-agent；daemon 主动 dial panel WebSocket 反向纳管）
-  update           拉 latest 二进制原子替换 + restart + 失败回滚（按已装角色拉对应二进制）
+  update           拉二进制原子替换 + restart + 失败回滚（默认 latest，可 --release 指定版本）
   update-script    从 GitHub main 分支拉取最新 install.sh 覆盖本地升级脚本
   uninstall <角色> 卸载指定角色（server / agent / daemon / all）；daemon 单独卸载前请先卸 server/agent
   reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
@@ -262,7 +262,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --port-range R                   agent 占用的中继端口范围，格式 START-END（默认 10001-20000）
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :7788
-  --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest（update 模式禁用）
+  --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
   --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；
                                    留空 = 直连。安装时持久化，后续自升级自动沿用
   --purge                          uninstall 模式专用：按角色 scope 清残留数据
@@ -280,6 +280,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   sudo $0 agent --panel-url https://panel.example.com --token abc...  # 远程节点
   sudo $0 agent --panel-url https://panel.example.com --token abc... --gh-proxy https://gh-proxy.com/
   sudo $0 update                         # 拉 latest 二进制升级
+  sudo $0 update --release v0.40.0       # 升级到指定版本
   sudo $0 update-script                  # 更新本地升级脚本（不动二进制）
   sudo $0 uninstall server               # 仅卸面板，保留 daemon
   sudo $0 uninstall daemon --purge       # 完整擦除 daemon 残留
@@ -626,9 +627,6 @@ if [[ -z "$mode" ]]; then
   esac
 fi
 
-if [[ "$mode" == "update" && -n "${RELEASE_EXPLICIT:-}" ]]; then
-  die "update 只拉 latest，要锁版本请用 install（如 sudo $0 tui --release v1.2.3）"
-fi
 if [[ "$mode" != "uninstall" && "$purge" -eq 1 ]]; then
   die "--purge 仅 uninstall 模式有效"
 fi
@@ -700,8 +698,10 @@ fi
 if [[ "$mode" == "update" ]]; then
   if [[ -n "${NFTF_RELEASE_BASE_URL:-}" ]]; then
     base="$NFTF_RELEASE_BASE_URL"
-  else
+  elif [[ "$RELEASE" == "latest" ]]; then
     base="${GH_PROXY}https://github.com/$REPO/releases/latest/download"
+  else
+    base="${GH_PROXY}https://github.com/$REPO/releases/download/$RELEASE"
   fi
   do_update
   exit 0
