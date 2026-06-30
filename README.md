@@ -19,11 +19,15 @@
 
 ## 一键安装
 
-```bash
-# 交互式（自动选模式）
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash
+交互式（自动选模式）：
 
-# 直接指定角色
+```bash
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash
+```
+
+直接指定角色：
+
+```bash
 curl -fsSL ... | bash -s server
 curl -fsSL ... | bash -s server --addr 127.0.0.1:7788
 curl -fsSL ... | bash -s agent --panel-url https://panel.example.com --token <hex>
