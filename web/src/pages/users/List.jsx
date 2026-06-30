@@ -148,7 +148,7 @@ export default function UserList() {
       </Panel>
       </div>
 
-      <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load() }} />
+      <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={(userId) => { setShowCreate(false); userId ? navigate(`/users/${userId}`) : load() }} />
     </Layout>
   )
 }
@@ -237,7 +237,7 @@ function CreateUserModal({ open, onClose, onDone }) {
     setLoading(true)
     const isUser = form.role === 'user'
     try {
-      await api.post('/users', {
+      const res = await api.post('/users', {
         username: form.username,
         password: form.password,
         role: form.role,
@@ -249,12 +249,10 @@ function CreateUserModal({ open, onClose, onDone }) {
           admin_note: form.admin_note.trim() || undefined,
         } : {}),
       })
-      // Copy login info before resetting the form (the password is only here in
-      // plaintext at creation time).
       const info = `面板地址：${panelURL}\n用户名：${form.username}\n密码：${form.password}`
       try { await navigator.clipboard.writeText(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
       setForm(emptyForm())
-      onDone()
+      onDone(res?.user?.id)
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 

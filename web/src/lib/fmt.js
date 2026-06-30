@@ -1,3 +1,4 @@
+const MB = 1048576
 const GB = 1073741824
 
 /** Format a byte count with an adaptive unit (B/KB/MB/GB/TB), one decimal. */
@@ -13,11 +14,16 @@ export function fmtBytes(n) {
   return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i]
 }
 
-/** Format used/quota traffic as "used / total GB"; quota 0 means unlimited. */
+function fmtAdaptive(bytes) {
+  if (bytes < GB) return (bytes / MB).toFixed(1) + ' MB'
+  return (bytes / GB).toFixed(1) + ' GB'
+}
+
+/** Format used/quota traffic; sub-1 GB values shown as MB. */
 export function fmtTrafficGB(used, quota) {
-  const u = ((used || 0) / GB).toFixed(1)
-  if (!quota || quota === 0) return `${u} / ∞ GB`
-  return `${u} / ${(quota / GB).toFixed(1)} GB`
+  const u = fmtAdaptive(used || 0)
+  if (!quota || quota === 0) return `${u} / ∞`
+  return `${u} / ${fmtAdaptive(quota)}`
 }
 
 export function fmtTime(unix) {
