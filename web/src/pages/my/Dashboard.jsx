@@ -234,12 +234,31 @@ function NodeOnline({ node }) {
 }
 
 function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken, toggleToken }) {
+  const [showHelp, setShowHelp] = useState(false)
+
   if (tokenLoading) return <div className="card"><div className="px-6 py-[22px]"><h3 className="text-[16px] font-bold mb-4">API Token</h3><Loading /></div></div>
 
   return (
     <div className="card">
       <div className="px-6 py-[22px]">
-        <h3 className="text-[16px] font-bold mb-4">API Token</h3>
+        <div className="flex items-center gap-2 mb-4">
+          <h3 className="text-[16px] font-bold">API Token</h3>
+          <div className="relative">
+            <button onClick={() => setShowHelp(!showHelp)} className="text-xs text-blue-600 hover:underline">使用说明</button>
+            {showHelp && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowHelp(false)} />
+                <div className="absolute left-0 top-full mt-2 z-50 bg-surface border border-line rounded-xl shadow-xl p-4 w-[340px] text-sm">
+                  <p className="font-semibold mb-2">通过 Token 查询账户信息</p>
+                  <p className="text-ink-soft mb-2">请求方式（二选一）：</p>
+                  <code className="block bg-surface-sunken rounded p-2 text-xs font-mono mb-1.5 break-all">GET /api/v1/info?token=YOUR_TOKEN</code>
+                  <code className="block bg-surface-sunken rounded p-2 text-xs font-mono mb-3 break-all">curl -H "Authorization: Bearer YOUR_TOKEN" /api/v1/info</code>
+                  <p className="text-ink-soft text-xs">返回：用户名、流量用量/配额、到期时间、规则数、已授权节点列表（含倍率和流量）。</p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
         {!token?.has_token ? (
           <div className="flex items-center justify-between">
             <span className="text-sm text-ink-soft">尚未创建 Token</span>
