@@ -106,7 +106,7 @@ export default function UserDetail() {
             {isRegularUser && <button onClick={toggleUser} className="btn-secondary text-xs">{user.disabled ? '启用' : '禁用'}</button>}
             {isRegularUser && <button onClick={resetTraffic} className="btn-secondary text-xs">重置流量</button>}
             {isRegularUser && <button onClick={resetPassword} className="btn-secondary text-xs">重置密码</button>}
-            {isRegularUser && <button onClick={deleteUser} className="btn-danger-sm text-xs">删除用户</button>}
+            {isRegularUser && <button onClick={deleteUser} className="btn-secondary text-xs">删除用户</button>}
           </div>
         </div>
       </div>

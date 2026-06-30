@@ -133,7 +133,7 @@ export default function RulesDetail() {
       {/* Actions */}
       <div className="flex items-center gap-3 flex-wrap mt-5">
         <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
-        <button onClick={deleteRule} className="btn-danger-sm text-xs">删除规则</button>
+        <button onClick={deleteRule} className="btn-secondary text-xs">删除规则</button>
         <Link to="/rules" className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           返回规则列表

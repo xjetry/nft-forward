@@ -138,7 +138,7 @@ export default function MyRuleDetail() {
 
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
-        <button onClick={deleteRule} className="btn-danger-sm text-xs">删除规则</button>
+        <button onClick={deleteRule} className="btn-secondary text-xs">删除规则</button>
       </div>
       </div>
 

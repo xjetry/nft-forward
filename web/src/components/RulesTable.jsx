@@ -87,29 +87,31 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td><ProtoBadge proto={r.proto} /></td>
-              <td className="font-mono text-xs !whitespace-normal" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center gap-1.5 mb-1">
-                  <Badge color="gray">入口</Badge>
-                  {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
-                </div>
-                <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
-                  <ExitKindBadge kind={r.exit_kind} />
-                  {(() => {
-                    const exitLabel = !isAdmin && r.exit_kind === 'landing' && r.landing_name
-                      ? <span className="font-sans">{r.landing_name}</span>
-                      : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
-                    if (r.relay_uri) {
-                      const yaml = copyFmt === 'yaml' ? uriToClashYaml(r.relay_uri) : null
-                      return <CopyText text={yaml || r.relay_uri}>{exitLabel}</CopyText>
-                    }
-                    return exitLabel
-                  })()}
+              <td className="font-mono text-xs !whitespace-normal">
+                <div className="inline-block" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Badge color="gray">入口</Badge>
+                    {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                    <ExitKindBadge kind={r.exit_kind} />
+                    {(() => {
+                      const exitLabel = !isAdmin && r.exit_kind === 'landing' && r.landing_name
+                        ? <span className="font-sans">{r.landing_name}</span>
+                        : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
+                      if (r.relay_uri) {
+                        const yaml = copyFmt === 'yaml' ? uriToClashYaml(r.relay_uri) : null
+                        return <CopyText text={yaml || r.relay_uri}>{exitLabel}</CopyText>
+                      }
+                      return exitLabel
+                    })()}
+                  </div>
                 </div>
               </td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
               {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</td>}
-              <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                <div className="flex gap-2 justify-end items-center">
+              <td className="text-right whitespace-nowrap">
+                <div className="inline-flex gap-2 justify-end items-center" onClick={e => e.stopPropagation()}>
                   <ProbeIconButton ruleId={r.id} />
                   <MoreMenu items={[
                     onEdit && { label: '编辑', onClick: () => onEdit(r) },
