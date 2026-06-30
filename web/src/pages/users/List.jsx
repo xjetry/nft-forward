@@ -5,11 +5,14 @@ import { fmtTrafficGB, nullStr, nullInt } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
+import PasteGrantsModal from './PasteGrantsModal'
 
 export default function UserList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [showPaste, setShowPaste] = useState(false)
+  const [allNodes, setAllNodes] = useState([])
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState(null) // null | 'expires_asc' | 'expires_desc'
   const { user: currentUser } = useUser()
@@ -22,6 +25,7 @@ export default function UserList() {
     api.get('/users').then(setData).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [])
+  useEffect(() => { api.get('/nodes').then(d => setAllNodes(d?.nodes || [])) }, [])
 
   if (loading) return <Layout><Loading /></Layout>
 
@@ -63,7 +67,10 @@ export default function UserList() {
       <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索用户名…" />
-          <div className="hidden md:block ml-auto"><ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton></div>
+          <div className="hidden md:flex ml-auto gap-2">
+            <ToolbarButton onClick={() => setShowPaste(true)}>粘贴授权</ToolbarButton>
+            <ToolbarButton onClick={() => setShowCreate(true)}>＋ 新建用户</ToolbarButton>
+          </div>
         </PanelToolbar>
 
         {users.length === 0 ? (
@@ -149,6 +156,8 @@ export default function UserList() {
       </div>
 
       <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={(userId) => { setShowCreate(false); userId ? navigate(`/users/${userId}`) : load() }} />
+      <PasteGrantsModal open={showPaste} onClose={() => setShowPaste(false)} onDone={load}
+        allNodes={allNodes} allUsers={users} preSelectedUserIds={[]} />
     </Layout>
   )
 }
