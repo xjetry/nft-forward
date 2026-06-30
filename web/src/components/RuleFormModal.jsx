@@ -3,7 +3,7 @@ import { Modal, Select, ProbeButton } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', comment: '' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '' }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -90,6 +90,9 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
           <label className="fl">协议</label>
           <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
             options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
+          <label className="fl">入口端口 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
+          <input className="input-field font-mono" type="number" min="1" max="65535" value={form.entry_port} onChange={e => set('entry_port', e.target.value)}
+            placeholder="留空自动分配" style={{ maxWidth: 200 }} />
 
           {landingEnabled ? (
             <>
@@ -160,6 +163,7 @@ export function ruleToForm(rule) {
     proto: rule.proto,
     exit,
     exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
+    entry_port: '',
     comment: rule.comment || '',
   }
 }

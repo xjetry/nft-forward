@@ -1322,9 +1322,9 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		for i, h := range body.Hops {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 		}
-		if body.EntryPort > 0 {
-			hops[0].DesiredPort = body.EntryPort
-		}
+	}
+	if body.EntryPort > 0 && len(hops) > 0 {
+		hops[0].DesiredPort = body.EntryPort
 	}
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
@@ -2134,11 +2134,12 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		NodeID  int64  `json:"node_id"`
-		Name    string `json:"name"`
-		Proto   string `json:"proto"`
-		Exit    string `json:"exit"`
-		Comment string `json:"comment"`
+		NodeID    int64  `json:"node_id"`
+		Name      string `json:"name"`
+		Proto     string `json:"proto"`
+		Exit      string `json:"exit"`
+		EntryPort int    `json:"entry_port"`
+		Comment   string `json:"comment"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2171,6 +2172,9 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
+	}
+	if body.EntryPort > 0 && len(hops) > 0 {
+		hops[0].DesiredPort = body.EntryPort
 	}
 	oldHops, err := db.ListRuleHops(s.DB, id)
 	if err != nil {

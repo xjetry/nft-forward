@@ -123,7 +123,8 @@ export default function MyRules() {
         onSubmit={async (form) => {
           await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            exit: form.exit, comment: form.comment || undefined,
+            exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
+            comment: form.comment || undefined,
           })
           toast('规则已创建'); setCreateOpen(false); load()
         }} />

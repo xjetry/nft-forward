@@ -48,7 +48,8 @@ export default function MyRuleDetail() {
   const saveEdit = async (form) => {
     await api.put(`/my/rules/${rule.id}`, {
       node_id: Number(form.node_id), name: form.name, proto: form.proto,
-      exit: form.exit, comment: form.comment || undefined,
+      exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
+      comment: form.comment || undefined,
     })
     toast('已保存并重下发'); setShowEdit(false); load()
   }
