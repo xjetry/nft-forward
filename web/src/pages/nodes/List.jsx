@@ -12,9 +12,6 @@ export default function NodeList() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
-  const [panelUrl, setPanelUrl] = useState('')
-  const [panelName, setPanelName] = useState('')
-  const [showRateToUser, setShowRateToUser] = useState(false)
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
   const [dragIndex, setDragIndex] = useState(null)
@@ -37,30 +34,9 @@ export default function NodeList() {
 
   const load = () => {
     setLoading(true)
-    api.get('/nodes').then(d => {
-      setData(d)
-      setPanelUrl(d.panel_url || '')
-      setPanelName(d.panel_name || '')
-      setShowRateToUser(!!d.show_rate_to_user)
-    }).catch(console.error).finally(() => setLoading(false))
+    api.get('/nodes').then(setData).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [])
-
-  const savePanelUrl = async (e) => {
-    e.preventDefault()
-    try {
-      await api.post('/settings', { panel_url: panelUrl })
-      toast('面板地址已保存')
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  const savePanelName = async (e) => {
-    e.preventDefault()
-    try {
-      await api.post('/settings', { panel_url: panelUrl, panel_name: panelName })
-      toast('面板名称已保存')
-    } catch (err) { toast(err.message, 'error') }
-  }
 
   const resyncAll = async () => {
     if (!(await confirm({ title: '同步所有节点', message: '向所有节点重新推送转发规则？', confirmText: '同步' }))) return
@@ -172,34 +148,6 @@ export default function NodeList() {
   return (
     <Layout>
       <PageHeader title="节点" count={nodes.length} unit="个节点" />
-
-      {/* Panel URL settings — desktop only */}
-      <Panel className="mb-5 hidden md:block">
-        <div className="flex items-center gap-3 px-[22px] py-4 border-b border-line-soft">
-          <h3 className="text-sm font-bold text-ink">面板设置</h3>
-        </div>
-        <div className="p-5 space-y-4">
-          <form onSubmit={savePanelName} className="flex items-center gap-3 max-w-xl">
-            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap w-[80px]">面板名称</label>
-            <input className="input-field flex-1" value={panelName} onChange={e => setPanelName(e.target.value)} placeholder="nft-forward" />
-            <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
-          </form>
-          <form onSubmit={savePanelUrl} className="flex items-center gap-3 max-w-xl">
-            <label className="text-[13px] font-semibold text-ink-soft whitespace-nowrap w-[80px]">面板地址</label>
-            <input className="input-field font-mono flex-1" value={panelUrl} onChange={e => setPanelUrl(e.target.value)} placeholder="例如 https://panel.example.com" />
-            <button type="submit" className="btn-primary whitespace-nowrap">保存</button>
-          </form>
-          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" className="accent-blue-600" checked={showRateToUser} onChange={async e => {
-              const v = e.target.checked
-              setShowRateToUser(v)
-              try { await api.post('/settings', { panel_url: panelUrl, show_rate_to_user: v }); toast(v ? '用户侧倍率已开启' : '用户侧倍率已关闭') } catch (err) { toast(err.message, 'error'); setShowRateToUser(!v) }
-            }} />
-            <span className="text-[13px] font-semibold text-ink-soft">向用户展示倍率</span>
-          </label>
-          <p className="text-xs text-ink-mut">面板名称留空则默认为 nft-forward；面板地址留空则安装命令回退使用当前域名。</p>
-        </div>
-      </Panel>
 
       {/* Node list */}
       <Panel fill>
