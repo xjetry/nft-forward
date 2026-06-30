@@ -145,6 +145,21 @@ func (d *Daemon) Bootstrap() error {
 		}
 	}
 
+	// Backfill: assign local IDs to any tui rules that lack one (left by
+	// an older downgrade that did not generate IDs).
+	if rules := owners["tui"]; len(rules) > 0 {
+		patched := false
+		for i := range rules {
+			if rules[i].ID == "" {
+				rules[i].ID = nft.NewRuleID()
+				patched = true
+			}
+		}
+		if patched {
+			_ = SaveState(d.statePath, owners, meta)
+		}
+	}
+
 	merged, err := MergedRuleset(owners)
 	if err != nil {
 		return fmt.Errorf("persisted state has conflict: %w", err)

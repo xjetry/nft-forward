@@ -547,7 +547,18 @@ purge=0
 RESET_PW=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    tui|server|agent|update|update-script|uninstall|reset-password) mode="$1"; shift ;;
+    tui|server|agent|update|update-script|uninstall|reset-password)
+      if [[ -z "$mode" ]]; then
+        mode="$1"
+      elif [[ "$mode" == "uninstall" ]]; then
+        UNINSTALL_TARGET="$1"
+      else
+        die "未知参数: $1"
+      fi
+      shift ;;
+    daemon|all)
+      if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
+      die "未知参数: $1" ;;
     --panel-url) panel_url="${2:?--panel-url 需要值}"; shift 2 ;;
     --panel-url=*) panel_url="${1#*=}"; shift ;;
     --token) token="${2:?--token 需要值}"; shift 2 ;;
@@ -563,9 +574,6 @@ while [[ $# -gt 0 ]]; do
     --purge) purge=1; shift ;;
     --password) RESET_PW="${2:?--password 需要值}"; shift 2 ;;
     --password=*) RESET_PW="${1#*=}"; shift ;;
-    server|agent|daemon)
-      if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
-      die "未知参数: $1" ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数: $1（用 --help 查看用法）" ;;
   esac
@@ -591,7 +599,7 @@ esac
 
 # Mode selection (interactive when no TTY arg).
 if [[ -z "$mode" ]]; then
-  [[ -t 0 ]] || die "未指定模式且无 TTY；--help 查看用法"
+  [[ -t 0 ]] || die "未指定模式。管道用法: curl ... | bash -s <tui|server|agent>；详见 --help"
   echo "请选择安装模式:"
   echo "  1) tui             单机 TUI（自动装 daemon）"
   echo "  2) server          控制面板（叠加 daemon）"
