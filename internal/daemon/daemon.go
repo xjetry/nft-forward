@@ -131,6 +131,7 @@ func (d *Daemon) Bootstrap() error {
 		downgraded := make([]nft.Rule, len(owners["panel"]))
 		for i, r := range owners["panel"] {
 			downgraded[i] = r
+			downgraded[i].ID = nft.NewRuleID()
 			downgraded[i].RuleID = 0
 			downgraded[i].RuleName = ""
 			downgraded[i].OwnerName = ""
