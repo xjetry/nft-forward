@@ -5,6 +5,7 @@ import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt,
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
 import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles } from '../../lib/landing'
+import PasteGrantsModal from './PasteGrantsModal'
 
 export default function UserDetail() {
   const { id } = useParams()
@@ -16,11 +17,14 @@ export default function UserDetail() {
   const confirm = useConfirm()
   const blurred = useBlur()
 
+  const [allUsers, setAllUsers] = useState([])
+
   const load = () => {
     setLoading(true)
     api.get(`/users/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [id])
+  useEffect(() => { api.get('/users').then(d => setAllUsers(d?.users || [])) }, [])
 
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="用户不存在" /></Layout>
@@ -113,7 +117,7 @@ export default function UserDetail() {
 
       {/* Node grants (regular users only) */}
       {isRegularUser && (
-        <GrantedNodesCard userId={id} nodes={nodes} grants={grants} allNodes={all_nodes} onDone={load} />
+        <GrantedNodesCard userId={id} nodes={nodes} grants={grants} allNodes={all_nodes} allUsers={allUsers} onDone={load} />
       )}
 
       {/* Landing-node source (regular users only) */}
@@ -422,10 +426,11 @@ function AdminTriToggle({ state, onChange }) {
   )
 }
 
-function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
+function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone }) {
   const [tab, setTab] = useState('single')
   const [selected, setSelected] = useState(new Set())
   const [revoking, setRevoking] = useState(false)
+  const [showPaste, setShowPaste] = useState(false)
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -469,9 +474,28 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
     try { await api.post(`/users/${userId}/nodes/${nodeId}/reset-traffic`); toast('已重置'); onDone() } catch (err) { toast(err.message, 'error') }
   }
 
+  const copyGrants = () => {
+    const lines = nodes.map(n => {
+      const g = grantByNode[n.id]
+      const parts = [n.name]
+      if (g?.max_forwards) parts.push(`max=${g.max_forwards}`)
+      const gb = g?.traffic_quota_bytes ? Number((g.traffic_quota_bytes / 1073741824).toFixed(2)) : 0
+      parts.push(`quota=${gb}GB`)
+      return parts.join(' | ')
+    })
+    const text = lines.join('\n')
+    navigator.clipboard.writeText(text).then(() => toast(`已复制 ${nodes.length} 个节点授权`))
+  }
+
   return (
     <div className="card mb-5">
-      <div className="card-header"><h3 className="text-sm font-bold">已授权节点</h3></div>
+      <div className="card-header">
+        <h3 className="text-sm font-bold">已授权节点</h3>
+        <div className="flex items-center gap-1.5 ml-auto">
+          {nodes.length > 0 && <button onClick={copyGrants} className="btn-secondary text-xs">复制授权</button>}
+          <button onClick={() => setShowPaste(true)} className="btn-secondary text-xs">粘贴授权</button>
+        </div>
+      </div>
       {nodes.length > 0 && (
         <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
           {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
@@ -534,6 +558,8 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
       <div className="p-5 border-t border-line-soft">
         <GrantNodeForm userId={userId} allNodes={allNodes} grantedNodes={nodes} onDone={onDone} />
       </div>
+      <PasteGrantsModal open={showPaste} onClose={() => setShowPaste(false)} onDone={onDone}
+        allNodes={allNodes} allUsers={allUsers} preSelectedUserIds={[Number(userId)]} />
     </div>
   )
 }
