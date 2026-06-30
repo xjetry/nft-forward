@@ -2633,3 +2633,59 @@ func (s *Server) apiMyToggleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]any{"disabled": disabled})
 }
+
+func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	var body struct {
+		UserIDs []int64 `json:"user_ids"`
+		Grants  []struct {
+			NodeName          string `json:"node_name"`
+			MaxForwards       int    `json:"max_forwards"`
+			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
+		} `json:"grants"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if len(body.UserIDs) == 0 {
+		jsonErr(w, http.StatusBadRequest, "请选择目标用户")
+		return
+	}
+	if len(body.Grants) == 0 {
+		jsonErr(w, http.StatusBadRequest, "请提供授权节点")
+		return
+	}
+	names := make([]string, len(body.Grants))
+	for i, g := range body.Grants {
+		names[i] = g.NodeName
+	}
+	nameToID, err := db.NodeIDsByNames(s.DB, names)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var skipped []string
+	var granted int
+	for _, g := range body.Grants {
+		nid, ok := nameToID[g.NodeName]
+		if !ok {
+			skipped = append(skipped, g.NodeName)
+			continue
+		}
+		mf := g.MaxForwards
+		if mf <= 0 {
+			mf = 10
+		}
+		for _, uid := range body.UserIDs {
+			if err := db.GrantNode(s.DB, uid, nid, mf, g.TrafficQuotaBytes); err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nid, 10))
+			granted++
+		}
+	}
+	jsonOK(w, map[string]any{"ok": true, "granted": granted, "skipped_nodes": skipped})
+}

@@ -413,6 +413,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/toggle", s.apiToggleUser)
 			r.Post("/users/{id}/reset-password", s.apiResetUserPassword)
 			r.Delete("/users/{id}", s.apiDeleteUser)
+			r.Post("/grants/batch-apply", s.apiBatchApplyGrants)
 		})
 
 		// User routes

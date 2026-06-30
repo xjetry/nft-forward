@@ -616,6 +616,25 @@ func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
 		userID, action, target, payload, now())
 }
 
+// NodeIDsByNames resolves a slice of node names to their database IDs. Names
+// that do not exist in the nodes table are silently omitted from the result so
+// the caller can report them as skipped rather than treating them as errors.
+func NodeIDsByNames(d *sql.DB, names []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(names))
+	if len(names) == 0 {
+		return out, nil
+	}
+	for _, name := range names {
+		var id int64
+		err := d.QueryRow(`SELECT id FROM nodes WHERE name = ?`, name).Scan(&id)
+		if err != nil {
+			continue
+		}
+		out[name] = id
+	}
+	return out, nil
+}
+
 // Agent-dialer helpers
 
 // UpsertSelfNode ensures the panel's built-in self-node exists and is marked
