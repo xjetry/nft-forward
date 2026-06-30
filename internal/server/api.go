@@ -81,6 +81,38 @@ func (s *Server) requireAPIAuth(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) requireTokenAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if token == "" {
+			jsonErr(w, http.StatusUnauthorized, "缺少 API Token")
+			return
+		}
+		u, t, err := db.GetUserByAPIToken(s.DB, token)
+		if err != nil {
+			jsonErr(w, http.StatusUnauthorized, "无效的 API Token")
+			return
+		}
+		if t.Disabled {
+			jsonErr(w, http.StatusForbidden, "Token 已停用")
+			return
+		}
+		if u.Disabled {
+			jsonErr(w, http.StatusForbidden, "账号已被禁用")
+			return
+		}
+		db.TouchAPITokenUsage(s.DB, t.ID)
+		ctx := withUser(r.Context(), u)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // --- Dispatcher helpers for JSON handlers (no flash cookies) ---
 
 func (s *Server) apiDispatch(nodeID int64) error {
@@ -2504,4 +2536,41 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_reset_days", strconv.FormatInt(id, 10), strconv.Itoa(body.TrafficResetDays))
 	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
+
+	nodeViews := make([]map[string]any, 0, len(grantedNodes))
+	for i, n := range grantedNodes {
+		g := grants[i]
+		nRules, _ := db.CountRulesForUserNode(s.DB, u.ID, n.ID)
+		nodeViews = append(nodeViews, map[string]any{
+			"name":            n.Name,
+			"rule_count":      nRules,
+			"rate_multiplier": n.RateMultiplier,
+			"unidirectional":  n.Unidirectional,
+			"traffic_used":    g.TrafficUsedBytes,
+			"traffic_quota":   g.TrafficQuotaBytes,
+		})
+	}
+
+	var expiresAt any
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
+		expiresAt = u.ExpiresAt.Int64
+	}
+
+	jsonOK(w, map[string]any{
+		"username":              u.Username,
+		"traffic_used":          u.TrafficUsedBytes,
+		"traffic_quota":         u.TrafficQuotaBytes,
+		"traffic_reset_days":    u.TrafficResetDays,
+		"last_traffic_reset_at": u.LastTrafficResetAt,
+		"expires_at":            expiresAt,
+		"rule_count":            ruleCount,
+		"max_forwards":          u.MaxForwards,
+		"nodes":                 nodeViews,
+	})
 }

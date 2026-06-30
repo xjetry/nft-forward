@@ -434,6 +434,12 @@ func (s *Server) Router() http.Handler {
 		})
 	})
 
+	// Public API (token auth)
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(s.requireTokenAuth)
+		r.Get("/info", s.apiTokenInfo)
+	})
+
 	r.NotFound(spaHandler().ServeHTTP)
 
 	return r
