@@ -635,13 +635,21 @@ case "$mode" in
     [[ -n "$token" ]] || die "agent 模式需要 --token 或 AGENT_TOKEN"
     ;;
   server)
-    if [[ -z "$addr" && -z "${PANEL_ADDR:-}" && -t 0 ]]; then
-      read -rp "面板绑定地址（端口或 地址:端口，默认 :7788）: " _port
-      _port="${_port:-7788}"
-      if [[ "$_port" == *:* ]]; then
-        addr="$_port"
+    if [[ -z "$addr" && -z "${PANEL_ADDR:-}" ]]; then
+      # Preserve existing bind address on re-install.
+      if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
+        addr="$(sed -n 's/^ExecStart=.*nft-server --addr //p' "$SYSTEMD_DIR/nft-forward-server.service" | head -1)"
+      fi
+      if [[ -z "$addr" && -t 0 ]]; then
+        read -rp "面板绑定地址（端口或 地址:端口，默认 :7788）: " _port
+        _port="${_port:-7788}"
+        if [[ "$_port" == *:* ]]; then
+          addr="$_port"
+        else
+          addr=":$_port"
+        fi
       else
-        addr=":$_port"
+        addr="${addr:-:7788}"
       fi
     else
       addr="${addr:-${PANEL_ADDR:-:7788}}"
@@ -771,7 +779,7 @@ EOF
     else
       echo ""
       echo "非首次安装，admin 密码沿用之前设置的密码。"
-      echo "如需重置: sudo $0 reset-password"
+      echo "如需重置: sudo nft-forward-upgrade reset-password"
     fi
     ;;
 
