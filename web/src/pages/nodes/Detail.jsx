@@ -26,6 +26,7 @@ export default function NodeDetail() {
   const [relayHostV6, setRelayHostV6] = useState('')
   const [portRange, setPortRange] = useState('')
   const [rateMult, setRateMult] = useState('1')
+  const [unidirectional, setUnidirectional] = useState(false)
   const [useGhProxy, setUseGhProxy] = useState(false)
   const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
   const toast = useToast()
@@ -41,6 +42,7 @@ export default function NodeDetail() {
       setRelayHostV6(d.node?.relay_host_v6 || '')
       setPortRange(d.node?.port_range || '')
       setRateMult(String(d.node?.rate_multiplier ?? 1))
+      setUnidirectional(!!d.node?.unidirectional)
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [id])
@@ -77,6 +79,10 @@ export default function NodeDetail() {
     e.preventDefault()
     const rm = parseFloat(rateMult)
     try { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm >= 0 ? rm : 1 }); toast('倍率已保存'); load() } catch (err) { toast(err.message, 'error') }
+  }
+  const toggleBillingDir = async () => {
+    const next = !unidirectional
+    try { await api.post(`/nodes/${id}/unidirectional`, { unidirectional: next }); setUnidirectional(next); toast(next ? '已切换为单向计费' : '已切换为双向计费') } catch (err) { toast(err.message, 'error') }
   }
   const resync = async () => {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
@@ -270,6 +276,12 @@ export default function NodeDetail() {
                 <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
               </form>
+            </ConfigField>
+
+            <ConfigField label="计费方向" hint="单向计费只计算出站流量，双向计费计算出站+入站">
+              <button onClick={toggleBillingDir} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${unidirectional ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
+                {unidirectional ? '单向计费（仅出站）' : '双向计费（出站+入站）'}
+              </button>
             </ConfigField>
           </section>
         </div>

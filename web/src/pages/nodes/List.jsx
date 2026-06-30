@@ -371,6 +371,7 @@ function AddNodeModal({ open, onClose, onDone }) {
   const [portStart, setPortStart] = useState('10001')
   const [portEnd, setPortEnd] = useState('20000')
   const [rateMult, setRateMult] = useState('1')
+  const [unidirectional, setUnidirectional] = useState(false)
   const [loading, setLoading] = useState(false)
   const toast = useToast()
   const navigate = useNavigate()
@@ -381,9 +382,9 @@ function AddNodeModal({ open, onClose, onDone }) {
     try {
       const portRange = `${portStart || '10001'}-${portEnd || '20000'}`
       const rm = parseFloat(rateMult)
-      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1 })
+      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1, unidirectional })
       toast('节点已添加')
-      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1')
+      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1'); setUnidirectional(false)
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
@@ -399,6 +400,11 @@ function AddNodeModal({ open, onClose, onDone }) {
           <input className="input-field font-mono" value={secret} onChange={e => setSecret(e.target.value)} placeholder="留空则随机生成 64 位 hex" />
           <label className="text-[13px] font-semibold text-ink-soft">倍率</label>
           <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
+          <label className="text-[13px] font-semibold text-ink-soft">计费方向</label>
+          <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" checked={unidirectional} onChange={e => setUnidirectional(e.target.checked)} className="accent-blue-600" />
+            <span className="text-[13px] text-ink-soft">{unidirectional ? '单向计费（仅出站）' : '双向计费（出站+入站）'}</span>
+          </label>
         </div>
         <div className="flex gap-2">
           <div className="flex-1">

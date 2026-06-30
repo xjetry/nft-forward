@@ -268,6 +268,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		NodeType       string  `json:"node_type"`
 		PortRange      string  `json:"port_range"`
 		RateMultiplier float64 `json:"rate_multiplier"`
+		Unidirectional bool    `json:"unidirectional"`
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
@@ -331,6 +332,9 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
 		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 	}
+	if body.Unidirectional {
+		_ = db.UpdateNodeUnidirectional(s.DB, n.ID, true)
+	}
 	if body.PortRange != "" {
 		if err := db.ValidatePortRange(body.PortRange); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
@@ -341,7 +345,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if body.RateMultiplier > 0 || body.PortRange != "" {
+	if body.RateMultiplier > 0 || body.PortRange != "" || body.Unidirectional {
 		n, _ = db.GetNode(s.DB, n.ID)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
@@ -693,6 +697,36 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_rate_multiplier", strconv.FormatInt(id, 10), fmt.Sprintf("%.2f", body.RateMultiplier))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	var body struct {
+		Unidirectional bool `json:"unidirectional"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := db.UpdateNodeUnidirectional(s.DB, id, body.Unidirectional); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	label := "双向"
+	if body.Unidirectional {
+		label = "单向"
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_unidirectional", strconv.FormatInt(id, 10), label)
 	jsonOK(w, map[string]any{"ok": true})
 }
 

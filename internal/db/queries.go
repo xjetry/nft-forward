@@ -59,6 +59,7 @@ type Node struct {
 	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
 	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
 	RateMultiplier     float64       `json:"rate_multiplier"`
+	Unidirectional     bool          `json:"unidirectional"`
 }
 
 type Rule struct {
@@ -250,7 +251,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -261,7 +262,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var disabled, hidden int
+	var disabled, hidden, unidirectional int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
@@ -272,12 +273,13 @@ func scanNode(r rowScanner) (*Node, error) {
 		&lastSeen, &n.LastApplyAt, &n.LastError,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-		&hidden, &n.SortOrder, &n.RateMultiplier,
+		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
 	); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
 	n.Hidden = hidden == 1
+	n.Unidirectional = unidirectional == 1
 	if ownerID.Valid {
 		v := ownerID.Int64
 		n.OwnerID = &v
@@ -416,6 +418,15 @@ func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
 
 func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
 	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
+	return err
+}
+
+func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
+	v := 0
+	if uni {
+		v = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET unidirectional=? WHERE id=?`, v, id)
 	return err
 }
 

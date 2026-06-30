@@ -119,7 +119,7 @@ export default function MyDashboard() {
                   <tr key={n.id}>
                     <td className="font-semibold">{n.name}</td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
-                    {show_rate && <td><Badge color="blue">×{n.rate_multiplier ?? 1}</Badge></td>}
+                    {show_rate && <td><Badge color="blue">×{n.rate_multiplier ?? 1}</Badge>{n.unidirectional && <Badge color="amber" className="ml-1">单向</Badge>}</td>}
                     <td><NodeOnline node={n} /></td>
                     <td className="font-mono text-xs whitespace-nowrap">
                       {speeds[n.id] ? (
@@ -152,6 +152,7 @@ export default function MyDashboard() {
                   <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
                     <NodeTypeBadge type={n.node_type} />
                     {show_rate && <Badge color="blue">×{n.rate_multiplier ?? 1}</Badge>}
+                    {n.unidirectional && <Badge color="amber">单向</Badge>}
                     {speeds[n.id] && <>
                       <span className="text-ink-mut">·</span>
                       <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>

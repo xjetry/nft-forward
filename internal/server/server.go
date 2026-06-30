@@ -377,6 +377,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
 			r.Post("/nodes/{id}/rate-multiplier", s.apiSetNodeRateMultiplier)
+			r.Post("/nodes/{id}/unidirectional", s.apiSetNodeUnidirectional)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
 

@@ -477,6 +477,12 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		ruleMap = map[int64]*db.Rule{}
 	}
 
+	node, err := db.GetNode(h.DB, nodeID)
+	if err != nil {
+		log.Printf("hub: node %d load for billing direction: %v", nodeID, err)
+		return
+	}
+
 	type userNode struct{ userID, nodeID int64 }
 	touched := map[userNode]bool{}
 	cycleChecked := map[int64]bool{}
@@ -488,6 +494,10 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			s.BytesUp = s.BytesDelta
 		}
 		totalDelta := s.BytesUp + s.BytesDown
+		billedDelta := totalDelta
+		if node.Unidirectional {
+			billedDelta = s.BytesUp
+		}
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
 		rh, ok := hopMap[key]
 		if !ok {
@@ -500,7 +510,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			continue
 		}
 		r := ruleMap[rh.RuleID]
-		if r == nil || !r.OwnerID.Valid || totalDelta <= 0 {
+		if r == nil || !r.OwnerID.Valid || billedDelta <= 0 {
 			continue
 		}
 		userID := r.OwnerID.Int64
@@ -523,8 +533,8 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}
 
-		// per-node: raw bytes on the physical node
-		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, totalDelta); err != nil {
+		// per-node: billed bytes (respects unidirectional billing)
+		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, billedDelta); err != nil {
 			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
 		}
 
@@ -532,7 +542,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		// node (r.NodeID != nodeID), only the entry hop (position=0) contributes
 		// to avoid counting the same traffic once per physical hop in the chain.
 		if r.NodeID != nodeID && rh.Position == 0 {
-			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, totalDelta); err != nil {
+			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, billedDelta); err != nil {
 				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
 			}
 		}
@@ -547,7 +557,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 			}
 		}
-		weighted := int64(math.Round(float64(totalDelta) * mult))
+		weighted := int64(math.Round(float64(billedDelta) * mult))
 		if weighted > 0 {
 			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
 				log.Printf("hub: user %d traffic add: %v", userID, err)

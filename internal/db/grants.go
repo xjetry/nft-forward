@@ -106,7 +106,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	for rows.Next() {
 		n := &Node{}
 		g := &UserNode{UserID: userID}
-		var disabled, hidden int
+		var disabled, hidden, unidirectional int
 		var localMigratedAt, lastSeen sql.NullInt64
 		var agentVersion sql.NullString
 		var ownerID sql.NullInt64
@@ -117,7 +117,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&lastSeen, &n.LastApplyAt, &n.LastError,
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-			&hidden, &n.SortOrder, &n.RateMultiplier,
+			&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err
@@ -127,6 +127,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		n.LastUpgradeError = luError.String
 		n.Disabled = disabled == 1
 		n.Hidden = hidden == 1
+		n.Unidirectional = unidirectional == 1
 		if ownerID.Valid {
 			v := ownerID.Int64
 			n.OwnerID = &v
