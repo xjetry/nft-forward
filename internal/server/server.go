@@ -426,6 +426,11 @@ func (s *Server) Router() http.Handler {
 			r.Post("/my/rules", s.apiMyCreateRule)
 			r.Put("/my/rules/{id}", s.apiMyUpdateRule)
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
+			r.Get("/my/token", s.apiMyGetToken)
+			r.Post("/my/token", s.apiMyCreateToken)
+			r.Delete("/my/token", s.apiMyDeleteToken)
+			r.Post("/my/token/refresh", s.apiMyRefreshToken)
+			r.Post("/my/token/toggle", s.apiMyToggleToken)
 		})
 
 		r.Group(func(r chi.Router) {

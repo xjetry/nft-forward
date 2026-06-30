@@ -2574,3 +2574,62 @@ func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
 		"nodes":                 nodeViews,
 	})
 }
+
+func (s *Server) apiMyGetToken(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	t, err := db.GetAPITokenByUser(s.DB, u.ID)
+	if err != nil {
+		jsonOK(w, map[string]any{"has_token": false})
+		return
+	}
+	var lastUsed any
+	if t.LastUsedAt.Valid {
+		lastUsed = t.LastUsedAt.Int64
+	}
+	jsonOK(w, map[string]any{
+		"has_token":    true,
+		"token_prefix": t.Token[:8],
+		"disabled":     t.Disabled,
+		"created_at":   t.CreatedAt,
+		"last_used_at": lastUsed,
+	})
+}
+
+func (s *Server) apiMyCreateToken(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	token, err := db.CreateAPIToken(s.DB, u.ID)
+	if err != nil {
+		jsonErr(w, http.StatusConflict, "已存在 Token，请先删除后重新创建")
+		return
+	}
+	jsonOK(w, map[string]any{"token": token})
+}
+
+func (s *Server) apiMyDeleteToken(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	if err := db.DeleteAPIToken(s.DB, u.ID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiMyRefreshToken(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	token, err := db.RefreshAPIToken(s.DB, u.ID)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "无 Token 可刷新")
+		return
+	}
+	jsonOK(w, map[string]any{"token": token})
+}
+
+func (s *Server) apiMyToggleToken(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	disabled, err := db.ToggleAPIToken(s.DB, u.ID)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "Token 不存在")
+		return
+	}
+	jsonOK(w, map[string]any{"disabled": disabled})
+}
