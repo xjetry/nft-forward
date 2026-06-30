@@ -22,16 +22,16 @@
 交互式（自动选模式）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh)
 ```
 
-直接指定角色：
+直接指定角色（管道模式）：
 
 ```bash
-curl -fsSL ... | bash -s server
-curl -fsSL ... | bash -s server --addr 127.0.0.1:7788
-curl -fsSL ... | bash -s agent --panel-url https://panel.example.com --token <hex>
-curl -fsSL ... | bash -s tui
+curl -fsSL https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | sudo bash -s server
+curl -fsSL ... | sudo bash -s server --addr 127.0.0.1:7788
+curl -fsSL ... | sudo bash -s agent --panel-url https://panel.example.com --token <hex>
+curl -fsSL ... | sudo bash -s tui
 ```
 
 > 仅支持 amd64 Linux；需 root + nftables。
