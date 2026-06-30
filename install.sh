@@ -291,6 +291,11 @@ USAGE
 die() { echo "错误: $*" >&2; exit 1; }
 note() { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
+require_val() {
+  if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+    die "$1 需要值（是否漏写了？）"
+  fi
+}
 
 # Persist the chosen gh-proxy so later self-upgrades reuse it. Empty value
 # leaves an empty file (treated as "direct"), keeping a single source of truth.
@@ -559,20 +564,20 @@ while [[ $# -gt 0 ]]; do
     daemon|all)
       if [[ "$mode" == "uninstall" ]]; then UNINSTALL_TARGET="$1"; shift; continue; fi
       die "未知参数: $1" ;;
-    --panel-url) panel_url="${2:?--panel-url 需要值}"; shift 2 ;;
+    --panel-url) require_val --panel-url "${2:-}"; panel_url="$2"; shift 2 ;;
     --panel-url=*) panel_url="${1#*=}"; shift ;;
-    --token) token="${2:?--token 需要值}"; shift 2 ;;
+    --token) require_val --token "${2:-}"; token="$2"; shift 2 ;;
     --token=*) token="${1#*=}"; shift ;;
-    --port-range) port_range="${2:?--port-range 需要值}"; shift 2 ;;
+    --port-range) require_val --port-range "${2:-}"; port_range="$2"; shift 2 ;;
     --port-range=*) port_range="${1#*=}"; shift ;;
-    --addr) addr="${2:?--addr 需要值}"; shift 2 ;;
+    --addr) require_val --addr "${2:-}"; addr="$2"; shift 2 ;;
     --addr=*) addr="${1#*=}"; shift ;;
-    --release) RELEASE="${2:?--release 需要值}"; RELEASE_EXPLICIT=1; shift 2 ;;
+    --release) require_val --release "${2:-}"; RELEASE="$2"; RELEASE_EXPLICIT=1; shift 2 ;;
     --release=*) RELEASE="${1#*=}"; RELEASE_EXPLICIT=1; shift ;;
-    --gh-proxy) GH_PROXY="${2:?--gh-proxy 需要值}"; GH_PROXY_EXPLICIT=1; shift 2 ;;
+    --gh-proxy) require_val --gh-proxy "${2:-}"; GH_PROXY="$2"; GH_PROXY_EXPLICIT=1; shift 2 ;;
     --gh-proxy=*) GH_PROXY="${1#*=}"; GH_PROXY_EXPLICIT=1; shift ;;
     --purge) purge=1; shift ;;
-    --password) RESET_PW="${2:?--password 需要值}"; shift 2 ;;
+    --password) require_val --password "${2:-}"; RESET_PW="$2"; shift 2 ;;
     --password=*) RESET_PW="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数: $1（用 --help 查看用法）" ;;

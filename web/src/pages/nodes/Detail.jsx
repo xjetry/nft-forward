@@ -295,7 +295,7 @@ export default function NodeDetail() {
         )}
 
         {/* ===== 安装命令（实体节点专属）— desktop only ===== */}
-        {!isComposite && (
+        {!isComposite && node.node_type !== 'self' && (
         <section className={`${card} px-[26px] py-[22px] hidden md:block`}>
           <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
             <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
