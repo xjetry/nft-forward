@@ -51,7 +51,7 @@ export default function NodeList() {
     try {
       await api.post('/settings', { panel_url: panelUrl })
       toast('面板地址已保存')
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const savePanelName = async (e) => {
@@ -59,30 +59,30 @@ export default function NodeList() {
     try {
       await api.post('/settings', { panel_url: panelUrl, panel_name: panelName })
       toast('面板名称已保存')
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const resyncAll = async () => {
     if (!(await confirm({ title: '同步所有节点', message: '向所有节点重新推送转发规则？', confirmText: '同步' }))) return
-    try { await api.post('/nodes/resync-all'); toast('已发起同步'); load() } catch (err) { toast(err.message) }
+    try { await api.post('/nodes/resync-all'); toast('已发起同步'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   const upgradeAll = async () => {
     if (!(await confirm({ title: '升级所有节点', message: '向所有版本不一致的节点推送升级？', confirmText: '升级' }))) return
-    try { await api.post('/nodes/upgrade-all'); toast('已发起升级'); load() } catch (err) { toast(err.message) }
+    try { await api.post('/nodes/upgrade-all'); toast('已发起升级'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   const deleteNode = async (node) => {
     if (!(await confirm({ title: '删除节点', message: `确认删除节点 ${node.name}？此操作会清空节点上的转发。`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/nodes/${node.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/nodes/${node.id}`); toast('已删除'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   const resyncNode = async (id) => {
-    try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
   }
 
   const toggleHidden = async (node) => {
-    try { await api.post(`/nodes/${node.id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${node.id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   if (loading) return <Layout><Loading /></Layout>
@@ -124,7 +124,7 @@ export default function NodeList() {
     const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
     const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
     setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
-    try { await api.post('/nodes/reorder', { ids: allIds }); toast('顺序已保存') } catch (err) { toast(err.message); load() }
+    try { await api.post('/nodes/reorder', { ids: allIds }); toast('顺序已保存') } catch (err) { toast(err.message, 'error'); load() }
   }
   const onDrop = async (toIndex) => {
     if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return }
@@ -193,7 +193,7 @@ export default function NodeList() {
             <input type="checkbox" className="accent-blue-600" checked={showRateToUser} onChange={async e => {
               const v = e.target.checked
               setShowRateToUser(v)
-              try { await api.post('/settings', { panel_url: panelUrl, show_rate_to_user: v }); toast(v ? '用户侧倍率已开启' : '用户侧倍率已关闭') } catch (err) { toast(err.message); setShowRateToUser(!v) }
+              try { await api.post('/settings', { panel_url: panelUrl, show_rate_to_user: v }); toast(v ? '用户侧倍率已开启' : '用户侧倍率已关闭') } catch (err) { toast(err.message, 'error'); setShowRateToUser(!v) }
             }} />
             <span className="text-[13px] font-semibold text-ink-soft">向用户展示倍率</span>
           </label>
@@ -386,7 +386,7 @@ function AddNodeModal({ open, onClose, onDone }) {
       setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1')
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   return (
@@ -478,7 +478,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
       setHops([{ node_id: '', mode: 'userspace' }])
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   return (

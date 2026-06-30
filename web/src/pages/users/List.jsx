@@ -28,18 +28,18 @@ export default function UserList() {
   const { users = [] } = data || {}
 
   const toggleUser = async (u) => {
-    try { await api.post(`/users/${u.id}/toggle`); toast(u.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/users/${u.id}/toggle`); toast(u.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
   }
   const resetPassword = async (u) => {
     if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码会一次性显示。', confirmText: '重置', danger: true }))) return
     try {
       const d = await api.post(`/users/${u.id}/reset-password`)
       toast(d?.new_password ? `新密码：${d.new_password}` : '已重置')
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
   const deleteUser = async (u) => {
     if (!(await confirm({ title: '删除用户', message: '删除该用户？关联的转发将被一并清除。', confirmText: '删除', danger: true }))) return
-    try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/users/${u.id}`); toast('已删除'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   const q = search.trim().toLowerCase()
@@ -255,7 +255,7 @@ function CreateUserModal({ open, onClose, onDone }) {
       try { await navigator.clipboard.writeText(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
       setForm(emptyForm())
       onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   return (

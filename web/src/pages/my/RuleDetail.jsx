@@ -56,7 +56,7 @@ export default function MyRuleDetail() {
 
   const deleteRule = async () => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); navigate('/my/rules') } catch (err) { toast(err.message) }
+    try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); navigate('/my/rules') } catch (err) { toast(err.message, 'error') }
   }
 
   const landingNodes = mergeLanding(localNodes, [])

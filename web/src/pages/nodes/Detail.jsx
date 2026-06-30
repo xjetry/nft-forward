@@ -59,27 +59,27 @@ export default function NodeDetail() {
 
   const saveName = async (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/rename`, { name }); toast('名称已保存'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/rename`, { name }); toast('名称已保存'); load() } catch (err) { toast(err.message, 'error') }
   }
   const saveRelay = async (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); load() } catch (err) { toast(err.message, 'error') }
   }
   const saveRelayV6 = async (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); load() } catch (err) { toast(err.message, 'error') }
   }
   const savePortRange = async (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); load() } catch (err) { toast(err.message, 'error') }
   }
   const saveRateMult = async (e) => {
     e.preventDefault()
     const rm = parseFloat(rateMult)
-    try { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm >= 0 ? rm : 1 }); toast('倍率已保存'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm >= 0 ? rm : 1 }); toast('倍率已保存'); load() } catch (err) { toast(err.message, 'error') }
   }
   const resync = async () => {
-    try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
   }
   const upgrade = async () => {
     if (!(await confirm({ title: '升级节点', message: '推送 agent 二进制到此节点并重启？', confirmText: '升级' }))) return
@@ -97,18 +97,18 @@ export default function NodeDetail() {
         } catch { clearInterval(poll) }
       }, 2000)
       setTimeout(() => clearInterval(poll), 120000)
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
   const toggle = async () => {
-    try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
   }
 
   const toggleHidden = async () => {
-    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message, 'error') }
   }
   const remove = async () => {
     if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message) }
+    try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message, 'error') }
   }
 
   // gh-proxy is a URL prefix: enabling it routes both the install.sh fetch and
@@ -370,7 +370,7 @@ export default function NodeDetail() {
                       <button onClick={async () => {
                         if (!await confirm({ title: '取消授权', message: `确定取消 ${g.username} 对该节点的授权？`, confirmText: '取消授权', danger: true })) return
                         try { await api.delete(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); load() }
-                        catch (e) { toast(e.message) }
+                        catch (e) { toast(e.message, 'error') }
                       }} className="text-red-500 text-xs font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0">取消授权</button>
                     </td>
                   </tr>
@@ -469,7 +469,7 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
       })
       toast('已保存')
       onDone()
-    } catch (err) { toast(err.message) } finally { setSaving(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
   }
 
   return (

@@ -31,15 +31,15 @@ export default function UserDetail() {
   const isRegularUser = user.role === 'user'
 
   const toggleUser = async () => {
-    try { await api.post(`/users/${id}/toggle`); toast(user.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/users/${id}/toggle`); toast(user.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
   }
   const resetTraffic = async () => {
     if (!(await confirm({ title: '清零流量', message: '清零该用户的已用流量？', confirmText: '清零', danger: true }))) return
-    try { await api.post(`/users/${id}/reset-traffic`); toast('已重置'); load() } catch (err) { toast(err.message) }
+    try { await api.post(`/users/${id}/reset-traffic`); toast('已重置'); load() } catch (err) { toast(err.message, 'error') }
   }
   const deleteUser = async () => {
     if (!(await confirm({ title: '删除用户', message: '删除用户？关联的规则将被一并清除。', confirmText: '删除', danger: true }))) return
-    try { await api.del(`/users/${id}`); toast('已删除'); navigate('/users') } catch (err) { toast(err.message) }
+    try { await api.del(`/users/${id}`); toast('已删除'); navigate('/users') } catch (err) { toast(err.message, 'error') }
   }
   const resetPassword = async () => {
     if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码只显示一次，请及时复制保存。', confirmText: '重置', danger: true }))) return
@@ -47,7 +47,7 @@ export default function UserDetail() {
       const d = await api.post(`/users/${id}/reset-password`)
       if (d?.new_password) setNewPassword(d.new_password)
       else toast('已重置')
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const expiresAt = user.expires_at && user.expires_at > 0 ? user.expires_at : null
@@ -219,7 +219,7 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
       })
       toast('已保存')
       onDone()
-    } catch (err) { toast(err.message) } finally { setSaving(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
   }
 
   return (
@@ -273,7 +273,7 @@ function PerNodeMaxForwardsForm({ userId, nodeId, maxForwards, onDone }) {
       await api.post(`/users/${userId}/nodes/${nodeId}/max-forwards`, { max_forwards: n })
       toast('已设置')
       onDone()
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
   return (
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
@@ -294,7 +294,7 @@ function PerNodeQuotaForm({ userId, nodeId, quotaBytes, onDone }) {
       await api.post(`/users/${userId}/nodes/${nodeId}/quota`, { traffic_quota_bytes: bytes })
       toast('已设置')
       onDone()
-    } catch (err) { toast(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
   return (
     <form onSubmit={submit} className="inline-flex items-center gap-1.5">
@@ -323,7 +323,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
       const d = await api.post(`/users/${userId}/landing`, { landing_sub_url: url.trim(), landing_uris: text })
       setPreview(d?.landing_nodes || [])
       toast('已保存'); onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   const handleSetRole = (n, role) => {
@@ -457,16 +457,16 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, onDone }) {
       toast(`已撤销 ${ids.length} 个节点`)
       setSelected(new Set())
       onDone()
-    } catch (err) { toast(err.message) } finally { setRevoking(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setRevoking(false) }
   }
 
   const revokeOne = async (nodeId) => {
-    try { await api.del(`/users/${userId}/grants/${nodeId}`); toast('已撤销'); onDone() } catch (err) { toast(err.message) }
+    try { await api.del(`/users/${userId}/grants/${nodeId}`); toast('已撤销'); onDone() } catch (err) { toast(err.message, 'error') }
   }
 
   const resetNodeTraffic = async (nodeId) => {
     if (!(await confirm({ title: '重置节点流量', message: '清零该用户在此节点上的已用流量？', confirmText: '清零', danger: true }))) return
-    try { await api.post(`/users/${userId}/nodes/${nodeId}/reset-traffic`); toast('已重置'); onDone() } catch (err) { toast(err.message) }
+    try { await api.post(`/users/${userId}/nodes/${nodeId}/reset-traffic`); toast('已重置'); onDone() } catch (err) { toast(err.message, 'error') }
   }
 
   return (
@@ -556,7 +556,7 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
     try {
       await api.post(`/users/${userId}/grants`, { node_ids: nodeIds.map(Number), max_forwards: Number(max) })
       toast(`已授权 ${nodeIds.length} 个节点`); setNodeIds([]); onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
   return (
     <>

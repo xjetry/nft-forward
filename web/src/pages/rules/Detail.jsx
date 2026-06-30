@@ -39,7 +39,7 @@ export default function RulesDetail() {
 
   const deleteRule = async () => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate('/rules') } catch (err) { toast(err.message) }
+    try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate('/rules') } catch (err) { toast(err.message, 'error') }
   }
 
   return (
@@ -160,7 +160,7 @@ function ReallocateForm({ ruleId, position, onDone }) {
       toast('端口已重分配')
       setPort('')
       onDone()
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   return (

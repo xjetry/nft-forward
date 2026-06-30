@@ -59,7 +59,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     setLoading(true)
     try {
       await onSubmit(form)
-    } catch (err) { toast(err.message) } finally { setLoading(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
   const fmtRate = (n) => {

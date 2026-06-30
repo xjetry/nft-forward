@@ -24,9 +24,9 @@ export function UserProvider({ children }) {
     }).catch(() => setUser(null))
   }, [])
 
-  const toast = useCallback((msg) => {
+  const toast = useCallback((msg, type) => {
     const id = ++idRef.current
-    setToasts(prev => [...prev, { id, msg }])
+    setToasts(prev => [...prev, { id, msg, type: type || 'success' }])
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 2000)
   }, [])
 
@@ -38,7 +38,9 @@ export function UserProvider({ children }) {
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 items-center">
           {toasts.map(t => (
             <div key={t.id} className="bg-gray-900 text-white px-4 py-2.5 rounded-lg text-sm font-medium shadow-lg flex items-center gap-2 animate-toast">
-              <svg className="w-4 h-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              {t.type === 'error'
+                ? <svg className="w-4 h-4 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                : <svg className="w-4 h-4 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
               {t.msg}
             </div>
           ))}

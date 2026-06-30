@@ -86,7 +86,7 @@ export function ProxyURIEditor({ username, blurred }) {
       setSubNodes(allNodes)
       if (errors.length) toast(`${allNodes.length} 个节点，${errors.length} 条订阅失败`)
       else toast(`已更新，共 ${allNodes.length} 个节点`)
-    } catch (err) { toast(err.message) } finally { setFetching(false) }
+    } catch (err) { toast(err.message, 'error') } finally { setFetching(false) }
   }
 
   const handleSetRole = (n, role) => {

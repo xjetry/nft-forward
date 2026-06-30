@@ -82,7 +82,7 @@ export default function RulesList() {
 
   const deleteRule = async (rule) => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/rules/${rule.id}`); toast('已删除'); load() } catch (err) { toast(err.message) }
+    try { await api.del(`/rules/${rule.id}`); toast('已删除'); load() } catch (err) { toast(err.message, 'error') }
   }
   const openCreate = () => { setCreateInitial(null); setCreateOpen(true) }
   const copyRule = (rule) => { setCreateInitial(copyInitial(rule)); setCreateOpen(true) }
