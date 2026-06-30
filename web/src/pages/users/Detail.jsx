@@ -478,7 +478,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
     const lines = nodes.map(n => {
       const g = grantByNode[n.id]
       const parts = [n.name]
-      if (g?.max_forwards) parts.push(`max=${g.max_forwards}`)
+      parts.push(`max=${g?.max_forwards ?? 10}`)
       const gb = g?.traffic_quota_bytes ? Number((g.traffic_quota_bytes / 1073741824).toFixed(2)) : 0
       parts.push(`quota=${gb}GB`)
       return parts.join(' | ')

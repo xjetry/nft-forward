@@ -36,7 +36,6 @@ export default function PasteGrantsModal({ open, onClose, onDone, allNodes, allU
 
   const parsed = text.trim() ? parseGrantText(text, allNodes) : []
   const valid = parsed.filter(p => p.found)
-  const invalid = parsed.filter(p => !p.found)
   const canSubmit = valid.length > 0 && userIds.length > 0 && !submitting
 
   const submit = async () => {
