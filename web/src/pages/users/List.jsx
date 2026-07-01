@@ -246,6 +246,15 @@ function CreateUserModal({ open, onClose, onDone }) {
     e.preventDefault()
     setLoading(true)
     const isUser = form.role === 'user'
+    // Copy the login info inside the click gesture, before the create request:
+    // the execCommand fallback (plain-HTTP panels) only works while the user
+    // activation is live, and awaiting the network would spend it. All the info
+    // fields are known pre-submit, so copying first is safe; the result is
+    // announced only after a successful create, so a failed create never claims
+    // the credentials were copied.
+    const info = `面板地址：${panelURL}\n用户名：${form.username}\n密码：${form.password}`
+    let copied = true
+    try { await copyToClipboard(info) } catch { copied = false }
     try {
       const res = await api.post('/users', {
         username: form.username,
@@ -259,8 +268,7 @@ function CreateUserModal({ open, onClose, onDone }) {
           admin_note: form.admin_note.trim() || undefined,
         } : {}),
       })
-      const info = `面板地址：${panelURL}\n用户名：${form.username}\n密码：${form.password}`
-      try { await copyToClipboard(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
+      toast(copied ? '用户已创建，登录信息已复制' : '用户已创建（复制失败，请手动记录密码）')
       setForm(emptyForm())
       onDone(res?.user?.id)
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }

@@ -136,7 +136,7 @@ export function CopyText({ text, children }) {
     copyToClipboard(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
-    })
+    }).catch(() => { /* text stays on screen for manual copy; no toast here */ })
   }
   return (
     <span className="cursor-pointer relative inline-flex items-center gap-1 group" onClick={copy} title="点击复制">

@@ -302,7 +302,7 @@ function TokenModal({ token, onClose }) {
     copyToClipboard(token).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    })
+    }).catch(() => { /* token stays visible for manual copy; no toast here */ })
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
