@@ -1266,6 +1266,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
+	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRateMultiplier(s.DB, nodes)
@@ -1518,6 +1519,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
 	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	allNodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeRateMultiplier(s.DB, allNodes)
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
 	jsonOK(w, map[string]any{

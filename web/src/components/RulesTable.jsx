@@ -57,18 +57,16 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
           <th className="cursor-pointer select-none" onClick={() => cycleSort('node')}>
             <span className="inline-flex items-center">节点<SortArrow dir={sort.col === 'node' ? sort.dir : null} /></span>
           </th>
-          <th>协议</th>
           <th>入口 / 出口</th>
+          <th>协议</th>
           {isAdmin && (
             <th className="cursor-pointer select-none" onClick={() => cycleSort('owner')}>
               <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
             </th>
           )}
-          {!isAdmin && (
-            <th className="text-right cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
-              <span className="inline-flex items-center justify-end">流量<SortArrow dir={sort.col === 'traffic' ? sort.dir : null} /></span>
-            </th>
-          )}
+          <th className="text-right cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
+            <span className="inline-flex items-center justify-end">流量<SortArrow dir={sort.col === 'traffic' ? sort.dir : null} /></span>
+          </th>
           <th className="text-right">操作</th>
         </tr>
       </thead>
@@ -86,12 +84,10 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                   : r.name}
               </td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
-              <td><ProtoBadge proto={r.proto} /></td>
               <td className="font-mono text-xs !whitespace-normal">
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5 mb-1">
                     <Badge color="gray">入口</Badge>
-                    {r.entry_node_id && nodeMap[r.entry_node_id] && <Badge color="indigo">{nodeMap[r.entry_node_id].name}</Badge>}
                     {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
@@ -109,8 +105,17 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                   </div>
                 </div>
               </td>
+              <td><ProtoBadge proto={r.proto} /></td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
-              {!isAdmin && <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</td>}
+              <td className="text-right font-mono text-xs">
+                {(() => {
+                  const raw = r.total_bytes || 0
+                  const mult = r.rate_multiplier || 1
+                  if (!isAdmin) return <span className="text-ink-mut">{fmtBytes(Math.round(raw * mult))}</span>
+                  if (mult === 1) return <span className="text-ink-mut">{fmtBytes(raw)}</span>
+                  return <><span className="text-ink-mut">{fmtBytes(raw)}</span><span className="text-ink-mut mx-0.5">/</span><span className="text-blue-600">{fmtBytes(Math.round(raw * mult))}</span></>
+                })()}
+              </td>
               <td className="text-right whitespace-nowrap">
                 <div className="inline-flex gap-2 justify-end items-center" onClick={e => e.stopPropagation()}>
                   <ProbeIconButton ruleId={r.id} />
@@ -143,10 +148,10 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
               <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
               {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
-              {!isAdmin && <><span className="text-ink-mut">·</span><span className="font-mono text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</span></>}
+              <span className="text-ink-mut">·</span>
+              <span className="font-mono text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</span>
             </div>
             <div className="text-xs text-ink-mut font-mono truncate">
-              {r.entry_node_id && nodeMap[r.entry_node_id] && <Badge color="indigo" className="mr-1.5 font-sans">{nodeMap[r.entry_node_id].name}</Badge>}
               {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}
               <span className="mx-1.5">→</span>
               <span className="text-ink-soft">

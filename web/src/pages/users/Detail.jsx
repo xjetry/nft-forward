@@ -149,7 +149,15 @@ export default function UserDetail() {
                   <td><ProtoBadge proto={r.proto} /></td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{r.entry_listen_port ? `:${r.entry_listen_port}` : '--'}</SensText></td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{r.exit_host ? `${r.exit_host}:${r.exit_port}` : '--'}</SensText></td>
-                  <td className="text-right font-mono">{fmtBytes(r.total_bytes)}</td>
+                  <td className="text-right font-mono text-xs">
+                    {(() => {
+                      const raw = r.total_bytes || 0
+                      const n = nodeMap[r.node_id]
+                      const mult = n?.rate_multiplier || 1
+                      if (mult === 1) return fmtBytes(raw)
+                      return <><span>{fmtBytes(raw)}</span><span className="text-ink-mut mx-0.5">/</span><span className="text-blue-600">{fmtBytes(Math.round(raw * mult))}</span></>
+                    })()}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -529,7 +537,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用 / 计费</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用(计费)</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -546,18 +554,8 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
                   <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
                 </td>
                 <td className="px-3 py-2 font-mono text-sm">
-                  {(() => {
-                    const raw = grantByNode[n.id]?.traffic_used_bytes || 0
-                    const mult = n.rate_multiplier || 1
-                    const quota = grantByNode[n.id]?.traffic_quota_bytes
-                    if (mult === 1) return fmtTrafficGB(raw, quota)
-                    return <>
-                      <span>{fmtTrafficGB(raw)}</span>
-                      <span className="text-ink-mut mx-1">/</span>
-                      <span className="text-blue-600">{fmtTrafficGB(Math.round(raw * mult), quota)}</span>
-                      <span className="text-ink-mut text-xs ml-1">×{mult}</span>
-                    </>
-                  })()}
+                  {fmtTrafficGB(Math.round((grantByNode[n.id]?.traffic_used_bytes || 0) * (n.rate_multiplier || 1)), grantByNode[n.id]?.traffic_quota_bytes)}
+                  {n.rate_multiplier > 0 && n.rate_multiplier !== 1 && <span className="text-ink-mut text-xs ml-1">×{n.rate_multiplier}</span>}
                 </td>
                 <td className="px-3 py-2">
                   {grantByNode[n.id]?.traffic_quota_bytes > 0 && grantByNode[n.id]?.traffic_used_bytes > 0 && (
