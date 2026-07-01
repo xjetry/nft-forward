@@ -94,7 +94,8 @@ export default function NodeList() {
   })
   const draggable = !sort.col && !q
   const saveOrder = async (visibleList) => {
-    const hiddenIds = tabNodes.filter(n => n.hidden).map(n => n.id)
+    const seen = new Set(visibleList.map(n => n.id))
+    const hiddenIds = tabNodes.filter(n => n.hidden && !seen.has(n.id)).map(n => n.id)
     const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
     const tabIds = [...visibleList.map(n => n.id), ...hiddenIds]
     const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
