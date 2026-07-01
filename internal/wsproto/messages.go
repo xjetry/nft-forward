@@ -81,6 +81,12 @@ type Hello struct {
 	Arch           string `json:"arch"`
 	LastAppliedRev string `json:"last_applied_rev,omitempty"`
 	PortRange      string `json:"port_range,omitempty"`
+	// ProbedV4/ProbedV6 are this agent's own best-guess outbound address per
+	// family, re-probed fresh on every hello. The panel only uses these to
+	// seed the family its own connection-observed address didn't cover —
+	// see hub.go's fillNodeRelayHosts. Empty from agents that predate this probe.
+	ProbedV4 string `json:"probed_v4,omitempty"`
+	ProbedV6 string `json:"probed_v6,omitempty"`
 }
 
 // HelloAck is the panel's response to Hello. Error == "" means the
