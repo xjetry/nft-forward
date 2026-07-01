@@ -78,9 +78,9 @@ export default function RulesDetail() {
           <div className="grid grid-cols-[90px_1fr] gap-4 items-center mt-5 text-sm">
             <span className="text-ink-soft font-semibold">名称</span>
             <span className="font-semibold">{rule.name}</span>
-            {rule.owner_id && <><span className="text-ink-soft font-semibold">用户</span>
+            {rule.owner_id?.Valid && <><span className="text-ink-soft font-semibold">用户</span>
             <span className="font-semibold">
-              <Link to={`/users/${rule.owner_id}`} className="text-blue-600 hover:underline">{rule.owner_name}</Link>
+              <Link to={`/users/${rule.owner_id.Int64}`} className="text-blue-600 hover:underline">{rule.owner_name}</Link>
             </span></>}
             <span className="text-ink-soft font-semibold">节点</span>
             <span className="inline-flex items-center gap-1.5 font-mono">
