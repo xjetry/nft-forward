@@ -4,6 +4,7 @@ import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { Layout } from '../../components/Layout'
 import { Loading, Empty, Badge, NodeTypeBadge } from '../../components/ui'
+import { copyToClipboard } from '../../lib/clipboard'
 import { ProxyURIEditor } from '../../components/ProxyURIEditor'
 
 export default function MyDashboard() {
@@ -298,7 +299,7 @@ function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken
 function TokenModal({ token, onClose }) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
-    navigator.clipboard.writeText(token).then(() => {
+    copyToClipboard(token).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })

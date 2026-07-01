@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
+import { copyToClipboard } from '../../lib/clipboard'
 import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
 import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
@@ -81,7 +82,7 @@ export default function MyRuleDetail() {
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY</span>
                 {rule.entry_node_id && node_by_id[rule.entry_node_id] && <span className="bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold px-2 py-0.5 rounded">{node_by_id[rule.entry_node_id].name}</span>}
                 <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry}</SensText></span>
-                <button onClick={() => { navigator.clipboard.writeText(rule.entry); toast('入口地址已复制') }}
+                <button onClick={() => copyToClipboard(rule.entry).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
                   className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
                   复制
@@ -93,7 +94,7 @@ export default function MyRuleDetail() {
                   <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1 truncate"><SensText blurred={blurred}>{rule.relay_uri}</SensText></span>
                   <button onClick={() => {
                     const yaml = copyFmt === 'yaml' ? uriToClashYaml(rule.relay_uri) : null
-                    navigator.clipboard.writeText(yaml || rule.relay_uri); toast('代理 URI 已复制')
+                    copyToClipboard(yaml || rule.relay_uri).then(() => toast('代理 URI 已复制')).catch(() => toast('复制失败', 'error'))
                   }}
                     className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>

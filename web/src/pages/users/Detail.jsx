@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
+import { copyToClipboard } from '../../lib/clipboard'
 import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles, ROLE_LANDING, ROLE_DIRECT } from '../../lib/landing'
 import PasteGrantsModal from './PasteGrantsModal'
 
@@ -180,7 +181,7 @@ export default function UserDetail() {
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
@@ -525,7 +526,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
       return parts.join(' | ')
     })
     const text = lines.join('\n')
-    navigator.clipboard.writeText(text).then(() => toast(`已复制 ${nodes.length} 个节点授权`))
+    copyToClipboard(text).then(() => toast(`已复制 ${nodes.length} 个节点授权`)).catch(() => toast('复制失败', 'error'))
   }
 
   return (

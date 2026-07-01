@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from 'react'
+import { copyToClipboard } from '../lib/clipboard'
 
 /* ---------- Modal ---------- */
 export function Modal({ open, onClose, title, children, wide }) {
@@ -132,7 +133,7 @@ export function CopyText({ text, children }) {
   const [copied, setCopied] = useState(false)
   const copy = (e) => {
     e.stopPropagation()
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
     })

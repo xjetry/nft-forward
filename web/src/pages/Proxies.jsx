@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { api } from '../lib/api'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
+import { copyToClipboard } from '../lib/clipboard'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
   parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING, ROLE_DIRECT,
@@ -104,7 +105,7 @@ export default function Proxies() {
           {tab !== 'landing' && filtered.length > 0 && (
             <button onClick={() => {
               const all = filtered.map(n => copyText(n)).filter(Boolean).join('\n')
-              navigator.clipboard.writeText(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败', 'error'))
+              copyToClipboard(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败', 'error'))
             }} className="ml-auto px-3 py-0.5 rounded text-xs border border-line bg-surface text-ink-soft hover:border-ink-mut transition-colors">
               复制全部
             </button>

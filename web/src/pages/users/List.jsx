@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTrafficGB, nullStr, nullInt } from '../../lib/fmt'
 import { Layout, useToast, useUser } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../components/ui'
+import { copyToClipboard } from '../../lib/clipboard'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import PasteGrantsModal from './PasteGrantsModal'
 
@@ -259,7 +260,7 @@ function CreateUserModal({ open, onClose, onDone }) {
         } : {}),
       })
       const info = `面板地址：${panelURL}\n用户名：${form.username}\n密码：${form.password}`
-      try { await navigator.clipboard.writeText(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
+      try { await copyToClipboard(info); toast('用户已创建，登录信息已复制') } catch { toast('用户已创建（复制失败，请手动记录密码）') }
       setForm(emptyForm())
       onDone(res?.user?.id)
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
