@@ -149,15 +149,7 @@ export default function UserDetail() {
                   <td><ProtoBadge proto={r.proto} /></td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{r.entry_listen_port ? `:${r.entry_listen_port}` : '--'}</SensText></td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{r.exit_host ? `${r.exit_host}:${r.exit_port}` : '--'}</SensText></td>
-                  <td className="text-right font-mono text-xs">
-                    {(() => {
-                      const raw = r.total_bytes || 0
-                      const n = nodeMap[r.node_id]
-                      const mult = n?.rate_multiplier || 1
-                      if (mult === 1) return fmtBytes(raw)
-                      return <><span>{fmtBytes(raw)}</span><span className="text-ink-mut mx-0.5">/</span><span className="text-blue-600">{fmtBytes(Math.round(raw * mult))}</span></>
-                    })()}
-                  </td>
+                  <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes || 0)}</td>
                 </tr>
               ))}
             </tbody>

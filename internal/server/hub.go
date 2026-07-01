@@ -505,72 +505,76 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			log.Printf("hub: node %d counters sample for %s/%d matched no rule_hop row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 			continue
 		}
-		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
-			totalDelta, s.BytesUp, s.BytesDown, totalDelta, rh.ID); err != nil {
-			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
-			continue
-		}
 		r := ruleMap[rh.RuleID]
-		if r == nil || !r.OwnerID.Valid || billedDelta <= 0 {
-			continue
-		}
-		userID := r.OwnerID.Int64
 
-		// Check billing cycle once per user per batch. If the window has
-		// rolled over, counters are reset; a user disabled for exceeding quota
-		// gets re-enabled and re-dispatched so the fresh cycle starts clean.
-		if !cycleChecked[userID] {
-			cycleChecked[userID] = true
-			if u, err := db.GetUserByID(h.DB, userID); err == nil {
-				if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
-					if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-						_ = db.SetUserDisabled(h.DB, userID, false, "")
-						// Push the rules back to the kernel now that the user is active again.
-						if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {
-							go h.Redispatch(nodes)
+		// Compute weighted = billedDelta × mult × billingRate.
+		// Direct nodes use the node's own rate_multiplier; composite hops
+		// use the per-hop traffic_multiplier from node_hops.
+		weighted := billedDelta
+		var userID int64
+		hasOwner := r != nil && r.OwnerID.Valid && billedDelta > 0
+		if hasOwner {
+			userID = r.OwnerID.Int64
+
+			if !cycleChecked[userID] {
+				cycleChecked[userID] = true
+				if u, err := db.GetUserByID(h.DB, userID); err == nil {
+					if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
+						if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
+							_ = db.SetUserDisabled(h.DB, userID, false, "")
+							if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {
+								go h.Redispatch(nodes)
+							}
 						}
 					}
 				}
 			}
-		}
 
-		// Compute the effective multiplier: hop multiplier × user billing rate.
-		// Direct rules (r.NodeID == nodeID) have no node_hop row, so hop mult = 1.0.
-		mult := 1.0
-		if r.NodeID != nodeID {
-			if hm, ok := hopMultipliers[r.NodeID]; ok {
-				if m, ok := hm[nodeID]; ok {
-					mult = m
+			mult := node.RateMultiplier
+			if mult <= 0 {
+				mult = 1.0
+			}
+			if r.NodeID != nodeID {
+				if hm, ok := hopMultipliers[r.NodeID]; ok {
+					if m, ok := hm[nodeID]; ok {
+						mult = m
+					}
 				}
 			}
-		}
-		billingRate, ok := billingRates[userID]
-		if !ok {
-			billingRate = 1.0
-			if u, err := db.GetUserByID(h.DB, userID); err == nil && u.BillingRate > 0 {
-				billingRate = u.BillingRate
+			billingRate, ok := billingRates[userID]
+			if !ok {
+				billingRate = 1.0
+				if u, err := db.GetUserByID(h.DB, userID); err == nil && u.BillingRate > 0 {
+					billingRate = u.BillingRate
+				}
+				billingRates[userID] = billingRate
 			}
-			billingRates[userID] = billingRate
+			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
 		}
-		weighted := int64(math.Round(float64(billedDelta) * mult * billingRate))
 
-		// per-node: store billed bytes so per-node quota checks use the same
-		// formula as the global quota (raw × node_rate × billing_rate).
-		if weighted > 0 {
-			if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, weighted); err != nil {
-				log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
-			}
+		// rule_hops: last_bytes are raw (for speed display), total_bytes is
+		// the cumulative billed amount so it matches quota accounting.
+		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
+			totalDelta, s.BytesUp, s.BytesDown, weighted, rh.ID); err != nil {
+			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
+			continue
 		}
-		if r.NodeID != nodeID && rh.Position == 0 && weighted > 0 {
+
+		if !hasOwner || weighted <= 0 {
+			continue
+		}
+
+		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, weighted); err != nil {
+			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
+		}
+		if r.NodeID != nodeID && rh.Position == 0 {
 			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, weighted); err != nil {
 				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
 			}
 		}
-		if weighted > 0 {
-			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
-				log.Printf("hub: user %d traffic add: %v", userID, err)
-				continue
-			}
+		if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
+			log.Printf("hub: user %d traffic add: %v", userID, err)
+			continue
 		}
 
 		touched[userNode{userID, nodeID}] = true

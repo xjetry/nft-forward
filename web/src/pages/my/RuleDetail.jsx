@@ -128,14 +128,7 @@ export default function MyRuleDetail() {
               <span><Badge color="blue">×{rule.rate_multiplier ?? 1}</Badge></span>
             </>}
             <span className="text-ink-soft font-semibold">流量</span>
-            <span className="font-mono text-sm">
-              {(() => {
-                const raw = rule.total_bytes || 0
-                const mult = rule.rate_multiplier || 1
-                if (mult === 1) return <span className="text-ink-mut">{fmtBytes(raw)}</span>
-                return <><span className="text-ink-mut">{fmtBytes(raw)}</span><span className="text-ink-mut mx-1">/</span><span className="text-blue-600">{fmtBytes(Math.round(raw * mult))}</span><span className="text-ink-mut text-xs ml-1">×{mult}</span></>
-              })()}
-            </span>
+            <span className="font-mono text-ink-mut">{fmtBytes(rule.total_bytes || 0)}</span>
             {rule.comment && <>
               <span className="text-ink-soft font-semibold">备注</span>
               <span className="text-ink-soft">{rule.comment}</span>

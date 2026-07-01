@@ -38,7 +38,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
 
   const sorted = !sort.col ? rules : [...rules].sort((a, b) => {
     if (sort.col === 'traffic') {
-      const d = (a.total_bytes || 0) * (a.rate_multiplier || 1) - (b.total_bytes || 0) * (b.rate_multiplier || 1)
+      const d = (a.total_bytes || 0) - (b.total_bytes || 0)
       return sort.dir === 'asc' ? d : -d
     }
     const va = sort.col === 'node' ? (nodeMap[a.node_id]?.name || '') : (a.owner_name || '')
@@ -107,15 +107,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </td>
               <td><ProtoBadge proto={r.proto} /></td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
-              <td className="text-right font-mono text-xs">
-                {(() => {
-                  const raw = r.total_bytes || 0
-                  const mult = r.rate_multiplier || 1
-                  if (!isAdmin) return <span className="text-ink-mut">{fmtBytes(Math.round(raw * mult))}</span>
-                  if (mult === 1) return <span className="text-ink-mut">{fmtBytes(raw)}</span>
-                  return <><span className="text-ink-mut">{fmtBytes(raw)}</span><span className="text-ink-mut mx-0.5">/</span><span className="text-blue-600">{fmtBytes(Math.round(raw * mult))}</span></>
-                })()}
-              </td>
+              <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes || 0)}</td>
               <td className="text-right whitespace-nowrap">
                 <div className="inline-flex gap-2 justify-end items-center" onClick={e => e.stopPropagation()}>
                   <ProbeIconButton ruleId={r.id} />
@@ -149,7 +141,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
               {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
               <span className="text-ink-mut">·</span>
-              <span className="font-mono text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</span>
+              <span className="font-mono text-ink-mut">{fmtBytes(r.total_bytes || 0)}</span>
             </div>
             <div className="text-xs text-ink-mut font-mono truncate">
               {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}
