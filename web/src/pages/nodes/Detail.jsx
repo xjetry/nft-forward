@@ -338,12 +338,15 @@ export default function NodeDetail() {
           {ruleHops.length ? (
             <div className="tbl-scroll">
             <table className="tbl">
-              <thead><tr><th>规则</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
+              <thead><tr><th>规则</th><th>用户</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
               <tbody>
                 {ruleHops.map((rh, i) => (
                   <tr key={i}>
                     <td className="font-semibold">
                       {rh.rule_id ? <Link to={`/rules/${rh.rule_id}`} className="text-blue-600 hover:underline">{rh.rule_name || `#${rh.rule_id}`}</Link> : '--'}
+                    </td>
+                    <td className="text-sm">
+                      {rh.owner_id ? <Link to={`/users/${rh.owner_id}`} className="text-blue-600 hover:underline">{rh.owner_name}</Link> : <span className="text-ink-mut">--</span>}
                     </td>
                     <td className="text-xs whitespace-nowrap">
                       {rh.total_hops > 1

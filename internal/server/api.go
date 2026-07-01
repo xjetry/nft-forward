@@ -408,12 +408,16 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		TotalHops  int    `json:"total_hops"`
 		NodeType   string `json:"node_type"`
 		RuleNodeID int64  `json:"rule_node_id"`
+		OwnerID    int64  `json:"owner_id,omitempty"`
+		OwnerName  string `json:"owner_name,omitempty"`
 	}
 	views := make([]ruleHopView, len(ruleHops))
 	type ruleMeta struct {
-		hopCount int
-		nodeType string
-		nodeID   int64
+		hopCount  int
+		nodeType  string
+		nodeID    int64
+		ownerID   int64
+		ownerName string
 	}
 	metaCache := make(map[int64]*ruleMeta)
 	for _, rh := range ruleHops {
@@ -421,12 +425,20 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 			m := &ruleMeta{}
 			s.DB.QueryRow(`SELECT COUNT(*) FROM rule_hops WHERE rule_id=?`, rh.RuleID).Scan(&m.hopCount)
 			s.DB.QueryRow(`SELECT COALESCE(n.node_type,'single'), r.node_id FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&m.nodeType, &m.nodeID)
+			var ownerID sql.NullInt64
+			s.DB.QueryRow(`SELECT owner_id FROM rules WHERE id=?`, rh.RuleID).Scan(&ownerID)
+			if ownerID.Valid {
+				m.ownerID = ownerID.Int64
+				if u, e := db.GetUserByID(s.DB, ownerID.Int64); e == nil {
+					m.ownerName = u.Username
+				}
+			}
 			metaCache[rh.RuleID] = m
 		}
 	}
 	for i, rh := range ruleHops {
 		m := metaCache[rh.RuleID]
-		views[i] = ruleHopView{RuleHop: rh, TotalHops: m.hopCount, NodeType: m.nodeType, RuleNodeID: m.nodeID}
+		views[i] = ruleHopView{RuleHop: rh, TotalHops: m.hopCount, NodeType: m.nodeType, RuleNodeID: m.nodeID, OwnerID: m.ownerID, OwnerName: m.ownerName}
 	}
 
 	grantedUsers, _ := db.ListUsersForNode(s.DB, n.ID)
