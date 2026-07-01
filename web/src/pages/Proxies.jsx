@@ -4,7 +4,7 @@ import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/La
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
 import {
-  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey,
+  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING, ROLE_DIRECT,
   landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
 } from '../lib/landing'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -41,10 +41,10 @@ export default function Proxies() {
 
   const allSubNodes = useMemo(() => mergeLanding(localSubNodes, serverNodes), [localSubNodes, serverNodes])
 
-  const directSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [allSubNodes, roles])
-  const landingSub = useMemo(() => allSubNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [allSubNodes, roles])
-  const directManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'direct' }), [manualNodes, roles])
-  const landingManual = useMemo(() => manualNodes.filter(n => { const k = nodeRoleKey(n); return k && roles[k] === 'landing' }), [manualNodes, roles])
+  const directSub = useMemo(() => allSubNodes.filter(n => nodeHasRole(roles, n, ROLE_DIRECT)), [allSubNodes, roles])
+  const landingSub = useMemo(() => allSubNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING)), [allSubNodes, roles])
+  const directManual = useMemo(() => manualNodes.filter(n => nodeHasRole(roles, n, ROLE_DIRECT)), [manualNodes, roles])
+  const landingManual = useMemo(() => manualNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING)), [manualNodes, roles])
 
   const allLanding = useMemo(() => {
     const manual = landingManual.map(n => ({ ...n, source: 'local' }))

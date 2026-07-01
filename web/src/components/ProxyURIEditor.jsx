@@ -7,6 +7,7 @@ import {
   loadSubURLs, saveSubURLs, loadSubCache, saveSubCache,
   nodeRoleKey, fetchNodeRoles,
   loadLocalRoles, saveLocalRoles, applyNodeRole, applyNodeRoleBatch,
+  ROLE_LANDING, ROLE_DIRECT,
 } from '../lib/landing'
 
 const MAX_H = 420
@@ -40,22 +41,26 @@ export function ProxyURIEditor({ username, blurred }) {
   const [fetching, setFetching] = useState(false)
   const [manualParsed, setManualParsed] = useState(() => parseURIs(loadLocalURIs(username)))
   const [showManualConfig, setShowManualConfig] = useState(() => parseURIs(loadLocalURIs(username)).length > 0)
+  const [selSub, setSelSub] = useState(new Set())
+  const [selManual, setSelManual] = useState(new Set())
 
   useEffect(() => { fetchNodeRoles().then(setServerRoles) }, [])
+  useEffect(() => { setSelSub(new Set()) }, [subNodes])
+  useEffect(() => { setSelManual(new Set()) }, [manualParsed])
   const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
   const toast = useToast()
   const [subRef, subH] = usePersistedHeight(`nf-sub-textarea-h:${username}`)
   const [manualRef, manualH] = usePersistedHeight(`nf-manual-textarea-h:${username}`)
 
   const roles = useMemo(() => ({ ...serverRoles, ...localRoles }), [serverRoles, localRoles])
-  const roleOf = (n) => { const k = nodeRoleKey(n); return k && roles[k] ? roles[k] : 'none' }
+  const roleOf = (n) => { const k = nodeRoleKey(n); return (k && roles[k]) || 0 }
   const manualCount = parseURIs(text).length
-  const mLanding = manualParsed.filter(n => roleOf(n) === 'landing').length
-  const mDirect = manualParsed.filter(n => roleOf(n) === 'direct').length
-  const mUnconfigured = manualParsed.length - mLanding - mDirect
-  const landingCount = subNodes.filter(n => roleOf(n) === 'landing').length
-  const directCount = subNodes.filter(n => roleOf(n) === 'direct').length
-  const unconfiguredCount = subNodes.length - landingCount - directCount
+  const mLanding = manualParsed.filter(n => roleOf(n) & ROLE_LANDING).length
+  const mDirect = manualParsed.filter(n => roleOf(n) & ROLE_DIRECT).length
+  const mUnconfigured = manualParsed.filter(n => !roleOf(n)).length
+  const landingCount = subNodes.filter(n => roleOf(n) & ROLE_LANDING).length
+  const directCount = subNodes.filter(n => roleOf(n) & ROLE_DIRECT).length
+  const unconfiguredCount = subNodes.filter(n => !roleOf(n)).length
 
   const saveManual = () => {
     saveLocalURIs(username, text)
@@ -89,23 +94,25 @@ export function ProxyURIEditor({ username, blurred }) {
     } catch (err) { toast(err.message, 'error') } finally { setFetching(false) }
   }
 
-  const handleSetRole = (n, role) => {
-    const next = applyNodeRole(localRoles, n, role)
+  const handleSetRole = (n, bit) => {
+    const next = applyNodeRole(localRoles, n, bit)
     setLocalRoles(next)
     saveLocalRoles(username, next)
   }
 
-  const handleMarkAll = (role) => {
-    const next = applyNodeRoleBatch(localRoles, subNodes, role)
+  const handleBulkRole = (nodesList, bit, on) => {
+    const next = applyNodeRoleBatch(localRoles, nodesList, bit, on)
     setLocalRoles(next)
     saveLocalRoles(username, next)
   }
 
-  const handleMarkAllManual = (role) => {
-    const next = applyNodeRoleBatch(localRoles, manualParsed, role)
-    setLocalRoles(next)
-    saveLocalRoles(username, next)
-  }
+  const toggleSel = (setSel) => (i) => setSel(s => {
+    const next = new Set(s)
+    if (next.has(i)) next.delete(i); else next.add(i)
+    return next
+  })
+  const toggleSelAll = (setSel, count) => () => setSel(s =>
+    s.size === count ? new Set() : new Set(Array.from({ length: count }, (_, i) => i)))
 
   const hasNodes = showSub && subNodes.length > 0
 
@@ -151,30 +158,30 @@ export function ProxyURIEditor({ username, blurred }) {
         {hasNodes && (
           <div className="mb-4 border border-line rounded-[10px] overflow-hidden">
             <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-              <span className="text-ink-soft font-semibold">
+              <span className="text-ink-soft font-semibold flex items-center gap-2">
+                <input type="checkbox" className="accent-blue-600"
+                  checked={subNodes.length > 0 && selSub.size === subNodes.length}
+                  onChange={toggleSelAll(setSelSub, subNodes.length)} />
                 {subNodes.length} 个节点
-                <span className="font-normal ml-2">{landingCount} 落地 · {directCount} 直连 · {unconfiguredCount} 未配置</span>
+                <span className="font-normal">{landingCount} 落地 · {directCount} 直连 · {unconfiguredCount} 未配置</span>
               </span>
-              <div className="flex gap-1.5">
-                <button onClick={() => handleMarkAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                <span className="text-ink-mut">|</span>
-                <button onClick={() => handleMarkAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                <span className="text-ink-mut">|</span>
-                <button onClick={() => handleMarkAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
-              </div>
+              <RoleBulkToggle nodes={subNodes.filter((_, i) => selSub.has(i))} roleOf={roleOf}
+                onToggle={(bit, on) => handleBulkRole(subNodes.filter((_, i) => selSub.has(i)), bit, on)} />
             </div>
             <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
               <table className="w-full text-[13px]">
                 <tbody>
                   {subNodes.map((n, i) => (
                     <tr key={i} className="border-t border-line-soft">
-                      <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
+                      <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
+                        checked={selSub.has(i)} onChange={() => toggleSel(setSelSub)(i)} /></td>
+                      <td className="px-2 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
                       <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
                       <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">
                         <SensText blurred={blurred}>{nodeRoleKey(n)}</SensText>
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
+                        <RoleToggle state={roleOf(n)} onChange={(bit) => handleSetRole(n, bit)} />
                       </td>
                     </tr>
                   ))}
@@ -202,28 +209,28 @@ export function ProxyURIEditor({ username, blurred }) {
             {showManualConfig && (
               <div className="mt-2 border border-line rounded-[10px] overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-                  <span className="text-ink-soft font-semibold">
+                  <span className="text-ink-soft font-semibold flex items-center gap-2">
+                    <input type="checkbox" className="accent-blue-600"
+                      checked={manualParsed.length > 0 && selManual.size === manualParsed.length}
+                      onChange={toggleSelAll(setSelManual, manualParsed.length)} />
                     {manualParsed.length} 个节点
-                    <span className="font-normal ml-2">{mLanding} 落地 · {mDirect} 直连 · {mUnconfigured} 未配置</span>
+                    <span className="font-normal">{mLanding} 落地 · {mDirect} 直连 · {mUnconfigured} 未配置</span>
                   </span>
-                  <div className="flex gap-1.5">
-                    <button onClick={() => handleMarkAllManual('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => handleMarkAllManual('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                    <span className="text-ink-mut">|</span>
-                    <button onClick={() => handleMarkAllManual('none')} className="text-ink-mut hover:underline">全部未配置</button>
-                  </div>
+                  <RoleBulkToggle nodes={manualParsed.filter((_, i) => selManual.has(i))} roleOf={roleOf}
+                    onToggle={(bit, on) => handleBulkRole(manualParsed.filter((_, i) => selManual.has(i)), bit, on)} />
                 </div>
                 <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
                   <table className="w-full text-[13px]">
                     <tbody>
                       {manualParsed.map((n, i) => (
                         <tr key={i} className="border-t border-line-soft">
-                          <td className="px-3 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
+                          <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
+                            checked={selManual.has(i)} onChange={() => toggleSel(setSelManual)(i)} /></td>
+                          <td className="px-2 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
                           <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
                           <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.host}:{n.port}</td>
                           <td className="px-3 py-1.5 text-right">
-                            <TriToggle state={roleOf(n)} onChange={(k) => handleSetRole(n, k)} />
+                            <RoleToggle state={roleOf(n)} onChange={(bit) => handleSetRole(n, bit)} />
                           </td>
                         </tr>
                       ))}
@@ -239,22 +246,45 @@ export function ProxyURIEditor({ username, blurred }) {
   )
 }
 
-function TriToggle({ state, onChange }) {
-  const opts = [
-    ['landing', '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
-    ['direct', '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
-    ['none', '未配置', 'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800/40 dark:text-gray-400 dark:border-gray-600'],
-  ]
+const ROLE_OPTS = [
+  [ROLE_LANDING, '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
+  [ROLE_DIRECT, '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
+]
+
+// Two independent per-node switches — landing and direct can both be on at
+// once (a node can be a rule exit and appear in "我的代理" simultaneously).
+function RoleToggle({ state, onChange }) {
   return (
-    <div className="inline-flex gap-px rounded-md overflow-hidden border border-line">
-      {opts.map(([key, label, cls]) => (
-        <button key={key} onClick={() => onChange(key)}
-          className={`px-2 py-0.5 text-[11px] font-semibold transition-colors ${
-            state === key ? cls : 'bg-transparent text-ink-mut/40 hover:text-ink-mut'
+    <div className="inline-flex gap-1.5">
+      {ROLE_OPTS.map(([bit, label, cls]) => (
+        <button key={bit} onClick={() => onChange(bit)}
+          className={`px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors ${
+            state & bit ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
           }`}>
           {label}
         </button>
       ))}
+    </div>
+  )
+}
+
+// Same switches, but scoped to a multi-selected set of nodes: highlighted
+// when every selected node already has the bit, click flips it for all of them.
+function RoleBulkToggle({ nodes, roleOf, onToggle }) {
+  if (!nodes.length) return null
+  return (
+    <div className="flex gap-1.5">
+      {ROLE_OPTS.map(([bit, label, cls]) => {
+        const allOn = nodes.every(n => roleOf(n) & bit)
+        return (
+          <button key={bit} onClick={() => onToggle(bit, !allOn)}
+            className={`px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors ${
+              allOn ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
+            }`}>
+            {label}
+          </button>
+        )
+      })}
     </div>
   )
 }

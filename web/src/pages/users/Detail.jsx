@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
-import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles } from '../../lib/landing'
+import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles, ROLE_LANDING, ROLE_DIRECT } from '../../lib/landing'
 import PasteGrantsModal from './PasteGrantsModal'
 
 export default function UserDetail() {
@@ -327,9 +327,11 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   const [preview, setPreview] = useState(nodes || [])
   const [roles, setRoles] = useState({})
   const [loading, setLoading] = useState(false)
+  const [sel, setSel] = useState(new Set())
   const toast = useToast()
 
   useEffect(() => { fetchNodeRoles().then(setRoles) }, [])
+  useEffect(() => { setSel(new Set()) }, [preview])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -341,18 +343,25 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
-  const handleSetRole = (n, role) => {
-    const next = applyNodeRole(roles, n, role)
+  const handleSetRole = (n, bit) => {
+    const next = applyNodeRole(roles, n, bit)
     setRoles(next); saveNodeRoles(next)
   }
-  const handleMarkAll = (role) => {
-    const next = applyNodeRoleBatch(roles, preview, role)
+  const handleBulkRole = (nodesList, bit, on) => {
+    const next = applyNodeRoleBatch(roles, nodesList, bit, on)
     setRoles(next); saveNodeRoles(next)
   }
-  const roleOf = (n) => { const k = nodeRoleKey(n); return k && roles[k] ? roles[k] : 'none' }
-  const landingCount = preview.filter(n => roleOf(n) === 'landing').length
-  const directCount = preview.filter(n => roleOf(n) === 'direct').length
-  const unconfiguredCount = preview.length - landingCount - directCount
+  const toggleSel = (i) => setSel(s => {
+    const next = new Set(s)
+    if (next.has(i)) next.delete(i); else next.add(i)
+    return next
+  })
+  const toggleSelAll = () => setSel(s =>
+    s.size === preview.length ? new Set() : new Set(preview.map((_, i) => i)))
+  const roleOf = (n) => { const k = nodeRoleKey(n); return (k && roles[k]) || 0 }
+  const landingCount = preview.filter(n => roleOf(n) & ROLE_LANDING).length
+  const directCount = preview.filter(n => roleOf(n) & ROLE_DIRECT).length
+  const unconfiguredCount = preview.filter(n => !roleOf(n)).length
 
   return (
     <div className="card mb-5">
@@ -382,27 +391,26 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
                 解析出的节点
                 <span className="normal-case font-normal ml-2">{landingCount} 落地 · {directCount} 直连 · {unconfiguredCount} 未配置</span>
               </div>
-              <div className="flex gap-1.5 text-[12px]">
-                <button type="button" onClick={() => handleMarkAll('landing')} className="text-emerald-600 hover:underline">全部落地</button>
-                <span className="text-ink-mut">|</span>
-                <button type="button" onClick={() => handleMarkAll('direct')} className="text-blue-600 hover:underline">全部直连</button>
-                <span className="text-ink-mut">|</span>
-                <button type="button" onClick={() => handleMarkAll('none')} className="text-ink-mut hover:underline">全部未配置</button>
-              </div>
+              <AdminRoleBulkToggle nodes={preview.filter((_, i) => sel.has(i))} roleOf={roleOf}
+                onToggle={(bit, on) => handleBulkRole(preview.filter((_, i) => sel.has(i)), bit, on)} />
             </div>
             <div className="tbl-scroll">
             <table className="tbl">
-              <thead><tr><th>名称</th><th>协议</th><th>地址</th><th className="text-right">用途</th></tr></thead>
+              <thead><tr>
+                <th className="w-8"><input type="checkbox" className="accent-blue-600"
+                  checked={preview.length > 0 && sel.size === preview.length} onChange={toggleSelAll} /></th>
+                <th>名称</th><th>协议</th><th>地址</th><th className="text-right">用途</th></tr></thead>
               <tbody>
                 {preview.map((n, i) => {
                   const st = roleOf(n)
                   return (
                     <tr key={i}>
+                      <td><input type="checkbox" className="accent-blue-600" checked={sel.has(i)} onChange={() => toggleSel(i)} /></td>
                       <td className="font-semibold">{n.name || '(未命名)'}</td>
                       <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
                       <td className="text-right">
-                        <AdminTriToggle state={st} onChange={k => handleSetRole(n, k)} />
+                        <AdminRoleToggle state={st} onChange={bit => handleSetRole(n, bit)} />
                       </td>
                     </tr>
                   )
@@ -417,22 +425,44 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   )
 }
 
-function AdminTriToggle({ state, onChange }) {
-  const opts = [
-    ['landing', '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
-    ['direct', '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
-    ['none', '未配置', 'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800/40 dark:text-gray-400 dark:border-gray-600'],
-  ]
+const ADMIN_ROLE_OPTS = [
+  [ROLE_LANDING, '落地', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
+  [ROLE_DIRECT, '直连', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'],
+]
+
+// Two independent per-node switches — landing and direct can both be on at once.
+function AdminRoleToggle({ state, onChange }) {
   return (
-    <div className="inline-flex gap-px rounded-md overflow-hidden border border-line">
-      {opts.map(([key, label, cls]) => (
-        <button key={key} type="button" onClick={() => onChange(key)}
-          className={`px-2 py-0.5 text-[11px] font-semibold transition-colors ${
-            state === key ? cls : 'bg-transparent text-ink-mut/40 hover:text-ink-mut'
+    <div className="inline-flex gap-1.5">
+      {ADMIN_ROLE_OPTS.map(([bit, label, cls]) => (
+        <button key={bit} type="button" onClick={() => onChange(bit)}
+          className={`px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors ${
+            state & bit ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
           }`}>
           {label}
         </button>
       ))}
+    </div>
+  )
+}
+
+// Same switches, scoped to the multi-selected rows: highlighted when every
+// selected node already has the bit, click flips it for all of them.
+function AdminRoleBulkToggle({ nodes, roleOf, onToggle }) {
+  if (!nodes.length) return null
+  return (
+    <div className="flex gap-1.5 text-[12px]">
+      {ADMIN_ROLE_OPTS.map(([bit, label, cls]) => {
+        const allOn = nodes.every(n => roleOf(n) & bit)
+        return (
+          <button key={bit} type="button" onClick={() => onToggle(bit, !allOn)}
+            className={`px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors ${
+              allOn ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
+            }`}>
+            {label}
+          </button>
+        )
+      })}
     </div>
   )
 }

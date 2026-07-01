@@ -1050,29 +1050,54 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// Node role is a bitmask so a node can be both a rule exit ("落地") and appear
+// in the user's own proxy list ("直连") at the same time.
+const (
+	roleLanding = 1
+	roleDirect  = 2
+	roleMask    = roleLanding | roleDirect
+)
+
 func (s *Server) apiGetNodeRoles(w http.ResponseWriter, r *http.Request) {
 	val, _ := db.GetSetting(s.DB, "node_roles")
-	var roles map[string]string
+	roles := map[string]int{}
 	if val != "" {
-		json.Unmarshal([]byte(val), &roles)
-	}
-	if roles == nil {
-		roles = map[string]string{}
+		var raw map[string]json.RawMessage
+		json.Unmarshal([]byte(val), &raw)
+		for k, v := range raw {
+			var n int
+			if err := json.Unmarshal(v, &n); err == nil {
+				if n &= roleMask; n != 0 {
+					roles[k] = n
+				}
+				continue
+			}
+			// Pre-bitmask data stored the role as the string 'landing'/'direct'.
+			var str string
+			if err := json.Unmarshal(v, &str); err == nil {
+				switch str {
+				case "landing":
+					roles[k] = roleLanding
+				case "direct":
+					roles[k] = roleDirect
+				}
+			}
+		}
 	}
 	jsonOK(w, map[string]any{"roles": roles})
 }
 
 func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Roles map[string]string `json:"roles"`
+		Roles map[string]int `json:"roles"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	clean := make(map[string]string)
+	clean := make(map[string]int)
 	for k, v := range body.Roles {
-		if v == "landing" || v == "direct" {
+		if v &= roleMask; v != 0 {
 			clean[k] = v
 		}
 	}

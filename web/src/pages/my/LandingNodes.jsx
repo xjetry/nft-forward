@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
-import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 /* Landing-nodes nav: lists the nodes available to the user — the admin-assigned
    ones (resolved server-side from a subscription and/or URIs) plus the user's
@@ -43,10 +43,7 @@ export default function MyLandingNodes() {
   const refresh = () => { load(true); toast('已刷新订阅') }
 
   const allNodes = mergeLanding(localNodes, serverNodes)
-  const nodes = allNodes.filter(n => {
-    const k = nodeRoleKey(n)
-    return k && roles[k] === 'landing'
-  })
+  const nodes = allNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING))
 
   const q = search.trim().toLowerCase()
   const filtered = !q ? nodes : nodes.filter(n =>

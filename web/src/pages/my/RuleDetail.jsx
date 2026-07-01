@@ -6,7 +6,7 @@ import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../../components
 import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
 import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
-import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 export default function MyRuleDetail() {
   const { id } = useParams()
@@ -25,7 +25,7 @@ export default function MyRuleDetail() {
     fetchNodeRoles().then(sr => setNodeRoles({ ...sr, ...loadLocalRoles(user?.username) }))
   }, [user])
   const localNodes = useMemo(() => {
-    const isLanding = n => { const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing' }
+    const isLanding = n => nodeHasRole(nodeRoles, n, ROLE_LANDING)
     const manual = parseURIs(loadLocalURIs(user?.username)).filter(isLanding)
     const sub = loadSubCache(user?.username).filter(isLanding)
     return mergeLanding(manual, sub)

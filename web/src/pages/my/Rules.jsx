@@ -6,7 +6,7 @@ import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
 import { RuleFormModal, copyInitial } from '../../components/RuleFormModal'
-import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeRoleKey } from '../../lib/landing'
+import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 export default function MyRules() {
   const [data, setData] = useState(null)
@@ -30,7 +30,7 @@ export default function MyRules() {
     fetchNodeRoles().then(sr => setNodeRoles({ ...sr, ...loadLocalRoles(user?.username) }))
   }, [user])
   const localNodes = useMemo(() => {
-    const isLanding = n => { const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing' }
+    const isLanding = n => nodeHasRole(nodeRoles, n, ROLE_LANDING)
     const manual = parseURIs(loadLocalURIs(user?.username)).filter(isLanding)
     const sub = loadSubCache(user?.username).filter(isLanding)
     return mergeLanding(manual, sub)
@@ -60,9 +60,7 @@ export default function MyRules() {
 
   // Filter server-assigned nodes by global role table — only landing-marked ones
   // appear in the exit picker (unconfigured/direct ones are excluded).
-  const serverLandingFiltered = serverLanding.filter(n => {
-    const k = nodeRoleKey(n); return k && nodeRoles[k] === 'landing'
-  })
+  const serverLandingFiltered = serverLanding.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
   const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
 
   const allLandingIdx = landingIndex(landingNodes)

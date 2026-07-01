@@ -68,19 +68,46 @@ export function nodeRoleKey(n) {
   return n.protocol && n.host && n.port ? `${n.protocol}:${n.host}:${n.port}` : null
 }
 
+/* Node role is a bitmask so a node can be both a rule exit ("落地") and
+   appear in the user's own proxy list ("直连") at the same time. */
+export const ROLE_LANDING = 1
+export const ROLE_DIRECT = 2
+const ROLE_MASK = ROLE_LANDING | ROLE_DIRECT
+
+// Pre-bitmask data (server settings row, browser localStorage) stored the
+// role as the string 'landing'/'direct' — accept both on read so existing
+// assignments survive the format change.
+function roleBits(v) {
+  if (typeof v === 'number') return v & ROLE_MASK
+  if (v === 'landing') return ROLE_LANDING
+  if (v === 'direct') return ROLE_DIRECT
+  return 0
+}
+
+export function nodeHasRole(roles, n, bit) {
+  const key = nodeRoleKey(n)
+  return !!(key && (roleBits(roles[key]) & bit))
+}
+
 export async function fetchNodeRoles() {
   try {
     const res = await fetch('/api/node-roles')
     if (!res.ok) return {}
     const d = await res.json()
-    return d?.roles || {}
+    const out = {}
+    for (const [k, v] of Object.entries(d?.roles || {})) {
+      const bits = roleBits(v)
+      if (bits) out[k] = bits
+    }
+    return out
   } catch { return {} }
 }
 
 export async function saveNodeRoles(roles) {
   const clean = {}
   for (const [k, v] of Object.entries(roles)) {
-    if (v === 'landing' || v === 'direct') clean[k] = v
+    const bits = roleBits(v)
+    if (bits) clean[k] = bits
   }
   await fetch('/api/node-roles', {
     method: 'POST',
@@ -96,7 +123,13 @@ export function loadLocalRoles(username) {
   if (!username) return {}
   try {
     const raw = localStorage.getItem(LS_LOCAL_ROLES_PREFIX + username)
-    return raw ? JSON.parse(raw) : {}
+    const parsed = raw ? JSON.parse(raw) : {}
+    const out = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      const bits = roleBits(v)
+      if (bits) out[k] = bits
+    }
+    return out
   } catch { return {} }
 }
 
@@ -104,7 +137,8 @@ export function saveLocalRoles(username, roles) {
   if (!username) return
   const clean = {}
   for (const [k, v] of Object.entries(roles)) {
-    if (v === 'landing' || v === 'direct') clean[k] = v
+    const bits = roleBits(v)
+    if (bits) clean[k] = bits
   }
   try {
     if (Object.keys(clean).length) localStorage.setItem(LS_LOCAL_ROLES_PREFIX + username, JSON.stringify(clean))
@@ -112,20 +146,25 @@ export function saveLocalRoles(username, roles) {
   } catch {}
 }
 
-export function applyNodeRole(roles, n, role) {
+// Toggle a single role bit for one node, leaving its other bit untouched.
+export function applyNodeRole(roles, n, bit) {
   const next = { ...roles }
   const key = nodeRoleKey(n)
   if (!key) return next
-  if (role === 'none') delete next[key]; else next[key] = role
+  const nv = roleBits(next[key]) ^ bit
+  if (nv) next[key] = nv; else delete next[key]
   return next
 }
 
-export function applyNodeRoleBatch(roles, nodes, role) {
+// Set (on=true) or clear (on=false) a role bit across many nodes at once.
+export function applyNodeRoleBatch(roles, nodes, bit, on) {
   const next = { ...roles }
   for (const n of nodes) {
     const key = nodeRoleKey(n)
     if (!key) continue
-    if (role === 'none') delete next[key]; else next[key] = role
+    const cur = roleBits(next[key])
+    const nv = on ? (cur | bit) : (cur & ~bit)
+    if (nv) next[key] = nv; else delete next[key]
   }
   return next
 }
