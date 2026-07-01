@@ -68,7 +68,10 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     const { entryV4, entryV6, exitV6 } = nodeStack(n)
     const parts = [entryV4 && 'v4', entryV6 && 'v6'].filter(Boolean)
     let tag = parts.join('+')
-    if (exitV6 !== entryV6) tag += exitV6 ? ' 出口支持v6' : ' 出口不支持v6'
+    if (exitV6 !== entryV6) {
+      const note = exitV6 ? '出口支持v6' : '出口不支持v6'
+      tag = tag ? `${tag} ${note}` : note
+    }
     return tag ? `[${tag}] ` : ''
   }
   const fmtRate = (n) => {
