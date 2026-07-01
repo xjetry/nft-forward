@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -149,9 +150,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	if node.RelayHost == "" && connectIP != "" {
-		_ = db.UpdateNodeRelayHost(h.DB, node.ID, connectIP)
-	}
+	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6)
 	if hello.PortRange != "" {
 		if err := db.ValidatePortRange(hello.PortRange); err == nil {
 			_ = db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange)
@@ -406,6 +405,34 @@ func extractIP(r *http.Request) string {
 		host = host[:i]
 	}
 	return strings.Trim(host, "[]")
+}
+
+// fillNodeRelayHosts seeds relay_host/relay_host_v6 for a node that hasn't
+// had them set yet. connectIP (the address the panel observed this WS
+// connection arrive from) is authoritative for whichever family it belongs
+// to — it reflects the address as seen after any NAT, unlike a locally
+// self-probed address. The agent's self-probed address only fills the
+// OTHER family, the one this connection didn't use. Never overwrites a
+// manually-configured value (only fires when the DB field is still empty).
+func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 string) {
+	connectIsV6 := false
+	if ip := net.ParseIP(connectIP); ip != nil {
+		connectIsV6 = ip.To4() == nil
+	}
+	if node.RelayHost == "" {
+		if !connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, connectIP)
+		} else if probedV4 != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, probedV4)
+		}
+	}
+	if node.RelayHostV6 == "" {
+		if connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, connectIP)
+		} else if probedV6 != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, probedV6)
+		}
+	}
 }
 
 func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
