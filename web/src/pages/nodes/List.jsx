@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
+import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, NodeStackBadge, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
 
 export default function NodeList() {
@@ -219,7 +219,12 @@ export default function NodeList() {
                       {n.hidden && <Badge color="gray">已隐藏</Badge>}
                     </span>
                   </td>
-                  <td><NodeTypeBadge type={n.node_type} /></td>
+                  <td>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <NodeTypeBadge type={n.node_type} />
+                      <NodeStackBadge node={n} />
+                    </div>
+                  </td>
                   <td className="font-mono text-xs">
                     {n.agent_version ? (
                       <span className={n.agent_version !== latest_agent_version ? 'text-red-600' : ''}>{n.agent_version}</span>
