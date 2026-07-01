@@ -48,7 +48,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     if (!node) return
     const hp = node.host.includes(':') ? `[${node.host}]:${node.port}` : `${node.host}:${node.port}`
     if (onAddProxyURI) onAddProxyURI(val)
-    setForm(f => ({ ...f, exit_kind: 'landing', exit: hp }))
+    setForm(f => {
+      const next = { ...f, exit_kind: 'landing', exit: hp }
+      if (!f.comment.trim() && node.name) next.comment = node.name
+      return next
+    })
     toast(`已识别 ${node.protocol} 代理并保存`)
   }
 

@@ -23,7 +23,7 @@ function SortArrow({ dir }) {
   )
 }
 
-export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick }) {
+export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick, probeAllTrigger }) {
   const isAdmin = variant === 'admin'
   const [sort, setSort] = useState({ col: null, dir: null })
   const { copyFmt } = useCopyFmt()
@@ -64,6 +64,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <span className="inline-flex items-center">所有者<SortArrow dir={sort.col === 'owner' ? sort.dir : null} /></span>
             </th>
           )}
+          <th>备注</th>
           <th className="text-right cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
             <span className="inline-flex items-center justify-end">流量<SortArrow dir={sort.col === 'traffic' ? sort.dir : null} /></span>
           </th>
@@ -78,11 +79,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               className={onRowClick ? 'cursor-pointer' : ''}
               onClick={onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
-              <td className="font-semibold">
-                {r.comment
-                  ? <Tooltip content={r.comment} className="border-b border-dotted border-ink-mut cursor-help">{r.name}</Tooltip>
-                  : r.name}
-              </td>
+              <td className="font-semibold">{r.name}</td>
               <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
               <td className="font-mono text-xs !whitespace-normal">
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
@@ -107,10 +104,17 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </td>
               <td><ProtoBadge proto={r.proto} /></td>
               {isAdmin && <td className="text-ink-soft">{r.owner_name || '--'}</td>}
+              <td className="text-xs text-ink-soft">
+                {r.comment
+                  ? r.comment.length > 8
+                    ? <Tooltip content={r.comment}><span className="cursor-help">{r.comment.slice(0, 8)}…</span></Tooltip>
+                    : r.comment
+                  : <span className="text-ink-mut">-</span>}
+              </td>
               <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(r.total_bytes || 0)}</td>
               <td className="text-right whitespace-nowrap">
                 <div className="inline-flex gap-2 justify-end items-center" onClick={e => e.stopPropagation()}>
-                  <ProbeIconButton ruleId={r.id} />
+                  <ProbeIconButton ruleId={r.id} probeAllTrigger={probeAllTrigger} />
                   <MoreMenu items={[
                     onEdit && { label: '编辑', onClick: () => onEdit(r) },
                     onCopy && { label: '复制', onClick: () => onCopy(r) },
@@ -133,7 +137,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <div className="flex items-center justify-between mb-1">
               <span className="font-semibold text-[14px]">{r.name}</span>
               <div className="flex items-center gap-2">
-                <ProbeIconButton ruleId={r.id} />
+                <ProbeIconButton ruleId={r.id} probeAllTrigger={probeAllTrigger} />
                 <ProtoBadge proto={r.proto} />
               </div>
             </div>
@@ -159,10 +163,13 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
   </>)
 }
 
-function ProbeIconButton({ ruleId }) {
+function ProbeIconButton({ ruleId, probeAllTrigger }) {
   const [state, setState] = useState('idle')
   const [label, setLabel] = useState('')
   const [tip, setTip] = useState('')
+  useEffect(() => {
+    if (probeAllTrigger) probe()
+  }, [probeAllTrigger])
   const probe = () => {
     setState('loading')
     fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json()).then(d => {
@@ -208,7 +215,15 @@ function MoreMenu({ items }) {
   useEffect(() => {
     if (!open || !menuRef.current) return
     const rect = menuRef.current.getBoundingClientRect()
-    if (rect.bottom > window.innerHeight - 8) setDropUp(true)
+    let maxBottom = window.innerHeight - 8
+    for (let el = menuRef.current.parentElement; el; el = el.parentElement) {
+      const s = getComputedStyle(el)
+      if (s.overflow === 'hidden' || s.overflow === 'auto' || s.overflowY === 'hidden' || s.overflowY === 'auto') {
+        maxBottom = Math.min(maxBottom, el.getBoundingClientRect().bottom - 8)
+        break
+      }
+    }
+    if (rect.bottom > maxBottom) setDropUp(true)
   }, [open])
   const toggle = () => { setDropUp(false); setOpen(o => !o) }
   const pos = dropUp ? 'bottom-[calc(100%+4px)]' : 'top-[calc(100%+4px)]'

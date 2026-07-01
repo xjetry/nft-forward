@@ -51,10 +51,13 @@ export function SearchInput({ value, onChange, placeholder }) {
 }
 
 /* Primary toolbar action; right-aligned by default. */
-export function ToolbarButton({ onClick, children, className = '' }) {
+export function ToolbarButton({ onClick, children, className = '', secondary }) {
+  const base = secondary
+    ? 'text-ink-soft bg-surface border border-line hover:bg-raised hover:text-ink'
+    : 'text-white bg-blue-600 hover:bg-blue-700 border-0'
   return (
     <button onClick={onClick}
-      className={`ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-white bg-blue-600 hover:bg-blue-700 border-0 px-4 py-[10px] rounded-[9px] cursor-pointer transition-colors ${className}`}>
+      className={`ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold px-4 py-[10px] rounded-[9px] cursor-pointer transition-colors ${base} ${className}`}>
       {children}
     </button>
   )

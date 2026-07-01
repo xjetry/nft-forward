@@ -15,6 +15,7 @@ export default function MyRules() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState(null)
   const [search, setSearch] = useState('')
+  const [probeAllTrigger, setProbeAllTrigger] = useState(0)
   const navigate = useNavigate()
   const toast = useToast()
   const blurred = useBlur()
@@ -99,6 +100,7 @@ export default function MyRules() {
       <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
+          <ToolbarButton onClick={() => setProbeAllTrigger(t => t + 1)} secondary>测试所有</ToolbarButton>
           <ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton>
         </PanelToolbar>
 
@@ -109,7 +111,8 @@ export default function MyRules() {
         ) : (
           <TableScroll>
             <RulesTable variant="my" rules={filtered} nodeMap={node_by_id} blurred={blurred}
-              onDelete={deleteRule} onCopy={copyRule} onRowClick={r => navigate(`/my/rules/${r.id}`)} />
+              onDelete={deleteRule} onCopy={copyRule} onRowClick={r => navigate(`/my/rules/${r.id}`)}
+              probeAllTrigger={probeAllTrigger} />
           </TableScroll>
         )}
       </Panel>
@@ -119,12 +122,13 @@ export default function MyRules() {
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
         nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI} showRate={show_rate}
         onSubmit={async (form) => {
-          await api.post('/my/rules', {
+          const res = await api.post('/my/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
           })
-          toast('规则已创建'); setCreateOpen(false); load()
+          toast('规则已创建'); setCreateOpen(false)
+          if (res?.rule_id) navigate(`/my/rules/${res.rule_id}`)
         }} />
 
     </Layout>
