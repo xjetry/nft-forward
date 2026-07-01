@@ -52,6 +52,7 @@ export default function RulesDetail() {
             <div className="space-y-2">
               <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY</span>
+                {rule.entry_node_id && node_by_id[rule.entry_node_id] && <span className="bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold px-2 py-0.5 rounded">{node_by_id[rule.entry_node_id].name}</span>}
                 <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry}</SensText></span>
                 <button onClick={() => { navigator.clipboard.writeText(rule.entry); toast('入口地址已复制') }}
                   className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">

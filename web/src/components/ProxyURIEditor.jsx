@@ -70,7 +70,7 @@ export function ProxyURIEditor({ username, blurred }) {
 
   const refreshSubs = async () => {
     const urls = subURLs.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-    if (!urls.length) { toast('请先填写订阅地址'); return }
+    if (!urls.length) { toast('请先填写订阅地址', 'error'); return }
     saveSubURLs(username, subURLs)
     setFetching(true)
     try {
@@ -84,7 +84,7 @@ export function ProxyURIEditor({ username, blurred }) {
       }
       saveSubCache(username, allNodes)
       setSubNodes(allNodes)
-      if (errors.length) toast(`${allNodes.length} 个节点，${errors.length} 条订阅失败`)
+      if (errors.length) toast(`${allNodes.length} 个节点，${errors.length} 条订阅失败`, 'error')
       else toast(`已更新，共 ${allNodes.length} 个节点`)
     } catch (err) { toast(err.message, 'error') } finally { setFetching(false) }
   }

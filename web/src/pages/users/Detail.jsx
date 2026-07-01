@@ -74,6 +74,8 @@ export default function UserDetail() {
                   {user.traffic_quota_bytes > 0 && ` (${pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)`}
                   {user.traffic_reset_days > 0 && <span className="text-ink-mut text-xs ml-1">每{user.traffic_reset_days}天重置</span>}
                 </span>
+                <span className="fl">计费倍率</span>
+                <span className="font-mono">×{user.billing_rate ?? 1}</span>
                 <span className="fl">到期时间</span>
                 <span className="font-mono">
                   {expiresAt ? <>{fmtDate(expiresAt)} {isExpired(expiresAt) && <Badge color="red">已过期</Badge>}</> : '永不过期'}
@@ -102,6 +104,7 @@ export default function UserDetail() {
               quotaBytes={user.traffic_quota_bytes}
               resetDays={user.traffic_reset_days}
               adminNote={user.admin_note || ''}
+              billingRate={user.billing_rate}
               onDone={load}
             />
           )}
@@ -187,13 +190,14 @@ function CopyButton({ text }) {
   )
 }
 
-function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays, adminNote, onDone }) {
+function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays, adminNote, billingRate, onDone }) {
   const [form, setForm] = useState({
     expiresAt: expiresAt ? fmtDateInput(expiresAt) : '',
     maxForwards: String(maxForwards || 0),
     quotaGB: String(Number(((quotaBytes || 0) / 1073741824).toFixed(2))),
     resetDays: String(resetDays || 0),
     adminNote: adminNote,
+    billingRate: String(billingRate ?? 1),
   })
   const [saving, setSaving] = useState(false)
   const toast = useToast()
@@ -220,6 +224,7 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
         traffic_quota_gb: Math.max(0, Number(form.quotaGB) || 0),
         traffic_reset_days: Math.max(0, Math.round(Number(form.resetDays) || 0)),
         admin_note: form.adminNote,
+        billing_rate: Math.max(0, Number(form.billingRate) || 1),
       })
       toast('已保存')
       onDone()
@@ -257,6 +262,12 @@ function UserProfileForm({ userId, expiresAt, maxForwards, quotaBytes, resetDays
         <div className="flex items-center gap-1.5">
           <input className="input-field font-mono flex-1" type="number" min="0" step="1" value={form.resetDays} onChange={set('resetDays')} title="0 = 永不重置" />
           <span className="text-xs text-ink-mut">天</span>
+        </div>
+
+        <label className="fl">计费倍率</label>
+        <div className="flex items-center gap-1.5">
+          <input className="input-field font-mono flex-1" type="number" min="0" step="0.1" value={form.billingRate} onChange={set('billingRate')} title="1.0 = 原价，<1 折扣，>1 加价" />
+          <span className="text-xs text-ink-mut">×</span>
         </div>
 
         <label className="fl">管理备注</label>
@@ -518,7 +529,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用 / 计费</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -535,7 +546,18 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
                   <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
                 </td>
                 <td className="px-3 py-2 font-mono text-sm">
-                  {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}
+                  {(() => {
+                    const raw = grantByNode[n.id]?.traffic_used_bytes || 0
+                    const mult = n.rate_multiplier || 1
+                    const quota = grantByNode[n.id]?.traffic_quota_bytes
+                    if (mult === 1) return fmtTrafficGB(raw, quota)
+                    return <>
+                      <span>{fmtTrafficGB(raw)}</span>
+                      <span className="text-ink-mut mx-1">/</span>
+                      <span className="text-blue-600">{fmtTrafficGB(Math.round(raw * mult), quota)}</span>
+                      <span className="text-ink-mut text-xs ml-1">×{mult}</span>
+                    </>
+                  })()}
                 </td>
                 <td className="px-3 py-2">
                   {grantByNode[n.id]?.traffic_quota_bytes > 0 && grantByNode[n.id]?.traffic_used_bytes > 0 && (
@@ -577,7 +599,7 @@ function GrantNodeForm({ userId, allNodes, grantedNodes, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!nodeIds.length) { toast('请选择节点'); return }
+    if (!nodeIds.length) { toast('请选择节点', 'error'); return }
     setLoading(true)
     try {
       await api.post(`/users/${userId}/grants`, { node_ids: nodeIds.map(Number), max_forwards: Number(max) })

@@ -123,6 +123,10 @@ export default function MyDashboard() {
                 {user.traffic_quota_bytes > 0 && <span className="text-green-600 dark:text-green-400"> ({pct(user.traffic_used_bytes, user.traffic_quota_bytes)}%)</span>}
               </div>
             </div>
+            <div className="flex items-center gap-4 py-3 border-b border-line-soft">
+              <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">计费倍率</div>
+              <div className="text-[14.5px] font-mono">×{user.billing_rate ?? 1}</div>
+            </div>
             <div className="flex items-center gap-4 py-3">
               <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">到期时间</div>
               <div className="text-[14.5px]">

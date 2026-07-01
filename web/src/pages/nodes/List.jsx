@@ -420,7 +420,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
     e.preventDefault()
     const validHops = hops.filter(h => h.node_id)
     if (validHops.length < 2) {
-      toast('组合节点至少需要 2 个子节点')
+      toast('组合节点至少需要 2 个子节点', 'error')
       return
     }
     setLoading(true)

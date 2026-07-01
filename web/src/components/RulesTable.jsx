@@ -91,6 +91,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5 mb-1">
                     <Badge color="gray">入口</Badge>
+                    {r.entry_node_id && nodeMap[r.entry_node_id] && <Badge color="indigo">{nodeMap[r.entry_node_id].name}</Badge>}
                     {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
@@ -145,6 +146,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               {!isAdmin && <><span className="text-ink-mut">·</span><span className="font-mono text-ink-mut">{fmtBytes(Math.round((r.total_bytes || 0) * (r.rate_multiplier || 1)))}</span></>}
             </div>
             <div className="text-xs text-ink-mut font-mono truncate">
+              {r.entry_node_id && nodeMap[r.entry_node_id] && <Badge color="indigo" className="mr-1.5 font-sans">{nodeMap[r.entry_node_id].name}</Badge>}
               {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}
               <span className="mx-1.5">→</span>
               <span className="text-ink-soft">
@@ -197,20 +199,29 @@ function ProbeIconButton({ ruleId }) {
 
 function MoreMenu({ items }) {
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const ref = useRef(null)
+  const menuRef = useRef(null)
   useEffect(() => {
     if (!open) return
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
   }, [open])
+  useEffect(() => {
+    if (!open || !menuRef.current) return
+    const rect = menuRef.current.getBoundingClientRect()
+    if (rect.bottom > window.innerHeight - 8) setDropUp(true)
+  }, [open])
+  const toggle = () => { setDropUp(false); setOpen(o => !o) }
+  const pos = dropUp ? 'bottom-[calc(100%+4px)]' : 'top-[calc(100%+4px)]'
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen(o => !o)} className="icon-btn">
+      <button onClick={toggle} className="icon-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[100px] bg-surface border border-line rounded-lg shadow-[0_8px_30px_-8px_rgba(0,0,0,0.5)] py-1">
+        <div ref={menuRef} className={`absolute right-0 ${pos} z-50 min-w-[100px] bg-surface border border-line rounded-lg shadow-[0_8px_30px_-8px_rgba(0,0,0,0.5)] py-1`}>
           {items.map((item, i) => item.href ? (
             <Link key={i} to={item.href} className="block px-3.5 py-2 text-[13px] text-ink hover:bg-raised transition-colors no-underline">{item.label}</Link>
           ) : (

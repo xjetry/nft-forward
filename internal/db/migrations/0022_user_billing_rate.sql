@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN billing_rate REAL NOT NULL DEFAULT 1.0;

@@ -97,7 +97,7 @@ export default function NodeDetail() {
           const st = d?.upgrade?.status
           if (st === 'ok' || st === 'error') {
             clearInterval(poll)
-            toast(st === 'ok' ? '升级成功' : '升级失败: ' + (d.upgrade.error || ''))
+            toast(st === 'ok' ? '升级成功' : '升级失败: ' + (d.upgrade.error || ''), st === 'ok' ? undefined : 'error')
             load()
           }
         } catch { clearInterval(poll) }
@@ -472,8 +472,8 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
   }
 
   const save = async () => {
-    if (rows.length < 2) { toast('至少需要 2 个子节点'); return }
-    if (rows.some(r => !r.node_id)) { toast('请选择所有节点'); return }
+    if (rows.length < 2) { toast('至少需要 2 个子节点', 'error'); return }
+    if (rows.some(r => !r.node_id)) { toast('请选择所有节点', 'error'); return }
     setSaving(true)
     try {
       await api.post(`/nodes/${nodeId}/hops`, {

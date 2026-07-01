@@ -95,7 +95,12 @@ func parseCounters(data []byte) ([]Counter, error) {
 	}
 	var out []Counter
 	for _, item := range doc.Nftables {
-		if item.Rule == nil || item.Rule.Chain != "account" {
+		if item.Rule == nil {
+			continue
+		}
+		switch item.Rule.Chain {
+		case "account", "account_local", "account_local_reply":
+		default:
 			continue
 		}
 		var c Counter

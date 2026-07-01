@@ -1516,6 +1516,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
+	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	allNodes, _ := db.ListNodes(s.DB)
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
@@ -1801,11 +1802,12 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ExpiresAt        string `json:"expires_at"`
-		MaxForwards      int    `json:"max_forwards"`
+		ExpiresAt        string  `json:"expires_at"`
+		MaxForwards      int     `json:"max_forwards"`
 		TrafficQuotaGB   float64 `json:"traffic_quota_gb"`
-		TrafficResetDays int    `json:"traffic_reset_days"`
-		AdminNote        string `json:"admin_note"`
+		TrafficResetDays int     `json:"traffic_reset_days"`
+		AdminNote        string  `json:"admin_note"`
+		BillingRate      float64 `json:"billing_rate"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1840,9 +1842,13 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		trafficQuotaBytes = 0
 	}
 
+	billingRate := body.BillingRate
+	if billingRate <= 0 {
+		billingRate = 1.0
+	}
 	if _, err := s.DB.Exec(
-		`UPDATE users SET expires_at=?, max_forwards=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=? WHERE id=?`,
-		expiresAt, body.MaxForwards, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), id,
+		`UPDATE users SET expires_at=?, max_forwards=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=?, billing_rate=? WHERE id=?`,
+		expiresAt, body.MaxForwards, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), billingRate, id,
 	); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2374,6 +2380,7 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["traffic_reset_days"] = u.TrafficResetDays
 	m["last_traffic_reset_at"] = u.LastTrafficResetAt
 	m["admin_note"] = u.AdminNote
+	m["billing_rate"] = u.BillingRate
 	return m
 }
 
@@ -2541,6 +2548,7 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
 
 	nodeViews := make([]map[string]any, 0, len(grantedNodes))
@@ -2571,6 +2579,7 @@ func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
 		"expires_at":            expiresAt,
 		"rule_count":            ruleCount,
 		"max_forwards":          u.MaxForwards,
+		"billing_rate":          u.BillingRate,
 		"nodes":                 nodeViews,
 	})
 }

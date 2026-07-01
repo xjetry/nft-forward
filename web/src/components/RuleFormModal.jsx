@@ -54,8 +54,8 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!form.node_id) { toast('请选择节点'); return }
-    if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择出口节点'); return }
+    if (!form.node_id) { toast('请选择节点', 'error'); return }
+    if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择出口节点', 'error'); return }
     setLoading(true)
     try {
       await onSubmit(form)

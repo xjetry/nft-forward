@@ -486,6 +486,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	type userNode struct{ userID, nodeID int64 }
 	touched := map[userNode]bool{}
 	cycleChecked := map[int64]bool{}
+	billingRates := map[int64]float64{}
 
 	for _, s := range samples {
 		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
@@ -547,7 +548,8 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}
 
-		// global: weighted by the hop's multiplier within its composite chain.
+		// global: weighted by the hop's multiplier within its composite chain,
+		// then scaled by the user's billing_rate (VIP discount / surcharge).
 		// Direct rules (r.NodeID == nodeID) have no node_hop row, so they use 1.0.
 		mult := 1.0
 		if r.NodeID != nodeID {
@@ -557,7 +559,15 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 			}
 		}
-		weighted := int64(math.Round(float64(billedDelta) * mult))
+		billingRate, ok := billingRates[userID]
+		if !ok {
+			billingRate = 1.0
+			if u, err := db.GetUserByID(h.DB, userID); err == nil && u.BillingRate > 0 {
+				billingRate = u.BillingRate
+			}
+			billingRates[userID] = billingRate
+		}
+		weighted := int64(math.Round(float64(billedDelta) * mult * billingRate))
 		if weighted > 0 {
 			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
 				log.Printf("hub: user %d traffic add: %v", userID, err)

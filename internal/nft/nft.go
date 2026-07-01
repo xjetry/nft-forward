@@ -83,6 +83,11 @@ func IsIPv6(addr string) bool {
 	return ip != nil && ip.To4() == nil
 }
 
+func IsLoopback(addr string) bool {
+	ip := net.ParseIP(addr)
+	return ip != nil && ip.IsLoopback()
+}
+
 func Validate(r Rule) error {
 	switch r.Proto {
 	case "tcp", "udp", "tcp+udp":
@@ -150,6 +155,14 @@ func daddrMatch(ip string) string {
 
 func RenderRuleset(rules []Rule) string {
 	var b strings.Builder
+	hasLoopback := false
+	for _, r := range rules {
+		if r.DestIP != "" && IsLoopback(r.DestIP) {
+			hasLoopback = true
+			break
+		}
+	}
+
 	b.WriteString(fmt.Sprintf("table %s %s {\n", TableFamily, TableName))
 	b.WriteString("\tchain prerouting {\n")
 	b.WriteString("\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
@@ -161,14 +174,21 @@ func RenderRuleset(rules []Rule) string {
 		if r.BandwidthMbps > 0 {
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
-		b.WriteString(fmt.Sprintf("\t\t%s %s%s\n",
-			ProtoDportMatch(r.Proto, r.SrcPort), mark, dnatTarget(r.DestIP, r.DestPort)))
+		if IsLoopback(r.DestIP) && IsIPv6(r.DestIP) {
+			// IPv6 has no route_localnet equivalent; redirect delivers the
+			// packet locally without needing to route to ::1.
+			b.WriteString(fmt.Sprintf("\t\tmeta nfproto ipv6 %s %sredirect to :%d\n",
+				ProtoDportMatch(r.Proto, r.SrcPort), mark, r.DestPort))
+		} else {
+			b.WriteString(fmt.Sprintf("\t\t%s %s%s\n",
+				ProtoDportMatch(r.Proto, r.SrcPort), mark, dnatTarget(r.DestIP, r.DestPort)))
+		}
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	for _, r := range rules {
-		if r.DestIP == "" {
+		if r.DestIP == "" || IsLoopback(r.DestIP) {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("\t\t%s %s ct status dnat masquerade\n",
@@ -178,7 +198,7 @@ func RenderRuleset(rules []Rule) string {
 	b.WriteString("\tchain account {\n")
 	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
 	for _, r := range rules {
-		if r.DestIP == "" {
+		if r.DestIP == "" || IsLoopback(r.DestIP) {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct direction original counter\n",
@@ -187,6 +207,28 @@ func RenderRuleset(rules []Rule) string {
 			l4protoMatch(r.Proto), r.SrcPort))
 	}
 	b.WriteString("\t}\n")
+	if hasLoopback {
+		b.WriteString("\tchain account_local {\n")
+		b.WriteString("\t\ttype filter hook input priority filter; policy accept;\n")
+		for _, r := range rules {
+			if r.DestIP == "" || !IsLoopback(r.DestIP) {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct status dnat ct direction original counter\n",
+				l4protoMatch(r.Proto), r.SrcPort))
+		}
+		b.WriteString("\t}\n")
+		b.WriteString("\tchain account_local_reply {\n")
+		b.WriteString("\t\ttype filter hook output priority filter; policy accept;\n")
+		for _, r := range rules {
+			if r.DestIP == "" || !IsLoopback(r.DestIP) {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct status dnat ct direction reply counter\n",
+				l4protoMatch(r.Proto), r.SrcPort))
+		}
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("}\n")
 	return b.String()
 }
@@ -215,7 +257,18 @@ func Apply(rules []Rule) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("nft 应用失败: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
+
+	for _, r := range rules {
+		if r.DestIP != "" && IsLoopback(r.DestIP) && !IsIPv6(r.DestIP) {
+			enableRouteLocalnet()
+			break
+		}
+	}
 	return nil
+}
+
+func enableRouteLocalnet() {
+	_ = os.WriteFile("/proc/sys/net/ipv4/conf/all/route_localnet", []byte("1\n"), 0o644)
 }
 
 func Available() bool {

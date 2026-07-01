@@ -148,6 +148,92 @@ func TestIsIPv6(t *testing.T) {
 	}
 }
 
+func TestIsLoopback(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.2", true},
+		{"::1", true},
+		{"10.0.0.1", false},
+		{"2001:db8::1", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsLoopback(c.addr); got != c.want {
+			t.Errorf("IsLoopback(%q)=%v want %v", c.addr, got, c.want)
+		}
+	}
+}
+
+func TestRenderRulesetLoopbackIPv4(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "127.0.0.1", DestPort: 80},
+	})
+	if !contains(out, "dnat ip to 127.0.0.1:80") {
+		t.Fatalf("expected IPv4 loopback DNAT, got:\n%s", out)
+	}
+	if contains(out, "masquerade") {
+		t.Fatalf("loopback rule must not emit masquerade, got:\n%s", out)
+	}
+	if contains(out, "chain account {\n\t\ttype filter hook forward") && contains(out, "proto-dst 8080 ct direction original") {
+		t.Fatalf("loopback rule must not appear in forward-hook account chain, got:\n%s", out)
+	}
+	if !contains(out, "chain account_local {") {
+		t.Fatalf("expected account_local chain for loopback, got:\n%s", out)
+	}
+	if !contains(out, "ct original proto-dst 8080 ct status dnat ct direction original counter") {
+		t.Fatalf("expected loopback input accounting, got:\n%s", out)
+	}
+	if !contains(out, "chain account_local_reply {") {
+		t.Fatalf("expected account_local_reply chain for loopback, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetLoopbackIPv6(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "::1", DestPort: 80},
+	})
+	if !contains(out, "meta nfproto ipv6 tcp dport 8080 redirect to :80") {
+		t.Fatalf("expected IPv6 redirect for ::1, got:\n%s", out)
+	}
+	if contains(out, "dnat ip6") {
+		t.Fatalf("must not emit dnat ip6 for ::1, got:\n%s", out)
+	}
+	if contains(out, "masquerade") {
+		t.Fatalf("loopback rule must not emit masquerade, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetMixedLoopbackAndRemote(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "127.0.0.1", DestPort: 80},
+		{Proto: "tcp", SrcPort: 9090, DestIP: "10.0.0.5", DestPort: 443},
+	})
+	// Remote rule has masquerade and forward-hook accounting
+	if !contains(out, "ip daddr 10.0.0.5 tcp dport 443 ct status dnat masquerade") {
+		t.Fatalf("remote rule must have masquerade, got:\n%s", out)
+	}
+	// Loopback rule has no masquerade
+	if contains(out, "ip daddr 127.0.0.1") {
+		t.Fatalf("loopback rule must not appear in masquerade, got:\n%s", out)
+	}
+	// Both account and account_local chains exist
+	if !contains(out, "chain account {") || !contains(out, "chain account_local {") {
+		t.Fatalf("expected both account and account_local chains, got:\n%s", out)
+	}
+}
+
+func TestRenderRulesetNoLoopbackOmitsLocalChains(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80},
+	})
+	if contains(out, "account_local") {
+		t.Fatalf("non-loopback rules must not emit account_local chains, got:\n%s", out)
+	}
+}
+
 func TestRenderRulesetSkipsEmptyDestIP(t *testing.T) {
 	// An unresolved DestHost leaves DestIP empty; the rule must be skipped in
 	// both chains rather than emitting invalid syntax that fails the whole table.
