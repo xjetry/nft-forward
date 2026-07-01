@@ -483,21 +483,14 @@ func TestHubFillsRelayHostByFamily(t *testing.T) {
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
 	_ = recvEnvelope(t, c)
 
-	// hello_ack is written before the relay-host side effects run, so the
-	// client seeing the ack doesn't guarantee those writes have landed yet;
-	// poll instead of reading right away. RelayHostV6 is the last of the two
-	// fields written, so waiting on it is sufficient for both.
-	var got *db.Node
-	for deadline := time.Now().Add(2 * time.Second); ; {
-		var err error
-		got, err = db.GetNode(hub.DB, n.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.RelayHostV6 != "" || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Hello handling (including fillNodeRelayHosts) runs synchronously in the
+	// same goroutine before readerLoop starts, so a pong to a ping sent after
+	// hello_ack proves the relay-host writes have already landed.
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got.RelayHost != "127.0.0.1" {
 		t.Errorf("RelayHost = %q, want 127.0.0.1 (from connectIP, this conn is v4)", got.RelayHost)
