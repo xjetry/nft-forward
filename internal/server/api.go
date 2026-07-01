@@ -1130,6 +1130,12 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		} else {
 			item.RateMultiplier = 1
 		}
+		item.BillingRate = 1
+		if rl.OwnerID.Valid {
+			if u := byID[rl.OwnerID.Int64]; u != nil && u.BillingRate > 0 {
+				item.BillingRate = u.BillingRate
+			}
+		}
 		views = append(views, item)
 	}
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
@@ -1273,10 +1279,14 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
 	var idx map[string]landing.Node
+	billingRate := 1.0
 	if rl.OwnerID.Valid {
 		if u, e := db.GetUserByID(s.DB, rl.OwnerID.Int64); e == nil {
 			ownerName = u.Username
 			idx = landingIndex(s.landingNodesFor(u, false))
+			if u.BillingRate > 0 {
+				billingRate = u.BillingRate
+			}
 		}
 	}
 	item := s.buildRuleListItem(rl, ownerName)
@@ -1286,6 +1296,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	} else {
 		item.RateMultiplier = 1
 	}
+	item.BillingRate = billingRate
 	jsonOK(w, map[string]any{
 		"rule": item, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
@@ -2005,6 +2016,10 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
+	br := u.BillingRate
+	if br <= 0 {
+		br = 1
+	}
 	views := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
 		item := s.buildRuleListItem(rl, "")
@@ -2014,6 +2029,7 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		} else {
 			item.RateMultiplier = 1
 		}
+		item.BillingRate = br
 		views = append(views, item)
 	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
@@ -2046,6 +2062,10 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		item.RateMultiplier = n.RateMultiplier
 	} else {
 		item.RateMultiplier = 1
+	}
+	item.BillingRate = u.BillingRate
+	if item.BillingRate <= 0 {
+		item.BillingRate = 1
 	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{

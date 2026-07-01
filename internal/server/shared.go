@@ -56,6 +56,7 @@ type ruleListItem struct {
 	LandingURI     string  `json:"landing_uri,omitempty"`
 	RelayURI       string  `json:"relay_uri,omitempty"`
 	RateMultiplier float64 `json:"rate_multiplier"`
+	BillingRate    float64 `json:"billing_rate"`
 }
 
 // nodeHopView adds the resolved child node name to a composite node's hop so

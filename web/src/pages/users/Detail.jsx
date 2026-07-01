@@ -537,7 +537,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用(计费)</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -554,8 +554,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
                   <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
                 </td>
                 <td className="px-3 py-2 font-mono text-sm">
-                  {fmtTrafficGB(Math.round((grantByNode[n.id]?.traffic_used_bytes || 0) * (n.rate_multiplier || 1)), grantByNode[n.id]?.traffic_quota_bytes)}
-                  {n.rate_multiplier > 0 && n.rate_multiplier !== 1 && <span className="text-ink-mut text-xs ml-1">×{n.rate_multiplier}</span>}
+                  {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}
                 </td>
                 <td className="px-3 py-2">
                   {grantByNode[n.id]?.traffic_quota_bytes > 0 && grantByNode[n.id]?.traffic_used_bytes > 0 && (

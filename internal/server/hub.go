@@ -534,23 +534,8 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}
 
-		// per-node: billed bytes (respects unidirectional billing)
-		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, billedDelta); err != nil {
-			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
-		}
-
-		// composite node per-node quota: if this rule belongs to a composite
-		// node (r.NodeID != nodeID), only the entry hop (position=0) contributes
-		// to avoid counting the same traffic once per physical hop in the chain.
-		if r.NodeID != nodeID && rh.Position == 0 {
-			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, billedDelta); err != nil {
-				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
-			}
-		}
-
-		// global: weighted by the hop's multiplier within its composite chain,
-		// then scaled by the user's billing_rate (VIP discount / surcharge).
-		// Direct rules (r.NodeID == nodeID) have no node_hop row, so they use 1.0.
+		// Compute the effective multiplier: hop multiplier × user billing rate.
+		// Direct rules (r.NodeID == nodeID) have no node_hop row, so hop mult = 1.0.
 		mult := 1.0
 		if r.NodeID != nodeID {
 			if hm, ok := hopMultipliers[r.NodeID]; ok {
@@ -568,6 +553,19 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			billingRates[userID] = billingRate
 		}
 		weighted := int64(math.Round(float64(billedDelta) * mult * billingRate))
+
+		// per-node: store billed bytes so per-node quota checks use the same
+		// formula as the global quota (raw × node_rate × billing_rate).
+		if weighted > 0 {
+			if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, weighted); err != nil {
+				log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
+			}
+		}
+		if r.NodeID != nodeID && rh.Position == 0 && weighted > 0 {
+			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, weighted); err != nil {
+				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
+			}
+		}
 		if weighted > 0 {
 			if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
 				log.Printf("hub: user %d traffic add: %v", userID, err)

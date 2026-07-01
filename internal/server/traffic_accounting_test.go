@@ -145,8 +145,9 @@ func TestApplyCountersMultiplier(t *testing.T) {
 		t.Fatalf("n1 per-node want 1000, got %d", g1.TrafficUsedBytes)
 	}
 	g2, _ := db.GetNodeGrant(d, uid, n2.ID)
-	if g2.TrafficUsedBytes != 1000 {
-		t.Fatalf("n2 per-node want 1000, got %d", g2.TrafficUsedBytes)
+	// per-node stores weighted bytes: 1000 * 0.5 = 500
+	if g2.TrafficUsedBytes != 500 {
+		t.Fatalf("n2 per-node want 500, got %d", g2.TrafficUsedBytes)
 	}
 }
 
@@ -186,7 +187,8 @@ func TestApplyCountersZeroMultiplier(t *testing.T) {
 		t.Fatalf("multiplier=0 should not add to global, got %d", u.TrafficUsedBytes)
 	}
 	g, _ := db.GetNodeGrant(d, uid, n1.ID)
-	if g.TrafficUsedBytes != 5000 {
-		t.Fatalf("per-node should still track raw bytes, got %d", g.TrafficUsedBytes)
+	// multiplier=0 → weighted=0 → per-node stays 0 (consistent with global)
+	if g.TrafficUsedBytes != 0 {
+		t.Fatalf("per-node should be 0 when multiplier=0, got %d", g.TrafficUsedBytes)
 	}
 }

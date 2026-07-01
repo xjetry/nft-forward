@@ -189,7 +189,7 @@ export default function MyDashboard() {
                         <span className="text-ink-mut">--</span>
                       )}
                     </td>
-                    <td className="font-mono text-xs">{fmtTrafficGB(Math.round((g?.traffic_used_bytes || 0) * (n.rate_multiplier || 1)), g?.traffic_quota_bytes)}</td>
+                    <td className="font-mono text-xs">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</td>
                     <td className="font-mono">{g?.max_forwards ?? '--'}</td>
                   </tr>
                 )
@@ -216,7 +216,7 @@ export default function MyDashboard() {
                       <span className="font-mono text-blue-600">↓{fmtSpeed(speeds[n.id].down)}</span>
                     </>}
                     <span className="text-ink-mut">·</span>
-                    <span className="font-mono">{fmtTrafficGB(Math.round((g?.traffic_used_bytes || 0) * (n.rate_multiplier || 1)), g?.traffic_quota_bytes)}</span>
+                    <span className="font-mono">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</span>
                   </div>
                 </div>
               )
