@@ -11,10 +11,9 @@
 
 1. 查看最近 tag：`git tag --sort=-v:refname | head -5`
 2. 查看自上次 tag 以来的 commits：`git log <last-tag>..HEAD --oneline`
-3. 根据变更类型决定版本号：
-   - 新功能：minor bump（如 v0.9 → v0.10.0）
-   - 修复/改进：patch bump（如 v0.10.0 → v0.10.1）
-   - 小修补：micro bump（如 v0.10.1 → v0.10.1.1）
+3. 根据变更类型决定版本号（**严格三段 vX.Y.Z，禁止四段及以上**）：
+   - 新功能：minor bump（如 v0.9.0 → v0.10.0）
+   - 修复/改进/小修补：patch bump（如 v0.10.0 → v0.10.1）
 
 ## 打 Tag 并推送
 
