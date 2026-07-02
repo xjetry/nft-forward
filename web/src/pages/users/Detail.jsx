@@ -461,7 +461,8 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                   return (
                     <tr key={i}>
                       <td><input type="checkbox" className="accent-blue-600" checked={sel.has(i)} onChange={() => toggleSel(i)} /></td>
-                      <td className="font-semibold">{n.name || '(未命名)'}</td>
+                      <td><ExitNameCell userId={userId} name={n.name}
+                        exit={exitByAddr[`${n.host}:${n.port}`]} onDone={loadExits} /></td>
                       <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
                       <td>{ex ? <ExitQuotaForm userId={userId} exit={ex} onDone={loadExits} /> : <span className="text-xs text-ink-mut">—</span>}</td>
@@ -470,7 +471,10 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                           <>
                             {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
                             {exceeded && <Badge color="red">已超额</Badge>}
-                            <button onClick={() => resetExit(ex)} className="text-blue-600 text-xs font-semibold ml-2">重置</button>
+                            <button onClick={() => resetExit(ex)}
+                              className="ml-2 px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700">
+                              重置
+                            </button>
                           </>
                         ) : <span className="text-ink-mut">—</span>}
                       </td>
@@ -485,8 +489,8 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                   return (
                     <tr key={`residual-${i}`} className="opacity-50">
                       <td></td>
-                      <td className="font-semibold">
-                        {ex.name || '(未命名)'}
+                      <td>
+                        <ExitNameCell userId={userId} name={ex.name} exit={ex} onDone={loadExits} />
                         <Badge color="gray">已不在来源</Badge>
                       </td>
                       <td className="font-mono text-xs text-ink-soft">{ex.protocol}</td>
@@ -495,7 +499,10 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                       <td className="font-mono text-xs">
                         {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
                         {exceeded && <Badge color="red">已超额</Badge>}
-                        <button onClick={() => resetExit(ex)} className="text-blue-600 text-xs font-semibold ml-2">重置</button>
+                        <button onClick={() => resetExit(ex)}
+                              className="ml-2 px-2 py-0.5 text-[11px] font-semibold rounded-md border transition-colors bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700">
+                              重置
+                            </button>
                       </td>
                       <td className="text-right">
                         <button onClick={() => deleteExit(ex)} className="text-red-600 text-xs font-semibold">删除</button>
@@ -531,6 +538,44 @@ function ExitQuotaForm({ userId, exit, onDone }) {
         onChange={e => setGb(e.target.value)} style={{ width: 80 }} title="0 = 不限" />
       <span className="text-xs text-ink-mut">GB</span>
       <button type="submit" className="btn-secondary text-xs">设限额</button>
+    </form>
+  )
+}
+
+/* Inline-editable display name for a parsed node. The override lives on the
+   exit-ledger row so it survives subscription refreshes; nodes without a
+   ledger row (not yet synced) stay read-only. Saving an empty value restores
+   the parsed name. */
+function ExitNameCell({ userId, name, exit, onDone }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+  const toast = useToast()
+  const effective = (exit?.name_override || name) || '(未命名)'
+  if (!exit) return <span className="font-semibold">{effective}</span>
+  const start = () => { setVal(exit.name_override || name || ''); setEditing(true) }
+  const save = async () => {
+    try {
+      await api.post(`/users/${userId}/landing-exits/rename`,
+        { host: exit.host, port: exit.port, name: val.trim() })
+      toast(val.trim() ? '已改名' : '已恢复原名')
+      setEditing(false)
+      onDone()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  if (!editing) return (
+    <button type="button" onClick={start}
+      title={exit.name_override ? `原名称: ${name || '(未命名)'}` : '点击改名'}
+      className="font-semibold text-left hover:text-blue-600 transition-colors">
+      {effective}
+      {exit.name_override && <span className="text-blue-500 ml-1">*</span>}
+    </button>
+  )
+  return (
+    <form onSubmit={e => { e.preventDefault(); save() }} className="inline-flex items-center gap-1.5">
+      <input autoFocus className="input-field" value={val} onChange={e => setVal(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Escape') setEditing(false) }}
+        placeholder="留空恢复原名" style={{ width: 140 }} />
+      <button type="submit" className="btn-secondary text-xs">保存</button>
     </form>
   )
 }
