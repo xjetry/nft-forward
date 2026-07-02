@@ -41,6 +41,7 @@ func New(d *sql.DB) (*Server, error) {
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
+		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
 	go s.expiryEnforcer()
@@ -180,6 +181,20 @@ func (s *Server) enforcePerNodeQuota(userID int64, nodeID int64) {
 				log.Printf("quota: re-dispatch node %d after per-node quota user %d: %v", n, userID, err)
 			}
 		}
+	}
+}
+
+// enforceExitQuota re-pushes the nodes carrying rules whose landing-exit
+// ledger reached quota, so ActiveRuleHopsForPush drops exactly the rules
+// pointed at the exhausted exit.
+func (s *Server) enforceExitQuota(userID int64) {
+	exceeded, err := db.ExitsExceedingQuota(s.DB, userID)
+	if err != nil {
+		log.Printf("quota: exit check user %d: %v", userID, err)
+		return
+	}
+	for _, k := range exceeded {
+		s.redispatchUserExit(userID, k.Host, k.Port)
 	}
 }
 

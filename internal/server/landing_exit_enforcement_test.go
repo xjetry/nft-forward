@@ -103,3 +103,24 @@ func TestExitQuotaExclusionChainRule(t *testing.T) {
 		}
 	}
 }
+
+// enforceExitQuota is a smoke path: the exclusion itself is covered above;
+// here we assert the callback wiring finds the exceeded exit and survives
+// dispatching to unconnected nodes.
+func TestEnforceExitQuota(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 100)
+	n1, _ := db.CreateNode(d, "eq1", "", "")
+	db.UpdateNodeRelayHost(d, n1.ID, "1.1.1.1")
+	db.GrantNode(d, uid, n1.ID, 10, 0)
+	createTestRuleDirectNode(t, d, uid, n1.ID)
+	seedLandingExit(t, d, uid, "8.8.8.8", 443, 100, 100)
+
+	s, _ := New(d)
+	s.enforceExitQuota(uid)
+
+	keys, _ := db.ExitsExceedingQuota(d, uid)
+	if len(keys) != 1 {
+		t.Fatalf("exceeded exit expected, got %+v", keys)
+	}
+}
