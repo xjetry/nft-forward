@@ -2391,10 +2391,22 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		item.BillingRate = br
 		views = append(views, item)
 	}
+	grantedSet := make(map[int64]bool)
+	for _, n := range grantedNodes {
+		grantedSet[n.ID] = true
+	}
+	allEdges, _ := db.ListAllNodeBindings(s.DB)
+	edges := make([]*db.NodeBinding, 0, len(allEdges))
+	for _, e := range allEdges {
+		if grantedSet[e.UpstreamNodeID] && grantedSet[e.DownstreamNodeID] {
+			edges = append(edges, e)
+		}
+	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"rules": views, "nodes": grantedNodes,
 		"node_by_id": grantedByID, "show_rate": showRate == "1",
+		"bindings": edges,
 	})
 }
 
