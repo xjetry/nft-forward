@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"testing"
 
 	"nft-forward/internal/db"
@@ -47,6 +48,10 @@ func TestPerNodeQuotaExclusion(t *testing.T) {
 	_ = r2
 }
 
+// When any logical segment of a chain exhausts its grant, the whole chain is
+// suppressed on every physical hop. Grants live on logical nodes, so the
+// exhausted segment must be one — here n2 is the rule's middle-layer (via)
+// segment, distinct from the n1 entry segment.
 func TestChainExcludedWhenOneHopExceedsQuota(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 100)
@@ -57,12 +62,28 @@ func TestChainExcludedWhenOneHopExceedsQuota(t *testing.T) {
 	db.UpdateNodeRelayHost(d, n2.ID, "2.2.2.2")
 
 	db.GrantNode(d, uid, n1.ID, 10, 0)
-	db.GrantNode(d, uid, n2.ID, 10, 500) // quota on n2
+	db.GrantNode(d, uid, n2.ID, 10, 500) // quota on the n2 middle-layer segment
 
-	// chain rule: n1 → n2
-	ruleID := createTestRuleWithHops(t, d, uid, n1.ID, n2.ID)
+	// chain rule: entry segment n1, middle-layer (via) segment n2
+	rl := &db.Rule{
+		NodeID:  n1.ID,
+		OwnerID: sql.NullInt64{Int64: uid, Valid: true},
+		Name:    "chain", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
+		ViaNodeIDs: []int64{n2.ID},
+	}
+	tx, _ := d.Begin()
+	ruleID, _ := db.CreateRule(tx, rl)
+	rl.ID = ruleID
+	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
+		{NodeID: n1.ID, ViaNodeID: n1.ID},
+		{NodeID: n2.ID, ViaNodeID: n2.ID},
+	}, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
 
-	// exceed n2 quota
+	// exceed the n2 segment quota
 	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=500 WHERE user_id=? AND node_id=?`, uid, n2.ID)
 
 	// both n1 and n2 hops for this rule should be excluded
@@ -70,7 +91,7 @@ func TestChainExcludedWhenOneHopExceedsQuota(t *testing.T) {
 	hops2, _ := db.ActiveRuleHopsForPush(d, n2.ID)
 	for _, h := range hops1 {
 		if h.RuleID == ruleID {
-			t.Fatal("chain rule hop on n1 should be excluded because n2 exceeded quota")
+			t.Fatal("chain rule hop on n1 should be excluded because the n2 segment exceeded quota")
 		}
 	}
 	for _, h := range hops2 {

@@ -581,20 +581,17 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 // the hop. Each sample is resolved to its rule_hop row so we learn the hop
 // id and the owning rule/user.
 //
-// Per-node usage accumulates raw bytes on every physical hop. Global usage
-// accumulates bytes weighted by the hop's traffic_multiplier so a physical
-// node in a high-cost chain is priced differently from the same node in a
-// low-cost chain.
+// The same bytes flow through every hop of a chain, so the global user quota is
+// billed exactly once — at the entry hop (position 0) — weighted by the entry
+// node's own rate_multiplier and the user's billing rate. Per-grant quota
+// charges raw bytes once per logical segment, at that segment's first hop, onto
+// the segment's logical node grant. Quota suppression keys on the same logical
+// node end to end.
 func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	hopMap, err := db.RuleHopMapByNode(h.DB, nodeID)
 	if err != nil {
 		log.Printf("hub: node %d load rule hop map for counters: %v", nodeID, err)
 		return
-	}
-	hopMultipliers, err := db.HopMultipliers(h.DB)
-	if err != nil {
-		log.Printf("hub: load hop multipliers: %v", err)
-		hopMultipliers = map[int64]map[int64]float64{}
 	}
 	// Only the rules referenced by this node's hops are ever looked up, so load
 	// just those instead of scanning the whole rules table every counters batch.
@@ -609,6 +606,18 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	ruleMap, _ := db.RulesByIDs(h.DB, ruleIDs)
 	if ruleMap == nil {
 		ruleMap = map[int64]*db.Rule{}
+	}
+	multipliers, err := db.NodeRateMultipliers(h.DB)
+	if err != nil {
+		log.Printf("hub: node %d load node rate multipliers: %v", nodeID, err)
+		multipliers = map[int64]float64{}
+	}
+	// Segment-first hops drive per-grant accounting: each logical segment's
+	// grant is charged once, at the hop where the segment begins.
+	segFirst, err := db.SegmentFirstHops(h.DB, ruleIDs)
+	if err != nil {
+		log.Printf("hub: node %d load segment first hops: %v", nodeID, err)
+		segFirst = map[int64]map[int]int64{}
 	}
 
 	// Landing-exit ledger lookups for this batch: which (owner, host, port)
@@ -692,9 +701,10 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}
 
-		// Compute weighted = billedDelta × mult × billingRate.
-		// Direct nodes use the node's own rate_multiplier; composite hops
-		// use the per-hop traffic_multiplier from node_hops.
+		// Global quota: the same bytes flow through every hop, so the user is
+		// billed exactly once — at the entry hop — with the entry node's own
+		// rate_multiplier (a composite entry carries the baked composite factor;
+		// middle-layer and child hops never stack their own).
 		weighted := billedDelta
 		var userID int64
 		hasOwner := r != nil && r.OwnerID.Valid && billedDelta > 0
@@ -719,16 +729,9 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 			}
 
-			mult := node.RateMultiplier
+			mult := multipliers[r.NodeID]
 			if mult <= 0 {
 				mult = 1.0
-			}
-			if r.NodeID != nodeID {
-				if hm, ok := hopMultipliers[r.NodeID]; ok {
-					if m, ok := hm[nodeID]; ok {
-						mult = m
-					}
-				}
 			}
 			billingRate := 1.0
 			if u != nil && u.BillingRate > 0 {
@@ -737,11 +740,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
 		}
 
-		// rule_hops: last_bytes are raw (for speed display), total_bytes is
-		// the cumulative billed amount so it matches quota accounting. A tcp+udp
-		// hop can fan in as two samples to the same row; last_* take the last
-		// sample's value and addWeighted sums, matching the prior per-sample
-		// UPDATE sequence.
+		// rule_hops: last_bytes stay raw for speed display. total_bytes carries
+		// the billed (weighted) amount on the entry hop — what per-rule traffic
+		// shows and the global quota consumes — and raw bytes on every other hop.
+		// A tcp+udp hop can fan in as two samples to the same row; last_* take
+		// the last sample and the total sums.
 		w := hopWrites[rh.ID]
 		if w == nil {
 			w = &hopWrite{}
@@ -750,19 +753,29 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		w.lastBytes = totalDelta
 		w.lastUp = s.BytesUp
 		w.lastDown = s.BytesDown
-		w.addWeighted += weighted
+		if rh.Position == 0 {
+			w.addWeighted += weighted
+		} else {
+			w.addWeighted += billedDelta
+		}
 
-		if !hasOwner || weighted <= 0 {
+		if !hasOwner {
 			continue
 		}
 
-		userNodeAdds[userNode{userID, nodeID}] += weighted
-		if r.NodeID != nodeID && rh.Position == 0 {
-			userNodeAdds[userNode{userID, r.NodeID}] += weighted
+		// Per-grant quota: raw bytes, charged once per logical segment at its
+		// first hop, onto the segment's logical node grant (the entry segment's
+		// via is rules.node_id, so its grant is included). Suppression marks the
+		// same logical node so RulesAffectedByNode and OnTrafficUpdate stay in
+		// step with this accounting.
+		if via, ok := segFirst[rh.RuleID][rh.Position]; ok {
+			userNodeAdds[userNode{userID, via}] += billedDelta
+			touched[userNode{userID, via}] = true
 		}
-		userAdds[userID] += weighted
-
-		touched[userNode{userID, nodeID}] = true
+		// Global usage is entry-only: bill the weighted amount once, at position 0.
+		if rh.Position == 0 && weighted > 0 {
+			userAdds[userID] += weighted
+		}
 	}
 
 	// Flush every accumulated mutation in a single transaction: one commit (one

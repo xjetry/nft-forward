@@ -638,17 +638,10 @@ func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 		AND NOT EXISTS (
 		  SELECT 1 FROM rule_hops rh2
 		  JOIN rules r2 ON r2.id = rh2.rule_id
-		  JOIN user_nodes un ON un.user_id = r2.owner_id AND un.node_id = rh2.node_id
+		  JOIN user_nodes un ON un.user_id = r2.owner_id AND un.node_id = rh2.via_node_id
 		  WHERE rh2.rule_id = rh.rule_id
 		    AND un.traffic_quota_bytes > 0
 		    AND un.traffic_used_bytes >= un.traffic_quota_bytes
-		)
-		AND NOT EXISTS (
-		  SELECT 1 FROM rules r3
-		  JOIN user_nodes un2 ON un2.user_id = r3.owner_id AND un2.node_id = r3.node_id
-		  WHERE r3.id = rh.rule_id
-		    AND un2.traffic_quota_bytes > 0
-		    AND un2.traffic_used_bytes >= un2.traffic_quota_bytes
 		)
 		AND NOT EXISTS (
 		  SELECT 1 FROM rules r4
