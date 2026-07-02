@@ -1644,11 +1644,20 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	db.ResolveCompositeRateMultiplier(s.DB, allNodes)
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
+	// The landing_nodes preview doubles as a sync point: any successful
+	// resolution keeps the materialized set fresh without waiting for the
+	// background pass.
+	landingPreview, lok := s.resolveLandingExits(target, false)
+	if lok {
+		s.syncLandingExits(target, landingPreview)
+	} else {
+		landingPreview = s.landingNodesFor(target, false)
+	}
 	jsonOK(w, map[string]any{
 		"user": apiUserFullView(target), "nodes": grantedNodes,
 		"grants": grants, "all_nodes": allNodes,
 		"rules":         rules,
-		"landing_nodes": s.landingNodesFor(target, false),
+		"landing_nodes": landingPreview,
 	})
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -27,6 +28,82 @@ func (s *Server) landingNodesFor(u *db.User, force bool) []landing.Node {
 		}
 	}
 	return nodes
+}
+
+// resolveLandingExits resolves the user's admin-assigned landing set for
+// materialization. Unlike landingNodesFor — display-oriented, silently
+// degrading to manual URIs when the subscription fetch fails — it reports
+// failure, because syncing a partial set would flip the subscription's exits
+// to present=0 and shift billing classification on a network blip.
+func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, bool) {
+	var nodes []landing.Node
+	if uris := strings.TrimSpace(u.LandingURIs); uris != "" {
+		nodes = append(nodes, landing.ParseURIs(strings.Split(uris, "\n"))...)
+	}
+	if url := strings.TrimSpace(u.LandingSubURL); url != "" {
+		subNodes, err := s.Landing.Subscription(url, force)
+		if err != nil {
+			return nil, false
+		}
+		nodes = append(nodes, subNodes...)
+	}
+	return nodes, true
+}
+
+// dedupLandingNodes keeps the first node per host:port — manual URIs precede
+// subscription nodes, so they win a collision — as the materialized shape.
+func dedupLandingNodes(nodes []landing.Node) []landing.Node {
+	seen := make(map[string]bool, len(nodes))
+	out := make([]landing.Node, 0, len(nodes))
+	for _, n := range nodes {
+		key := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// syncLandingExits materializes a successfully resolved landing set and
+// re-pushes any exits whose push-exclusion state flipped with presence —
+// excluded rules generate no traffic, so no counters-driven path would ever
+// revive them.
+func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) {
+	deduped := dedupLandingNodes(nodes)
+	exits := make([]db.LandingExitInput, 0, len(deduped))
+	for _, n := range deduped {
+		exits = append(exits, db.LandingExitInput{Host: n.Host, Port: n.Port, Name: n.Name, Protocol: n.Protocol, URI: n.URI})
+	}
+	flipped, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
+	if err != nil {
+		log.Printf("landing: sync exits for user %d: %v", u.ID, err)
+		return
+	}
+	if !synced || len(flipped) == 0 {
+		return
+	}
+	go func() {
+		for _, k := range flipped {
+			s.redispatchUserExit(u.ID, k.Host, k.Port)
+		}
+	}()
+}
+
+// redispatchUserExit re-pushes every node carrying rules that exit to the
+// given landing exit so a changed ledger/quota state reaches the data plane.
+func (s *Server) redispatchUserExit(userID int64, host string, port int) {
+	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
+	if err != nil {
+		log.Printf("landing: nodes for user %d exit %s:%d: %v", userID, host, port, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("landing: re-dispatch node %d for exit %s:%d: %v", n, host, port, err)
+		}
+	}
 }
 
 // landingIndex keys landing nodes by "host:port" for exit classification. The
@@ -81,9 +158,13 @@ func (s *Server) apiSetUserLanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_landing", strconv.FormatInt(id, 10), subURL)
-	// Return a fresh preview so the admin sees what the source resolved to.
+	// Return a fresh preview so the admin sees what the source resolved to,
+	// and materialize it while the resolution is known-good.
 	target, _ := db.GetUserByID(s.DB, id)
-	nodes := s.landingNodesFor(target, true)
+	if nodes, ok := s.resolveLandingExits(target, true); ok {
+		s.syncLandingExits(target, nodes)
+	}
+	nodes := s.landingNodesFor(target, false)
 	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes})
 }
 
