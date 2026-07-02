@@ -363,6 +363,21 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, createRuleResp{ListenPort: listenPort})
 }
 
+// panelHopCount returns the HopCount metadata of the panel-segment rule with
+// the given server RuleID, or 0 when the rule is not in local state. Chain
+// rules (HopCount > 1) must be edited through the per-hop channel: the server
+// rejects whole-rule updates on multi-hop rules.
+func (d *Daemon) panelHopCount(ruleID int64) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, r := range d.owners["panel"] {
+		if r.RuleID == ruleID {
+			return r.HopCount
+		}
+	}
+	return 0
+}
+
 // handleUpdateRule updates a rule: server-side rules (numeric RuleID) relay
 // through WS; local hex-ID rules update in the tui segment directly.
 func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id string) {
@@ -387,7 +402,18 @@ func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id str
 			http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
 			return
 		}
-		ack, err := dl.UpdateRule(r.Context(), updateToWSProto(ruleID, req))
+		var ack wsproto.RuleCmdAck
+		var err error
+		// Multi-hop chain rules only expose port/mode/comment to the node side;
+		// the server owns the rest of the skeleton and rejects rule_update on
+		// them, so those edits go through the per-hop channel instead.
+		if d.panelHopCount(ruleID) > 1 {
+			ack, err = dl.EditRuleHop(r.Context(), wsproto.RuleHopEdit{
+				RuleID: ruleID, ListenPort: req.ListenPort, Mode: req.Mode, Comment: req.Comment,
+			})
+		} else {
+			ack, err = dl.UpdateRule(r.Context(), updateToWSProto(ruleID, req))
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
