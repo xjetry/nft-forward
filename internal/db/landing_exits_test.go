@@ -196,3 +196,40 @@ func TestOpenStripsLegacyExitNameSuffixes(t *testing.T) {
 		t.Errorf("b.com name = %q, want %q", byHost["b.com"], "plain")
 	}
 }
+
+func TestLandingExitNameOverride(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+	if _, _, err := SyncUserLandingExits(d, uid, inputs("a.com"), "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// unknown row: no update, no error
+	updated, err := SetUserLandingExitName(d, uid, "nope.com", 443, "x")
+	if err != nil || updated {
+		t.Fatalf("unknown row: updated=%v err=%v", updated, err)
+	}
+
+	updated, err = SetUserLandingExitName(d, uid, "a.com", 443, "香港 01")
+	if err != nil || !updated {
+		t.Fatalf("set: updated=%v err=%v", updated, err)
+	}
+
+	// the override must survive a re-sync that overwrites the parsed name
+	if _, _, err := SyncUserLandingExits(d, uid, inputs("a.com"), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	exits, _ := ListUserLandingExits(d, uid)
+	if len(exits) != 1 || exits[0].NameOverride != "香港 01" || exits[0].Name != "n-a.com" {
+		t.Fatalf("override lost or name corrupted: %+v", exits[0])
+	}
+
+	// empty name clears the override
+	if _, err := SetUserLandingExitName(d, uid, "a.com", 443, ""); err != nil {
+		t.Fatal(err)
+	}
+	exits, _ = ListUserLandingExits(d, uid)
+	if exits[0].NameOverride != "" {
+		t.Fatalf("override not cleared: %+v", exits[0])
+	}
+}

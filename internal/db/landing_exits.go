@@ -11,16 +11,17 @@ import (
 // URI is server-internal (relay-URI rewriting); it never serializes into
 // admin-facing JSON.
 type LandingExit struct {
-	UserID     int64  `json:"user_id"`
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Name       string `json:"name"`
-	Protocol   string `json:"protocol"`
-	URI        string `json:"-"`
-	Present    bool   `json:"present"`
-	QuotaBytes int64  `json:"quota_bytes"`
-	UsedBytes  int64  `json:"used_bytes"`
-	UpdatedAt  int64  `json:"updated_at"`
+	UserID       int64  `json:"user_id"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	Name         string `json:"name"`
+	NameOverride string `json:"name_override"`
+	Protocol     string `json:"protocol"`
+	URI          string `json:"-"`
+	Present      bool   `json:"present"`
+	QuotaBytes   int64  `json:"quota_bytes"`
+	UsedBytes    int64  `json:"used_bytes"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // LandingExitInput is a deduplicated landing node destined for the
@@ -132,12 +133,12 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 	return flipped, true, nil
 }
 
-const landingExitCols = `user_id, host, port, name, protocol, uri, present, quota_bytes, used_bytes, updated_at`
+const landingExitCols = `user_id, host, port, name, name_override, protocol, uri, present, quota_bytes, used_bytes, updated_at`
 
 func scanLandingExit(r rowScanner) (*LandingExit, error) {
 	e := &LandingExit{}
 	var present int
-	if err := r.Scan(&e.UserID, &e.Host, &e.Port, &e.Name, &e.Protocol, &e.URI, &present, &e.QuotaBytes, &e.UsedBytes, &e.UpdatedAt); err != nil {
+	if err := r.Scan(&e.UserID, &e.Host, &e.Port, &e.Name, &e.NameOverride, &e.Protocol, &e.URI, &present, &e.QuotaBytes, &e.UsedBytes, &e.UpdatedAt); err != nil {
 		return nil, err
 	}
 	e.Present = present == 1
@@ -301,4 +302,19 @@ func NodesForUserExit(d *sql.DB, userID int64, host string, port int) ([]int64, 
 		FROM rule_hops rh
 		JOIN rules r ON r.id = rh.rule_id
 		WHERE r.owner_id=? AND r.exit_host=? AND r.exit_port=?`, userID, host, port)
+}
+
+// SetUserLandingExitName sets or clears (name == "") one exit's display-name
+// override. The override lives outside SyncUserLandingExits so a subscription
+// refresh cannot undo an admin rename; the parsed name column stays intact so
+// clearing the override restores it. Renames never change push exclusion, so
+// no re-dispatch hint is returned.
+func SetUserLandingExitName(d *sql.DB, userID int64, host string, port int, name string) (updated bool, err error) {
+	found, _, err := exitRowPresent(d, userID, host, port)
+	if err != nil || !found {
+		return false, err
+	}
+	_, err = d.Exec(`UPDATE user_landing_exits SET name_override=?, updated_at=? WHERE user_id=? AND host=? AND port=?`,
+		name, now(), userID, host, port)
+	return err == nil, err
 }
