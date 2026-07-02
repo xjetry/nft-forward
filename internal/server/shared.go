@@ -9,6 +9,7 @@ import (
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
+	"nft-forward/internal/resolver"
 )
 
 // ruleView is the per-rule row the list/detail API renders.
@@ -131,6 +132,9 @@ func parseExit(raw string) (string, int, error) {
 	}
 	if host == "" {
 		return "", 0, fmt.Errorf("出口地址不能为空")
+	}
+	if net.ParseIP(host) == nil && !resolver.PlausibleHostname(host) {
+		return "", 0, fmt.Errorf("出口地址非法：%q 不是合法 IP 或域名", host)
 	}
 	return host, port, nil
 }

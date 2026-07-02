@@ -43,3 +43,24 @@ func TestParseExitValidIPv4(t *testing.T) {
 		t.Fatalf("got host=%q port=%d, want host=10.0.0.1 port=80", host, port)
 	}
 }
+
+func TestParseExit(t *testing.T) {
+	cases := []struct {
+		raw     string
+		wantErr bool
+	}{
+		{"1.2.3.4:80", false},
+		{"example.com:443", false},
+		{"[2001:db8::1]:80", false},
+		{"4212:80", true},  // 纯数字 host —— 被误填的端口
+		{"host:0", true},   // 端口非法
+		{":80", true},      // host 空
+		{"nohostport", true},
+	}
+	for _, c := range cases {
+		_, _, err := parseExit(c.raw)
+		if (err != nil) != c.wantErr {
+			t.Errorf("parseExit(%q) err = %v, wantErr = %v", c.raw, err, c.wantErr)
+		}
+	}
+}
