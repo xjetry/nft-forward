@@ -17,7 +17,11 @@ type UserNode struct {
 	// TrafficQuotaBytes is the per-grant quota override; 0 means fall back to the global user quota.
 	TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64 `json:"traffic_used_bytes"`
-	GrantedAt         int64 `json:"granted_at"`
+	// RateLimitMBytes is the per-grant shared rate limit in MB/s; all of the
+	// user's rules on this node share one bucket. 0 = unlimited (unlike the
+	// quota, there is no user-level fallback).
+	RateLimitMBytes int64 `json:"rate_limit_mbytes"`
+	GrantedAt       int64 `json:"granted_at"`
 }
 
 // CreateNodeHops inserts ordered hops for a composite node.
@@ -73,9 +77,9 @@ func RevokeNode(d *sql.DB, userID, nodeID int64) error {
 }
 
 func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
-	row := d.QueryRow(`SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
+	row := d.QueryRow(`SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
 	g := &UserNode{}
-	if err := row.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt); err != nil {
+	if err := row.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.GrantedAt); err != nil {
 		return nil, err
 	}
 	return g, nil
@@ -83,7 +87,7 @@ func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 
 func scanUserNode(r rowScanner) (*UserNode, error) {
 	g := &UserNode{}
-	if err := r.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt); err != nil {
+	if err := r.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.GrantedAt); err != nil {
 		return nil, err
 	}
 	return g, nil
@@ -94,7 +98,7 @@ func scanUserNode(r rowScanner) (*UserNode, error) {
 func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	rows, err := d.Query(`
 		SELECT `+nodeCols+`,
-		       g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.granted_at
+		       g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.granted_at
 		FROM nodes n JOIN user_nodes g ON g.node_id = n.id
 		WHERE g.user_id = ? ORDER BY n.sort_order, n.id`, userID)
 	if err != nil {
@@ -119,7 +123,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 			&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
 			&relayHostDeclared, &relayHostV6Declared,
-			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt,
+			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -165,9 +169,10 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 	MaxForwards       int    `json:"max_forwards"`
 	TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+	RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 	GrantedAt         int64  `json:"granted_at"`
 }, error) {
-	rows, err := d.Query(`SELECT g.user_id, u.username, g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.granted_at
+	rows, err := d.Query(`SELECT g.user_id, u.username, g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.granted_at
 		FROM user_nodes g JOIN users u ON u.id = g.user_id
 		WHERE g.node_id = ? ORDER BY g.granted_at`, nodeID)
 	if err != nil {
@@ -180,6 +185,7 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 		MaxForwards       int    `json:"max_forwards"`
 		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 		TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+		RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 		GrantedAt         int64  `json:"granted_at"`
 	}
 	for rows.Next() {
@@ -189,9 +195,10 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 			MaxForwards       int    `json:"max_forwards"`
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 			TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 			GrantedAt         int64  `json:"granted_at"`
 		}
-		if err := rows.Scan(&r.UserID, &r.Username, &r.MaxForwards, &r.TrafficQuotaBytes, &r.TrafficUsedBytes, &r.GrantedAt); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Username, &r.MaxForwards, &r.TrafficQuotaBytes, &r.TrafficUsedBytes, &r.RateLimitMBytes, &r.GrantedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -200,7 +207,7 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 }
 
 func ListAllGrants(d *sql.DB) ([]*UserNode, error) {
-	return queryAll(d, `SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, granted_at FROM user_nodes`, scanUserNode)
+	return queryAll(d, `SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, granted_at FROM user_nodes`, scanUserNode)
 }
 
 // CheckNodeAccess validates that a user has access to a node. Node owners
@@ -212,4 +219,35 @@ func CheckNodeAccess(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 		return &UserNode{UserID: userID, NodeID: nodeID, MaxForwards: 9999, TrafficQuotaBytes: 0, TrafficUsedBytes: 0}, nil
 	}
 	return GetNodeGrant(d, userID, nodeID)
+}
+
+// GrantShape carries the shaping identity and limit of one rate-limited grant.
+// GrantID is the user_nodes rowid: stable across upserts, so agents can use it
+// as the connmark-backed shaping group id. A revoke+regrant creates a new row
+// and therefore a new group — existing connections fall back to the default
+// class until they reconnect, which is the intended semantics for a new grant.
+type GrantShape struct {
+	GrantID         int64
+	RateLimitMBytes int64
+}
+
+// GrantShapes returns every rate-limited grant keyed by {user_id, node_id}.
+// Unlimited grants (rate 0) are omitted so callers can treat absence as "no
+// shaping".
+func GrantShapes(d *sql.DB) (map[[2]int64]GrantShape, error) {
+	rows, err := d.Query(`SELECT rowid, user_id, node_id, rate_limit_mbytes FROM user_nodes WHERE rate_limit_mbytes > 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[[2]int64]GrantShape{}
+	for rows.Next() {
+		var gs GrantShape
+		var uid, nid int64
+		if err := rows.Scan(&gs.GrantID, &uid, &nid, &gs.RateLimitMBytes); err != nil {
+			return nil, err
+		}
+		out[[2]int64{uid, nid}] = gs
+	}
+	return out, rows.Err()
 }
