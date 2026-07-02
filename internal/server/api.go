@@ -617,8 +617,13 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if _, err := db.GetNode(s.DB, id); err != nil {
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.RelayHostDeclared {
+		jsonErr(w, http.StatusConflict, "该字段由节点 daemon 的 --relay-host 参数管理，如需修改请更新节点配置后重启 daemon")
 		return
 	}
 	var body struct {
@@ -652,8 +657,13 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if _, err := db.GetNode(s.DB, id); err != nil {
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.RelayHostV6Declared {
+		jsonErr(w, http.StatusConflict, "该字段由节点 daemon 的 --relay-host-v6 参数管理，如需修改请更新节点配置后重启 daemon")
 		return
 	}
 	var body struct {
