@@ -121,10 +121,11 @@ export default function RulesList() {
   })
 
   const filterActive = selectedOwners.size > 0 || selectedNodes.size > 0
-  const clearFilters = () => {
-    setSelectedOwners(new Set())
-    setSelectedNodes(new Set())
-  }
+  // A single updateParams call: setSearchParams's updater closes over the
+  // searchParams from this render, not an accumulating prev, so two separate
+  // setSelectedOwners/setSelectedNodes calls here would each compute from the
+  // same stale params and the second navigate would clobber the first's clear.
+  const clearFilters = () => updateParams({ owners: '', nodes: '' })
   // Handed to the detail page via route state so its "返回规则列表" link can
   // restore this exact filter/search combo instead of landing on a bare list.
   const rulesQuery = searchParams.toString()

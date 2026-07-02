@@ -119,6 +119,11 @@ function StatCard({ label, value, unit, sub, accent, icon }) {
 
 function NodeStatus({ node }) {
   if (node.disabled) return <Badge color="amber">禁用</Badge>
+  // A composite node has no agent of its own to sync, so a dispatch error
+  // meant for a single node doesn't apply to it — only online/offline does.
+  if (node.node_type === 'composite') {
+    return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
+  }
   // Surface a sync error (hover for detail) rather than hiding it behind 离线.
   const lastErr = nullStr(node.last_error)
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>

@@ -1009,6 +1009,12 @@ func (s *Server) apiResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var ok, fail int
 	for _, n := range nodes {
+		// Composite nodes have no agent of their own to dispatch to; skipping
+		// them mirrors apiUpgradeAllNodes below and avoids stamping a spurious
+		// dispatch-failure into their last_error.
+		if n.NodeType == "composite" {
+			continue
+		}
 		if err := s.dispatchToNode(n.ID); err != nil {
 			fail++
 		} else {
