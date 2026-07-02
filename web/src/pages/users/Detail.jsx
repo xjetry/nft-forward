@@ -126,10 +126,7 @@ export default function UserDetail() {
 
       {/* Landing-node source (regular users only) */}
       {isRegularUser && (
-        <>
-          <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
-          <LandingExitQuotaCard userId={id} blurred={blurred} />
-        </>
+        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
       )}
 
       {/* Rules */}
@@ -352,11 +349,17 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   const [text, setText] = useState(uris || '')
   const [preview, setPreview] = useState(nodes || [])
   const [roles, setRoles] = useState({})
+  const [exits, setExits] = useState([])
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState(new Set())
   const toast = useToast()
 
-  useEffect(() => { fetchNodeRoles().then(setRoles) }, [])
+  const loadExits = () => {
+    api.get(`/users/${userId}/landing-exits`)
+      .then(d => setExits(d?.exits || []))
+      .catch(err => toast(err.message, 'error'))
+  }
+  useEffect(() => { fetchNodeRoles().then(setRoles); loadExits() }, [userId])
   useEffect(() => { setSel(new Set()) }, [preview])
 
   const submit = async (e) => {
@@ -365,8 +368,21 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
     try {
       const d = await api.post(`/users/${userId}/landing`, { landing_sub_url: url.trim(), landing_uris: text })
       setPreview(d?.landing_nodes || [])
-      toast('已保存'); onDone()
+      toast('已保存'); loadExits(); onDone()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
+  }
+
+  const resetExit = async (ex) => {
+    try {
+      await api.post(`/users/${userId}/landing-exits/reset`, { host: ex.host, port: ex.port })
+      toast('已重置'); loadExits()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  const deleteExit = async (ex) => {
+    try {
+      await api.post(`/users/${userId}/landing-exits/delete`, { host: ex.host, port: ex.port })
+      toast('已删除'); loadExits()
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const handleSetRole = (n, bit) => {
@@ -388,6 +404,17 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   const landingCount = preview.filter(n => roleOf(n) & ROLE_LANDING).length
   const directCount = preview.filter(n => roleOf(n) & ROLE_DIRECT).length
   const unconfiguredCount = preview.filter(n => !roleOf(n)).length
+  const exitByAddr = Object.fromEntries(exits.map(e => [`${e.host}:${e.port}`, e]))
+  const residualExits = exits.filter(e => !e.present)
+
+  // Quota cells stay visible on rows with an active ledger even without the
+  // landing mark: the backend enforces per-exit quotas regardless of role
+  // marks, so an enforcing quota must never be hidden by unmarking a node.
+  const showQuotaFor = (n, st) => {
+    const ex = exitByAddr[`${n.host}:${n.port}`]
+    if (!ex) return null
+    return (st & ROLE_LANDING) || ex.quota_bytes > 0 || ex.used_bytes > 0 ? ex : null
+  }
 
   return (
     <div className="card mb-5">
@@ -410,7 +437,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
           <button type="submit" disabled={loading} className="btn-primary text-xs">保存</button>
         </form>
 
-        {preview.length > 0 && (
+        {(preview.length > 0 || residualExits.length > 0) && (
           <div className="mt-4 border-t border-line-soft pt-4">
             <div className="flex items-center justify-between mb-2">
               <div className="text-xs font-bold text-ink-mut uppercase tracking-wider">
@@ -425,18 +452,53 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
               <thead><tr>
                 <th className="w-8"><input type="checkbox" className="accent-blue-600"
                   checked={preview.length > 0 && sel.size === preview.length} onChange={toggleSelAll} /></th>
-                <th>名称</th><th>协议</th><th>地址</th><th className="text-right">用途</th></tr></thead>
+                <th>名称</th><th>协议</th><th>地址</th><th>限额</th><th>已用</th><th className="text-right">用途</th></tr></thead>
               <tbody>
                 {preview.map((n, i) => {
                   const st = roleOf(n)
+                  const ex = showQuotaFor(n, st)
+                  const exceeded = ex && ex.quota_bytes > 0 && ex.used_bytes >= ex.quota_bytes
                   return (
                     <tr key={i}>
                       <td><input type="checkbox" className="accent-blue-600" checked={sel.has(i)} onChange={() => toggleSel(i)} /></td>
                       <td className="font-semibold">{n.name || '(未命名)'}</td>
                       <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                       <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
+                      <td>{ex ? <ExitQuotaForm userId={userId} exit={ex} onDone={loadExits} /> : <span className="text-xs text-ink-mut">—</span>}</td>
+                      <td className="font-mono text-xs">
+                        {ex ? (
+                          <>
+                            {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
+                            {exceeded && <Badge color="red">已超额</Badge>}
+                            <button onClick={() => resetExit(ex)} className="text-blue-600 text-xs font-semibold ml-2">重置</button>
+                          </>
+                        ) : <span className="text-ink-mut">—</span>}
+                      </td>
                       <td className="text-right">
                         <AdminRoleToggle state={st} onChange={bit => handleSetRole(n, bit)} />
+                      </td>
+                    </tr>
+                  )
+                })}
+                {residualExits.map((ex, i) => {
+                  const exceeded = ex.quota_bytes > 0 && ex.used_bytes >= ex.quota_bytes
+                  return (
+                    <tr key={`residual-${i}`} className="opacity-50">
+                      <td></td>
+                      <td className="font-semibold">
+                        {ex.name || '(未命名)'}
+                        <Badge color="gray">已不在来源</Badge>
+                      </td>
+                      <td className="font-mono text-xs text-ink-soft">{ex.protocol}</td>
+                      <td className="font-mono text-xs"><SensText blurred={blurred}>{ex.host}:{ex.port}</SensText></td>
+                      <td><ExitQuotaForm userId={userId} exit={ex} onDone={loadExits} /></td>
+                      <td className="font-mono text-xs">
+                        {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
+                        {exceeded && <Badge color="red">已超额</Badge>}
+                        <button onClick={() => resetExit(ex)} className="text-blue-600 text-xs font-semibold ml-2">重置</button>
+                      </td>
+                      <td className="text-right">
+                        <button onClick={() => deleteExit(ex)} className="text-red-600 text-xs font-semibold">删除</button>
                       </td>
                     </tr>
                   )
@@ -470,78 +532,6 @@ function ExitQuotaForm({ userId, exit, onDone }) {
       <span className="text-xs text-ink-mut">GB</span>
       <button type="submit" className="btn-secondary text-xs">设限额</button>
     </form>
-  )
-}
-
-function LandingExitQuotaCard({ userId, blurred }) {
-  const [exits, setExits] = useState(null)
-  const [refreshing, setRefreshing] = useState(false)
-  const toast = useToast()
-  const load = (refresh = false) => {
-    if (refresh) setRefreshing(true)
-    api.get(`/users/${userId}/landing-exits${refresh ? '?refresh=1' : ''}`)
-      .then(d => setExits(d?.exits || []))
-      .catch(err => toast(err.message, 'error'))
-      .finally(() => setRefreshing(false))
-  }
-  useEffect(() => { load(false) }, [userId])
-
-  const reset = async (e) => {
-    try {
-      await api.post(`/users/${userId}/landing-exits/reset`, { host: e.host, port: e.port })
-      toast('已重置'); load()
-    } catch (err) { toast(err.message, 'error') }
-  }
-  const del = async (e) => {
-    try {
-      await api.post(`/users/${userId}/landing-exits/delete`, { host: e.host, port: e.port })
-      toast('已删除'); load()
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  if (exits === null) return null
-  return (
-    <div className="card mb-5">
-      <div className="card-header">
-        <h3 className="text-sm font-bold">落地出口限额</h3>
-        <button onClick={() => load(true)} disabled={refreshing} className="btn-secondary text-xs">
-          {refreshing ? '刷新中…' : '刷新'}
-        </button>
-      </div>
-      {exits.length === 0 ? (
-        <div className="p-5 text-xs text-ink-mut">暂无落地出口——先在上方配置落地节点来源。</div>
-      ) : (
-        <div className="tbl-scroll">
-          <table className="tbl">
-            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>限额</th><th>已用</th><th className="text-right">操作</th></tr></thead>
-            <tbody>
-              {exits.map((e, i) => {
-                const exceeded = e.quota_bytes > 0 && e.used_bytes >= e.quota_bytes
-                return (
-                  <tr key={i} className={e.present ? '' : 'opacity-50'}>
-                    <td className="font-semibold">
-                      {e.name || '(未命名)'}
-                      {!e.present && <Badge color="gray">已不在来源</Badge>}
-                    </td>
-                    <td className="font-mono text-xs text-ink-soft">{e.protocol}</td>
-                    <td className="font-mono text-xs"><SensText blurred={blurred}>{e.host}:{e.port}</SensText></td>
-                    <td><ExitQuotaForm userId={userId} exit={e} onDone={load} /></td>
-                    <td className="font-mono text-xs">
-                      {fmtTrafficGB(e.used_bytes, e.quota_bytes)}
-                      {exceeded && <Badge color="red">已超额</Badge>}
-                    </td>
-                    <td className="text-right">
-                      <button onClick={() => reset(e)} className="text-blue-600 text-xs font-semibold">重置</button>
-                      {!e.present && <button onClick={() => del(e)} className="text-red-600 text-xs font-semibold ml-3">删除</button>}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
   )
 }
 
