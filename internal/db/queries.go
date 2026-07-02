@@ -49,6 +49,7 @@ type Node struct {
 	LastSeen     *int64      `json:"last_seen,omitempty"`
 	LastApplyAt  sql.NullInt64 `json:"last_apply_at"`
 	LastError    sql.NullString `json:"last_error"`
+	LastWarning  string         `json:"last_warning"`
 	Disabled     bool         `json:"disabled"`
 	Hidden       bool         `json:"hidden"`
 	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
@@ -261,7 +262,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -280,7 +281,7 @@ func scanNode(r rowScanner) (*Node, error) {
 	if err := r.Scan(
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
-		&lastSeen, &n.LastApplyAt, &n.LastError,
+		&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
@@ -728,18 +729,22 @@ func MarkNodeOffline(d *sql.DB, id int64) error {
 
 // MarkNodeApplied stamps last_apply_at and clears last_error after a
 // successful dispatch. Templates render "已同步" when last_apply_at is
-// set and last_error is empty.
-func MarkNodeApplied(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_error=NULL WHERE id=?`, now(), id)
+// set and last_error is empty. warning carries a non-fatal, dispatch-level
+// caveat (e.g. some rules skipped) so the UI can flag "applied, but..." —
+// pass "" when the apply had nothing to warn about.
+func MarkNodeApplied(d *sql.DB, id int64, warning string) error {
+	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_error=NULL, last_warning=? WHERE id=?`, now(), warning, id)
 	return err
 }
 
 // MarkNodeDispatchError records a dispatch failure so the panel UI can
 // flag the node as out-of-sync. last_apply_at is deliberately not touched
 // — the admin needs to see both "last successful apply was at T" and
-// "but the most recent attempt failed with msg".
+// "but the most recent attempt failed with msg". A newer failed attempt
+// supersedes any prior success's skip-state, so last_warning is cleared
+// and only the error (red) is shown.
 func MarkNodeDispatchError(d *sql.DB, id int64, msg string) error {
-	_, err := d.Exec(`UPDATE nodes SET last_error=? WHERE id=?`, msg, id)
+	_, err := d.Exec(`UPDATE nodes SET last_error=?, last_warning='' WHERE id=?`, msg, id)
 	return err
 }
 

@@ -194,7 +194,7 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
 	}
-	_ = db.MarkNodeApplied(s.DB, nodeID)
+	_ = db.MarkNodeApplied(s.DB, nodeID, "")
 	return nil
 }
 

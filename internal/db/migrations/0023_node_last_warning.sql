@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN last_warning TEXT NOT NULL DEFAULT '';
