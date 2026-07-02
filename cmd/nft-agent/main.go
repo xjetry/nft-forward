@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -15,6 +16,29 @@ import (
 	"nft-forward/internal/sysdeps"
 	"nft-forward/internal/tui"
 )
+
+// validateConnectURL rejects a plaintext ws:// control channel unless the
+// operator explicitly opts in. The panel↔agent link carries root-level upgrade
+// frames, so a MITM on ws:// can push an arbitrary binary and gain RCE — wss://
+// is mandatory in production.
+func validateConnectURL(raw string, allowInsecure bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("--connect 地址无法解析: %v", err)
+	}
+	switch u.Scheme {
+	case "wss":
+		return nil
+	case "ws":
+		if allowInsecure {
+			fmt.Fprintln(os.Stderr, "警告: 使用明文 ws:// 控制信道，存在中间人注入升级帧的风险，仅限本地测试")
+			return nil
+		}
+		return fmt.Errorf("--connect 必须使用 wss://（明文 ws:// 可被中间人注入升级帧实现 RCE）；如确为本地测试，请加 --insecure-connect")
+	default:
+		return fmt.Errorf("--connect 协议必须是 wss://（当前 %q）", u.Scheme)
+	}
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -39,6 +63,7 @@ func runDaemon(args []string) int {
 		portRange      string
 		relayHost      string
 		relayHostV6    string
+		allowInsecure  bool
 	)
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
@@ -50,6 +75,7 @@ func runDaemon(args []string) int {
 	fs.StringVar(&portRange, "port-range", "", "端口范围（如 10001-20000），上报给面板")
 	fs.StringVar(&relayHost, "relay-host", "", "显式声明数据面 IPv4 地址/域名，覆盖面板的自动识别（用于双出口等场景）")
 	fs.StringVar(&relayHostV6, "relay-host-v6", "", "显式声明数据面 IPv6 地址，覆盖面板的自动识别")
+	fs.BoolVar(&allowInsecure, "insecure-connect", false, "允许明文 ws:// 控制信道（仅本地测试；生产必须用 wss://）")
 	if err := fs.Parse(args); err != nil {
 		// Tolerate unknown flags so a binary upgrade that predates a
 		// newly-added install.sh flag doesn't crash the daemon.
@@ -76,6 +102,13 @@ func runDaemon(args []string) int {
 	if !nft.IPForwardEnabled() {
 		if err := nft.EnableIPForward(); err != nil {
 			fmt.Fprintln(os.Stderr, "启用 ip_forward 失败:", err)
+			return 1
+		}
+	}
+
+	if connectURL != "" {
+		if err := validateConnectURL(connectURL, allowInsecure); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 	}

@@ -269,6 +269,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
                                    留空 = 直连。安装时持久化，后续自升级自动沿用
   --purge                          uninstall 模式专用：按角色 scope 清残留数据
   --password PW                    reset-password 模式：新密码（缺省则交互输入或随机生成）
+  --insecure       (NFTF_ALLOW_INSECURE) 允许明文 http/ws 控制信道（有 RCE 风险，仅本地测试）
   -h, --help                       显示此帮助
 
 二进制:
@@ -294,6 +295,7 @@ USAGE
 die() { echo "错误: $*" >&2; exit 1; }
 note() { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
+warn() { printf '\033[33m警告: %s\033[0m\n' "$*" >&2; }
 require_val() {
   if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
     die "$1 需要值（是否漏写了？）"
@@ -307,10 +309,28 @@ persist_gh_proxy() {
   printf '%s' "$GH_PROXY" >"$GH_PROXY_FILE"
 }
 
+# looks_like_installer sanity-checks a freshly downloaded install.sh before it
+# replaces the root-run script. It rejects HTML error pages, truncated bodies,
+# and other garbage a proxy/CDN might return. This is NOT full integrity — a
+# malicious mirror could still serve a valid-looking script — but it stops the
+# common failure mode of installing non-script content as an executable.
+looks_like_installer() {
+  local f="$1"
+  [[ -s "$f" ]] || return 1
+  head -1 "$f" | grep -q '^#!' || return 1
+  grep -q 'nft-forward' "$f" || return 1
+  grep -q 'tui|server|agent' "$f" || return 1
+  return 0
+}
+
 persist_script() {
   if curl -fsSL "$(script_url)" -o "$tmp/upgrade.sh" 2>/dev/null; then
-    install -m 0755 "$tmp/upgrade.sh" "$SCRIPT_PATH"
-    note "升级脚本已保存到 $SCRIPT_PATH（后续升级: sudo nft-forward-upgrade）"
+    if looks_like_installer "$tmp/upgrade.sh"; then
+      install -m 0755 "$tmp/upgrade.sh" "$SCRIPT_PATH"
+      note "升级脚本已保存到 $SCRIPT_PATH（后续升级: sudo nft-forward-upgrade）"
+    else
+      warn "下载的 install.sh 内容异常（疑似错误页/截断），已跳过保存升级脚本"
+    fi
   fi
 }
 
@@ -321,6 +341,10 @@ do_update_script() {
   note "下载最新 install.sh ..."
   curl -fsSL "$surl" -o "$stmp/upgrade.sh" \
     || { rm -rf "$stmp"; die "下载失败: $surl"; }
+  if ! looks_like_installer "$stmp/upgrade.sh"; then
+    rm -rf "$stmp"
+    die "下载的 install.sh 内容异常（疑似错误页/截断），拒绝覆盖 $SCRIPT_PATH"
+  fi
   install -m 0755 "$stmp/upgrade.sh" "$SCRIPT_PATH"
   rm -rf "$stmp"
   ok "升级脚本已更新: $SCRIPT_PATH"
@@ -555,6 +579,7 @@ relay_host_v6=""
 addr=""
 purge=0
 RESET_PW=""
+allow_insecure="${NFTF_ALLOW_INSECURE:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     tui|server|agent|update|update-script|uninstall|reset-password)
@@ -586,6 +611,7 @@ while [[ $# -gt 0 ]]; do
     --gh-proxy) require_val --gh-proxy "${2:-}"; GH_PROXY="$2"; GH_PROXY_EXPLICIT=1; shift 2 ;;
     --gh-proxy=*) GH_PROXY="${1#*=}"; GH_PROXY_EXPLICIT=1; shift ;;
     --purge) purge=1; shift ;;
+    --insecure) allow_insecure=1; shift ;;
     --password) require_val --password "${2:-}"; RESET_PW="$2"; shift 2 ;;
     --password=*) RESET_PW="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -806,15 +832,29 @@ EOF
 
   agent)
     switch_role_cleanup agent
-    # Normalize URL: http→ws, https→wss; append /v1/agents if path empty.
+    # Normalize URL: https→wss, http→ws; append /v1/agents if path empty.
+    # The control channel carries root-level upgrade frames, so plaintext
+    # (http/ws) is refused unless the operator explicitly opts in with
+    # --insecure / NFTF_ALLOW_INSECURE=1 (local testing only).
     panel_url="${panel_url:-${PANEL_URL:-}}"
     [[ -n "$panel_url" ]] || die "agent 模式需要 --panel-url 或 PANEL_URL"
+    insecure_scheme=""
     case "$panel_url" in
       https://*) panel_url="wss://${panel_url#https://}" ;;
-      http://*)  panel_url="ws://${panel_url#http://}" ;;
-      wss://*|ws://*) ;;
+      wss://*) ;;
+      http://*)  panel_url="ws://${panel_url#http://}";  insecure_scheme=1 ;;
+      ws://*) insecure_scheme=1 ;;
       *) die "panel-url 必须以 http(s):// 或 ws(s):// 开头" ;;
     esac
+    connect_insecure_arg=""
+    if [[ -n "$insecure_scheme" ]]; then
+      if [[ -n "$allow_insecure" ]]; then
+        warn "使用明文控制信道 $panel_url —— 存在中间人注入升级帧实现 root RCE 的风险，仅限本地测试"
+        connect_insecure_arg=" --insecure-connect"
+      else
+        die "拒绝明文控制信道：--panel-url 请使用 https:// (wss://)。控制信道会下发 root 级升级帧，明文可被中间人劫持实现 RCE；确为本地测试请加 --insecure（或 NFTF_ALLOW_INSECURE=1）"
+      fi
+    fi
     case "$panel_url" in
       *"/v1/agents"|*"/v1/agents/") ;;
       */) panel_url="${panel_url}v1/agents" ;;
@@ -827,7 +867,7 @@ EOF
     relay_arg=""
     [[ -n "$relay_host" ]] && relay_arg+=" --relay-host $relay_host"
     [[ -n "$relay_host_v6" ]] && relay_arg+=" --relay-host-v6 $relay_host_v6"
-    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}${relay_arg}"
+    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}${relay_arg}${connect_insecure_arg}"
     systemctl daemon-reload
     # enable --now 对已运行的 daemon 是 no-op，不会重启；装 agent 时 daemon 往往
     # 已在运行（纯 daemon 段或先前角色），必须 restart 才能让新写入的 --connect
