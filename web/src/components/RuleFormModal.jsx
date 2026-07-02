@@ -59,7 +59,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   // `initial`, together with its own via_node_ids) every time the modal
   // opens, and an effect can't tell that assignment apart from a real user
   // switch — it would wipe the edit prefill's chain right after seeding it.
-  const pickEntry = (v) => setForm(f => ({ ...f, node_id: v, via_node_ids: [] }))
+  // Select fires onChange even when the clicked option is already selected,
+  // and it emits string values while a seeded node_id may be a number — the
+  // String() comparison keeps a same-entry reselect from clearing the chain.
+  const pickEntry = (v) => setForm(f =>
+    String(v) === String(f.node_id) ? f : { ...f, node_id: v, via_node_ids: [] })
 
   const handleExitBlur = () => {
     if (!landingEnabled || form.exit_kind !== 'custom') return
