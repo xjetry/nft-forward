@@ -22,13 +22,14 @@ import (
 )
 
 type Server struct {
-	DB           *sql.DB
-	Hub          *Hub
-	Dispatcher   *Dispatcher
-	Landing      *landing.Fetcher
-	loginLimiter *loginLimiter
-	stopExpiry   chan struct{}
-	stopCycle    chan struct{}
+	DB              *sql.DB
+	Hub             *Hub
+	Dispatcher      *Dispatcher
+	Landing         *landing.Fetcher
+	loginLimiter    *loginLimiter
+	stopExpiry      chan struct{}
+	stopCycle       chan struct{}
+	stopLandingSync chan struct{}
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -37,7 +38,7 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
@@ -46,6 +47,7 @@ func New(d *sql.DB) (*Server, error) {
 	hub.Redispatch = s.redispatchNodes
 	go s.expiryEnforcer()
 	go s.cycleResetEnforcer()
+	go s.landingSyncEnforcer()
 	return s, nil
 }
 
@@ -129,6 +131,49 @@ func (s *Server) cycleResetEnforcer() {
 				}
 			}
 		}
+	}
+}
+
+// landingSyncEnforcer keeps materialized landing-exit sets in step with
+// subscription content when no page load resolves them. The first pass runs
+// immediately and includes manual-URI users, backfilling existing deployments
+// right after upgrade; the table then persists, so later restarts have no
+// empty-set window.
+func (s *Server) landingSyncEnforcer() {
+	s.landingSyncPass(true)
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopLandingSync:
+			return
+		case <-ticker.C:
+			s.landingSyncPass(false)
+		}
+	}
+}
+
+// landingSyncPass syncs every user with a landing source. includeManualOnly
+// widens the pass to users without a subscription — their set only changes on
+// save, so the periodic pass skips them.
+func (s *Server) landingSyncPass(includeManualOnly bool) {
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("landing: sync pass list users: %v", err)
+		return
+	}
+	for _, u := range users {
+		if !hasLandingSource(u) {
+			continue
+		}
+		if !includeManualOnly && !hasDynamicSource(u) {
+			continue
+		}
+		nodes, ok := s.resolveLandingExits(u, false)
+		if !ok {
+			continue
+		}
+		s.syncLandingExits(u, nodes)
 	}
 }
 
