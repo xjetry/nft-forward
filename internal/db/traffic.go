@@ -18,9 +18,12 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 	return err
 }
 
-// ResetAllUserTraffic zeroes the global traffic counter, all per-node counters
-// and the landing-exit ledger for a user. All three must be cleared together
-// so accounting stays consistent.
+// ResetAllUserTraffic zeroes the global traffic counter, all per-node counters,
+// the landing-exit ledger and the displayed per-rule hop totals for a user —
+// an admin reset promises a clean slate, so every number shown for the user
+// must drop to zero together. rule_hops.last_bytes* are deliberately kept:
+// they snapshot the agent's cumulative counters for delta computation, and
+// zeroing them would re-bill the full counter value on the next sample.
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -34,6 +37,9 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0 WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE rule_hops SET total_bytes = 0 WHERE rule_id IN (SELECT id FROM rules WHERE owner_id = ?)`, userID); err != nil {
 		return err
 	}
 	return tx.Commit()

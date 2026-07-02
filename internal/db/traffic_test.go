@@ -58,6 +58,55 @@ func TestResetAllUserTraffic(t *testing.T) {
 	}
 }
 
+// seedRuleWithTraffic creates one single-hop rule owned by uid with the given
+// accumulated display counter and a nonzero last_bytes snapshot.
+func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort int, totalBytes int64) (hopID int64) {
+	t.Helper()
+	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at) VALUES (?,?,?,?,?,?,0)`,
+		nodeID, uid, "r", "tcp", "8.8.8.8", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleID, _ := res.LastInsertId()
+	res, err = d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, last_bytes, total_bytes) VALUES (?,0,?,?,?,?,?,777,?)`,
+		ruleID, nodeID, "tcp", listenPort, "8.8.8.8", 443, totalBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hopID, _ = res.LastInsertId()
+	return hopID
+}
+
+func TestResetAllUserTrafficClearsRuleCounters(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+	other := createTestUser(t, d)
+	n1 := createTestNode(t, d, "rc")
+	mine := seedRuleWithTraffic(t, d, uid, n1, 20001, 5000)
+	theirs := seedRuleWithTraffic(t, d, other, n1, 20002, 6000)
+
+	if err := ResetAllUserTraffic(d, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	var total, last int64
+	if err := d.QueryRow(`SELECT total_bytes, last_bytes FROM rule_hops WHERE id=?`, mine).Scan(&total, &last); err != nil {
+		t.Fatal(err)
+	}
+	if total != 0 {
+		t.Fatalf("user's rule counter should reset with the user ledgers, got %d", total)
+	}
+	if last != 777 {
+		t.Fatalf("last_bytes is the agent counter snapshot for delta computation and must survive a reset, got %d", last)
+	}
+	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 6000 {
+		t.Fatalf("another user's rule counter must be untouched, got %d", total)
+	}
+}
+
 func TestHopMultipliers(t *testing.T) {
 	d := openTestDB(t)
 	n1 := createTestNode(t, d, "entry")
