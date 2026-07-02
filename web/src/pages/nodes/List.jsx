@@ -461,8 +461,14 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    const validHops = hops.filter(h => h.node_id)
-    if (validHops.length < 2) {
+    // 空行必须显式处理而不是静默过滤：过滤会让"真实尾行"（出口段归规则）
+    // 与界面上按行数标出的尾行错位，倒数第二行会出现一个看似生效实则被
+    // 出口段语义覆盖的模式选择器
+    if (hops.some(h => !h.node_id)) {
+      toast('请为每一跳选择节点，或删除空行', 'error')
+      return
+    }
+    if (hops.length < 2) {
       toast('组合节点至少需要 2 个子节点', 'error')
       return
     }
@@ -471,7 +477,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
       const res = await api.post('/nodes', {
         name,
         node_type: 'composite',
-        hops: validHops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
+        hops: hops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
         user_ids: userIds.length ? userIds.map(Number) : undefined,
       })
       toast('组合节点已创建')
@@ -502,8 +508,13 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
                 <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
                   options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
-                <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
-                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                {/* 尾行没有模式可配：出口段（最后一跳 → 目标）的模式在创建规则时选择 */}
+                {i === hops.length - 1 ? (
+                  <span className="text-xs text-ink-mut text-center shrink-0 cursor-help" style={{ width: 110 }} title="出口段（最后一跳 → 目标）的转发模式在创建规则时选择">-</span>
+                ) : (
+                  <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
+                    options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                )}
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
                 <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>
                 {hops.length > 1 && (

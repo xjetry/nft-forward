@@ -1,0 +1,1 @@
+ALTER TABLE rules ADD COLUMN entry_family TEXT NOT NULL DEFAULT 'v4';

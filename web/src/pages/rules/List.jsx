@@ -193,9 +193,10 @@ export default function RulesList() {
         onSubmit={async (form) => {
           const res = await api.post('/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            mode: form.mode || undefined,
+            mode: form.mode || undefined, exit_mode: form.mode || undefined,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
+            entry_family: form.entry_family || undefined,
           })
           toast('规则已创建'); setCreateOpen(false)
           if (res?.rule?.id) navigate(`/rules/${res.rule.id}`)
@@ -207,9 +208,10 @@ export default function RulesList() {
         onSubmit={async (form) => {
           await api.put(`/rules/${editRule.id}`, {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            mode: form.mode || undefined,
+            mode: form.mode || undefined, exit_mode: form.mode || undefined,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
+            entry_family: form.entry_family || undefined,
           })
           toast('已保存并重下发'); setEditRule(null); load()
         }} />

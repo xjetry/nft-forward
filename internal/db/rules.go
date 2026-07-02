@@ -215,6 +215,21 @@ func hostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
+// EntryAddresses resolves a rule's entry_family against a node's relay
+// addresses. entry is the primary address (v4 by default, so existing single
+// address consumers like RelayURI rewriting keep working unchanged); entryV6
+// is only non-empty for family "both", carrying the second address.
+func EntryAddresses(family, relayHost, relayHostV6 string, port int) (entry, entryV6 string) {
+	switch family {
+	case "v6":
+		return hostPort(relayHostV6, port), ""
+	case "both":
+		return hostPort(relayHost, port), hostPort(relayHostV6, port)
+	default:
+		return hostPort(relayHost, port), ""
+	}
+}
+
 // HopInput is one ordered hop the caller wants the rule to have. Mode is the
 // requested data plane (udp coerces every hop to kernel). DesiredPort, when >0,
 // pins this hop's listen_port to an explicit value instead of the
@@ -230,10 +245,16 @@ type HopInput struct {
 }
 
 // CreateRule inserts the rule header; hops are written by RegenerateRule.
-// entry_listen_port starts at 0 until the first regeneration.
+// entry_listen_port starts at 0 until the first regeneration. Callers that
+// don't set EntryFamily (e.g. the agent WS create path) get the "v4" default
+// normalized here rather than relying on the column's DEFAULT, since the
+// INSERT always supplies the column explicitly.
 func CreateRule(d DBTX, r *Rule) (int64, error) {
-	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,comment,created_at) VALUES (?,?,?,?,?,?,?,?)`,
-		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, now())
+	if r.EntryFamily == "" {
+		r.EntryFamily = "v4"
+	}
+	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,comment,created_at,entry_family) VALUES (?,?,?,?,?,?,?,?,?)`,
+		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, now(), r.EntryFamily)
 	if err != nil {
 		return 0, err
 	}
@@ -249,8 +270,11 @@ func GetRule(d DBTX, id int64) (*Rule, error) {
 // hand in hand with RegenerateRule rebuilding the hops for the new node.
 // entry_listen_port is owned by RegenerateRule and not touched here.
 func UpdateRuleHeader(d DBTX, r *Rule) error {
-	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=? WHERE id=?`,
-		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.ID)
+	if r.EntryFamily == "" {
+		r.EntryFamily = "v4"
+	}
+	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=?,entry_family=? WHERE id=?`,
+		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.EntryFamily, r.ID)
 	return err
 }
 
@@ -523,6 +547,19 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		return "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
 	}
 
+	entryFamily := r.EntryFamily
+	if entryFamily == "" {
+		entryFamily = "v4"
+	}
+	if entryFamily != "v4" && entryFamily != "v6" && entryFamily != "both" {
+		return "", nil, fmt.Errorf("入口类型 %s 无效", entryFamily)
+	}
+	if (entryFamily == "v6" || entryFamily == "both") && rs[0].relayHostV6 == "" {
+		var name string
+		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[0].nodeID).Scan(&name)
+		return "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，无法用作 %s 入口", name, entryFamily)
+	}
+
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
 	// their port — entry endpoint + installed rules don't churn on edits.
 	prev, err := ListRuleHops(tx, r.ID)
@@ -613,7 +650,9 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	for n := range affected {
 		nodes = append(nodes, n)
 	}
-	return hostPort(rs[0].relayHost, ports[0]), nodes, nil
+	entry, entryV6 := EntryAddresses(entryFamily, rs[0].relayHost, rs[0].relayHostV6, ports[0])
+	r.EntryV6 = entryV6
+	return entry, nodes, nil
 }
 
 // RuleHopCounts returns hop count per rule for the given rule IDs.

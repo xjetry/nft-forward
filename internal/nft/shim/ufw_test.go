@@ -218,3 +218,89 @@ func TestUfwShimCleanupAbsentNoOp(t *testing.T) {
 		}
 	}
 }
+
+func TestUfwSync_IPv6MirroredToUfw6Chains(t *testing.T) {
+	f4 := newUfwFake(map[string]string{
+		ufwForwardChain: "-N ufw-user-forward\n",
+		ufwInputChain:   "-N ufw-user-input\n",
+	})
+	f6 := newUfwFake(map[string]string{
+		ufw6ForwardChain: "-N ufw6-user-forward\n",
+		ufw6InputChain:   "-N ufw6-user-input\n",
+	})
+	s := &UfwShim{runIpt: f4.run, runIpt6: f6.run}
+	rules := []nft.Rule{
+		{Proto: "tcp", DestIP: "10.0.0.1", DestPort: 443},
+		{Proto: "tcp", DestIP: "2001:db8::1", DestPort: 443},
+	}
+	err := s.Sync(FirewallState{
+		ForwardRules: rules,
+		ListenPorts:  []ListenPort{{Proto: "tcp", Port: 8443}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined4 := strings.Join(f4.calls, "\n")
+	if strings.Contains(joined4, "2001:db8::1") {
+		t.Fatalf("v6 dest must not land in the v4 chain:\n%s", joined4)
+	}
+	if !strings.Contains(joined4, "-d 10.0.0.1") {
+		t.Fatalf("v4 dest missing from v4 chain:\n%s", joined4)
+	}
+	if !strings.Contains(joined4, "-A ufw-user-input") || !strings.Contains(joined4, "--dport 8443") {
+		t.Fatalf("v4 input chain not synced:\n%s", joined4)
+	}
+
+	joined6 := strings.Join(f6.calls, "\n")
+	if !strings.Contains(joined6, "-A ufw6-user-forward") || !strings.Contains(joined6, "-d 2001:db8::1") {
+		t.Fatalf("v6 forward chain missing the v6 dest:\n%s", joined6)
+	}
+	if strings.Contains(joined6, "10.0.0.1") {
+		t.Fatalf("v4 dest must not land in the v6 chain:\n%s", joined6)
+	}
+	if !strings.Contains(joined6, "--ctstate ESTABLISHED,RELATED") {
+		t.Fatalf("v6 forward chain missing the ct-state accept:\n%s", joined6)
+	}
+	// Listen ports are family-agnostic (a userspace listener binds dual-stack),
+	// so the same port must reach the v6 input chain too.
+	if !strings.Contains(joined6, "-A ufw6-user-input") || !strings.Contains(joined6, "--dport 8443") {
+		t.Fatalf("v6 input chain not synced:\n%s", joined6)
+	}
+}
+
+func TestUfwSync_NilIpt6RunnerSkipsV6Chains(t *testing.T) {
+	f := newUfwFake(map[string]string{
+		ufwForwardChain: "-N ufw-user-forward\n",
+		ufwInputChain:   "-N ufw-user-input\n",
+	})
+	s := &UfwShim{runIpt: f.run} // runIpt6 left nil, as production callers never do
+	rules := []nft.Rule{{Proto: "tcp", DestIP: "2001:db8::1", DestPort: 443}}
+	if err := s.Sync(FirewallState{ForwardRules: rules}); err != nil {
+		t.Fatalf("nil runIpt6 must not panic or error: %v", err)
+	}
+}
+
+func TestUfwShimCleanup_MirrorsV6Chains(t *testing.T) {
+	f4 := newUfwFake(map[string]string{
+		ufwForwardChain: strings.Join([]string{
+			"-N ufw-user-forward",
+			`-A ufw-user-forward -m comment --comment "nft-forward managed" -j ACCEPT`,
+		}, "\n"),
+		ufwInputChain: "-N ufw-user-input\n",
+	})
+	f6 := newUfwFake(map[string]string{
+		ufw6ForwardChain: strings.Join([]string{
+			"-N ufw6-user-forward",
+			`-A ufw6-user-forward -m comment --comment "nft-forward managed" -j ACCEPT`,
+		}, "\n"),
+		ufw6InputChain: "-N ufw6-user-input\n",
+	})
+	s := &UfwShim{runIpt: f4.run, runIpt6: f6.run}
+	if err := s.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(f6.calls, "\n"), "-D ufw6-user-forward 1") {
+		t.Fatalf("cleanup must delete owned rule in the v6 chain too:\n%s", strings.Join(f6.calls, "\n"))
+	}
+}

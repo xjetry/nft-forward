@@ -198,7 +198,7 @@ func (s *Server) apiBranding(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
-	jsonOK(w, map[string]any{"user": apiUserFullView(u), "panel_name": panelName})
+	jsonOK(w, map[string]any{"user": apiUserFullView(u), "panel_name": panelName, "version": serverVersion()})
 }
 
 func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -558,11 +558,13 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"node_hops": nodeHops})
 }
 
-// apiUpdateNodeHops switches the forwarding mode of each hop of a composite
-// node. Membership and order are preserved (the request supplies one mode per
-// existing hop, in order); this only flips kernel/userspace. The new modes
-// shape rules subsequently created on the composite — existing rules keep the
-// modes captured when they were expanded.
+// apiUpdateNodeHops replaces a composite node's hop chain (membership, order,
+// per-hop mode and traffic multiplier). The config modes shape rules
+// subsequently created on the composite, and only for the inter-node
+// segments: the exit segment's mode belongs to the rule (see hopsForNode), so
+// the stored last-hop mode stays dormant until a reorder turns that hop into
+// an inter-node one. Existing rules keep the modes captured when they were
+// expanded.
 func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -1259,13 +1261,19 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		// Mode is the forwarding mode for a single-node rule; composite chains
-		// carry per-hop modes in the node config and ignore it.
-		Mode string `json:"mode"`
-		Hops []struct {
+		// ExitMode is the exit-segment forwarding mode: the only hop of a
+		// single-node rule, or the last hop of a composite chain (whose
+		// inter-node hops take their modes from the node config). Mode is its
+		// legacy alias honored for single-node rules only — see hopsForNode.
+		Mode     string `json:"mode"`
+		ExitMode string `json:"exit_mode"`
+		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
+		// "v6", or "both". Empty defaults to "v4".
+		EntryFamily string `json:"entry_family"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1282,6 +1290,11 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var hops []db.HopInput
 
@@ -1292,7 +1305,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 		}
 	} else if body.NodeID > 0 {
-		derived, derr := s.hopsForNode(body.NodeID, body.Mode)
+		derived, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
@@ -1330,13 +1343,14 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	// subject (this route group is admin-only). The agent/WS path instead
 	// inherits the node owner.
 	rl := &db.Rule{
-		NodeID:   ruleNodeID,
-		OwnerID:  sql.NullInt64{Int64: u.ID, Valid: true},
-		Name:     name,
-		Proto:    proto,
-		ExitHost: exitHost,
-		ExitPort: exitPort,
-		Comment:  strings.TrimSpace(body.Comment),
+		NodeID:      ruleNodeID,
+		OwnerID:     sql.NullInt64{Int64: u.ID, Valid: true},
+		Name:        name,
+		Proto:       proto,
+		ExitHost:    exitHost,
+		ExitPort:    exitPort,
+		Comment:     strings.TrimSpace(body.Comment),
+		EntryFamily: entryFamily,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -1402,27 +1416,39 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 }
 
 // hopsForNode expands a logical entry node into the chain of hops a rule runs
-// over: a single node yields one hop on itself carrying singleMode as its
-// forwarding mode; a composite yields its ordered sub-node hops (each hop's
-// mode comes from the node config, so singleMode is ignored). Used when
-// (re)pointing a rule at a node so create and edit derive the chain the same way.
-func (s *Server) hopsForNode(nodeID int64, singleMode string) ([]db.HopInput, error) {
+// over: a single node yields one hop on itself; a composite yields its ordered
+// sub-node hops. The composite config's modes only cover the inter-node
+// segments — the exit segment (last hop -> exit target) belongs to the rule,
+// so the last hop carries the request's exitMode (empty falls back to the
+// kernel default, same as a single-node rule). singleMode is the legacy alias
+// honored for single-node rules only: clients predating exit_mode always sent
+// mode prefilled from the first hop, so letting it reach a composite's exit
+// hop would rewrite the exit segment on every edit from a stale web bundle.
+// The composite return flag tells edit handlers which fields count as an
+// explicit mode request. Used when (re)pointing a rule at a node so create
+// and edit derive the chain the same way.
+func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []db.HopInput, composite bool, err error) {
 	node, err := db.GetNode(s.DB, nodeID)
 	if err != nil {
-		return nil, fmt.Errorf("节点不存在")
+		return nil, false, fmt.Errorf("节点不存在")
 	}
 	if node.NodeType == "composite" {
 		nh, _ := db.ListNodeHops(s.DB, nodeID)
 		if len(nh) == 0 {
-			return nil, fmt.Errorf("组合节点无子节点")
+			return nil, true, fmt.Errorf("组合节点无子节点")
 		}
-		hops := make([]db.HopInput, len(nh))
+		hops = make([]db.HopInput, len(nh))
 		for i, h := range nh {
 			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode}
 		}
-		return hops, nil
+		hops[len(hops)-1].Mode = exitMode
+		return hops, true, nil
 	}
-	return []db.HopInput{{NodeID: nodeID, Mode: singleMode}}, nil
+	mode := exitMode
+	if mode == "" {
+		mode = singleMode
+	}
+	return []db.HopInput{{NodeID: nodeID, Mode: mode}}, false, nil
 }
 
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
@@ -1444,14 +1470,20 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		// Mode is the forwarding mode for a single-node rule; empty keeps the
-		// current mode so clients that don't send it can't silently reset a
-		// userspace rule back to kernel.
-		Mode string `json:"mode"`
-		Hops []struct {
+		// ExitMode is the exit-segment forwarding mode (single hop or a
+		// chain's last hop); empty keeps the current mode so clients that
+		// don't send it can't silently reset a userspace exit back to kernel.
+		// Mode is its legacy alias honored for single-node rules only — see
+		// hopsForNode.
+		Mode     string `json:"mode"`
+		ExitMode string `json:"exit_mode"`
+		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
+		// "v6", or "both". Empty defaults to "v4".
+		EntryFamily string `json:"entry_family"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -1468,6 +1500,11 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Three ways to resolve the chain, in priority order:
 	//   node_id  -> re-derive from the selected entry node (single/composite);
 	//               this is how the entry node gets switched.
@@ -1478,15 +1515,21 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	var hops []db.HopInput
 	switch {
 	case body.NodeID > 0:
-		derived, derr := s.hopsForNode(body.NodeID, body.Mode)
+		derived, composite, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
 		}
 		hops = derived
-		if body.Mode == "" && body.NodeID == rl.NodeID && len(hops) == 1 {
-			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) == 1 {
-				hops[0].Mode = existing[0].Mode
+		// A same-node edit without an explicit exit-segment mode keeps the
+		// exit hop's current mode, so clients that don't send one can't
+		// silently reset a userspace exit back to kernel. Composite chains
+		// only treat exit_mode as explicit — the legacy mode field never was
+		// an exit-segment request for them.
+		explicit := body.ExitMode != "" || (!composite && body.Mode != "")
+		if !explicit && body.NodeID == rl.NodeID {
+			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
+				hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 			}
 		}
 		rl.NodeID = body.NodeID
@@ -1515,6 +1558,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
+	rl.EntryFamily = entryFamily
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1536,7 +1580,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "entry": entry})
+	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": rl.EntryV6})
 }
 
 func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
@@ -2252,9 +2296,15 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		// Mode is the forwarding mode for a single-node rule; composite chains
-		// carry per-hop modes in the node config and ignore it.
-		Mode string `json:"mode"`
+		// ExitMode is the exit-segment forwarding mode: the only hop of a
+		// single-node rule, or the last hop of a composite chain (whose
+		// inter-node hops take their modes from the node config). Mode is its
+		// legacy alias honored for single-node rules only — see hopsForNode.
+		Mode     string `json:"mode"`
+		ExitMode string `json:"exit_mode"`
+		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
+		// "v6", or "both". Empty defaults to "v4".
+		EntryFamily string `json:"entry_family"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2267,6 +2317,11 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exitHost, exitPort, err := parseExit(body.Exit)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -2286,7 +2341,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hops, derr := s.hopsForNode(body.NodeID, body.Mode)
+	hops, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
@@ -2317,13 +2372,14 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	rl := &db.Rule{
-		NodeID:   body.NodeID,
-		OwnerID:  nullInt64(u.ID),
-		Name:     name,
-		Proto:    proto,
-		ExitHost: exitHost,
-		ExitPort: exitPort,
-		Comment:  strings.TrimSpace(body.Comment),
+		NodeID:      body.NodeID,
+		OwnerID:     nullInt64(u.ID),
+		Name:        name,
+		Proto:       proto,
+		ExitHost:    exitHost,
+		ExitPort:    exitPort,
+		Comment:     strings.TrimSpace(body.Comment),
+		EntryFamily: entryFamily,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -2343,7 +2399,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry})
+	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry, "entry_v6": rl.EntryV6})
 }
 
 // apiMyUpdateRule lets a user edit their own rule: name / proto / exit / comment
@@ -2382,10 +2438,16 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		// Mode is the forwarding mode for a single-node rule; empty keeps the
-		// current mode so clients that don't send it can't silently reset a
-		// userspace rule back to kernel.
-		Mode string `json:"mode"`
+		// ExitMode is the exit-segment forwarding mode (single hop or a
+		// chain's last hop); empty keeps the current mode so clients that
+		// don't send it can't silently reset a userspace exit back to kernel.
+		// Mode is its legacy alias honored for single-node rules only — see
+		// hopsForNode.
+		Mode     string `json:"mode"`
+		ExitMode string `json:"exit_mode"`
+		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
+		// "v6", or "both". Empty defaults to "v4".
+		EntryFamily string `json:"entry_family"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2402,6 +2464,11 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	nodeID := rl.NodeID
 	if body.NodeID > 0 {
 		nodeID = body.NodeID
@@ -2414,14 +2481,17 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "无权使用该节点")
 		return
 	}
-	hops, derr := s.hopsForNode(nodeID, body.Mode)
+	hops, composite, derr := s.hopsForNode(nodeID, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
 	}
-	if body.Mode == "" && nodeID == rl.NodeID && len(hops) == 1 {
-		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) == 1 {
-			hops[0].Mode = existing[0].Mode
+	// Same-node edits without an explicit exit-segment mode keep the exit
+	// hop's current mode (see the admin update handler for the rationale).
+	explicit := body.ExitMode != "" || (!composite && body.Mode != "")
+	if !explicit && nodeID == rl.NodeID {
+		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
+			hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 		}
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
@@ -2448,6 +2518,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	rl.NodeID = nodeID
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
+	rl.EntryFamily = entryFamily
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -2469,7 +2540,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "entry": entry})
+	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": rl.EntryV6})
 }
 
 func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {

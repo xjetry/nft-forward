@@ -49,9 +49,10 @@ export default function MyRuleDetail() {
   const saveEdit = async (form) => {
     await api.put(`/my/rules/${rule.id}`, {
       node_id: Number(form.node_id), name: form.name, proto: form.proto,
-      mode: form.mode || undefined,
+      mode: form.mode || undefined, exit_mode: form.mode || undefined,
       exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
       comment: form.comment || undefined,
+      entry_family: form.entry_family || undefined,
     })
     toast('已保存并重下发'); setShowEdit(false); load()
   }
@@ -89,6 +90,17 @@ export default function MyRuleDetail() {
                   复制
                 </button>
               </div>
+              {rule.entry_v6 && (
+                <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY (v6)</span>
+                  <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry_v6}</SensText></span>
+                  <button onClick={() => copyToClipboard(rule.entry_v6).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
+                    className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                    复制
+                  </button>
+                </div>
+              )}
               {rule.relay_uri && (
                 <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">PROXY</span>

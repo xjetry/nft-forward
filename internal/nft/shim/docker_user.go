@@ -2,12 +2,15 @@ package shim
 
 import (
 	"strconv"
+
+	"nft-forward/internal/nft"
 )
 
 const (
-	dockerUserFamily = "ip"
-	dockerUserTable  = "filter"
-	dockerUserChain  = "DOCKER-USER"
+	dockerUserFamily  = "ip"
+	dockerUserFamily6 = "ip6"
+	dockerUserTable   = "filter"
+	dockerUserChain   = "DOCKER-USER"
 )
 
 // DockerUserShim integrates with Docker's DOCKER-USER chain. Docker
@@ -33,20 +36,33 @@ func (s *DockerUserShim) Detect() bool {
 	return err == nil
 }
 
-// Sync updates DOCKER-USER with FORWARD accepts for the current DNAT targets.
-// Docker manages host INPUT filtering separately, so listen ports are ignored.
+// Sync updates DOCKER-USER with FORWARD accepts for the current DNAT
+// targets, in both the ip and ip6 tables — Docker creates DOCKER-USER
+// separately in each family, and a rule added to one never covers the
+// other. Docker manages host INPUT filtering separately, so listen ports
+// are ignored.
 func (s *DockerUserShim) Sync(state FirewallState) error {
-	out, err := s.runNft("-a", "list", "chain", dockerUserFamily, dockerUserTable, dockerUserChain)
+	if err := s.syncFamily(dockerUserFamily, state.ForwardRules); err != nil {
+		return err
+	}
+	return s.syncFamily(dockerUserFamily6, state.ForwardRules)
+}
+
+func (s *DockerUserShim) syncFamily(family string, rules []nft.Rule) error {
+	out, err := s.runNft("-a", "list", "chain", family, dockerUserTable, dockerUserChain)
 	if err != nil {
-		return nil // chain absent; nothing to do
+		return nil // chain absent for this family; nothing to do
 	}
 	stale := parseShimHandles(out)
-	script := renderShimScript(dockerUserFamily, dockerUserTable, dockerUserChain, state.ForwardRules, stale)
+	script := renderShimScript(family, dockerUserTable, dockerUserChain, rules, stale)
 	return s.runNftScript(script)
 }
 
 func (s *DockerUserShim) Cleanup() error {
-	return cleanupChain(s.runNft, s.runNftScript, dockerUserFamily, dockerUserTable, dockerUserChain)
+	if err := cleanupChain(s.runNft, s.runNftScript, dockerUserFamily, dockerUserTable, dockerUserChain); err != nil {
+		return err
+	}
+	return cleanupChain(s.runNft, s.runNftScript, dockerUserFamily6, dockerUserTable, dockerUserChain)
 }
 
 // formatDelete produces a single `delete rule family table chain handle N`

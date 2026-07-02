@@ -92,9 +92,17 @@ type Rule struct {
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
 	CreatedAt       int64         `json:"created_at"`
+	// EntryFamily selects which of the entry node's relay addresses the entry
+	// endpoint advertises: "v4" (default), "v6", or "both". Validated and
+	// resolved against the entry node's relay_host/relay_host_v6 in RegenerateRule.
+	EntryFamily string `json:"entry_family"`
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
+	// EntryV6 is not a rules-table column; RegenerateRule sets it on create/edit
+	// when entry_family is "both" so the immediate response can show the second
+	// address alongside EntryListenPort's primary one.
+	EntryV6 string `json:"entry_v6,omitempty"`
 }
 
 type RuleHop struct {
@@ -559,12 +567,12 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 // out of the projection rather than dropped (dropping needs a table rebuild).
 // bandwidth_mbps is likewise dead (shaping moved to the per-grant rate limit
 // on user_nodes) and stays out of the projection.
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1

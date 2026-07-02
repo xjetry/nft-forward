@@ -78,11 +78,42 @@ func TestDockerUserShimSyncInjectsRule(t *testing.T) {
 	if err := s.Sync(FirewallState{ForwardRules: rules}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.scripts) != 1 {
-		t.Fatalf("expected 1 script, got %d", len(r.scripts))
+	// The fake's chain listing succeeds for any family, so Sync's ip and ip6
+	// passes both produce a script (see the fake's listOut in newDockerUserShimWith).
+	if len(r.scripts) != 2 {
+		t.Fatalf("expected 2 scripts (ip + ip6), got %d", len(r.scripts))
 	}
 	if !strings.Contains(r.scripts[0], "ip daddr 10.20.1.20 tcp dport 8443 counter accept") {
-		t.Fatalf("rule missing from script:\n%s", r.scripts[0])
+		t.Fatalf("rule missing from ip script:\n%s", r.scripts[0])
+	}
+	if strings.Contains(r.scripts[1], "ip daddr") {
+		t.Fatalf("ip6 script must not carry the v4 rule as an ip6 daddr match:\n%s", r.scripts[1])
+	}
+}
+
+// TestDockerUserShimSyncMirrorsIPv6Rule verifies a v6 DNAT target lands only
+// in the ip6 family's script, as "ip6 daddr" — not "ip daddr" ip6tables
+// would reject at nft -f time.
+func TestDockerUserShimSyncMirrorsIPv6Rule(t *testing.T) {
+	r := &recorder{
+		listOut: `table ip filter {
+	chain DOCKER-USER {
+	}
+}`,
+	}
+	s := newDockerUserShimWith(r)
+	rules := []nft.Rule{{Proto: "tcp", DestIP: "2001:db8::1", DestPort: 8443}}
+	if err := s.Sync(FirewallState{ForwardRules: rules}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.scripts) != 2 {
+		t.Fatalf("expected 2 scripts (ip + ip6), got %d", len(r.scripts))
+	}
+	if strings.Contains(r.scripts[0], "2001:db8::1") {
+		t.Fatalf("v6 dest must not land in the ip script:\n%s", r.scripts[0])
+	}
+	if !strings.Contains(r.scripts[1], "ip6 daddr 2001:db8::1 tcp dport 8443 counter accept") {
+		t.Fatalf("v6 rule missing from ip6 script:\n%s", r.scripts[1])
 	}
 }
 
@@ -121,8 +152,10 @@ func TestDockerUserShimCleanupRemovesAll(t *testing.T) {
 	if err := s.Cleanup(); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.scripts) != 1 {
-		t.Fatalf("expected 1 cleanup script, got %d", len(r.scripts))
+	// The fake's chain listing succeeds for any family, so Cleanup's ip and
+	// ip6 passes both emit a script.
+	if len(r.scripts) != 2 {
+		t.Fatalf("expected 2 cleanup scripts (ip + ip6), got %d", len(r.scripts))
 	}
 	script := r.scripts[0]
 	if !strings.Contains(script, "delete rule ip filter DOCKER-USER handle 7") {

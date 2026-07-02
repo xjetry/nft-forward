@@ -14,6 +14,7 @@ export function useToast() { return useContext(ToastCtx) }
 export function UserProvider({ children }) {
   const [user, setUser] = useState(undefined) // undefined = loading, null = not logged in
   const [panelName, setPanelName] = useState('')
+  const [version, setVersion] = useState('')
   const [toasts, setToasts] = useState([])
   const idRef = useRef(0)
 
@@ -21,6 +22,7 @@ export function UserProvider({ children }) {
     api.get('/me').then(data => {
       setUser(data?.user ?? null)
       setPanelName(data?.panel_name || '')
+      setVersion(data?.version || '')
     }).catch(() => setUser(null))
   }, [])
 
@@ -31,7 +33,7 @@ export function UserProvider({ children }) {
   }, [])
 
   return (
-    <UserCtx.Provider value={{ user, setUser, panelName }}>
+    <UserCtx.Provider value={{ user, setUser, panelName, version }}>
       <ToastCtx.Provider value={toast}>
         {children}
         {/* Toast stack */}
@@ -51,8 +53,16 @@ export function UserProvider({ children }) {
 }
 
 /* ---------- Layout (sidebar + content) ---------- */
+const REPO_URL = 'https://github.com/xjetry/nft-forward'
+
+const IconGitHub = () => (
+  <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+  </svg>
+)
+
 export function Layout({ children }) {
-  const { user, panelName } = useUser()
+  const { user, panelName, version } = useUser()
   const navigate = useNavigate()
   const [sideOpen, setSideOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('nf-sidebar') === '1')
@@ -107,12 +117,16 @@ export function Layout({ children }) {
           {/* Brand */}
           <div className={`flex items-center gap-3 pt-5 pb-5 ${collapsed ? 'px-3 justify-center' : 'px-5'}`}>
             <div className="w-[42px] h-[42px] rounded-[11px] flex-none grid place-items-center text-white shadow-[0_6px_18px_-6px_rgba(74,108,247,0.7)]"
+              title={collapsed && version ? version : undefined}
               style={{ background: 'linear-gradient(150deg, #5b7cfa, #3a5bef)' }}>
               <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
             </div>
             {!collapsed && <div>
               <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">{panelName || 'nft-forward'}</div>
-              <div className="text-[12px] text-[#6b7280] mt-0.5">{isAdmin ? '管理面板' : '用户面板'}</div>
+              <div className="text-[12px] text-[#6b7280] mt-0.5">
+                {isAdmin ? '管理面板' : '用户面板'}
+                {version && <span className="font-mono"> · {version}</span>}
+              </div>
             </div>}
           </div>
 
@@ -159,6 +173,10 @@ export function Layout({ children }) {
                 <button onClick={handleLogout} title="退出登录" className="w-[34px] h-[34px] rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors grid place-items-center">
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                 </button>
+                <a href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
+                  className="w-[34px] h-[34px] rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors grid place-items-center">
+                  <IconGitHub />
+                </a>
               </div>
             ) : (<>
               <div className="flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
@@ -173,6 +191,10 @@ export function Layout({ children }) {
               <div className="flex gap-2">
                 <NavLink to="/change-password" className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
                 <button onClick={handleLogout} className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
+                <a href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
+                  className="flex-none w-[34px] grid place-items-center rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors">
+                  <IconGitHub />
+                </a>
               </div>
             </>)}
             {/* Collapse toggle — desktop only */}

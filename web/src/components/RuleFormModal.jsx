@@ -3,7 +3,7 @@ import { Modal, Select, ProbeButton, nodeStack } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel', entry_family: 'v4' }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -37,6 +37,18 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     }
     setForm(seed)
   }, [open])
+
+  // A node switch that lands on a single-stack node can't keep a v6/both
+  // entry type — force it back to v4 rather than submitting a family the
+  // new node doesn't support.
+  useEffect(() => {
+    const n = nodes.find(x => String(x.id) === String(form.node_id))
+    if (!n) return
+    const { entryV4, entryV6 } = nodeStack(n)
+    if (!(entryV4 && entryV6)) {
+      setForm(f => f.entry_family === 'v4' ? f : { ...f, entry_family: 'v4' })
+    }
+  }, [form.node_id, nodes])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -102,22 +114,47 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
         <div className="grid grid-cols-[120px_1fr] gap-6 items-center">
           <label className="fl">入口节点</label>
           <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
+          {(() => {
+            const selNode = nodes.find(n => String(n.id) === String(form.node_id))
+            if (!selNode) return null
+            const { entryV4, entryV6 } = nodeStack(selNode)
+            if (!(entryV4 && entryV6)) return null
+            return (
+              <>
+                <label className="fl">入口类型</label>
+                <div className="inline-flex gap-1 p-1 rounded-[10px] border border-line bg-surface w-fit">
+                  {[['v4', 'IPv4'], ['v6', 'IPv6'], ['both', 'IPv4+IPv6']].map(([k, lbl]) => (
+                    <button key={k} type="button" onClick={() => set('entry_family', k)}
+                      className={`px-4 py-[9px] rounded-[7px] text-[14px] font-semibold transition-colors ${(form.entry_family || 'v4') === k ? 'bg-blue-600 text-white' : 'text-ink-soft hover:text-ink'}`}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )
+          })()}
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
           <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
             options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
-          {/* 组合节点的模式在节点配置里按跳设置，这里只对单点规则开放 */}
+          {/* 模式作用于出口段（最后一跳 → 目标）：单点规则即唯一一跳；
+              组合链路的节点间各跳模式由组合节点配置决定，这里只管出口段 */}
           {(() => {
             const selNode = nodes.find(n => String(n.id) === String(form.node_id))
-            if (!selNode || selNode.node_type === 'composite') return null
+            if (!selNode) return null
+            const composite = selNode.node_type === 'composite'
             return (
               <>
-                <label className="fl">转发模式</label>
+                <label className="fl">{composite ? '出口段模式' : '转发模式'}</label>
                 <div className="flex items-center gap-2.5 flex-wrap">
                   <Select value={form.mode || 'kernel'} onChange={v => set('mode', v)} style={{ width: 160 }}
                     options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-                  <span className="text-xs text-ink-mut">内核态支持 TCP/UDP；用户态仅 TCP，UDP 自动走内核态</span>
+                  <span className="text-xs text-ink-mut">
+                    {composite
+                      ? '仅作用于最后一跳 → 目标；节点间各跳由组合节点配置决定。用户态仅 TCP，UDP 自动走内核态'
+                      : '内核态支持 TCP/UDP；用户态仅 TCP，UDP 自动走内核态'}
+                  </span>
                 </div>
               </>
             )
@@ -197,7 +234,10 @@ export function ruleToForm(rule) {
     exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
     entry_port: rule.entry_listen_port > 0 ? String(rule.entry_listen_port) : '',
     comment: rule.comment || '',
-    mode: rule.entry_mode || 'kernel',
+    // 模式字段的语义是出口段（尾跳）；entry_mode 兜底兼容旧列表载荷，
+    // 单点规则两者本就相同。
+    mode: rule.exit_mode || rule.entry_mode || 'kernel',
+    entry_family: rule.entry_family || 'v4',
   }
 }
 

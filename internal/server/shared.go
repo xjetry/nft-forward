@@ -16,28 +16,31 @@ import (
 type ruleView struct {
 	Rule        *db.Rule
 	Entry       string
+	EntryV6     string
 	Exit        string
 	EntryNodeID int64
 	EntryMode   string
+	ExitMode    string
 	OwnerName   string
 }
 
 func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	hops, _ := db.ListRuleHops(s.DB, r.ID)
 	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
-	entry := "—"
+	entry, entryV6 := "—", ""
 	var entryNodeID int64
-	entryMode := ""
+	entryMode, exitMode := "", ""
 	if len(hops) > 0 {
 		entryMode = hops[0].Mode
+		exitMode = hops[len(hops)-1].Mode
 	}
 	if len(hops) > 0 && r.EntryListenPort > 0 {
 		entryNodeID = hops[0].NodeID
 		if n, err := db.GetNode(s.DB, hops[0].NodeID); err == nil && n.RelayHost != "" {
-			entry = net.JoinHostPort(n.RelayHost, strconv.Itoa(r.EntryListenPort))
+			entry, entryV6 = db.EntryAddresses(r.EntryFamily, n.RelayHost, n.RelayHostV6, r.EntryListenPort)
 		}
 	}
-	return ruleView{Rule: r, Entry: entry, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode}
+	return ruleView{Rule: r, Entry: entry, EntryV6: entryV6, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode, ExitMode: exitMode}
 }
 
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
@@ -46,13 +49,20 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 // fields. A wrapped {"rule":{...}} shape would leave r.id undefined in the UI.
 type ruleListItem struct {
 	*db.Rule
-	OwnerName   string `json:"owner_name"`
-	Entry       string `json:"entry"`
+	OwnerName string `json:"owner_name"`
+	Entry     string `json:"entry"`
+	// EntryV6 is the rule's secondary entry address, populated only when
+	// entry_family is "both"; it shadows the embedded db.Rule.EntryV6 (which
+	// only carries a value transiently right after create/edit) with the
+	// read-path value computed in buildRuleView.
+	EntryV6     string `json:"entry_v6,omitempty"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
-	// EntryMode is the first hop's forwarding mode; for single-node rules this
-	// is the rule's mode and prefills the edit form's kernel/userspace picker.
+	// EntryMode is the first hop's forwarding mode. ExitMode is the last
+	// hop's — the exit segment the rule owns — and prefills the edit form's
+	// kernel/userspace picker; on single-node rules the two coincide.
 	EntryMode string `json:"entry_mode"`
+	ExitMode  string `json:"exit_mode"`
 	// ExitKind is "landing" when the exit host:port matches one of the owner's
 	// admin-assigned landing nodes, else "custom". LandingURI is the original
 	// (direct) proxy URI; RelayURI is that URI with its host:port rewritten to
@@ -79,7 +89,7 @@ type nodeHopView struct {
 
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode}
+	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, EntryV6: v.EntryV6, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode, ExitMode: v.ExitMode}
 }
 
 // classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to
@@ -124,6 +134,21 @@ func validRuleProto(proto string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// normalizeEntryFamily validates a client-supplied entry_family, defaulting
+// an empty value to "v4" so old frontends that never send the field keep
+// today's behavior.
+func normalizeEntryFamily(v string) (string, error) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "":
+		return "v4", nil
+	case "v4", "v6", "both":
+		return v, nil
+	default:
+		return "", fmt.Errorf("entry_family 须为 v4、v6 或 both")
 	}
 }
 

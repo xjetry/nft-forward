@@ -599,7 +599,8 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
         <span className="text-[12.5px] text-ink-mut">{rows.length} 跳</span>
       </div>
       <p className="text-[12.5px] text-ink-mut mb-2.5">
-        拖拽 ⠿ 调整顺序。内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP。修改对此后新建的规则生效。
+        拖拽 ⠿ 调整顺序。模式作用于该跳到下一跳之间的段（内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP）；
+        出口段（最后一跳 → 目标）的模式在规则上选择。修改对此后新建的规则生效。
       </p>
       <div className="space-y-2">
         {rows.map((r, i) => (
@@ -615,8 +616,14 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
                 if (nd) setField(i, 'node_name', nd.name)
               }}
               options={singleNodes.filter(n => n.id === Number(r.node_id) || !rows.some((rr, j) => j !== i && Number(rr.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
-            <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
-              options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+            {/* 尾行没有模式可配：出口段的模式归规则所有；这行存的 mode 只在
+                之后被重排成中间跳时才重新生效 */}
+            {i === rows.length - 1 ? (
+              <span className="text-xs text-ink-mut text-center shrink-0 cursor-help" style={{ width: 120 }} title="出口段（最后一跳 → 目标）的转发模式在规则上选择">-</span>
+            ) : (
+              <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
+                options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+            )}
             <input className="input-field font-mono" type="number" min="0" step="0.1"
               value={r.mult} onChange={e => setField(i, 'mult', e.target.value)}
               style={{ width: 80 }} title="倍率" />
