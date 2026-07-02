@@ -495,6 +495,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/landing-exits/quota", s.apiSetLandingExitQuota)
 			r.Post("/users/{id}/landing-exits/reset", s.apiResetLandingExitTraffic)
 			r.Post("/users/{id}/landing-exits/delete", s.apiDeleteLandingExit)
+			r.Post("/users/{id}/landing-exits/rename", s.apiRenameLandingExit)
 
 			r.Get("/users", s.apiListUsers)
 			r.Patch("/users/{id}/profile", s.apiUpdateUserProfile)

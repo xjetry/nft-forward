@@ -379,3 +379,37 @@ func (s *Server) apiDeleteLandingExit(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("%s:%d", body.Host, body.Port))
 	jsonOK(w, map[string]any{"ok": true})
 }
+
+// apiRenameLandingExit sets or clears a display-name override on one exit.
+// The override outlives subscription syncs and is what the user-facing list
+// and copied URIs show; an empty name falls back to the parsed one.
+func (s *Server) apiRenameLandingExit(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	updated, err := db.SetUserLandingExitName(s.DB, id, body.Host, body.Port, name)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !updated {
+		jsonErr(w, http.StatusNotFound, "出口不存在")
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.rename_exit", strconv.FormatInt(id, 10),
+		fmt.Sprintf("%s:%d name=%q", body.Host, body.Port, name))
+	jsonOK(w, map[string]any{"ok": true})
+}

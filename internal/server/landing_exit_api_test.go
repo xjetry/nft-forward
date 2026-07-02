@@ -106,3 +106,53 @@ func TestAPILandingExitsRequireAdmin(t *testing.T) {
 		t.Fatal("non-admin must be rejected")
 	}
 }
+
+func TestAPILandingExitRename(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 10)
+	db.SyncUserLandingExits(d, uid, []db.LandingExitInput{
+		{Host: "1.2.3.4", Port: 443, Name: "HK", Protocol: "vless", URI: "vless://u@1.2.3.4:443#HK"},
+	}, "", "")
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	rec := adminPost(t, s, admin, "/api/users/"+itoa(uid)+"/landing-exits/rename",
+		map[string]any{"host": "1.2.3.4", "port": 443, "name": "香港 01"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body.String())
+	}
+	exits, _ := db.ListUserLandingExits(d, uid)
+	if exits[0].NameOverride != "香港 01" {
+		t.Fatalf("override not stored: %+v", exits[0])
+	}
+
+	// unknown exit 404
+	if rec = adminPost(t, s, admin, "/api/users/"+itoa(uid)+"/landing-exits/rename",
+		map[string]any{"host": "nope", "port": 1, "name": "x"}); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown exit: %d", rec.Code)
+	}
+
+	// empty (or blank) name clears the override
+	if rec = adminPost(t, s, admin, "/api/users/"+itoa(uid)+"/landing-exits/rename",
+		map[string]any{"host": "1.2.3.4", "port": 443, "name": "  "}); rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if exits, _ = db.ListUserLandingExits(d, uid); exits[0].NameOverride != "" {
+		t.Fatalf("override not cleared: %+v", exits[0])
+	}
+}
+
+func TestAPILandingExitRenameRequiresAdmin(t *testing.T) {
+	d := openDB(t)
+	uid, userCookie := loginAsUser(t, d, 10)
+	s, _ := New(d)
+	req := httptest.NewRequest("POST", "/api/users/"+itoa(uid)+"/landing-exits/rename",
+		bytes.NewReader([]byte(`{"host":"1.2.3.4","port":443,"name":"x"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(userCookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatal("non-admin must be rejected")
+	}
+}
