@@ -5,7 +5,7 @@ import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
-import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
+import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
 
 export default function RulesDetail() {
   const { id } = useParams()
@@ -34,13 +34,7 @@ export default function RulesDetail() {
   const node = node_by_id[rule.node_id]
 
   const saveEdit = async (form) => {
-    await api.put(`/rules/${rule.id}`, {
-      node_id: Number(form.node_id), name: form.name, proto: form.proto,
-      mode: form.mode || undefined, exit_mode: form.mode || undefined,
-      exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
-      comment: form.comment || undefined,
-      entry_family: form.entry_family || undefined,
-    })
+    await api.put(`/rules/${rule.id}`, ruleFormToPayload(form))
     toast('已保存并重下发'); setShowEdit(false); load()
   }
 

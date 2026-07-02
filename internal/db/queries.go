@@ -99,10 +99,6 @@ type Rule struct {
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
-	// EntryV6 is not a rules-table column; RegenerateRule sets it on create/edit
-	// when entry_family is "both" so the immediate response can show the second
-	// address alongside EntryListenPort's primary one.
-	EntryV6 string `json:"entry_v6,omitempty"`
 }
 
 type RuleHop struct {

@@ -439,16 +439,23 @@ function NodeStatus({ node }) {
 
 function CompositeNodeModal({ open, onClose, nodes, onDone }) {
   const [name, setName] = useState('')
-  const [hops, setHops] = useState([{ node_id: '', mode: 'userspace' }])
+  const [hops, setHops] = useState([{ node_id: '', mode: 'userspace', mult: '' }])
   const [userIds, setUserIds] = useState([])
   const [loading, setLoading] = useState(false)
   const users = useGrantableUsers(open)
   const toast = useToast()
   const navigate = useNavigate()
 
-  const addHop = () => setHops(h => [...h, { node_id: '', mode: 'userspace' }])
+  const addHop = () => setHops(h => [...h, { node_id: '', mode: 'userspace', mult: '' }])
   const removeHop = (i) => setHops(h => h.filter((_, j) => j !== i))
   const setHop = (i, k, v) => setHops(h => h.map((hop, j) => j === i ? { ...hop, [k]: v } : hop))
+  // Selecting a node seeds the hop multiplier with that node's own rate, the
+  // same default the server would apply — shown so it can be edited in place.
+  const pickNode = (i, v) => setHops(h => h.map((hop, j) => {
+    if (j !== i) return hop
+    const n = nodes.find(x => x.id === Number(v))
+    return { ...hop, node_id: v, mult: n ? String(n.rate_multiplier ?? 1) : hop.mult }
+  }))
   const moveHop = (i, dir) => {
     setHops(h => {
       const arr = [...h]
@@ -477,12 +484,15 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
       const res = await api.post('/nodes', {
         name,
         node_type: 'composite',
-        hops: hops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
+        hops: hops.map(h => ({
+          node_id: Number(h.node_id), mode: h.mode,
+          traffic_multiplier: parseFloat(h.mult) >= 0 ? parseFloat(h.mult) : undefined,
+        })),
         user_ids: userIds.length ? userIds.map(Number) : undefined,
       })
       toast('组合节点已创建')
       setName('')
-      setHops([{ node_id: '', mode: 'userspace' }])
+      setHops([{ node_id: '', mode: 'userspace', mult: '' }])
       setUserIds([])
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
@@ -506,7 +516,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
             {hops.map((hop, i) => (
               <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
-                <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
+                <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => pickNode(i, v)}
                   options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
                 {/* 尾行没有模式可配：出口段（最后一跳 → 目标）的模式在创建规则时选择 */}
                 {i === hops.length - 1 ? (
@@ -515,6 +525,9 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
                   <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
                     options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
                 )}
+                <input className="input-field font-mono" type="number" min="0" step="0.1"
+                  value={hop.mult} onChange={e => setHop(i, 'mult', e.target.value)}
+                  placeholder="倍率" title="该跳流量倍率，留空跟随节点倍率" style={{ width: 80 }} />
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
                 <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>
                 {hops.length > 1 && (

@@ -218,16 +218,37 @@ func hostPort(host string, port int) string {
 // EntryAddresses resolves a rule's entry_family against a node's relay
 // addresses. entry is the primary address (v4 by default, so existing single
 // address consumers like RelayURI rewriting keep working unchanged); entryV6
-// is only non-empty for family "both", carrying the second address.
+// is only non-empty for family "both", carrying the second address. A family
+// whose relay address is missing yields an empty string for that slot rather
+// than a malformed ":port" — the write path validates presence up front, but
+// the read path can race a since-cleared node field.
 func EntryAddresses(family, relayHost, relayHostV6 string, port int) (entry, entryV6 string) {
 	switch family {
 	case "v6":
+		if relayHostV6 == "" {
+			return "", ""
+		}
 		return hostPort(relayHostV6, port), ""
 	case "both":
+		if relayHostV6 == "" {
+			return hostPort(relayHost, port), ""
+		}
 		return hostPort(relayHost, port), hostPort(relayHostV6, port)
 	default:
 		return hostPort(relayHost, port), ""
 	}
+}
+
+// CountV6EntryRulesOnNode counts rules whose entry hop runs on the node and
+// whose entry family requires the node's IPv6 relay address. Guards the
+// relay_host_v6 clear: RegenerateRule rejects such rules once the address is
+// gone, which would block every subsequent edit of them.
+func CountV6EntryRulesOnNode(d DBTX, nodeID int64) (int, error) {
+	var n int
+	err := d.QueryRow(`SELECT COUNT(*) FROM rules r
+		JOIN rule_hops h ON h.rule_id = r.id AND h.position = 0
+		WHERE h.node_id = ? AND r.entry_family IN ('v6','both')`, nodeID).Scan(&n)
+	return n, err
 }
 
 // HopInput is one ordered hop the caller wants the rule to have. Mode is the
@@ -493,7 +514,8 @@ func FillUserRuleCounts(d DBTX, users []*User) error {
 }
 
 // RegenerateRule rewrites rule r's hops for the given ordered hops and returns
-// the copyable entry endpoint plus the set of nodes whose kernel state must be
+// the copyable entry endpoint, the secondary v6 endpoint (non-empty only for
+// entry_family "both"), plus the set of nodes whose kernel state must be
 // re-dispatched (current hops + previously-touched nodes). Ports are kept
 // stable per node across edits; avoid[nodeID]=port forces that node off a
 // given port (used by the reallocate-on-conflict flow).
@@ -501,9 +523,9 @@ func FillUserRuleCounts(d DBTX, users []*User) error {
 // Structural validation only: relay_host present, no repeated node,
 // port-range exhaustion, udp=>kernel. Policy (grant ownership, exit CIDR,
 // quota) is the caller's responsibility.
-func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (string, []int64, error) {
+func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (string, string, []int64, error) {
 	if len(hops) == 0 {
-		return "", nil, fmt.Errorf("链路至少需要一跳")
+		return "", "", nil, fmt.Errorf("链路至少需要一跳")
 	}
 
 	type resolved struct {
@@ -519,20 +541,20 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	seen := map[int64]bool{}
 	for i, hop := range hops {
 		if seen[hop.NodeID] {
-			return "", nil, fmt.Errorf("同一节点不能在链路中重复")
+			return "", "", nil, fmt.Errorf("同一节点不能在链路中重复")
 		}
 		seen[hop.NodeID] = true
 
 		var name, relay, relayV6, portRange string
 		if err := tx.QueryRow(`SELECT name, relay_host, relay_host_v6, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &relayV6, &portRange); err != nil {
-			return "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
+			return "", "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
 		}
 		if relay == "" {
-			return "", nil, fmt.Errorf("节点 %s 未设置中继地址", name)
+			return "", "", nil, fmt.Errorf("节点 %s 未设置中继地址", name)
 		}
 		segs, err := ParsePortRange(portRange)
 		if err != nil {
-			return "", nil, fmt.Errorf("节点 %s 端口范围格式错误: %v", name, err)
+			return "", "", nil, fmt.Errorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
 		mode := NormalizeForwardMode(hop.Mode)
 		if r.Proto == "udp" {
@@ -544,7 +566,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
 		var name string
 		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[len(rs)-1].nodeID).Scan(&name)
-		return "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
+		return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
 	}
 
 	entryFamily := r.EntryFamily
@@ -552,19 +574,35 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		entryFamily = "v4"
 	}
 	if entryFamily != "v4" && entryFamily != "v6" && entryFamily != "both" {
-		return "", nil, fmt.Errorf("入口类型 %s 无效", entryFamily)
+		return "", "", nil, fmt.Errorf("入口类型 %s 无效", entryFamily)
 	}
-	if (entryFamily == "v6" || entryFamily == "both") && rs[0].relayHostV6 == "" {
-		var name string
-		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[0].nodeID).Scan(&name)
-		return "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，无法用作 %s 入口", name, entryFamily)
+	if entryFamily == "v6" || entryFamily == "both" {
+		if rs[0].relayHostV6 == "" {
+			var name string
+			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[0].nodeID).Scan(&name)
+			return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，无法用作 %s 入口", name, entryFamily)
+		}
+		// IPv6 ingress needs the userspace relay on the entry segment: kernel
+		// DNAT cannot cross address families ("dnat ip to <v4>" never matches
+		// an IPv6 packet, and there is no NAT64), so only the dual-stack
+		// userspace listener can accept v6 clients and dial onward over v4.
+		// The userspace relay is TCP-only, so a UDP leg can never serve v6:
+		// pure udp is coerced to kernel above, and tcp+udp splits its udp
+		// half into a kernel DNAT that would leave the advertised v6 entry
+		// dead for UDP traffic.
+		if rs[0].mode != "userspace" {
+			return "", "", nil, fmt.Errorf("%s 入口需要入口段为用户态转发（内核态 DNAT 无法接收 IPv6 连接）", entryFamily)
+		}
+		if r.Proto != "tcp" {
+			return "", "", nil, fmt.Errorf("%s 入口仅支持 TCP 协议（用户态转发不支持 UDP）", entryFamily)
+		}
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
 	// their port — entry endpoint + installed rules don't churn on edits.
 	prev, err := ListRuleHops(tx, r.ID)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	prevPort := map[int64]int{}
 	affected := map[int64]bool{}
@@ -576,14 +614,14 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	}
 
 	if _, err := tx.Exec(`DELETE FROM rule_hops WHERE rule_id=?`, r.ID); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 
 	ports := make([]int, len(rs))
 	for i, h := range rs {
 		occ, err := OccupiedPortsOnNode(tx, h.nodeID, r.Proto, r.ID)
 		if err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 		if av, ok := avoid[h.nodeID]; ok {
 			occ[av] = true
@@ -593,10 +631,10 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 			var name string
 			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
 			if !PortInRange(h.desiredPort, h.portSegs) {
-				return "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, name)
+				return "", "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, name)
 			}
 			if occ[h.desiredPort] {
-				return "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, name)
+				return "", "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, name)
 			}
 			p = h.desiredPort
 		} else {
@@ -606,7 +644,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 				if p == 0 {
 					var name string
 					_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
-					return "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", name)
+					return "", "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", name)
 				}
 			}
 		}
@@ -636,13 +674,13 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		}
 		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,?,?,?,?,?,?,?,?)`,
 			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment); err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 		affected[h.nodeID] = true
 	}
 
 	if _, err := tx.Exec(`UPDATE rules SET entry_listen_port=? WHERE id=?`, ports[0], r.ID); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	r.EntryListenPort = ports[0]
 
@@ -651,8 +689,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		nodes = append(nodes, n)
 	}
 	entry, entryV6 := EntryAddresses(entryFamily, rs[0].relayHost, rs[0].relayHostV6, ports[0])
-	r.EntryV6 = entryV6
-	return entry, nodes, nil
+	return entry, entryV6, nodes, nil
 }
 
 // RuleHopCounts returns hop count per rule for the given rule IDs.

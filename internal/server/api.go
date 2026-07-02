@@ -348,6 +348,10 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
+			// TrafficMultiplier is optional; a pointer distinguishes "not
+			// sent" (inherit the child node's rate multiplier) from an
+			// explicit value, including an explicit 0.
+			TrafficMultiplier *float64 `json:"traffic_multiplier"`
 		} `json:"hops"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -384,7 +388,9 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 				mode = "userspace"
 			}
 			mult := 0.0
-			if child, err := db.GetNode(s.DB, h.NodeID); err == nil {
+			if h.TrafficMultiplier != nil && *h.TrafficMultiplier >= 0 {
+				mult = *h.TrafficMultiplier
+			} else if child, err := db.GetNode(s.DB, h.NodeID); err == nil {
 				mult = child.RateMultiplier
 			}
 			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: mult}
@@ -734,6 +740,16 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 	if host != "" && !isValidRelayHostV6(host) {
 		jsonErr(w, http.StatusBadRequest, "IPv6 中继地址须为有效的 IPv6 地址")
 		return
+	}
+	// Clearing the v6 relay would brick rules whose entry family needs it:
+	// RegenerateRule hard-fails them on every subsequent edit/rewire, so the
+	// owner couldn't even save an unrelated rename until flipping the entry
+	// type. Refuse the clear while such rules exist.
+	if host == "" {
+		if cnt, err := db.CountV6EntryRulesOnNode(s.DB, id); err == nil && cnt > 0 {
+			jsonErr(w, http.StatusConflict, fmt.Sprintf("该节点上有 %d 条使用 v6 入口的规则，需先将它们的入口类型改为 v4 才能清除 IPv6 中继地址", cnt))
+			return
+		}
 	}
 	if err := db.UpdateNodeRelayHostV6(s.DB, id, host); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1359,7 +1375,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.ID = id
 
-	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
+	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1370,7 +1386,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"rule": rl, "entry": entry})
+	jsonOK(w, map[string]any{"rule": rl, "entry": entry, "entry_v6": entryV6})
 }
 
 func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
@@ -1441,6 +1457,12 @@ func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []
 		for i, h := range nh {
 			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode}
 		}
+		// The exit segment belongs to the rule, never the composite config:
+		// an empty exitMode deliberately lands on the kernel default (same
+		// as a single-node rule) instead of the config's stored tail mode,
+		// so a rule's exit behavior is fully determined by its own fields.
+		// Same-node edits that omit the mode keep the rule's current one via
+		// the callers' explicit-mode check.
 		hops[len(hops)-1].Mode = exitMode
 		return hops, true, nil
 	}
@@ -1547,6 +1569,14 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		for i, h := range existing {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 		}
+		// A header-only edit still owns the exit segment: an explicit
+		// exit_mode (or the single-node legacy mode) applies to the last hop
+		// instead of being silently dropped with a 200.
+		if body.ExitMode != "" {
+			hops[len(hops)-1].Mode = body.ExitMode
+		} else if body.Mode != "" && len(hops) == 1 {
+			hops[0].Mode = body.Mode
+		}
 	default:
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
@@ -1558,7 +1588,11 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
-	rl.EntryFamily = entryFamily
+	// Absent entry_family keeps the stored family — only an explicit value
+	// changes it, mirroring how an empty mode keeps the exit segment.
+	if entryFamily != "" {
+		rl.EntryFamily = entryFamily
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1569,7 +1603,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
+	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1580,7 +1614,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": rl.EntryV6})
+	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": entryV6})
 }
 
 func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
@@ -1643,7 +1677,7 @@ func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	_, affected, err := db.RegenerateRule(tx, rl, inputs, avoid)
+	_, _, affected, err := db.RegenerateRule(tx, rl, inputs, avoid)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -2388,7 +2422,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl.ID = id
 
-	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
+	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -2399,7 +2433,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry, "entry_v6": rl.EntryV6})
+	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry, "entry_v6": entryV6})
 }
 
 // apiMyUpdateRule lets a user edit their own rule: name / proto / exit / comment
@@ -2518,7 +2552,11 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	rl.NodeID = nodeID
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
-	rl.EntryFamily = entryFamily
+	// Absent entry_family keeps the stored family — only an explicit value
+	// changes it, mirroring how an empty mode keeps the exit segment.
+	if entryFamily != "" {
+		rl.EntryFamily = entryFamily
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -2529,7 +2567,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	entry, affected, err := db.RegenerateRule(tx, rl, hops, nil)
+	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -2540,7 +2578,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": rl.EntryV6})
+	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": entryV6})
 }
 
 func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {

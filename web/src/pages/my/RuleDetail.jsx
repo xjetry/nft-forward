@@ -5,7 +5,7 @@ import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
-import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
+import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
 import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
@@ -47,13 +47,7 @@ export default function MyRuleDetail() {
   const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
 
   const saveEdit = async (form) => {
-    await api.put(`/my/rules/${rule.id}`, {
-      node_id: Number(form.node_id), name: form.name, proto: form.proto,
-      mode: form.mode || undefined, exit_mode: form.mode || undefined,
-      exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
-      comment: form.comment || undefined,
-      entry_family: form.entry_family || undefined,
-    })
+    await api.put(`/my/rules/${rule.id}`, ruleFormToPayload(form))
     toast('已保存并重下发'); setShowEdit(false); load()
   }
 

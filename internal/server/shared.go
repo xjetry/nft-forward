@@ -37,7 +37,12 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	if len(hops) > 0 && r.EntryListenPort > 0 {
 		entryNodeID = hops[0].NodeID
 		if n, err := db.GetNode(s.DB, hops[0].NodeID); err == nil && n.RelayHost != "" {
-			entry, entryV6 = db.EntryAddresses(r.EntryFamily, n.RelayHost, n.RelayHostV6, r.EntryListenPort)
+			// EntryAddresses returns "" for a family whose relay address the
+			// node no longer carries; keep the "—" placeholder instead of
+			// rendering an empty host.
+			if e, e6 := db.EntryAddresses(r.EntryFamily, n.RelayHost, n.RelayHostV6, r.EntryListenPort); e != "" {
+				entry, entryV6 = e, e6
+			}
 		}
 	}
 	return ruleView{Rule: r, Entry: entry, EntryV6: entryV6, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode, ExitMode: exitMode}
@@ -52,9 +57,8 @@ type ruleListItem struct {
 	OwnerName string `json:"owner_name"`
 	Entry     string `json:"entry"`
 	// EntryV6 is the rule's secondary entry address, populated only when
-	// entry_family is "both"; it shadows the embedded db.Rule.EntryV6 (which
-	// only carries a value transiently right after create/edit) with the
-	// read-path value computed in buildRuleView.
+	// entry_family is "both"; computed from the entry node's current relay
+	// addresses in buildRuleView.
 	EntryV6     string `json:"entry_v6,omitempty"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
@@ -137,15 +141,14 @@ func validRuleProto(proto string) bool {
 	}
 }
 
-// normalizeEntryFamily validates a client-supplied entry_family, defaulting
-// an empty value to "v4" so old frontends that never send the field keep
-// today's behavior.
+// normalizeEntryFamily validates a client-supplied entry_family. Empty passes
+// through as empty so callers can tell "not sent" apart from an explicit
+// value: create defaults it to v4, while edit keeps the rule's stored family —
+// a client predating the field must not silently downgrade a v6/both rule.
 func normalizeEntryFamily(v string) (string, error) {
 	v = strings.ToLower(strings.TrimSpace(v))
 	switch v {
-	case "":
-		return "v4", nil
-	case "v4", "v6", "both":
+	case "", "v4", "v6", "both":
 		return v, nil
 	default:
 		return "", fmt.Errorf("entry_family 须为 v4、v6 或 both")
@@ -262,7 +265,7 @@ func (s *Server) regenerateRuleByID(ruleID int64) ([]int64, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	_, affected, err := db.RegenerateRule(tx, r, inputs, nil)
+	_, _, affected, err := db.RegenerateRule(tx, r, inputs, nil)
 	if err != nil {
 		return nil, err
 	}

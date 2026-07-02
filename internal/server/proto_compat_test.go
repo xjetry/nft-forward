@@ -124,7 +124,7 @@ func TestRegenerateRuleCrossProtoPortConflict(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, _, err := db.RegenerateRule(tx, r, []db.HopInput{{NodeID: n.ID, DesiredPort: 10001}}, nil); err != nil {
+		if _, _, _, err := db.RegenerateRule(tx, r, []db.HopInput{{NodeID: n.ID, DesiredPort: 10001}}, nil); err != nil {
 			tx.Rollback()
 			return err
 		}

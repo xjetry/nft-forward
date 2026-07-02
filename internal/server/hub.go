@@ -889,7 +889,7 @@ func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comme
 		return "", err
 	}
 	defer tx.Rollback()
-	entry, affected, err := db.RegenerateRule(tx, r, inputs, nil)
+	entry, _, affected, err := db.RegenerateRule(tx, r, inputs, nil)
 	if err != nil {
 		return "", err
 	}
@@ -994,7 +994,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	if req.ListenPort > 0 {
 		hop.DesiredPort = req.ListenPort
 	}
-	entry, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 	if err != nil {
 		sendRuleAckErr(ac, env.ID, err.Error())
 		return
@@ -1068,7 +1068,7 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 	if req.ListenPort > 0 {
 		hop.DesiredPort = req.ListenPort
 	}
-	entry, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 	if err != nil {
 		sendRuleAckErr(ac, env.ID, err.Error())
 		return
@@ -1157,7 +1157,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 		if r.SrcPort > 0 {
 			hop.DesiredPort = r.SrcPort
 		}
-		_, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
+		_, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 		if err != nil {
 			sendRuleAckErr(ac, env.ID, fmt.Sprintf("生成规则失败: %v", err))
 			return

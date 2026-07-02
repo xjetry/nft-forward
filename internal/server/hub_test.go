@@ -176,7 +176,7 @@ func createStandaloneRuleHop(t *testing.T, d *sql.DB, nodeID int64, proto string
 		t.Fatal(err)
 	}
 	rl.ID = ruleID
-	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: nodeID, DesiredPort: listenPort}}, nil)
+	_, _, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: nodeID, DesiredPort: listenPort}}, nil)
 	if err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -371,7 +371,7 @@ func seedTwoHopRuleDB(t *testing.T, d *sql.DB) (*db.Rule, int64, int64) {
 		t.Fatal(err)
 	}
 	rl.ID = id
-	if _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
+	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n0.ID}, {NodeID: n1.ID}}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

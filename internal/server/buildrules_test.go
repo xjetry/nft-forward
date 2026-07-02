@@ -27,7 +27,7 @@ func TestBuildRulesStampsRuleMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	rl.ID = ruleID
-	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
+	_, _, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
 	if err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestBuildRules_FillsOwnerName(t *testing.T) {
 		t.Fatal(err)
 	}
 	rl.ID = ruleID
-	_, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
+	_, _, _, err = db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n.ID}}, nil)
 	if err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestBuildRules_FillsOwnerName(t *testing.T) {
 		t.Fatal(err)
 	}
 	rl2.ID = ruleID2
-	_, _, err = db.RegenerateRule(tx2, rl2, []db.HopInput{{NodeID: n.ID}}, nil)
+	_, _, _, err = db.RegenerateRule(tx2, rl2, []db.HopInput{{NodeID: n.ID}}, nil)
 	if err != nil {
 		tx2.Rollback()
 		t.Fatal(err)

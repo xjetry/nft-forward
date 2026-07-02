@@ -5,7 +5,7 @@ import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
-import { RuleFormModal, copyInitial } from '../../components/RuleFormModal'
+import { RuleFormModal, copyInitial, ruleFormToPayload } from '../../components/RuleFormModal'
 import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 export default function MyRules() {
@@ -124,13 +124,7 @@ export default function MyRules() {
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
         nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI} showRate={show_rate}
         onSubmit={async (form) => {
-          const res = await api.post('/my/rules', {
-            node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            mode: form.mode || undefined, exit_mode: form.mode || undefined,
-            exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
-            comment: form.comment || undefined,
-            entry_family: form.entry_family || undefined,
-          })
+          const res = await api.post('/my/rules', ruleFormToPayload(form))
           toast('规则已创建'); setCreateOpen(false)
           if (res?.rule_id) navigate(`/my/rules/${res.rule_id}`)
         }} />

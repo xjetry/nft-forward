@@ -32,7 +32,7 @@ func createTestRuleWithHops(t *testing.T, d *sql.DB, ownerID, n1, n2 int64) int6
 		t.Fatal(err)
 	}
 	rl.ID = id
-	if _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n1}, {NodeID: n2}}, nil); err != nil {
+	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: n1}, {NodeID: n2}}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func createTestRuleDirectNode(t *testing.T, d *sql.DB, ownerID, nodeID int64) in
 		t.Fatal(err)
 	}
 	rl.ID = id
-	if _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: nodeID}}, nil); err != nil {
+	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{{NodeID: nodeID}}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import { RulesTable } from '../../components/RulesTable'
-import { RuleFormModal, copyInitial, ruleToForm } from '../../components/RuleFormModal'
+import { RuleFormModal, copyInitial, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
 import { parseURIs, mergeLanding, landingIndex, rewriteEndpoint, splitEndpoint, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 export default function RulesList() {
@@ -191,13 +191,7 @@ export default function RulesList() {
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
         nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
-          const res = await api.post('/rules', {
-            node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            mode: form.mode || undefined, exit_mode: form.mode || undefined,
-            exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
-            comment: form.comment || undefined,
-            entry_family: form.entry_family || undefined,
-          })
+          const res = await api.post('/rules', ruleFormToPayload(form))
           toast('规则已创建'); setCreateOpen(false)
           if (res?.rule?.id) navigate(`/rules/${res.rule.id}`)
         }} />
@@ -206,13 +200,7 @@ export default function RulesList() {
         open={!!editRule} onClose={() => setEditRule(null)} title="编辑规则" submitLabel="保存并重下发"
         nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
-          await api.put(`/rules/${editRule.id}`, {
-            node_id: Number(form.node_id), name: form.name, proto: form.proto,
-            mode: form.mode || undefined, exit_mode: form.mode || undefined,
-            exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
-            comment: form.comment || undefined,
-            entry_family: form.entry_family || undefined,
-          })
+          await api.put(`/rules/${editRule.id}`, ruleFormToPayload(form))
           toast('已保存并重下发'); setEditRule(null); load()
         }} />
     </Layout>

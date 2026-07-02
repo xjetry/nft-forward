@@ -119,16 +119,33 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
             if (!selNode) return null
             const { entryV4, entryV6 } = nodeStack(selNode)
             if (!(entryV4 && entryV6)) return null
+            const composite = selNode.node_type === 'composite'
+            // IPv6 ingress rides the userspace relay (kernel DNAT can't
+            // cross address families), which is TCP-only. Single-node rules
+            // can be auto-switched here; a composite's entry segment comes
+            // from the node config, so only the hint applies.
+            const pickFamily = (k) => setForm(f => {
+              const next = { ...f, entry_family: k }
+              if (k !== 'v4' && !composite) next.mode = 'userspace'
+              return next
+            })
             return (
               <>
                 <label className="fl">入口类型</label>
-                <div className="inline-flex gap-1 p-1 rounded-[10px] border border-line bg-surface w-fit">
-                  {[['v4', 'IPv4'], ['v6', 'IPv6'], ['both', 'IPv4+IPv6']].map(([k, lbl]) => (
-                    <button key={k} type="button" onClick={() => set('entry_family', k)}
-                      className={`px-4 py-[9px] rounded-[7px] text-[14px] font-semibold transition-colors ${(form.entry_family || 'v4') === k ? 'bg-blue-600 text-white' : 'text-ink-soft hover:text-ink'}`}>
-                      {lbl}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <div className="inline-flex gap-1 p-1 rounded-[10px] border border-line bg-surface w-fit">
+                    {[['v4', 'IPv4'], ['v6', 'IPv6'], ['both', 'IPv4+IPv6']].map(([k, lbl]) => (
+                      <button key={k} type="button" onClick={() => pickFamily(k)}
+                        className={`px-4 py-[9px] rounded-[7px] text-[14px] font-semibold transition-colors ${(form.entry_family || 'v4') === k ? 'bg-blue-600 text-white' : 'text-ink-soft hover:text-ink'}`}>
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                  {(form.entry_family === 'v6' || form.entry_family === 'both') && (
+                    <span className="text-xs text-ink-mut">
+                      {composite ? 'v6 入口要求组合节点第一段为用户态转发，且协议仅 TCP' : 'v6 入口走用户态转发，协议仅 TCP'}
+                    </span>
+                  )}
                 </div>
               </>
             )
@@ -245,4 +262,19 @@ export function ruleToForm(rule) {
    blank — the source rule still holds its port, so the copy needs a fresh one. */
 export function copyInitial(rule) {
   return { ...ruleToForm(rule), name: `${rule.name}_Copy`, entry_port: '' }
+}
+
+/* Map the form's fields to the create/edit request body — the single source
+   of the payload shape for every rules page, so a new field can't silently
+   go missing from one of the call sites. form.mode is the exit-segment mode;
+   it is sent as both exit_mode (the real field) and mode (legacy alias for
+   single-node rules, so older servers keep honoring it). */
+export function ruleFormToPayload(form) {
+  return {
+    node_id: Number(form.node_id), name: form.name, proto: form.proto,
+    mode: form.mode || undefined, exit_mode: form.mode || undefined,
+    exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
+    comment: form.comment || undefined,
+    entry_family: form.entry_family || undefined,
+  }
 }

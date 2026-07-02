@@ -58,11 +58,16 @@ func (s *DockerUserShim) syncFamily(family string, rules []nft.Rule) error {
 	return s.runNftScript(script)
 }
 
+// Cleanup attempts both families even when one fails — an early return on
+// the ip pass would strand owner-tagged accepts in the ip6 chain with no
+// process left to ever remove them.
 func (s *DockerUserShim) Cleanup() error {
-	if err := cleanupChain(s.runNft, s.runNftScript, dockerUserFamily, dockerUserTable, dockerUserChain); err != nil {
-		return err
+	err4 := cleanupChain(s.runNft, s.runNftScript, dockerUserFamily, dockerUserTable, dockerUserChain)
+	err6 := cleanupChain(s.runNft, s.runNftScript, dockerUserFamily6, dockerUserTable, dockerUserChain)
+	if err4 != nil {
+		return err4
 	}
-	return cleanupChain(s.runNft, s.runNftScript, dockerUserFamily6, dockerUserTable, dockerUserChain)
+	return err6
 }
 
 // formatDelete produces a single `delete rule family table chain handle N`

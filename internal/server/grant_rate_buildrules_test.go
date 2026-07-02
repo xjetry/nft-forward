@@ -82,7 +82,7 @@ func TestGrantRateLimitPropagatesToCompositeChainHops(t *testing.T) {
 	}
 	rl.ID = ruleID
 	hops := []db.HopInput{{NodeID: a.ID, Mode: "kernel"}, {NodeID: b.ID, Mode: "kernel"}}
-	if _, _, err := db.RegenerateRule(tx, rl, hops, nil); err != nil {
+	if _, _, _, err := db.RegenerateRule(tx, rl, hops, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

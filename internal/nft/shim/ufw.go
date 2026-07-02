@@ -160,27 +160,27 @@ func deleteOwned(run iptRunner, chain string) error {
 	return nil
 }
 
+// Cleanup attempts every chain even when one fails — an early return on a
+// v4 chain would strand owner-tagged accepts in the ufw6 chains with no
+// process left to ever remove them. The first error is reported after all
+// chains have been tried.
 func (s *UfwShim) Cleanup() error {
-	for _, chain := range []string{ufwForwardChain, ufwInputChain} {
-		if _, err := s.runIpt("-L", chain, "-n"); err != nil {
-			continue
-		}
-		if err := deleteOwned(s.runIpt, chain); err != nil {
-			return err
-		}
-	}
-	if s.runIpt6 == nil {
-		return nil
-	}
-	for _, chain := range []string{ufw6ForwardChain, ufw6InputChain} {
-		if _, err := s.runIpt6("-L", chain, "-n"); err != nil {
-			continue
-		}
-		if err := deleteOwned(s.runIpt6, chain); err != nil {
-			return err
+	var firstErr error
+	cleanup := func(run iptRunner, chains ...string) {
+		for _, chain := range chains {
+			if _, err := run("-L", chain, "-n"); err != nil {
+				continue
+			}
+			if err := deleteOwned(run, chain); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	cleanup(s.runIpt, ufwForwardChain, ufwInputChain)
+	if s.runIpt6 != nil {
+		cleanup(s.runIpt6, ufw6ForwardChain, ufw6InputChain)
+	}
+	return firstErr
 }
 
 // iptExpandProto splits "tcp+udp" into separate iptables protocol entries.
