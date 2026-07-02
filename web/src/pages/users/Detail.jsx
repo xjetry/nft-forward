@@ -126,7 +126,7 @@ export default function UserDetail() {
 
       {/* Landing-node source (regular users only) */}
       {isRegularUser && (
-        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
+        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} />
       )}
 
       {/* Rules */}
@@ -344,7 +344,7 @@ function PerNodeRateForm({ userId, nodeId, rateMBytes, onDone }) {
   )
 }
 
-function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
+function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
   const [preview, setPreview] = useState(nodes || [])
@@ -368,7 +368,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
     try {
       const d = await api.post(`/users/${userId}/landing`, { landing_sub_url: url.trim(), landing_uris: text })
       setPreview(d?.landing_nodes || [])
-      toast('已保存'); loadExits(); onDone()
+      toast('已保存'); loadExits()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 

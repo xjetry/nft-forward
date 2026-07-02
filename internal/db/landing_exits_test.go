@@ -155,3 +155,44 @@ func TestCycleResetClearsExitLedger(t *testing.T) {
 		t.Fatal("manual full reset must clear the exit ledger too")
 	}
 }
+
+func TestOpenStripsLegacyExitNameSuffixes(t *testing.T) {
+	path := t.TempDir() + "/test.db"
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := createTestUser(t, d)
+	ins := []LandingExitInput{
+		{Host: "a.com", Port: 443, Name: "boil-hkt ^~2~^", Protocol: "ss", URI: "ss://x@a.com:443"},
+		{Host: "b.com", Port: 443, Name: "plain", Protocol: "vless", URI: "vless://x@b.com:443"},
+	}
+	if _, _, err := SyncUserLandingExits(d, uid, ins, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a DB written before parsing stripped the suffix.
+	if _, err := d.Exec(`UPDATE user_landing_exits SET name='boil-hkt ^~2~^' WHERE host='a.com'`); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	exits, err := ListUserLandingExits(d, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := map[string]string{}
+	for _, e := range exits {
+		byHost[e.Host] = e.Name
+	}
+	if byHost["a.com"] != "boil-hkt" {
+		t.Errorf("a.com name = %q, want %q", byHost["a.com"], "boil-hkt")
+	}
+	if byHost["b.com"] != "plain" {
+		t.Errorf("b.com name = %q, want %q", byHost["b.com"], "plain")
+	}
+}

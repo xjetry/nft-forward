@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -34,8 +35,25 @@ func ParseURIs(uris []string) []Node {
 			continue
 		}
 		if n, ok := parseOne(raw); ok {
+			n.Name = StripDedupSuffix(n.Name)
 			out = append(out, n)
 		}
+	}
+	return out
+}
+
+// dedupSuffixRe matches the trailing "^~2~^"-style counters some panels (e.g.
+// Remnawave) append when a subscription carries same-named nodes — typically
+// the same node exported once per protocol. Nodes are identified by host:port
+// everywhere downstream, so the counter is display noise.
+var dedupSuffixRe = regexp.MustCompile(`(\s*\^~\d+~\^)+$`)
+
+// StripDedupSuffix drops the trailing dedup counter, keeping the name as-is
+// when the counter is all there is (an empty name would render worse).
+func StripDedupSuffix(name string) string {
+	out := strings.TrimSpace(dedupSuffixRe.ReplaceAllString(name, ""))
+	if out == "" {
+		return name
 	}
 	return out
 }

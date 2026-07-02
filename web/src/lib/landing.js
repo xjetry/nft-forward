@@ -236,6 +236,12 @@ export function tryParseURI(uri) {
 /* ---------- internals ---------- */
 
 function parseOne(uri) {
+  const n = parseRaw(uri)
+  if (n) n.name = stripDedupSuffix(n.name)
+  return n
+}
+
+function parseRaw(uri) {
   const i = uri.indexOf('://')
   if (i <= 0) return parseSnell(uri)
   const scheme = uri.slice(0, i).toLowerCase()
@@ -243,6 +249,15 @@ function parseOne(uri) {
   if (scheme === 'ss') return parseSS(uri)
   if (scheme === 'http' || scheme === 'https') return null
   return parseAuthority(uri, scheme === 'hy2' ? 'hysteria2' : scheme)
+}
+
+/* Some panels (e.g. Remnawave) append "^~2~^"-style counters to same-named
+   nodes in a subscription — typically the same node exported once per
+   protocol. Nodes are identified by host:port here, so the counter is display
+   noise; keep the name as-is when the counter is all there is. */
+function stripDedupSuffix(name) {
+  const out = (name || '').replace(/(\s*\^~\d+~\^)+$/, '').trim()
+  return out || name
 }
 
 function parseAuthority(uri, proto) {
