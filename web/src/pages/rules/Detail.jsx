@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
@@ -10,6 +10,10 @@ import { RuleFormModal, ruleToForm } from '../../components/RuleFormModal'
 export default function RulesDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  // Set by the list page's row click so "返回规则列表" restores its filter/search
+  // instead of landing on a bare, unfiltered list.
+  const backTo = `/rules${location.state?.rulesQuery || ''}`
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
@@ -41,7 +45,7 @@ export default function RulesDetail() {
 
   const deleteRule = async () => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate('/rules') } catch (err) { toast(err.message, 'error') }
+    try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate(backTo) } catch (err) { toast(err.message, 'error') }
   }
 
   return (
@@ -143,7 +147,7 @@ export default function RulesDetail() {
       <div className="flex items-center gap-3 flex-wrap mt-5">
         <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
         <button onClick={deleteRule} className="btn-secondary text-xs">删除规则</button>
-        <Link to="/rules" className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
+        <Link to={backTo} className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           返回规则列表
         </Link>

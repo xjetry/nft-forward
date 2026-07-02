@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, useConfirm } from '../../components/ui'
@@ -16,9 +16,24 @@ export default function RulesList() {
   const [createInitial, setCreateInitial] = useState(null)
   const [editRule, setEditRule] = useState(null)
   const [users, setUsers] = useState([])
-  const [selectedOwners, setSelectedOwners] = useState(new Set())
-  const [selectedNodes, setSelectedNodes] = useState(new Set())
-  const [search, setSearch] = useState('')
+  // Filters live in the URL (not local state) so they survive navigating into a
+  // rule's detail page and back — a plain useState resets on remount.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const search = searchParams.get('q') || ''
+  const selectedOwners = useMemo(() => new Set((searchParams.get('owners') || '').split(',').filter(Boolean).map(Number)), [searchParams])
+  const selectedNodes = useMemo(() => new Set((searchParams.get('nodes') || '').split(',').filter(Boolean).map(Number)), [searchParams])
+  const updateParams = (patch) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      for (const [k, v] of Object.entries(patch)) {
+        if (v) next.set(k, v); else next.delete(k)
+      }
+      return next
+    }, { replace: true })
+  }
+  const setSearch = (v) => updateParams({ q: v })
+  const setSelectedOwners = (next) => updateParams({ owners: next.size ? [...next].join(',') : '' })
+  const setSelectedNodes = (next) => updateParams({ nodes: next.size ? [...next].join(',') : '' })
   const toast = useToast()
   const blurred = useBlur()
   const navigate = useNavigate()
@@ -110,6 +125,9 @@ export default function RulesList() {
     setSelectedOwners(new Set())
     setSelectedNodes(new Set())
   }
+  // Handed to the detail page via route state so its "返回规则列表" link can
+  // restore this exact filter/search combo instead of landing on a bare list.
+  const rulesQuery = searchParams.toString()
 
   const userOptions = users.map(u => ({ value: u.id, label: u.username }))
   const nodeOptions = nodes.filter(n => !n.hidden).map(n => ({ value: n.id, label: n.name }))
@@ -162,7 +180,7 @@ export default function RulesList() {
           <TableScroll>
             <RulesTable variant="admin" rules={filtered} nodeMap={nodeMap} blurred={blurred}
               onDelete={deleteRule} onEdit={setEditRule} onCopy={copyRule}
-              onRowClick={r => navigate(`/rules/${r.id}`)} />
+              onRowClick={r => navigate(`/rules/${r.id}`, rulesQuery ? { state: { rulesQuery: `?${rulesQuery}` } } : undefined)} />
           </TableScroll>
         )}
       </Panel>

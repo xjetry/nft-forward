@@ -195,13 +195,14 @@ export function ruleToForm(rule) {
     proto: rule.proto,
     exit,
     exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
-    entry_port: '',
+    entry_port: rule.entry_listen_port > 0 ? String(rule.entry_listen_port) : '',
     comment: rule.comment || '',
     mode: rule.entry_mode || 'kernel',
   }
 }
 
-/* Prefill for "copy": same chain/target, name suffixed _Copy. */
+/* Prefill for "copy": same chain/target, name suffixed _Copy. entry_port stays
+   blank — the source rule still holds its port, so the copy needs a fresh one. */
 export function copyInitial(rule) {
-  return { ...ruleToForm(rule), name: `${rule.name}_Copy` }
+  return { ...ruleToForm(rule), name: `${rule.name}_Copy`, entry_port: '' }
 }
