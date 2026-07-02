@@ -16,52 +16,54 @@ type User struct {
 	Disabled          bool           `json:"disabled"`
 	DisableReason     sql.NullString `json:"disable_reason"`
 	MaxForwards       int            `json:"max_forwards"`
-	TrafficQuotaBytes  int64          `json:"traffic_quota_bytes"`
-	TrafficUsedBytes   int64          `json:"traffic_used_bytes"`
+	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
+	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
 	// TrafficResetDays is the rolling window length in days; 0 means never auto-reset.
-	TrafficResetDays   int            `json:"traffic_reset_days"`
-	LastTrafficResetAt int64          `json:"last_traffic_reset_at"`
-	ExpiresAt          sql.NullInt64  `json:"expires_at"`
+	TrafficResetDays   int           `json:"traffic_reset_days"`
+	LastTrafficResetAt int64         `json:"last_traffic_reset_at"`
+	ExpiresAt          sql.NullInt64 `json:"expires_at"`
 	// LandingSubURL is an optional subscription URL; LandingURIs is an optional
 	// newline-separated list of proxy URIs. They combine into the user's set of
 	// landing nodes (see internal/landing). Both empty means no landing source.
-	LandingSubURL string `json:"landing_sub_url"`
-	LandingURIs   string `json:"landing_uris"`
-	AdminNote   string  `json:"admin_note"`
-	BillingRate float64 `json:"billing_rate"`
+	LandingSubURL string  `json:"landing_sub_url"`
+	LandingURIs   string  `json:"landing_uris"`
+	AdminNote     string  `json:"admin_note"`
+	BillingRate   float64 `json:"billing_rate"`
 	// RuleCount is not a users-table column; it is filled by FillUserRuleCounts
 	// so the user list can show used/total rule quota.
 	RuleCount int `json:"rule_count"`
 }
 
 type Node struct {
-	ID        int64          `json:"id"`
-	Name      string         `json:"name"`
-	NodeType  string         `json:"node_type"`
-	OwnerID   *int64         `json:"owner_id,omitempty"`
-	Address   string         `json:"address"`
-	Secret    string         `json:"secret"`
-	RelayHost   string       `json:"relay_host"`
-	RelayHostV6 string       `json:"relay_host_v6"`
-	Online    int            `json:"online"`
-	AgentVersion string      `json:"agent_version"`
-	AgentSHA     string      `json:"agent_sha"`
-	LastSeen     *int64      `json:"last_seen,omitempty"`
-	LastApplyAt  sql.NullInt64 `json:"last_apply_at"`
-	LastError    sql.NullString `json:"last_error"`
-	LastWarning  string         `json:"last_warning"`
-	Disabled     bool         `json:"disabled"`
-	Hidden       bool         `json:"hidden"`
-	LocalMigratedAt *int64   `json:"local_migrated_at,omitempty"`
-	PortRange    string       `json:"port_range"`
-	SortOrder    int64        `json:"sort_order"`
-	CreatedAt    int64        `json:"created_at"`
-	LastUpgradeAt      sql.NullInt64 `json:"last_upgrade_at"`
-	LastUpgradeVersion string        `json:"last_upgrade_version,omitempty"`
-	LastUpgradeStatus  string        `json:"last_upgrade_status,omitempty"`
-	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
-	RateMultiplier     float64       `json:"rate_multiplier"`
-	Unidirectional     bool          `json:"unidirectional"`
+	ID                  int64          `json:"id"`
+	Name                string         `json:"name"`
+	NodeType            string         `json:"node_type"`
+	OwnerID             *int64         `json:"owner_id,omitempty"`
+	Address             string         `json:"address"`
+	Secret              string         `json:"secret"`
+	RelayHost           string         `json:"relay_host"`
+	RelayHostV6         string         `json:"relay_host_v6"`
+	RelayHostDeclared   bool           `json:"relay_host_declared"`
+	RelayHostV6Declared bool           `json:"relay_host_v6_declared"`
+	Online              int            `json:"online"`
+	AgentVersion        string         `json:"agent_version"`
+	AgentSHA            string         `json:"agent_sha"`
+	LastSeen            *int64         `json:"last_seen,omitempty"`
+	LastApplyAt         sql.NullInt64  `json:"last_apply_at"`
+	LastError           sql.NullString `json:"last_error"`
+	LastWarning         string         `json:"last_warning"`
+	Disabled            bool           `json:"disabled"`
+	Hidden              bool           `json:"hidden"`
+	LocalMigratedAt     *int64         `json:"local_migrated_at,omitempty"`
+	PortRange           string         `json:"port_range"`
+	SortOrder           int64          `json:"sort_order"`
+	CreatedAt           int64          `json:"created_at"`
+	LastUpgradeAt       sql.NullInt64  `json:"last_upgrade_at"`
+	LastUpgradeVersion  string         `json:"last_upgrade_version,omitempty"`
+	LastUpgradeStatus   string         `json:"last_upgrade_status,omitempty"`
+	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
+	RateMultiplier      float64        `json:"rate_multiplier"`
+	Unidirectional      bool           `json:"unidirectional"`
 	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
 	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
 	// (entry = first hop's own relay fields, exit = last hop's v6 relay field),
@@ -91,16 +93,16 @@ type Rule struct {
 }
 
 type RuleHop struct {
-	ID         int64  `json:"id"`
-	RuleID     int64  `json:"rule_id"`
-	Position   int    `json:"position"`
-	NodeID     int64  `json:"node_id"`
-	Proto      string `json:"proto"`
-	ListenPort int    `json:"listen_port"`
-	TargetHost string `json:"target_host"`
-	TargetPort int    `json:"target_port"`
-	Mode       string `json:"mode"`
-	Comment    string `json:"comment"`
+	ID            int64  `json:"id"`
+	RuleID        int64  `json:"rule_id"`
+	Position      int    `json:"position"`
+	NodeID        int64  `json:"node_id"`
+	Proto         string `json:"proto"`
+	ListenPort    int    `json:"listen_port"`
+	TargetHost    string `json:"target_host"`
+	TargetPort    int    `json:"target_port"`
+	Mode          string `json:"mode"`
+	Comment       string `json:"comment"`
 	LastBytes     int64  `json:"last_bytes"`
 	LastBytesUp   int64  `json:"last_bytes_up"`
 	LastBytesDown int64  `json:"last_bytes_down"`
@@ -262,7 +264,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -273,7 +275,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var disabled, hidden, unidirectional int
+	var disabled, hidden, unidirectional, relayHostDeclared, relayHostV6Declared int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
@@ -285,12 +287,15 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
+		&relayHostDeclared, &relayHostV6Declared,
 	); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
 	n.Hidden = hidden == 1
 	n.Unidirectional = unidirectional == 1
+	n.RelayHostDeclared = relayHostDeclared == 1
+	n.RelayHostV6Declared = relayHostV6Declared == 1
 	if ownerID.Valid {
 		v := ownerID.Int64
 		n.OwnerID = &v
@@ -490,6 +495,24 @@ func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
 		portRange = DefaultPortRange
 	}
 	_, err := d.Exec(`UPDATE nodes SET port_range=? WHERE id=?`, portRange, id)
+	return err
+}
+
+func SetNodeRelayHostDeclared(d *sql.DB, id int64, declared bool) error {
+	v := 0
+	if declared {
+		v = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET relay_host_declared=? WHERE id=?`, v, id)
+	return err
+}
+
+func SetNodeRelayHostV6Declared(d *sql.DB, id int64, declared bool) error {
+	v := 0
+	if declared {
+		v = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET relay_host_v6_declared=? WHERE id=?`, v, id)
 	return err
 }
 

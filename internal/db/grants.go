@@ -11,9 +11,9 @@ type NodeHop struct {
 }
 
 type UserNode struct {
-	UserID            int64 `json:"user_id"`
-	NodeID            int64 `json:"node_id"`
-	MaxForwards       int   `json:"max_forwards"`
+	UserID      int64 `json:"user_id"`
+	NodeID      int64 `json:"node_id"`
+	MaxForwards int   `json:"max_forwards"`
 	// TrafficQuotaBytes is the per-grant quota override; 0 means fall back to the global user quota.
 	TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64 `json:"traffic_used_bytes"`
@@ -106,7 +106,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	for rows.Next() {
 		n := &Node{}
 		g := &UserNode{UserID: userID}
-		var disabled, hidden, unidirectional int
+		var disabled, hidden, unidirectional, relayHostDeclared, relayHostV6Declared int
 		var localMigratedAt, lastSeen sql.NullInt64
 		var agentVersion sql.NullString
 		var ownerID sql.NullInt64
@@ -118,6 +118,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 			&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
+			&relayHostDeclared, &relayHostV6Declared,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err
@@ -128,6 +129,8 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		n.Disabled = disabled == 1
 		n.Hidden = hidden == 1
 		n.Unidirectional = unidirectional == 1
+		n.RelayHostDeclared = relayHostDeclared == 1
+		n.RelayHostV6Declared = relayHostV6Declared == 1
 		if ownerID.Valid {
 			v := ownerID.Int64
 			n.OwnerID = &v

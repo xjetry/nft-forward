@@ -43,3 +43,49 @@ func TestNodeLastWarningRoundTrip(t *testing.T) {
 		t.Fatalf("last_error = %+v, want boom", got.LastError)
 	}
 }
+
+func TestNodeRelayHostDeclaredRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+	n, err := CreateNode(d, "n1", "https://p", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.RelayHostDeclared || n.RelayHostV6Declared {
+		t.Fatalf("new node should start undeclared, got %+v", n)
+	}
+
+	if err := UpdateNodeRelayHost(d, n.ID, "203.0.113.9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetNodeRelayHostDeclared(d, n.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetNodeRelayHostV6Declared(d, n.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := GetNode(d, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.RelayHostDeclared {
+		t.Error("RelayHostDeclared should be true after SetNodeRelayHostDeclared(true)")
+	}
+	if !got.RelayHostV6Declared {
+		t.Error("RelayHostV6Declared should be true after SetNodeRelayHostV6Declared(true)")
+	}
+
+	if err := SetNodeRelayHostDeclared(d, n.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = GetNode(d, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostDeclared {
+		t.Error("RelayHostDeclared should be false after SetNodeRelayHostDeclared(false)")
+	}
+	if !got.RelayHostV6Declared {
+		t.Error("RelayHostV6Declared should remain true (only the v4 flag was cleared)")
+	}
+}

@@ -1,0 +1,2 @@
+ALTER TABLE nodes ADD COLUMN relay_host_declared INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE nodes ADD COLUMN relay_host_v6_declared INTEGER NOT NULL DEFAULT 0;
