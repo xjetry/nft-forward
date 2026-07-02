@@ -414,7 +414,23 @@ func extractIP(r *http.Request) string {
 // self-probed address. The agent's self-probed address only fills the
 // OTHER family, the one this connection didn't use. Never overwrites a
 // manually-configured value (only fires when the DB field is still empty).
+//
+// relay_host must always hold a v4 literal or hostname: an IPv6 literal
+// found there can only be leftover data from before the two fields were
+// split by address family. Such a value is migrated to relay_host_v6 (kept
+// only if that field is still empty, so a real manual v6 config wins) and
+// evicted from relay_host so the empty-field seeding below can re-fill it
+// with a proper v4 value. This makes stale data self-heal on the node's
+// next connection instead of persisting forever.
 func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 string) {
+	if ip := net.ParseIP(node.RelayHost); ip != nil && ip.To4() == nil {
+		if node.RelayHostV6 == "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost)
+			node.RelayHostV6 = node.RelayHost
+		}
+		_ = db.UpdateNodeRelayHost(d, node.ID, "")
+		node.RelayHost = ""
+	}
 	connectIsV6 := false
 	if ip := net.ParseIP(connectIP); ip != nil {
 		connectIsV6 = ip.To4() == nil

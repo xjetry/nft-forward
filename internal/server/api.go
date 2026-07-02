@@ -630,7 +630,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	}
 	host := strings.TrimSpace(body.RelayHost)
 	if host != "" && !isValidRelayHost(host) {
-		jsonErr(w, http.StatusBadRequest, "中继地址须为 IP 或域名")
+		jsonErr(w, http.StatusBadRequest, "中继地址须为 IPv4 或域名，IPv6 请使用 IPv6 中继地址字段")
 		return
 	}
 	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
@@ -2512,10 +2512,15 @@ func toInt64(v any) (int64, error) {
 	}
 }
 
-// isValidRelayHost checks that a string is a valid IP or hostname.
+// isValidRelayHost checks that a string is a valid IPv4 literal or hostname.
+// relay_host (the data-plane v4 address) and relay_host_v6 are family-typed
+// fields; an IPv6 literal here would look identical to a v4-only node's
+// address to anything reading relay_host without also checking family,
+// silently reintroducing the mixed-family bug this field split was meant to
+// fix. IPv6 belongs exclusively in relay_host_v6.
 func isValidRelayHost(host string) bool {
 	if ip := net.ParseIP(host); ip != nil {
-		return true
+		return ip.To4() != nil
 	}
 	return resolver.IsHostname(host)
 }

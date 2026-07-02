@@ -501,6 +501,35 @@ func TestHubFillsRelayHostByFamily(t *testing.T) {
 	}
 }
 
+func TestHubReconcilesDirtyV6RelayHostOnConnect(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	// Simulate historical data written before relay_host was family-aware:
+	// a pure-v6 node's connect IP was once stuffed straight into relay_host.
+	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, "2001:db8::dead"); err != nil {
+		t.Fatal(err)
+	}
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		ProbedV4: "198.51.100.1",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostV6 != "2001:db8::dead" {
+		t.Errorf("RelayHostV6 = %q, want 2001:db8::dead (migrated from the stale relay_host value)", got.RelayHostV6)
+	}
+	if got.RelayHost != "127.0.0.1" {
+		t.Errorf("RelayHost = %q, want 127.0.0.1 (re-seeded from connectIP after the dirty v6 value was evicted)", got.RelayHost)
+	}
+}
+
 func TestHubNeverOverwritesManualRelayHost(t *testing.T) {
 	srv, hub, n := newHubTestServer(t)
 	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, "203.0.113.9"); err != nil {
