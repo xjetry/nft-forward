@@ -108,6 +108,40 @@
 - 编辑路径：带 `node_id` 的编辑保留 via、header-only 与 rewire 不丢中间层、不带字段的请求不降级；
 - 迁移：倍率聚合与现状有效值等值、溯源列 backfill、`nodeCols`/`scanNode`/inline SELECT 三处对齐。
 
+## 附带修复：TUI 链式行编辑通道断裂
+
+中间层落地后多跳规则会显著增多，该缺陷的暴露面随之扩大，故随本设计一并修复。
+
+### 缺陷
+
+TUI 的字段锁定矩阵对链式行（`HopCount > 1`）放开了监听端口/模式/备注编辑，但提交路径走不通：
+
+- TUI `commitEdit` 以数字 RuleID 调 `client.UpdateRule`（`internal/tui/form.go:210-227`）；
+- daemon `handleUpdateRule` 对数字 RuleID 一律经 `Dialer.UpdateRule` 发 WS `rule_update`（`internal/daemon/handlers.go:384-401`）；
+- hub `handleRuleUpdate` 对多跳规则直接拒绝：`len(hops) != 1` → 「仅支持编辑单跳规则」（`internal/server/hub.go:1045-1047`）。
+
+即链式行在 TUI 上一提交必然报错。专用的每跳编辑通道两端俱全但无调用方：服务端 `rule_hop_edit` 分发与 `applyRuleHopEdit`（`internal/server/hub.go:273-285`、`856-903`）、daemon 侧 `Dialer.EditRuleHop`（`internal/daemon/dialer.go:170-180`）、协议消息 `wsproto.RuleHopEdit{rule_id, listen_port, mode, comment}` 均已存在——统一 TUI-server 规则管理时移除了旧 `/v1/chain/edit` 端点，未把 TUI 编辑接回该通道。链式行的删除路径（`rule_delete` → `applyRuleDelete`）不受影响。
+
+### 修复方案
+
+在 daemon `handleUpdateRule` 的数字 RuleID 分支按跳数路由：
+
+- daemon 在自身 panel 段状态（`d.owners["panel"]`，规则携带服务端注入的 `HopCount` 元数据）中按 RuleID 查找该规则；
+- `HopCount > 1` → 改走 `Dialer.EditRuleHop`，仅携带 `listen_port` / `mode` / `comment`（TUI 对链式行锁定的 proto/目标字段本就不可改，请求中的值原样丢弃）；
+- 单跳或本地状态查不到该规则 → 维持现有 `rule_update` 路径，由服务端权威校验兜底。
+
+不改协议、不改 TUI、不改服务端——只补 daemon 侧一处路由。
+
+### 语义说明
+
+- 权限模型沿用两条通道各自的既有语义：`rule_update` 要求节点归属用户等于规则属主（单跳全量编辑）；`rule_hop_edit` 只要求节点在链上（仅能改自己这跳的端口/模式/备注），与删除路径和字段锁定矩阵一致。
+- 若被编辑的是链尾跳，改模式等效于修改该规则的出口段模式（面板侧 `exit_mode` 读自末跳），面板用户可见——这是每跳编辑语义的固有结果，节点操作者对自己机器的转发方式有最终决定权。
+
+### 测试要点
+
+- daemon：多跳规则的 PUT 发出 `rule_hop_edit` 且只携带三个可编辑字段；单跳规则仍发 `rule_update`；本地状态无此 RuleID 时回退 `rule_update`。
+- 端到端：链式行改端口后 `RegenerateRule` 完成上下游端口对齐并重下发受影响节点（`applyRuleHopEdit` 既有行为）。
+
 ## 设计取舍与理由
 
 - **通用倍率只在入口计一次**：同一份字节流经每一跳，逐跳累加使价格随链长增长，与「中间层是入口的增值链路」的定价模型不符；组合入口迁移为倍率求和使存量价格不变。
