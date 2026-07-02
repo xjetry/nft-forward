@@ -448,3 +448,43 @@ func TestDialerHelloIncludesProbedV4(t *testing.T) {
 		t.Error("expected ProbedV4 to be populated (host must have a default v4 route)")
 	}
 }
+
+func TestDialerHelloIncludesDeclaredRelayHost(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	dl := NewDialer(DialerConfig{
+		URL:                 "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
+		Token:               "tok",
+		AgentVersion:        "v1",
+		DeclaredRelayHost:   "203.0.113.50",
+		DeclaredRelayHostV6: "2001:db8::50",
+		GetState:            func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
+		OnApply:             func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := dl.runOnce(ctx); err != nil && err != context.DeadlineExceeded {
+		t.Logf("runOnce returned: %v (expected timeout)", err)
+	}
+
+	frames := fh.Frames()
+	if len(frames) == 0 || frames[0].Type != wsproto.TypeHello {
+		t.Fatalf("expected first frame to be hello, got %+v", frames)
+	}
+	var hello wsproto.Hello
+	if err := json.Unmarshal(frames[0].Payload, &hello); err != nil {
+		t.Fatal(err)
+	}
+	if hello.DeclaredRelayHost != "203.0.113.50" {
+		t.Errorf("DeclaredRelayHost = %q, want 203.0.113.50", hello.DeclaredRelayHost)
+	}
+	if hello.DeclaredRelayHostV6 != "2001:db8::50" {
+		t.Errorf("DeclaredRelayHostV6 = %q, want 2001:db8::50", hello.DeclaredRelayHostV6)
+	}
+}

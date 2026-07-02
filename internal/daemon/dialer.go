@@ -45,6 +45,13 @@ type DialerConfig struct {
 	AgentSHA     string
 	PortRange    string
 
+	// DeclaredRelayHost/DeclaredRelayHostV6 come from the daemon's
+	// --relay-host/--relay-host-v6 flags. Non-empty values are sent with
+	// every hello so the panel treats them as authoritative — see
+	// hub.go's applyDeclaredRelayHosts.
+	DeclaredRelayHost   string
+	DeclaredRelayHostV6 string
+
 	GetState func() (OwnerRuleset, AgentMeta)
 	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) (warning string, err error)
 
@@ -280,15 +287,17 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	_, currentMeta := d.cfg.GetState()
 	probedV4, probedV6 := probeOutboundIPs()
 	helloPayload, err := json.Marshal(wsproto.Hello{
-		NodeToken:      d.cfg.Token,
-		AgentVersion:   d.cfg.AgentVersion,
-		AgentSHA:       d.cfg.AgentSHA,
-		OS:             runtime.GOOS,
-		Arch:           runtime.GOARCH,
-		LastAppliedRev: currentMeta.LastAppliedRev,
-		PortRange:      d.cfg.PortRange,
-		ProbedV4:       probedV4,
-		ProbedV6:       probedV6,
+		NodeToken:           d.cfg.Token,
+		AgentVersion:        d.cfg.AgentVersion,
+		AgentSHA:            d.cfg.AgentSHA,
+		OS:                  runtime.GOOS,
+		Arch:                runtime.GOARCH,
+		LastAppliedRev:      currentMeta.LastAppliedRev,
+		PortRange:           d.cfg.PortRange,
+		ProbedV4:            probedV4,
+		ProbedV6:            probedV6,
+		DeclaredRelayHost:   d.cfg.DeclaredRelayHost,
+		DeclaredRelayHostV6: d.cfg.DeclaredRelayHostV6,
 	})
 	if err != nil {
 		return false, fmt.Errorf("marshal hello: %w", err)

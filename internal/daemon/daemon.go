@@ -51,6 +51,12 @@ type Config struct {
 	ConnectURL   string
 	ConnectToken string
 	PortRange    string
+
+	// DeclaredRelayHost/DeclaredRelayHostV6, when set, are sent with every
+	// hello as the authoritative data-plane address for this node — see
+	// cmd/nft-agent's --relay-host/--relay-host-v6 flags.
+	DeclaredRelayHost   string
+	DeclaredRelayHostV6 string
 }
 
 // New constructs a Daemon ready to Bootstrap and Run. Dataplane defaults to
@@ -84,16 +90,18 @@ func New(cfg Config) (*Daemon, error) {
 		cfg.Dataplane = forward.New(forward.Config{Iface: iface})
 	}
 	return &Daemon{
-		socketPath:  cfg.SocketPath,
-		statePath:   cfg.StatePath,
-		groupName:   cfg.GroupName,
-		dp:          cfg.Dataplane,
-		legacyPaths: cfg.LegacyPaths,
-		countersFn:  cfg.Dataplane.Counters,
-		resolveFn:   defaultResolver(resolver.New()),
-		connectURL:  cfg.ConnectURL,
-		connectTok:  cfg.ConnectToken,
-		portRange:   cfg.PortRange,
+		socketPath:          cfg.SocketPath,
+		statePath:           cfg.StatePath,
+		groupName:           cfg.GroupName,
+		dp:                  cfg.Dataplane,
+		legacyPaths:         cfg.LegacyPaths,
+		countersFn:          cfg.Dataplane.Counters,
+		resolveFn:           defaultResolver(resolver.New()),
+		connectURL:          cfg.ConnectURL,
+		connectTok:          cfg.ConnectToken,
+		portRange:           cfg.PortRange,
+		declaredRelayHost:   cfg.DeclaredRelayHost,
+		declaredRelayHostV6: cfg.DeclaredRelayHostV6,
 	}, nil
 }
 
@@ -215,15 +223,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	if d.connectURL != "" {
 		dl := NewDialer(DialerConfig{
-			URL:          d.connectURL,
-			Token:        d.connectTok,
-			AgentVersion: agentVersion(),
-			AgentSHA:     agentSHA(),
-			PortRange:    d.portRange,
-			GetState:     d.SnapshotForDialer,
-			OnApply:      d.SetPanelRuleset,
-			OnMigrated:   d.clearTuiSegment,
-			CountersFn:   d.counterSamples,
+			URL:                 d.connectURL,
+			Token:               d.connectTok,
+			AgentVersion:        agentVersion(),
+			AgentSHA:            agentSHA(),
+			PortRange:           d.portRange,
+			DeclaredRelayHost:   d.declaredRelayHost,
+			DeclaredRelayHostV6: d.declaredRelayHostV6,
+			GetState:            d.SnapshotForDialer,
+			OnApply:             d.SetPanelRuleset,
+			OnMigrated:          d.clearTuiSegment,
+			CountersFn:          d.counterSamples,
 			OnConfigUpdate: func(poolSize int) {
 				if dp, ok := d.dp.(*forward.Dataplane); ok {
 					dp.SetPoolSize(poolSize)
@@ -405,4 +415,3 @@ func (d *Daemon) SnapshotForDialer() (OwnerRuleset, AgentMeta) {
 	}
 	return cp, d.meta
 }
-
