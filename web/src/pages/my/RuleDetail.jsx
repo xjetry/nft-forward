@@ -15,6 +15,10 @@ export default function MyRuleDetail() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
+  // The single-rule endpoint doesn't carry the binding graph (only the list
+  // endpoint computes the granted-intersection edges) — fetch it alongside
+  // so the edit modal's middle-layer cascade has candidates to offer.
+  const [bindings, setBindings] = useState([])
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -35,6 +39,7 @@ export default function MyRuleDetail() {
   const load = () => {
     setLoading(true)
     api.get(`/my/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
+    api.get('/my/rules').then(d => setBindings(d?.bindings || [])).catch(console.error)
   }
   useEffect(load, [id])
 
@@ -153,7 +158,7 @@ export default function MyRuleDetail() {
 
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} landingNodes={landingNodes} initial={showEdit ? ruleToForm(rule) : null}
+        nodes={nodes} landingNodes={landingNodes} bindings={bindings} initial={showEdit ? ruleToForm(rule) : null}
         onSubmit={saveEdit} showRate={show_rate} />
     </Layout>
   )

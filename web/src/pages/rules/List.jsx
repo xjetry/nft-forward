@@ -16,6 +16,7 @@ export default function RulesList() {
   const [createInitial, setCreateInitial] = useState(null)
   const [editRule, setEditRule] = useState(null)
   const [users, setUsers] = useState([])
+  const [bindings, setBindings] = useState([])
   // Filters live in the URL (not local state) so they survive navigating into a
   // rule's detail page and back — a plain useState resets on remount.
   const [searchParams, setSearchParams] = useSearchParams()
@@ -84,6 +85,9 @@ export default function RulesList() {
       })
       .catch(err => setError(err?.message || '加载失败'))
       .finally(() => setLoading(false))
+    // The binding graph is admin-global (not scoped to a rule's owner), so it
+    // loads once alongside the rule list rather than per-node like /bindings.
+    api.get('/node-bindings').then(d => setBindings(d?.bindings || [])).catch(console.error)
   }
   useEffect(load, [])
 
@@ -189,7 +193,7 @@ export default function RulesList() {
 
       <RuleFormModal
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
-        nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI}
+        nodes={nodes} landingNodes={landingNodes} bindings={bindings} initial={createInitial} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
           const res = await api.post('/rules', ruleFormToPayload(form))
           toast('规则已创建'); setCreateOpen(false)
@@ -198,7 +202,7 @@ export default function RulesList() {
 
       <RuleFormModal
         open={!!editRule} onClose={() => setEditRule(null)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} landingNodes={landingNodes} initial={editRule ? ruleToForm(editRule) : null} onAddProxyURI={addProxyURI}
+        nodes={nodes} landingNodes={landingNodes} bindings={bindings} initial={editRule ? ruleToForm(editRule) : null} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
           await api.put(`/rules/${editRule.id}`, ruleFormToPayload(form))
           toast('已保存并重下发'); setEditRule(null); load()

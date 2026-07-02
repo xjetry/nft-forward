@@ -17,6 +17,7 @@ export default function RulesDetail() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
+  const [bindings, setBindings] = useState([])
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -24,6 +25,7 @@ export default function RulesDetail() {
   const load = () => {
     setLoading(true)
     api.get(`/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
+    api.get('/node-bindings').then(d => setBindings(d?.bindings || [])).catch(console.error)
   }
   useEffect(load, [id])
 
@@ -161,7 +163,7 @@ export default function RulesDetail() {
 
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} initial={ruleToForm(rule)} onSubmit={saveEdit} />
+        nodes={nodes} bindings={bindings} initial={ruleToForm(rule)} onSubmit={saveEdit} />
     </Layout>
   )
 }
