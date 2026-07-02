@@ -438,7 +438,7 @@ func TestRenderRuleset_GroupShaping(t *testing.T) {
 	// tc's egress fw filter classifies the whole connection.
 	if !strings.Contains(out, "chain restore_mark") ||
 		!strings.Contains(out, "type filter hook prerouting priority mangle; policy accept;") ||
-		!strings.Contains(out, "ct mark != 0 meta mark set ct mark") {
+		!strings.Contains(out, "ct mark and 0xffff0000 == 0x10000 meta mark set ct mark") {
 		t.Fatalf("missing restore_mark chain:\n%s", out)
 	}
 }

@@ -223,9 +223,14 @@ func CheckNodeAccess(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 
 // GrantShape carries the shaping identity and limit of one rate-limited grant.
 // GrantID is the user_nodes rowid: stable across upserts, so agents can use it
-// as the connmark-backed shaping group id. A revoke+regrant creates a new row
-// and therefore a new group — existing connections fall back to the default
-// class until they reconnect, which is the intended semantics for a new grant.
+// as the connmark-backed shaping group id. user_nodes has a composite primary
+// key (no INTEGER PRIMARY KEY), so it is an ordinary rowid table — after a
+// revoke deletes the highest-numbered row, SQLite may reuse that rowid for
+// the next insert. A revoke+regrant is therefore not guaranteed to produce a
+// new group id: on that rare reuse, a connection that outlives the revoke
+// keeps being classified into the tc class the reused id now names, spending
+// bandwidth against the new grant's bucket until the connection ends, after
+// which the misclassification self-heals.
 type GrantShape struct {
 	GrantID         int64
 	RateLimitMBytes int64

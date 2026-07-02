@@ -223,7 +223,12 @@ func RenderRuleset(rules []Rule) string {
 	if hasGroup {
 		b.WriteString("\tchain restore_mark {\n")
 		b.WriteString("\t\ttype filter hook prerouting priority mangle; policy accept;\n")
-		b.WriteString("\t\tct mark != 0 meta mark set ct mark\n")
+		// Restrict the restore to marks in our group space (high 16 bits ==
+		// 0x0001, per the 0x10000 offset in GroupShapeMark). An unmasked
+		// "ct mark != 0" would also restore ct marks set by unrelated host
+		// components (policy routing, other QoS), hijacking their packets
+		// into our tc classification.
+		b.WriteString("\t\tct mark and 0xffff0000 == 0x10000 meta mark set ct mark\n")
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("\tchain postrouting {\n")
