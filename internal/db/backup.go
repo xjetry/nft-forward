@@ -43,6 +43,13 @@ func StartBackups(d *sql.DB, dbPath string, interval time.Duration, keep int) fu
 			return
 		}
 		dest := filepath.Join(dir, "panel-"+time.Now().Format("20060102-150405")+".db")
+		// VACUUM INTO refuses to overwrite. A backup for this second already
+		// existing means a near-simultaneous run (e.g. two processes overlapping
+		// during an upgrade restart) already captured it — skip rather than log a
+		// spurious error.
+		if _, err := os.Stat(dest); err == nil {
+			return
+		}
 		if err := Backup(d, dest); err != nil {
 			log.Printf("backup: %v", err)
 			return

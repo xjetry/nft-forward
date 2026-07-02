@@ -42,6 +42,24 @@ func TestBackupProducesUsableCopy(t *testing.T) {
 	}
 }
 
+// VACUUM INTO refuses to overwrite an existing file, so StartBackups guards with
+// an os.Stat check; this documents the constraint that guard handles.
+func TestBackupRefusesExistingDest(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	dest := filepath.Join(dir, "snap.db")
+	if err := Backup(d, dest); err != nil {
+		t.Fatalf("first backup: %v", err)
+	}
+	if err := Backup(d, dest); err == nil {
+		t.Fatal("second backup to an existing path should fail")
+	}
+}
+
 func TestPruneBackupsKeepsNewest(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{
