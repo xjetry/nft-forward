@@ -565,7 +565,7 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 // apiUpdateNodeHops replaces a composite node's hop chain (membership, order
 // and per-hop mode). The config modes shape rules subsequently created on the
 // composite, and only for the inter-node segments: the exit segment's mode
-// belongs to the rule (see hopsForNode), so the stored last-hop mode stays
+// belongs to the rule (see hopsForChain), so the stored last-hop mode stays
 // dormant until a reorder turns that hop into an inter-node one. Existing
 // rules keep the modes captured when they were expanded. The multiplier is no
 // longer a per-hop attribute — a composite's billing multiplier is its own
@@ -1274,13 +1274,17 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForNode.
+		// legacy alias honored for single-node rules only — see hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (edits keep the stored path — old clients must not silently
+		// strip layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -1307,6 +1311,9 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var hops []db.HopInput
+	// vias is the persisted middle-layer path; only the entry-node branch
+	// derives a chain from it, so an explicit-hops request keeps it empty.
+	var vias []int64
 
 	if len(body.Hops) > 0 {
 		// Explicit hops provided
@@ -1315,7 +1322,8 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
 		}
 	} else if body.NodeID > 0 {
-		derived, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+		vias = viasOf(body.ViaNodeIDs)
+		derived, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
@@ -1361,6 +1369,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		ExitPort:    exitPort,
 		Comment:     strings.TrimSpace(body.Comment),
 		EntryFamily: entryFamily,
+		ViaNodeIDs:  vias,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -1424,19 +1433,13 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// hopsForNode expands a logical entry node into the chain of hops a rule runs
-// over: a single node yields one hop on itself; a composite yields its ordered
-// sub-node hops. The composite config's modes only cover the inter-node
-// segments — the exit segment (last hop -> exit target) belongs to the rule,
-// so the last hop carries the request's exitMode (empty falls back to the
-// kernel default, same as a single-node rule). singleMode is the legacy alias
-// honored for single-node rules only: clients predating exit_mode always sent
-// mode prefilled from the first hop, so letting it reach a composite's exit
-// hop would rewrite the exit segment on every edit from a stale web bundle.
-// The composite return flag tells edit handlers which fields count as an
-// explicit mode request. Used when (re)pointing a rule at a node so create
-// and edit derive the chain the same way.
-func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []db.HopInput, composite bool, err error) {
+// expandSegment expands one logical node into its physical hops: a single node
+// is itself; a composite is its ordered children with the config's inter-node
+// modes. Every hop carries the segment's logical node id for provenance. Mode
+// of the segment's tail hop is left as stored (dormant for composites) — the
+// chain assembler overwrites it with the junction edge mode or the rule's
+// exit mode.
+func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 	node, err := db.GetNode(s.DB, nodeID)
 	if err != nil {
 		return nil, false, fmt.Errorf("节点不存在")
@@ -1446,24 +1449,59 @@ func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []
 		if len(nh) == 0 {
 			return nil, true, fmt.Errorf("组合节点无子节点")
 		}
-		hops = make([]db.HopInput, len(nh))
+		hops := make([]db.HopInput, len(nh))
 		for i, h := range nh {
-			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode, ViaNodeID: nodeID}
 		}
-		// The exit segment belongs to the rule, never the composite config:
-		// an empty exitMode deliberately lands on the kernel default (same
-		// as a single-node rule) instead of the config's stored tail mode,
-		// so a rule's exit behavior is fully determined by its own fields.
-		// Same-node edits that omit the mode keep the rule's current one via
-		// the callers' explicit-mode check.
-		hops[len(hops)-1].Mode = exitMode
 		return hops, true, nil
 	}
+	return []db.HopInput{{NodeID: nodeID, Mode: "", ViaNodeID: nodeID}}, false, nil
+}
+
+// hopsForChain assembles a rule's physical chain: the entry segment followed
+// by each middle-layer (via) segment. Non-final segment tails take the
+// forwarding mode of the binding edge they cross; the final hop takes the
+// rule's exitMode (empty falls back to singleMode for a bare single-node
+// chain — the legacy alias — else the kernel default). Every via must carry
+// the via role and be reachable from its predecessor through a binding edge;
+// grants are the caller's policy. The composite flag tells edit handlers
+// which fields count as an explicit exit-mode request: any chain beyond a
+// bare single node never honors the legacy mode alias.
+func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string) ([]db.HopInput, bool, error) {
+	hops, entryComposite, err := s.expandSegment(entryID)
+	if err != nil {
+		return nil, false, err
+	}
+	prev := entryID
+	for _, viaID := range vias {
+		viaNode, err := db.GetNode(s.DB, viaID)
+		if err != nil {
+			return nil, true, fmt.Errorf("中间层节点不存在")
+		}
+		if viaNode.Roles&db.NodeRoleVia == 0 {
+			return nil, true, fmt.Errorf("节点 %s 不是中间层", viaNode.Name)
+		}
+		edge, err := db.GetNodeBinding(s.DB, prev, viaID)
+		if err != nil {
+			return nil, true, fmt.Errorf("中间层 %s 未绑定到所选上游", viaNode.Name)
+		}
+		seg, _, err := s.expandSegment(viaID)
+		if err != nil {
+			return nil, true, err
+		}
+		// The junction (previous segment's tail -> this segment's head) is an
+		// inter-node leg owned by the binding edge, not by the rule.
+		hops[len(hops)-1].Mode = edge.Mode
+		hops = append(hops, seg...)
+		prev = viaID
+	}
+	composite := entryComposite || len(vias) > 0
 	mode := exitMode
-	if mode == "" {
+	if mode == "" && !composite {
 		mode = singleMode
 	}
-	return []db.HopInput{{NodeID: nodeID, Mode: mode, ViaNodeID: nodeID}}, false, nil
+	hops[len(hops)-1].Mode = mode
+	return hops, composite, nil
 }
 
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
@@ -1489,13 +1527,17 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForNode.
+		// hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (keep the stored path — old clients must not silently strip
+		// layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -1521,33 +1563,45 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Three ways to resolve the chain, in priority order:
-	//   node_id  -> re-derive from the selected entry node (single/composite);
-	//               this is how the entry node gets switched.
+	//   node_id / via_node_ids -> re-derive from the selected entry node and
+	//               middle-layer path (single/composite); this is how the entry
+	//               node or the via path gets switched. A sent via_node_ids
+	//               field alone (even with node_id absent) re-derives so an
+	//               explicit empty list can clear the layers.
 	//   hops     -> explicit chain (reorder/mode edits).
 	//   neither  -> keep the existing chain; RegenerateRule reuses each node's
 	//               current listen port so a header-only edit doesn't churn the
 	//               entry endpoint or installed ports.
 	var hops []db.HopInput
 	switch {
-	case body.NodeID > 0:
-		derived, composite, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+	case body.NodeID > 0 || body.ViaNodeIDs != nil:
+		entryID := body.NodeID
+		if entryID == 0 {
+			entryID = rl.NodeID
+		}
+		vias := rl.ViaNodeIDs
+		if body.ViaNodeIDs != nil {
+			vias = *body.ViaNodeIDs
+		}
+		derived, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
 		}
 		hops = derived
-		// A same-node edit without an explicit exit-segment mode keeps the
+		// A same-entry edit without an explicit exit-segment mode keeps the
 		// exit hop's current mode, so clients that don't send one can't
-		// silently reset a userspace exit back to kernel. Composite chains
-		// only treat exit_mode as explicit — the legacy mode field never was
-		// an exit-segment request for them.
+		// silently reset a userspace exit back to kernel. Any chain beyond a
+		// bare single node treats only exit_mode as explicit — the legacy mode
+		// field never was an exit-segment request for them.
 		explicit := body.ExitMode != "" || (!composite && body.Mode != "")
-		if !explicit && body.NodeID == rl.NodeID {
+		if !explicit && entryID == rl.NodeID {
 			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
 				hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 			}
 		}
-		rl.NodeID = body.NodeID
+		rl.NodeID = entryID
+		rl.ViaNodeIDs = vias
 	case len(body.Hops) == 0:
 		existing, err := db.ListRuleHops(s.DB, id)
 		if err != nil {
@@ -2316,9 +2370,13 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForNode.
+		// legacy alias honored for single-node rules only — see hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" apart from an explicit empty list; each via is authorized on
+		// its own grant just like the entry node.
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -2358,7 +2416,18 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hops, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+	// Each middle-layer node is authorized on its own grant before the chain
+	// is validated, so a revoked via is rejected as forbidden rather than
+	// falling through to the role/binding checks.
+	vias := viasOf(body.ViaNodeIDs)
+	for _, viaID := range vias {
+		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			return
+		}
+	}
+
+	hops, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
@@ -2397,6 +2466,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		ExitPort:    exitPort,
 		Comment:     strings.TrimSpace(body.Comment),
 		EntryFamily: entryFamily,
+		ViaNodeIDs:  vias,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -2459,9 +2529,13 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForNode.
+		// hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (keep the stored path — old clients must not silently strip
+		// layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -2486,27 +2560,43 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	nodeID := rl.NodeID
+	entryID := rl.NodeID
 	if body.NodeID > 0 {
-		nodeID = body.NodeID
+		entryID = body.NodeID
+	}
+	// Absent via_node_ids keeps the stored path so a header-only edit can't
+	// silently strip the middle layers; an explicit list (empty included)
+	// replaces it.
+	vias := rl.ViaNodeIDs
+	if body.ViaNodeIDs != nil {
+		vias = *body.ViaNodeIDs
 	}
 	// The grant on the target node authorizes the rule and carries the per-node
 	// cap; a composite is the unit of authorization (granting it covers the
 	// whole chain), so the check is on the selected node itself.
-	grant, gerr := db.GetNodeGrant(s.DB, u.ID, nodeID)
+	grant, gerr := db.GetNodeGrant(s.DB, u.ID, entryID)
 	if gerr != nil {
 		jsonErr(w, http.StatusForbidden, "无权使用该节点")
 		return
 	}
-	hops, composite, derr := s.hopsForNode(nodeID, body.Mode, body.ExitMode)
+	// Each middle-layer node is authorized on its own grant before the chain
+	// is validated, so a revoked via is rejected as forbidden rather than
+	// falling through to the role/binding checks.
+	for _, viaID := range vias {
+		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			return
+		}
+	}
+	hops, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
 	}
-	// Same-node edits without an explicit exit-segment mode keep the exit
+	// Same-entry edits without an explicit exit-segment mode keep the exit
 	// hop's current mode (see the admin update handler for the rationale).
 	explicit := body.ExitMode != "" || (!composite && body.Mode != "")
-	if !explicit && nodeID == rl.NodeID {
+	if !explicit && entryID == rl.NodeID {
 		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
 			hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 		}
@@ -2521,8 +2611,8 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	// Per-node cap only when moving to a different node — the rule already
 	// counts against its current node, so a same-node edit can't exceed it.
-	if nodeID != rl.NodeID {
-		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, nodeID); cnt+1 > grant.MaxForwards {
+	if entryID != rl.NodeID {
+		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, entryID); cnt+1 > grant.MaxForwards {
 			jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
 			return
 		}
@@ -2532,7 +2622,8 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusConflict, err.Error())
 		return
 	}
-	rl.NodeID = nodeID
+	rl.NodeID = entryID
+	rl.ViaNodeIDs = vias
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
 	// Absent entry_family keeps the stored family — only an explicit value
