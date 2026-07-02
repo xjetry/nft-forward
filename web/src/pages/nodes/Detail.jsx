@@ -261,6 +261,11 @@ export default function NodeDetail() {
                 </InfoRow>
               )}
             </div>
+            {nullStr(node.last_error) && (
+              <div className="mt-2 text-[12.5px] text-red-700 dark:text-red-400 bg-red-500/[.08] border border-red-500/30 rounded-lg px-3 py-2 break-all">
+                {nullStr(node.last_error)}
+              </div>
+            )}
             {node.last_warning && !nullStr(node.last_error) && (
               <div className="mt-2 text-[12.5px] text-[#b25000] bg-[#fef6ec] border border-[#f6d9ac] rounded-lg px-3 py-2 break-all">
                 {node.last_warning}

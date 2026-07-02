@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { fmtBytes, fmtTime } from '../lib/fmt'
+import { fmtBytes, fmtTime, nullStr } from '../lib/fmt'
 import { Layout, useBlur, useUser } from '../components/Layout'
 import { Loading, Empty, Badge, SensText, NodeTypeBadge } from '../components/ui'
 import { ProxyURIEditor } from '../components/ProxyURIEditor'
@@ -119,5 +119,8 @@ function StatCard({ label, value, unit, sub, accent, icon }) {
 
 function NodeStatus({ node }) {
   if (node.disabled) return <Badge color="amber">禁用</Badge>
+  // Surface a sync error (hover for detail) rather than hiding it behind 离线.
+  const lastErr = nullStr(node.last_error)
+  if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
 }

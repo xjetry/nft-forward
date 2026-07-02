@@ -3,8 +3,8 @@ import { api } from '../../lib/api'
 import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { useIsMobile } from '../../lib/useIsMobile'
-import { Layout } from '../../components/Layout'
-import { Loading, Empty, Badge, NodeTypeBadge } from '../../components/ui'
+import { Layout, useToast } from '../../components/Layout'
+import { Loading, Empty, Badge, NodeTypeBadge, useConfirm } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
 import { ProxyURIEditor } from '../../components/ProxyURIEditor'
 
@@ -16,6 +16,8 @@ export default function MyDashboard() {
   const [newUsername, setNewUsername] = useState('')
   const speeds = useSpeed()
   const isMobile = useIsMobile()
+  const toast = useToast()
+  const confirm = useConfirm()
 
   const [token, setToken] = useState(null)
   const [tokenLoading, setTokenLoading] = useState(true)
@@ -37,33 +39,33 @@ export default function MyDashboard() {
       setShowTokenModal(true)
       const t = await api.get('/my/token')
       setToken(t)
-    } catch (err) { alert(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const deleteToken = async () => {
-    if (!confirm('确认删除 Token？删除后使用此 Token 的所有外部服务将失效。')) return
+    if (!(await confirm({ title: '删除 Token', message: '删除后使用此 Token 的所有外部服务将失效。', confirmText: '删除', danger: true }))) return
     try {
       await api.del('/my/token')
       setToken({ has_token: false })
-    } catch (err) { alert(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const refreshToken = async () => {
-    if (!confirm('确认刷新 Token？旧 Token 将立即失效。')) return
+    if (!(await confirm({ title: '刷新 Token', message: '旧 Token 将立即失效，使用它的外部服务需要更新。', confirmText: '刷新', danger: true }))) return
     try {
       const res = await api.post('/my/token/refresh')
       setNewToken(res.token)
       setShowTokenModal(true)
       const t = await api.get('/my/token')
       setToken(t)
-    } catch (err) { alert(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const toggleToken = async () => {
     try {
       const res = await api.post('/my/token/toggle')
       setToken(prev => ({ ...prev, disabled: res.disabled }))
-    } catch (err) { alert(err.message) }
+    } catch (err) { toast(err.message, 'error') }
   }
 
   if (loading) return <Layout><Loading /></Layout>
@@ -102,7 +104,7 @@ export default function MyDashboard() {
                     await api.post('/my/username', { username: name })
                     setEditingUsername(false)
                     window.location.reload()
-                  } catch (err) { alert(err.message) }
+                  } catch (err) { toast(err.message, 'error') }
                 }}>
                   <input className="input-field font-mono text-sm" value={newUsername} onChange={e => setNewUsername(e.target.value)} autoFocus style={{ width: 180 }} />
                   <button type="submit" className="btn-primary text-xs">保存</button>

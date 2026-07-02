@@ -11,6 +11,7 @@ import { parseURIs, mergeLanding, landingIndex, rewriteEndpoint, splitEndpoint, 
 export default function RulesList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState(null)
   const [editRule, setEditRule] = useState(null)
@@ -60,12 +61,13 @@ export default function RulesList() {
 
   const load = () => {
     setLoading(true)
+    setError('')
     api.get(`/rules`)
       .then(d => {
         setData(d)
         if (d.users?.length) setUsers(d.users)
       })
-      .catch(console.error)
+      .catch(err => setError(err?.message || '加载失败'))
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
@@ -73,6 +75,9 @@ export default function RulesList() {
   // Only blank the page on the first load; later reloads (delete/edit) keep the
   // current list on screen instead of flashing a full-page spinner.
   if (loading && !data) return <Layout><Loading /></Layout>
+  // A load failure is distinct from an empty list — don't disguise an error as
+  // "暂无规则".
+  if (!data && error) return <Layout><Empty title="加载失败" desc={error}><button onClick={load} className="btn-secondary text-xs mt-3">重试</button></Empty></Layout>
 
   const { rules: allRulesRaw = [], nodes = [] } = data || {}
   const nodeMap = {}

@@ -11,6 +11,7 @@ import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../..
 export default function NodeList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
   const [search, setSearch] = useState('')
@@ -36,7 +37,8 @@ export default function NodeList() {
 
   const load = () => {
     setLoading(true)
-    api.get('/nodes').then(setData).catch(console.error).finally(() => setLoading(false))
+    setError('')
+    api.get('/nodes').then(setData).catch(err => setError(err?.message || '加载失败')).finally(() => setLoading(false))
   }
   useEffect(load, [])
 
@@ -63,7 +65,8 @@ export default function NodeList() {
     try { await api.post(`/nodes/${node.id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message, 'error') }
   }
 
-  if (loading) return <Layout><Loading /></Layout>
+  if (loading && !data) return <Layout><Loading /></Layout>
+  if (!data && error) return <Layout><Empty title="加载失败" desc={error}><button onClick={load} className="btn-secondary text-xs mt-3">重试</button></Empty></Layout>
 
   const { nodes = [], latest_agent_version, node_traffic = {} } = data || {}
   const singleNodes = nodes.filter(n => n.node_type !== 'composite')

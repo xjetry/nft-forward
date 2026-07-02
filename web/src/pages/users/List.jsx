@@ -12,6 +12,8 @@ import { useIsMobile } from '../../lib/useIsMobile'
 export default function UserList() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [newPassword, setNewPassword] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showPaste, setShowPaste] = useState(false)
   const [allNodes, setAllNodes] = useState([])
@@ -25,12 +27,14 @@ export default function UserList() {
 
   const load = () => {
     setLoading(true)
-    api.get('/users').then(setData).catch(console.error).finally(() => setLoading(false))
+    setError('')
+    api.get('/users').then(setData).catch(err => setError(err?.message || '加载失败')).finally(() => setLoading(false))
   }
   useEffect(load, [])
   useEffect(() => { api.get('/nodes').then(d => setAllNodes(d?.nodes || [])) }, [])
 
-  if (loading) return <Layout><Loading /></Layout>
+  if (loading && !data) return <Layout><Loading /></Layout>
+  if (!data && error) return <Layout><Empty title="加载失败" desc={error}><button onClick={load} className="btn-secondary text-xs mt-3">重试</button></Empty></Layout>
 
   const { users = [] } = data || {}
 
@@ -38,10 +42,10 @@ export default function UserList() {
     try { await api.post(`/users/${u.id}/toggle`); toast(u.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
   }
   const resetPassword = async (u) => {
-    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码会一次性显示。', confirmText: '重置', danger: true }))) return
+    if (!(await confirm({ title: '重置密码', message: '重置该用户密码？新密码只显示一次，请及时复制保存。', confirmText: '重置', danger: true }))) return
     try {
       const d = await api.post(`/users/${u.id}/reset-password`)
-      toast(d?.new_password ? `新密码：${d.new_password}` : '已重置')
+      if (d?.new_password) setNewPassword(d.new_password); else toast('已重置')
     } catch (err) { toast(err.message, 'error') }
   }
   const deleteUser = async (u) => {
@@ -161,6 +165,17 @@ export default function UserList() {
       <CreateUserModal open={showCreate} onClose={() => setShowCreate(false)} onDone={(userId) => { setShowCreate(false); userId ? navigate(`/users/${userId}`) : load() }} />
       <PasteGrantsModal open={showPaste} onClose={() => setShowPaste(false)} onDone={load}
         allNodes={allNodes} allUsers={users} preSelectedUserIds={[]} />
+
+      <Modal open={!!newPassword} onClose={() => setNewPassword(null)} title="新密码">
+        <p className="text-sm text-ink-soft mb-3">新密码只显示这一次，请复制并妥善保存。关闭后将无法再次查看。</p>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 font-mono text-sm bg-raised border border-line rounded-lg px-3 py-2.5 break-all select-all">{newPassword}</code>
+          <button onClick={() => copyToClipboard(newPassword).then(() => toast('已复制')).catch(() => toast('复制失败', 'error'))} className="btn-secondary text-xs flex-none">复制</button>
+        </div>
+        <div className="flex justify-end mt-5">
+          <button onClick={() => setNewPassword(null)} className="btn-secondary">关闭</button>
+        </div>
+      </Modal>
     </Layout>
   )
 }

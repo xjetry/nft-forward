@@ -39,8 +39,10 @@ const badgeColors = {
   blue: 'bg-blue-500/[.12] text-blue-700 dark:text-blue-400 border-blue-500/30',
   violet: 'bg-violet-500/[.12] text-violet-700 dark:text-violet-400 border-violet-500/30',
 }
-export function Badge({ color = 'gray', children }) {
-  return <span className={`inline-flex items-center gap-1.5 px-[11px] py-1 rounded-full text-[12px] font-semibold border ${badgeColors[color] || badgeColors.gray}`}>{children}</span>
+export function Badge({ color = 'gray', className = '', children, ...rest }) {
+  // Forward ...rest (notably title) so hovering a status badge can reveal detail
+  // like a node's last_error — previously these props were silently dropped.
+  return <span {...rest} className={`inline-flex items-center gap-1.5 px-[11px] py-1 rounded-full text-[12px] font-semibold border ${badgeColors[color] || badgeColors.gray} ${className}`}>{children}</span>
 }
 
 /* ---------- NodeTypeBadge ---------- */
