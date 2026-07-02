@@ -287,9 +287,9 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
-		"node_traffic": nodeTraffic,
+		"node_traffic":         nodeTraffic,
 		"latest_agent_version": serverVersion(),
-		"show_rate_to_user": showRate == "1",
+		"show_rate_to_user":    showRate == "1",
 	})
 }
 
@@ -664,12 +664,9 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := strings.TrimSpace(body.RelayHostV6)
-	if host != "" {
-		ip := net.ParseIP(host)
-		if ip == nil || ip.To4() != nil {
-			jsonErr(w, http.StatusBadRequest, "IPv6 中继地址须为有效的 IPv6 地址")
-			return
-		}
+	if host != "" && !isValidRelayHostV6(host) {
+		jsonErr(w, http.StatusBadRequest, "IPv6 中继地址须为有效的 IPv6 地址")
+		return
 	}
 	if err := db.UpdateNodeRelayHostV6(s.DB, id, host); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -2523,6 +2520,13 @@ func isValidRelayHost(host string) bool {
 		return ip.To4() != nil
 	}
 	return resolver.IsHostname(host)
+}
+
+// isValidRelayHostV6 checks that a string is a valid IPv6 literal (not a
+// v4-mapped one, which belongs in relay_host instead).
+func isValidRelayHostV6(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
 }
 
 func (s *Server) apiSetPerNodeMaxForwards(w http.ResponseWriter, r *http.Request) {

@@ -150,7 +150,8 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6)
+	applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
 	if hello.PortRange != "" {
 		if err := db.ValidatePortRange(hello.PortRange); err == nil {
 			_ = db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange)
@@ -426,7 +427,7 @@ func extractIP(r *http.Request) string {
 // written. This makes stale data self-heal on the node's next connection
 // instead of persisting forever, without letting the stale value block a
 // fresher one from landing.
-func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 string) {
+func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string) {
 	connectIsV6 := false
 	if ip := net.ParseIP(connectIP); ip != nil {
 		connectIsV6 = ip.To4() == nil
@@ -439,19 +440,56 @@ func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 
 		_ = db.UpdateNodeRelayHost(d, node.ID, "")
 		node.RelayHost = ""
 	}
-	if node.RelayHost == "" {
+	if node.RelayHost == "" && declaredV4 == "" {
 		if !connectIsV6 && connectIP != "" {
 			_ = db.UpdateNodeRelayHost(d, node.ID, connectIP)
 		} else if probedV4 != "" {
 			_ = db.UpdateNodeRelayHost(d, node.ID, probedV4)
 		}
 	}
-	if node.RelayHostV6 == "" {
+	if node.RelayHostV6 == "" && declaredV6 == "" {
 		if connectIsV6 && connectIP != "" {
 			_ = db.UpdateNodeRelayHostV6(d, node.ID, connectIP)
 		} else if probedV6 != "" {
 			_ = db.UpdateNodeRelayHostV6(d, node.ID, probedV6)
 		}
+	}
+}
+
+// applyDeclaredRelayHosts handles operator-declared relay_host/relay_host_v6
+// values sent via Hello.DeclaredRelayHost/DeclaredRelayHostV6 (see
+// cmd/nft-agent's --relay-host/--relay-host-v6 flags). Unlike
+// fillNodeRelayHosts, which only ever seeds an empty field once, a declared
+// value is authoritative: it overwrites whatever is in the DB on every
+// hello where it's present, so config drift self-heals. When the daemon
+// stops declaring a value (flag removed, daemon restarted), the DB field
+// unlocks but keeps its last value rather than going blank, so a live route
+// doesn't disappear out from under the running link.
+func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 string) {
+	if declaredV4 != "" {
+		if isValidRelayHost(declaredV4) {
+			if node.RelayHost != declaredV4 || !node.RelayHostDeclared {
+				_ = db.UpdateNodeRelayHost(d, node.ID, declaredV4)
+				_ = db.SetNodeRelayHostDeclared(d, node.ID, true)
+				node.RelayHost, node.RelayHostDeclared = declaredV4, true
+			}
+		}
+	} else if node.RelayHostDeclared {
+		_ = db.SetNodeRelayHostDeclared(d, node.ID, false)
+		node.RelayHostDeclared = false
+	}
+
+	if declaredV6 != "" {
+		if isValidRelayHostV6(declaredV6) {
+			if node.RelayHostV6 != declaredV6 || !node.RelayHostV6Declared {
+				_ = db.UpdateNodeRelayHostV6(d, node.ID, declaredV6)
+				_ = db.SetNodeRelayHostV6Declared(d, node.ID, true)
+				node.RelayHostV6, node.RelayHostV6Declared = declaredV6, true
+			}
+		}
+	} else if node.RelayHostV6Declared {
+		_ = db.SetNodeRelayHostV6Declared(d, node.ID, false)
+		node.RelayHostV6Declared = false
 	}
 }
 

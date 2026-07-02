@@ -14,25 +14,25 @@ import (
 // Type constants. Strings (not iota) so the wire is self-describing
 // when debugging with `wscat`/`websocat`.
 const (
-	TypeHello            = "hello"
-	TypeHelloAck         = "hello_ack"
-	TypeApplyRuleset     = "apply_ruleset"
-	TypeApplyAck         = "apply_ack"
-	TypeCounters         = "counters"
-	TypeRuleHopEdit      = "rule_hop_edit"
-	TypeRuleDelete       = "rule_delete"
-	TypeRuleCmdAck       = "rule_cmd_ack"
-	TypeRuleCreate       = "rule_create"
-	TypeRuleUpdate       = "rule_update"
-	TypeMigrateRules     = "migrate_rules"
-	TypeUpgrade          = "upgrade"
-	TypeUpgradeAck       = "upgrade_ack"
-	TypeProbe            = "probe"
-	TypeProbeAck         = "probe_ack"
-	TypePing             = "ping"
-	TypePong             = "pong"
-	TypeError            = "error"
-	TypeConfigUpdate     = "config_update"
+	TypeHello        = "hello"
+	TypeHelloAck     = "hello_ack"
+	TypeApplyRuleset = "apply_ruleset"
+	TypeApplyAck     = "apply_ack"
+	TypeCounters     = "counters"
+	TypeRuleHopEdit  = "rule_hop_edit"
+	TypeRuleDelete   = "rule_delete"
+	TypeRuleCmdAck   = "rule_cmd_ack"
+	TypeRuleCreate   = "rule_create"
+	TypeRuleUpdate   = "rule_update"
+	TypeMigrateRules = "migrate_rules"
+	TypeUpgrade      = "upgrade"
+	TypeUpgradeAck   = "upgrade_ack"
+	TypeProbe        = "probe"
+	TypeProbeAck     = "probe_ack"
+	TypePing         = "ping"
+	TypePong         = "pong"
+	TypeError        = "error"
+	TypeConfigUpdate = "config_update"
 )
 
 // Envelope wraps every frame. ID is required for req/resp pairs
@@ -87,6 +87,14 @@ type Hello struct {
 	// see hub.go's fillNodeRelayHosts. Empty from agents that predate this probe.
 	ProbedV4 string `json:"probed_v4,omitempty"`
 	ProbedV6 string `json:"probed_v6,omitempty"`
+	// DeclaredRelayHost/DeclaredRelayHostV6 are explicit operator-provided
+	// addresses (daemon --relay-host/--relay-host-v6), distinct from
+	// ProbedV4/ProbedV6 which are the agent's own outbound-route guesses.
+	// When present they are authoritative and override whatever is in the
+	// DB, unlike ProbedV4/ProbedV6 which only ever seed an empty field —
+	// see hub.go's applyDeclaredRelayHosts.
+	DeclaredRelayHost   string `json:"declared_relay_host,omitempty"`
+	DeclaredRelayHostV6 string `json:"declared_relay_host_v6,omitempty"`
 }
 
 // HelloAck is the panel's response to Hello. Error == "" means the
