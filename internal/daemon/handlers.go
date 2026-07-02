@@ -516,8 +516,9 @@ func (d *Daemon) pickLocalFreePort(proto string) int {
 }
 
 // ownerWriteError is the typed error returned by reconcileOwners so the
-// HTTP handler can map merge conflicts to 409 and unresolved hosts to 400
-// without reparsing the error message.
+// HTTP handler can map merge conflicts to 409 without reparsing the error
+// message. Syntactically invalid targets are rejected up front by the
+// handler before reconcileOwners ever runs, so they never reach here.
 type ownerWriteError struct {
 	status int
 	err    error
@@ -534,8 +535,6 @@ func (d *Daemon) classifyWriteError(err error) error {
 	switch {
 	case strings.Contains(msg, "already claimed"):
 		return &ownerWriteError{status: http.StatusConflict, err: err}
-	case strings.Contains(msg, "无法解析目标域名"):
-		return &ownerWriteError{status: http.StatusBadRequest, err: err}
 	default:
 		return &ownerWriteError{status: http.StatusInternalServerError, err: err}
 	}
