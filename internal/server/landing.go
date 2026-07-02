@@ -241,6 +241,16 @@ func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 			v.QuotaBytes = e.QuotaBytes
 			v.UsedBytes = e.UsedBytes
 			v.Exceeded = e.QuotaBytes > 0 && e.UsedBytes >= e.QuotaBytes
+			// An admin rename must reach the client the user actually
+			// imports, not just this list — rewrite the URI's display name
+			// too. A URI the rewriter can't handle is served unchanged so
+			// copying keeps working.
+			if e.NameOverride != "" {
+				v.Node.Name = e.NameOverride
+				if rewritten, err := landing.RewriteName(v.Node.URI, e.NameOverride); err == nil {
+					v.Node.URI = rewritten
+				}
+			}
 		}
 		views = append(views, v)
 	}

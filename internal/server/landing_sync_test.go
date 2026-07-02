@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/landing"
 )
 
 func TestResolveLandingExitsManualOnly(t *testing.T) {
@@ -172,5 +173,41 @@ func TestMyLandingNodesStaleFallback(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if !resp.Stale || len(resp.Nodes) != 1 || resp.Nodes[0].Host != "1.2.3.4" {
 		t.Fatalf("stale fallback should serve the snapshot, got %+v", resp)
+	}
+}
+
+func TestMyLandingNodesAppliesNameOverride(t *testing.T) {
+	d := openDB(t)
+	uid, cookie := loginAsUser(t, d, 10)
+	db.SetUserLandingSource(d, uid, "", "vless://u@1.2.3.4:443#HK")
+	s, _ := New(d)
+
+	// first request materializes the exit set the rename targets
+	req := httptest.NewRequest("GET", "/api/my/landing-nodes", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := db.SetUserLandingExitName(d, uid, "1.2.3.4", 443, "香港 01"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	var resp struct {
+		Nodes []struct {
+			Name string `json:"name"`
+			URI  string `json:"uri"`
+		} `json:"nodes"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "香港 01" {
+		t.Fatalf("override not applied: %+v", resp.Nodes)
+	}
+	parsed := landing.ParseURIs([]string{resp.Nodes[0].URI})
+	if len(parsed) != 1 || parsed[0].Name != "香港 01" || parsed[0].Host != "1.2.3.4" || parsed[0].Port != 443 {
+		t.Fatalf("uri not rewritten or endpoint changed: %q -> %+v", resp.Nodes[0].URI, parsed)
 	}
 }
