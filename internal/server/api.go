@@ -1470,7 +1470,7 @@ func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []
 	if mode == "" {
 		mode = singleMode
 	}
-	return []db.HopInput{{NodeID: nodeID, Mode: mode}}, false, nil
+	return []db.HopInput{{NodeID: nodeID, Mode: mode, ViaNodeID: nodeID}}, false, nil
 }
 
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
