@@ -126,7 +126,10 @@ export default function UserDetail() {
 
       {/* Landing-node source (regular users only) */}
       {isRegularUser && (
-        <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
+        <>
+          <LandingSourceForm userId={id} subURL={user.landing_sub_url} uris={user.landing_uris} nodes={landing_nodes} blurred={blurred} onDone={load} />
+          <LandingExitQuotaCard userId={id} blurred={blurred} />
+        </>
       )}
 
       {/* Rules */}
@@ -444,6 +447,100 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function ExitQuotaForm({ userId, exit, onDone }) {
+  const [gb, setGb] = useState(String(Number(((exit.quota_bytes || 0) / 1073741824).toFixed(2))))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const bytes = Math.max(0, Math.round((Number(gb) || 0) * 1073741824))
+    try {
+      await api.post(`/users/${userId}/landing-exits/quota`, { host: exit.host, port: exit.port, quota_bytes: bytes })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" step="0.1" value={gb}
+        onChange={e => setGb(e.target.value)} style={{ width: 80 }} title="0 = 不限" />
+      <span className="text-xs text-ink-mut">GB</span>
+      <button type="submit" className="btn-secondary text-xs">设限额</button>
+    </form>
+  )
+}
+
+function LandingExitQuotaCard({ userId, blurred }) {
+  const [exits, setExits] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const toast = useToast()
+  const load = (refresh = false) => {
+    if (refresh) setRefreshing(true)
+    api.get(`/users/${userId}/landing-exits${refresh ? '?refresh=1' : ''}`)
+      .then(d => setExits(d?.exits || []))
+      .catch(err => toast(err.message, 'error'))
+      .finally(() => setRefreshing(false))
+  }
+  useEffect(() => { load(false) }, [userId])
+
+  const reset = async (e) => {
+    try {
+      await api.post(`/users/${userId}/landing-exits/reset`, { host: e.host, port: e.port })
+      toast('已重置'); load()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  const del = async (e) => {
+    try {
+      await api.post(`/users/${userId}/landing-exits/delete`, { host: e.host, port: e.port })
+      toast('已删除'); load()
+    } catch (err) { toast(err.message, 'error') }
+  }
+
+  if (exits === null) return null
+  return (
+    <div className="card mb-5">
+      <div className="card-header">
+        <h3 className="text-sm font-bold">落地出口限额</h3>
+        <button onClick={() => load(true)} disabled={refreshing} className="btn-secondary text-xs">
+          {refreshing ? '刷新中…' : '刷新'}
+        </button>
+      </div>
+      {exits.length === 0 ? (
+        <div className="p-5 text-xs text-ink-mut">暂无落地出口——先在上方配置落地节点来源。</div>
+      ) : (
+        <div className="tbl-scroll">
+          <table className="tbl">
+            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>限额</th><th>已用</th><th className="text-right">操作</th></tr></thead>
+            <tbody>
+              {exits.map((e, i) => {
+                const exceeded = e.quota_bytes > 0 && e.used_bytes >= e.quota_bytes
+                return (
+                  <tr key={i} className={e.present ? '' : 'opacity-50'}>
+                    <td className="font-semibold">
+                      {e.name || '(未命名)'}
+                      {!e.present && <Badge color="gray">已不在来源</Badge>}
+                    </td>
+                    <td className="font-mono text-xs text-ink-soft">{e.protocol}</td>
+                    <td className="font-mono text-xs"><SensText blurred={blurred}>{e.host}:{e.port}</SensText></td>
+                    <td><ExitQuotaForm userId={userId} exit={e} onDone={load} /></td>
+                    <td className="font-mono text-xs">
+                      {fmtTrafficGB(e.used_bytes, e.quota_bytes)}
+                      {exceeded && <Badge color="red">已超额</Badge>}
+                    </td>
+                    <td className="text-right">
+                      <button onClick={() => reset(e)} className="text-blue-600 text-xs font-semibold">重置</button>
+                      {!e.present && <button onClick={() => del(e)} className="text-red-600 text-xs font-semibold ml-3">删除</button>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
