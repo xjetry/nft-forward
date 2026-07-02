@@ -280,6 +280,7 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	db.ResolveCompositeOnline(s.DB, nodes)
 	db.ResolveCompositeRateMultiplier(s.DB, nodes)
+	db.ResolveCompositeRelayStack(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
@@ -473,9 +474,13 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		resp["single_nodes"] = singleNodes
 		// Online is aggregated from children; reuse the same node list.
 		db.ResolveCompositeOnline(s.DB, all)
+		db.ResolveCompositeRelayStack(s.DB, all)
 		for _, c := range all {
 			if c.ID == n.ID {
 				n.Online = c.Online
+				n.EntryRelayHost = c.EntryRelayHost
+				n.EntryRelayHostV6 = c.EntryRelayHostV6
+				n.ExitRelayHostV6 = c.ExitRelayHostV6
 				break
 			}
 		}
@@ -1127,6 +1132,7 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRateMultiplier(s.DB, nodes)
+	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
 	byID := make(map[int64]*db.User, len(allUsers))
@@ -1313,6 +1319,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRateMultiplier(s.DB, nodes)
+	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
 	var idx map[string]landing.Node
@@ -2052,6 +2059,19 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	idx := landingIndex(s.landingNodesFor(u, false))
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
+	// A user is granted the composite itself, not its hop children, so the
+	// relay-stack resolver needs the full node list to see the child hosts;
+	// copy the derived fields back onto the (narrower) granted set.
+	allNodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeRelayStack(s.DB, allNodes)
+	stackByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
+	for _, n := range grantedNodes {
+		if full := stackByID[n.ID]; full != nil {
+			n.EntryRelayHost = full.EntryRelayHost
+			n.EntryRelayHostV6 = full.EntryRelayHostV6
+			n.ExitRelayHostV6 = full.ExitRelayHostV6
+		}
+	}
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	br := u.BillingRate
 	if br <= 0 {
@@ -2091,6 +2111,19 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
+	// A user is granted the composite itself, not its hop children, so the
+	// relay-stack resolver needs the full node list to see the child hosts;
+	// copy the derived fields back onto the (narrower) granted set.
+	allNodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeRelayStack(s.DB, allNodes)
+	stackByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
+	for _, n := range grantedNodes {
+		if full := stackByID[n.ID]; full != nil {
+			n.EntryRelayHost = full.EntryRelayHost
+			n.EntryRelayHostV6 = full.EntryRelayHostV6
+			n.ExitRelayHostV6 = full.ExitRelayHostV6
+		}
+	}
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	idx := landingIndex(s.landingNodesFor(u, false))
 	item := s.buildRuleListItem(rl, "")

@@ -472,3 +472,52 @@ func TestHubCloseSendsGoingAway(t *testing.T) {
 		t.Fatalf("expected StatusGoingAway, got %v", ce.Code)
 	}
 }
+
+func TestHubFillsRelayHostByFamily(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		ProbedV6: "2001:db8::1",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+
+	// Hello handling (including fillNodeRelayHosts) runs synchronously in the
+	// same goroutine before readerLoop starts, so a pong to a ping sent after
+	// hello_ack proves the relay-host writes have already landed.
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "127.0.0.1" {
+		t.Errorf("RelayHost = %q, want 127.0.0.1 (from connectIP, this conn is v4)", got.RelayHost)
+	}
+	if got.RelayHostV6 != "2001:db8::1" {
+		t.Errorf("RelayHostV6 = %q, want 2001:db8::1 (from agent self-probe, connectIP didn't cover v6)", got.RelayHostV6)
+	}
+}
+
+func TestHubNeverOverwritesManualRelayHost(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, "203.0.113.9"); err != nil {
+		t.Fatal(err)
+	}
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		ProbedV4: "198.51.100.1",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "203.0.113.9" {
+		t.Errorf("RelayHost = %q, want unchanged 203.0.113.9 (manual value must not be overwritten)", got.RelayHost)
+	}
+}

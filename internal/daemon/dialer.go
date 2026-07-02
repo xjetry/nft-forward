@@ -29,6 +29,11 @@ const (
 	dialerBackoffMax       = 60 * time.Second
 )
 
+const (
+	probeV4Target = "8.8.8.8:80"
+	probeV6Target = "[2001:4860:4860::8888]:80"
+)
+
 // DialerConfig wires the dialer to its host daemon without import cycles.
 // GetState/OnApply give the dialer read-and-write access to the
 // owner-segmented state through plain function values so the test in
@@ -273,6 +278,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
 	_, currentMeta := d.cfg.GetState()
+	probedV4, probedV6 := probeOutboundIPs()
 	helloPayload, err := json.Marshal(wsproto.Hello{
 		NodeToken:      d.cfg.Token,
 		AgentVersion:   d.cfg.AgentVersion,
@@ -281,6 +287,8 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		Arch:           runtime.GOARCH,
 		LastAppliedRev: currentMeta.LastAppliedRev,
 		PortRange:      d.cfg.PortRange,
+		ProbedV4:       probedV4,
+		ProbedV6:       probedV6,
 	})
 	if err != nil {
 		return false, fmt.Errorf("marshal hello: %w", err)
@@ -544,4 +552,29 @@ func doProbe(target string) wsproto.ProbeAck {
 	}
 	conn.Close()
 	return wsproto.ProbeAck{OK: true, Latency: int(elapsed.Milliseconds())}
+}
+
+// probeOutboundIP dials target over the given UDP network ("udp4" or "udp6")
+// and returns the local address the OS routing table picked for it. A UDP
+// dial never sends a packet — this is a pure local route lookup, so it works
+// even when target itself is unreachable or firewalled. Returns "" if the
+// family has no usable route (e.g. no IPv6 connectivity at all).
+func probeOutboundIP(network, target string) string {
+	conn, err := net.DialTimeout(network, target, 2*time.Second)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+// probeOutboundIPs returns this host's best-guess v4/v6 outbound addresses.
+// Re-probed fresh on every call (cheap — no packets sent) so a network change
+// between reconnects is picked up without an agent restart.
+func probeOutboundIPs() (v4, v6 string) {
+	return probeOutboundIP("udp4", probeV4Target), probeOutboundIP("udp6", probeV6Target)
 }

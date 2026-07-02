@@ -61,6 +61,15 @@ type Node struct {
 	LastUpgradeError   string        `json:"last_upgrade_error,omitempty"`
 	RateMultiplier     float64       `json:"rate_multiplier"`
 	Unidirectional     bool          `json:"unidirectional"`
+	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
+	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
+	// (entry = first hop's own relay fields, exit = last hop's v6 relay field),
+	// the same pattern RateMultiplier above uses for hop aggregation. Single/
+	// self nodes leave them empty; callers fall back to the node's own
+	// RelayHost/RelayHostV6 in that case.
+	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
+	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
+	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
 }
 
 type Rule struct {
@@ -360,6 +369,48 @@ func ResolveCompositeRateMultiplier(d *sql.DB, nodes []*Node) {
 	for _, n := range nodes {
 		if n.NodeType == "composite" {
 			n.RateMultiplier = sums[n.ID]
+		}
+	}
+}
+
+// ResolveCompositeRelayStack fills each composite node's EntryRelayHost/
+// EntryRelayHostV6/ExitRelayHostV6 from its hop chain's first and last node —
+// see the Node struct's doc comment for why these aren't real columns.
+func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) {
+	hops, err := ListAllNodeHops(d)
+	if err != nil {
+		return
+	}
+	resolveCompositeRelayStack(nodes, hops)
+}
+
+// resolveCompositeRelayStack is the pure aggregation, split out so tests
+// don't need a DB. hops must already be ordered by (node_id, position) —
+// ListAllNodeHops guarantees this — so chain[0]/chain[len-1] are the first
+// and last hop of each composite.
+func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
+	byID := make(map[int64]*Node, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	chains := make(map[int64][]*NodeHop)
+	for _, h := range hops {
+		chains[h.NodeID] = append(chains[h.NodeID], h)
+	}
+	for _, n := range nodes {
+		if n.NodeType != "composite" {
+			continue
+		}
+		chain := chains[n.ID]
+		if len(chain) == 0 {
+			continue
+		}
+		if first := byID[chain[0].HopNodeID]; first != nil {
+			n.EntryRelayHost = first.RelayHost
+			n.EntryRelayHostV6 = first.RelayHostV6
+		}
+		if last := byID[chain[len(chain)-1].HopNodeID]; last != nil {
+			n.ExitRelayHostV6 = last.RelayHostV6
 		}
 	}
 }

@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, useConfirm, Select } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, NodeStackBadge, useConfirm, Select } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
 
 const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
@@ -148,6 +148,7 @@ export default function NodeDetail() {
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1 className="m-0 text-[22px] font-bold tracking-[-0.01em]">{node.name}</h1>
                 <NodeTypeBadge type={node.node_type} />
+                <NodeStackBadge node={node} />
                 {isComposite
                   ? (node.disabled && <Badge color="amber">已禁用</Badge>)
                   : <HeaderStatus node={node} />}

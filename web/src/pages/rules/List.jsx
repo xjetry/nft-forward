@@ -28,10 +28,10 @@ export default function RulesList() {
   const [nodeRoles, setNodeRoles] = useState({})
   useEffect(() => { fetchNodeRoles().then(setNodeRoles) }, [])
   const localNodes = useMemo(() => {
-    const manual = parseURIs(loadLocalURIs(user?.username))
-    const sub = loadSubCache(user?.username)
-    const landingSub = sub.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
-    return mergeLanding(manual, landingSub)
+    const isLanding = n => nodeHasRole(nodeRoles, n, ROLE_LANDING)
+    const manual = parseURIs(loadLocalURIs(user?.username)).filter(isLanding)
+    const sub = loadSubCache(user?.username).filter(isLanding)
+    return mergeLanding(manual, sub)
   }, [user, localVer, nodeRoles])
 
   const landingNodes = localNodes
@@ -165,12 +165,13 @@ export default function RulesList() {
         open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
         nodes={nodes} landingNodes={landingNodes} initial={createInitial} onAddProxyURI={addProxyURI}
         onSubmit={async (form) => {
-          await api.post('/rules', {
+          const res = await api.post('/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
           })
-          toast('规则已创建'); setCreateOpen(false); load()
+          toast('规则已创建'); setCreateOpen(false)
+          if (res?.rule?.id) navigate(`/rules/${res.rule.id}`)
         }} />
 
       <RuleFormModal

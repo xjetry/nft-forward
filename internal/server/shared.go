@@ -120,6 +120,9 @@ func parseExit(raw string) (string, int, error) {
 	raw = strings.TrimSpace(raw)
 	host, portStr, err := net.SplitHostPort(raw)
 	if err != nil {
+		if looksLikeBareIPv6(raw) {
+			return "", 0, fmt.Errorf("IPv6 地址需要用方括号包裹，例如 [::1]:1080")
+		}
 		return "", 0, fmt.Errorf("出口需为 host:port 形式")
 	}
 	port, err := strconv.Atoi(portStr)
@@ -130,6 +133,13 @@ func parseExit(raw string) (string, int, error) {
 		return "", 0, fmt.Errorf("出口地址不能为空")
 	}
 	return host, port, nil
+}
+
+// looksLikeBareIPv6 reports whether raw is very likely an IPv6 literal
+// missing the brackets host:port syntax requires: multiple colons with no
+// leading '[' isn't ambiguous with any valid IPv4/hostname:port form.
+func looksLikeBareIPv6(raw string) bool {
+	return !strings.HasPrefix(raw, "[") && strings.Count(raw, ":") >= 2
 }
 
 func validateCIDRList(s string) error {

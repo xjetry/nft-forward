@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Modal, Select, ProbeButton } from './ui'
+import { Modal, Select, ProbeButton, nodeStack } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
@@ -48,7 +48,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     if (!node) return
     const hp = node.host.includes(':') ? `[${node.host}]:${node.port}` : `${node.host}:${node.port}`
     if (onAddProxyURI) onAddProxyURI(val)
-    setForm(f => ({ ...f, exit_kind: 'landing', exit: hp }))
+    setForm(f => {
+      const next = { ...f, exit_kind: 'landing', exit: hp }
+      if (!f.comment.trim() && node.name) next.comment = node.name
+      return next
+    })
     toast(`已识别 ${node.protocol} 代理并保存`)
   }
 
@@ -62,10 +66,23 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
+  // Select 的 label 必须是纯字符串（既要参与搜索过滤的 .toLowerCase()，
+  // 也不支持渲染 JSX），沿用 landingOptions 那种文本前缀写法标协议栈。
+  const fmtStack = (n) => {
+    const { entryV4, entryV6, exitV6 } = nodeStack(n)
+    const parts = [entryV4 && 'v4', entryV6 && 'v6'].filter(Boolean)
+    let tag = parts.join('+')
+    if (exitV6 !== entryV6) {
+      const note = exitV6 ? '出口支持v6' : '出口不支持v6'
+      tag = tag ? `${tag} ${note}` : note
+    }
+    return tag ? `[${tag}] ` : ''
+  }
   const fmtRate = (n) => {
-    if (showRate === false) return n.name
+    const stack = fmtStack(n)
+    if (showRate === false) return `${stack}${n.name}`
     const r = n.rate_multiplier ?? 1
-    return r !== 1 ? `${n.name} (×${r})` : n.name
+    return r !== 1 ? `${stack}${n.name} (×${r})` : `${stack}${n.name}`
   }
   const groups = [
     { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },

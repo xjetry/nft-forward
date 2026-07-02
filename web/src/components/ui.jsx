@@ -65,6 +65,29 @@ export function NodeTypeBadge({ type }) {
   return <Badge color="green">{nodeTypeIcon.single}单点</Badge>
 }
 
+/* ---------- NodeStackBadge ---------- */
+// 组合节点的入口可达地址来自首跳，出口 IPv6 转发能力来自尾跳（与
+// RegenerateRule 里 exitIsIPv6 校验最后一跳 relay_host_v6 的语义一致）；
+// 单点节点入口出口就是它自己，两者天然相等。
+export function nodeStack(node) {
+  const entryV4 = node.node_type === 'composite' ? !!node.entry_relay_host : !!node.relay_host
+  const entryV6 = node.node_type === 'composite' ? !!node.entry_relay_host_v6 : !!node.relay_host_v6
+  const exitV6 = node.node_type === 'composite' ? !!node.exit_relay_host_v6 : !!node.relay_host_v6
+  return { entryV4, entryV6, exitV6 }
+}
+
+export function NodeStackBadge({ node }) {
+  const { entryV4, entryV6, exitV6 } = nodeStack(node)
+  const entryParts = [entryV4 && 'v4', entryV6 && 'v6'].filter(Boolean)
+  if (entryParts.length === 0 && exitV6 === entryV6) return null
+  return (
+    <span className="inline-flex items-center gap-1">
+      {entryParts.length > 0 && <Badge color="gray">{entryParts.join('+')}</Badge>}
+      {exitV6 !== entryV6 && <Badge color={exitV6 ? 'blue' : 'amber'}>出口{exitV6 ? '支持' : '不支持'} v6</Badge>}
+    </span>
+  )
+}
+
 /* ---------- ExitKindBadge ---------- */
 // Distinguishes a landing-node exit (resolved from the user's subscription)
 // from a custom host:port exit.
