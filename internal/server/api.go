@@ -303,7 +303,6 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.ResolveCompositeOnline(s.DB, nodes)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
@@ -348,9 +347,11 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
-			// TrafficMultiplier is optional; a pointer distinguishes "not
-			// sent" (inherit the child node's rate multiplier) from an
-			// explicit value, including an explicit 0.
+			// TrafficMultiplier is deprecated and ignored: a composite's
+			// billing multiplier is its own rate_multiplier column now
+			// (set via the top-level RateMultiplier field), not a per-hop
+			// sum. The field stays so older clients still get a valid
+			// decode.
 			TrafficMultiplier *float64 `json:"traffic_multiplier"`
 		} `json:"hops"`
 	}
@@ -387,17 +388,14 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			if mode == "" {
 				mode = "userspace"
 			}
-			mult := 0.0
-			if h.TrafficMultiplier != nil && *h.TrafficMultiplier >= 0 {
-				mult = *h.TrafficMultiplier
-			} else if child, err := db.GetNode(s.DB, h.NodeID); err == nil {
-				mult = child.RateMultiplier
-			}
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: mult}
+			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: 0}
 		}
 		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
+			_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 		}
 		n, _ = db.GetNode(s.DB, n.ID)
 		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
@@ -564,13 +562,14 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"node_hops": nodeHops})
 }
 
-// apiUpdateNodeHops replaces a composite node's hop chain (membership, order,
-// per-hop mode and traffic multiplier). The config modes shape rules
-// subsequently created on the composite, and only for the inter-node
-// segments: the exit segment's mode belongs to the rule (see hopsForNode), so
-// the stored last-hop mode stays dormant until a reorder turns that hop into
-// an inter-node one. Existing rules keep the modes captured when they were
-// expanded.
+// apiUpdateNodeHops replaces a composite node's hop chain (membership, order
+// and per-hop mode). The config modes shape rules subsequently created on the
+// composite, and only for the inter-node segments: the exit segment's mode
+// belongs to the rule (see hopsForNode), so the stored last-hop mode stays
+// dormant until a reorder turns that hop into an inter-node one. Existing
+// rules keep the modes captured when they were expanded. The multiplier is no
+// longer a per-hop attribute — a composite's billing multiplier is its own
+// rate_multiplier column, so hop rows carry a dormant 0 here.
 func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -588,8 +587,11 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type hopUpdate struct {
-		NodeID            int64   `json:"node_id"`
-		Mode              string  `json:"mode"`
+		NodeID int64  `json:"node_id"`
+		Mode   string `json:"mode"`
+		// TrafficMultiplier is deprecated and ignored: a composite's billing
+		// multiplier is its own rate_multiplier column now, not a per-hop
+		// sum. The field stays so older clients still get a valid decode.
 		TrafficMultiplier float64 `json:"traffic_multiplier"`
 	}
 	var body struct {
@@ -618,11 +620,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "子节点 ID 不能为空")
 			return
 		}
-		mult := hu.TrafficMultiplier
-		if mult < 0 {
-			mult = 1.0
-		}
-		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: mult}
+		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: 0}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -1217,7 +1215,6 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	}
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
@@ -1403,7 +1400,6 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
@@ -1715,9 +1711,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, allNodes)
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
 	// The landing_nodes preview doubles as a sync point: any successful
@@ -2199,19 +2193,13 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	// in the user's granted set — resolve over the full node list, then project
 	// the result onto the granted nodes so the dashboard shows accurate status.
 	db.ResolveCompositeOnline(s.DB, nodes)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	onlineByID := make(map[int64]int, len(nodes))
-	rateByID := make(map[int64]float64, len(nodes))
 	for _, n := range nodes {
 		onlineByID[n.ID] = n.Online
-		rateByID[n.ID] = n.RateMultiplier
 	}
 	for _, gn := range grantedNodes {
 		if o, ok := onlineByID[gn.ID]; ok {
 			gn.Online = o
-		}
-		if r, ok := rateByID[gn.ID]; ok {
-			gn.RateMultiplier = r
 		}
 	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
@@ -2227,7 +2215,6 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	idx := s.landingIndexFromDB(u.ID)
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
@@ -2279,7 +2266,6 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
@@ -2888,7 +2874,6 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
 
 	nodeViews := make([]map[string]any, 0, len(grantedNodes))

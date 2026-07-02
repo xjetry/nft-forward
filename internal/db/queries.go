@@ -80,10 +80,11 @@ type Node struct {
 	Roles int64 `json:"roles"`
 	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
 	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
-	// (entry = first hop's own relay fields, exit = last hop's v6 relay field),
-	// the same pattern RateMultiplier above uses for hop aggregation. Single/
-	// self nodes leave them empty; callers fall back to the node's own
-	// RelayHost/RelayHostV6 in that case.
+	// (entry = first hop's own relay fields, exit = last hop's v6 relay field).
+	// RateMultiplier above needs no such resolution: it is a real column on
+	// every node, composite included. Single/self nodes leave the relay-stack
+	// fields empty; callers fall back to the node's own RelayHost/RelayHostV6
+	// in that case.
 	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
 	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
 	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
@@ -406,24 +407,6 @@ func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
 		return
 	}
 	resolveCompositeOnline(nodes, hops)
-}
-
-// ResolveCompositeRateMultiplier sets each composite node's RateMultiplier to
-// the sum of its hops' TrafficMultiplier values.
-func ResolveCompositeRateMultiplier(d *sql.DB, nodes []*Node) {
-	hops, err := ListAllNodeHops(d)
-	if err != nil {
-		return
-	}
-	sums := make(map[int64]float64)
-	for _, h := range hops {
-		sums[h.NodeID] += h.TrafficMultiplier
-	}
-	for _, n := range nodes {
-		if n.NodeType == "composite" {
-			n.RateMultiplier = sums[n.ID]
-		}
-	}
 }
 
 // ResolveCompositeRelayStack fills each composite node's EntryRelayHost/
