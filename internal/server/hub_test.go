@@ -255,8 +255,10 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 		}
 	}
 
-	var notified []int64
-	hub.OnTrafficUpdate = func(userID int64, nodeID int64) { notified = append(notified, userID) }
+	// OnTrafficUpdate fires off-goroutine (so quota enforcement can't deadlock
+	// the reader loop), so collect via a channel rather than a shared slice.
+	notified := make(chan int64, 4)
+	hub.OnTrafficUpdate = func(userID int64, nodeID int64) { notified <- userID }
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{
@@ -270,8 +272,18 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	if gotUser.TrafficUsedBytes != delta {
 		t.Fatalf("user traffic_used_bytes = %d, want %d", gotUser.TrafficUsedBytes, delta)
 	}
-	if len(notified) != 1 || notified[0] != uid {
-		t.Fatalf("OnTrafficUpdate calls = %v, want [%d]", notified, uid)
+	select {
+	case got := <-notified:
+		if got != uid {
+			t.Fatalf("OnTrafficUpdate userID = %d, want %d", got, uid)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnTrafficUpdate was not called")
+	}
+	select {
+	case extra := <-notified:
+		t.Fatalf("OnTrafficUpdate called more than once (extra userID=%d)", extra)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

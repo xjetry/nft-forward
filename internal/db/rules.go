@@ -358,6 +358,22 @@ func CountRulesForUser(d *sql.DB, userID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM rules WHERE owner_id=?`, userID)
 }
 
+// DeleteRulesForUserNode removes the rules a user owns that enter at nodeID
+// (rule.node_id = nodeID, covering both single-node rules and composite rules
+// whose composite node is nodeID) and returns the physical node IDs whose
+// kernel state must be re-pushed. Used when a node grant is revoked so the
+// user's forwarding stops instead of lingering. rule_hops cascade-delete.
+func DeleteRulesForUserNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
+	nodes, err := queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=? AND r.node_id=?`, userID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := d.Exec(`DELETE FROM rules WHERE owner_id=? AND node_id=?`, userID, nodeID); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
 // RulesReferencingNode returns the distinct rule IDs that have a hop on the
 // given node. Rule hops bake the next hop's relay_host into their target,
 // so when a node's relay_host changes or the node is removed, every rule it

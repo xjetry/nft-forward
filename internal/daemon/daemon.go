@@ -234,6 +234,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			OnApply:             d.SetPanelRuleset,
 			OnMigrated:          d.clearTuiSegment,
 			CountersFn:          d.counterSamples,
+			CountersReadd:       d.reAddCounters,
 			OnConfigUpdate: func(poolSize int) {
 				if dp, ok := d.dp.(*forward.Dataplane); ok {
 					dp.SetPoolSize(poolSize)

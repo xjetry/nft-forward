@@ -62,6 +62,11 @@ type DialerConfig struct {
 	// CountersFn returns deltas since the last call. nil = skip counters.
 	CountersFn func() []wsproto.CounterSample
 
+	// CountersReadd rolls a batch of deltas back into the sampler's cursor after
+	// a failed send, so the bytes are re-reported next tick instead of being
+	// silently lost (which would systematically undercount quota/billing).
+	CountersReadd func([]wsproto.CounterSample)
+
 	// OnConfigUpdate is called when the panel pushes a pool_size change,
 	// either via HelloAck on connect or via a config_update frame at runtime.
 	OnConfigUpdate func(poolSize int)
@@ -512,6 +517,9 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 			}
 			if err := writeOne(ctx, ws, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cp}); err != nil {
 				log.Printf("dialer: write %s: %v", wsproto.TypeCounters, err)
+				if d.cfg.CountersReadd != nil {
+					d.cfg.CountersReadd(samples)
+				}
 			}
 		case res := <-d.upgradeCh:
 			ap, _ := json.Marshal(res.ack)

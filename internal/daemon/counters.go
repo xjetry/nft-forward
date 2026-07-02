@@ -77,3 +77,21 @@ func (d *Daemon) counterSamples() []wsproto.CounterSample {
 	}
 	return out
 }
+
+// reAddCounters rewinds the sampler cursor by the given deltas after a failed
+// send so the next counterSamples() call re-reports them. Without this, a
+// dropped counters frame silently discards traffic and undercounts quota. Bytes
+// for a key already pruned (its rule was removed) are unrecoverable and dropped.
+func (d *Daemon) reAddCounters(samples []wsproto.CounterSample) {
+	d.countersMu.Lock()
+	defer d.countersMu.Unlock()
+	if d.lastCounters == nil {
+		return
+	}
+	for _, s := range samples {
+		key := s.Proto + "/" + strconv.Itoa(s.ListenPort)
+		if last, ok := d.lastCounters[key]; ok {
+			d.lastCounters[key] = [2]int64{last[0] - s.BytesUp, last[1] - s.BytesDown}
+		}
+	}
+}

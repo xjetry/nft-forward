@@ -1751,8 +1751,17 @@ func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Revoking access must also stop the user's existing forwarding on that node;
+	// otherwise the rules keep running (and keep billing) with no grant behind
+	// them. Delete them and re-push the affected nodes so the kernel converges.
+	affected, err := db.DeleteRulesForUserNode(s.DB, userID, nodeID)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.apiDispatchFanout(affected)
 	db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
-	jsonOK(w, map[string]any{"ok": true})
+	jsonOK(w, map[string]any{"ok": true, "removed_rule_nodes": len(affected)})
 }
 
 func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
@@ -1773,13 +1782,21 @@ func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
+	var affected []int64
 	for _, nid := range body.NodeIDs {
 		if err := db.RevokeNode(s.DB, userID, nid); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		nodes, err := db.DeleteRulesForUserNode(s.DB, userID, nid)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected = append(affected, nodes...)
 		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
 	}
+	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true})
 }
 

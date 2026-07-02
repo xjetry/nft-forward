@@ -158,8 +158,33 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A node may have missed rule changes while it was offline. Reconcile now so
+	// the kernel state converges on reconnect instead of drifting until the next
+	// mutation. The rev check keeps this a no-op when the node is already in sync.
+	h.reconcileOnConnect(node.ID, hello.LastAppliedRev)
+
 	go h.writerLoop(ac)
-	h.readerLoop(ctx, ac, hello.LastAppliedRev)
+	h.readerLoop(ctx, ac)
+}
+
+// reconcileOnConnect re-pushes the node's ruleset after a (re)connect unless the
+// agent's reported last-applied rev already matches what the panel would send.
+// Redispatch runs off-goroutine, so it schedules the apply without blocking the
+// hello path; the apply_ack is handled once readerLoop starts.
+func (h *Hub) reconcileOnConnect(nodeID int64, lastAppliedRev string) {
+	if h.Redispatch == nil {
+		return
+	}
+	ruleHops, err := db.ActiveRuleHopsForPush(h.DB, nodeID)
+	if err != nil {
+		// Can't compute the target rev — force a resync rather than risk drift.
+		go h.Redispatch([]int64{nodeID})
+		return
+	}
+	if lastAppliedRev != "" && computeRev(buildRules(h.DB, ruleHops)) == lastAppliedRev {
+		return
+	}
+	go h.Redispatch([]int64{nodeID})
 }
 
 func (h *Hub) registerConn(ac *agentConn) {
@@ -215,7 +240,7 @@ func (h *Hub) writerLoop(ac *agentConn) {
 	}
 }
 
-func (h *Hub) readerLoop(parent context.Context, ac *agentConn, lastAppliedRev string) {
+func (h *Hub) readerLoop(parent context.Context, ac *agentConn) {
 	for {
 		ctx, cancel := context.WithTimeout(parent, hubReadTimeout)
 		_, b, err := ac.ws.Read(ctx)
@@ -690,10 +715,21 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	}
 	h.speedCache.update(nodeID, deltas)
 
-	if h.OnTrafficUpdate != nil {
+	// Quota enforcement (the OnTrafficUpdate callback) can call back into the hub
+	// to re-dispatch a ruleset, which blocks on an apply_ack that this very
+	// readerLoop must deliver. Run it off-goroutine so the reader never waits on
+	// itself — otherwise every enforcement fires the 30s apply timeout and flaps
+	// the node. touched is loop-local, so snapshotting it here is race-free.
+	if h.OnTrafficUpdate != nil && len(touched) > 0 {
+		pairs := make([]userNode, 0, len(touched))
 		for un := range touched {
-			h.OnTrafficUpdate(un.userID, un.nodeID)
+			pairs = append(pairs, un)
 		}
+		go func() {
+			for _, un := range pairs {
+				h.OnTrafficUpdate(un.userID, un.nodeID)
+			}
+		}()
 	}
 }
 
