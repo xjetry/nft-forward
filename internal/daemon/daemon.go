@@ -332,8 +332,8 @@ func (d *Daemon) RunWithSignals() error {
 // segment mutation funnels through reconcileOwners; rev is recorded in
 // agent_meta.LastAppliedRev as part of the same SaveState transaction
 // so a reconnect won't replay the same payload.
-func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) error {
-	_, _, _, err := d.reconcileOwners(ctx,
+func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) (string, error) {
+	_, unresolved, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			if len(rules) == 0 {
 				delete(candidate, "panel")
@@ -349,9 +349,29 @@ func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Ru
 		true,
 	)
 	if err != nil {
-		return d.classifyWriteError(err)
+		return "", d.classifyWriteError(err)
 	}
-	return nil
+	return summarizeUnresolved(unresolved), nil
+}
+
+// summarizeUnresolved renders a short, human-readable note naming the rules
+// whose target could not be resolved, for display as a node-level warning.
+func summarizeUnresolved(rules []nft.Rule) string {
+	if len(rules) == 0 {
+		return ""
+	}
+	const maxList = 5
+	parts := make([]string, 0, len(rules))
+	for i, r := range rules {
+		if i == maxList {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("端口 %d → %s", r.SrcPort, r.DestHost))
+	}
+	if len(rules) > maxList {
+		parts = append(parts, fmt.Sprintf("等共 %d 条", len(rules)))
+	}
+	return fmt.Sprintf("%d 条规则的目标无法解析：%s", len(rules), strings.Join(parts, "，"))
 }
 
 // clearTuiSegment removes the "tui" segment after a successful migration

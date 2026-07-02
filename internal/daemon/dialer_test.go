@@ -122,7 +122,7 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 		GetState: func() (OwnerRuleset, AgentMeta) {
 			return OwnerRuleset{}, AgentMeta{}
 		},
-		OnApply: func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply: func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -150,7 +150,7 @@ func TestDialerStoresNodeIdentityFromHelloAck(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -186,7 +186,7 @@ func TestDialerEditRuleHopRoundtripsAck(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -220,7 +220,7 @@ func TestDialerCreateRuleRoundtripsAck(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -254,7 +254,7 @@ func TestDialerUpdateRuleRoundtripsAck(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -297,7 +297,7 @@ func TestDialerCommandWokenOnDisconnect(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	// Long ctx so a pass proves the wake came from disconnect cleanup, not
 	// from the context deadline firing.
@@ -371,7 +371,7 @@ func TestDialerMigratesTuiRulesOnConnect(t *testing.T) {
 		GetState: func() (OwnerRuleset, AgentMeta) {
 			return OwnerRuleset{"tui": tuiRules}, AgentMeta{}
 		},
-		OnApply:    func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:    func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 		OnMigrated: func() { migrated <- struct{}{} },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -428,7 +428,7 @@ func TestDialerHelloIncludesProbedV4(t *testing.T) {
 		Token:        "tok",
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
-		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) error { return nil },
+		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

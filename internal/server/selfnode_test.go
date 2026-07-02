@@ -49,12 +49,12 @@ func TestDispatchRoutesSelfToUnixSocketStub(t *testing.T) {
 	disp := &Dispatcher{
 		DB:  d,
 		Hub: nil, // hub not needed for self route
-		SendLocal: func(rules []nft.Rule) error {
+		SendLocal: func(rules []nft.Rule) (string, error) {
 			called = "local"
-			return nil
+			return "", nil
 		},
 	}
-	if err := disp.Dispatch(self.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1"); err != nil {
+	if _, err := disp.Dispatch(self.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1"); err != nil {
 		t.Fatal(err)
 	}
 	if called != "local" {
@@ -69,7 +69,7 @@ func TestDispatchRemoteWithNilHubReturnsClearError(t *testing.T) {
 		t.Fatal(err)
 	}
 	disp := &Dispatcher{DB: d, Hub: nil}
-	err = disp.Dispatch(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
+	_, err = disp.Dispatch(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
 	if err == nil {
 		t.Fatal("expected error when Hub is nil and node is remote")
 	}

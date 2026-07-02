@@ -144,7 +144,8 @@ func TestHubSendApplyRulesetReturnsAck(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- hub.SendApplyRuleset(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
+		_, e := hub.SendApplyRuleset(n.ID, []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}, "rev1")
+		done <- e
 	}()
 
 	env := recvEnvelope(t, c)
@@ -285,9 +286,9 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dispatched bool
-	s.Dispatcher.SendLocal = func(rules []nft.Rule) error {
+	s.Dispatcher.SendLocal = func(rules []nft.Rule) (string, error) {
 		dispatched = true
-		return nil
+		return "", nil
 	}
 
 	hash, _ := HashPassword("pw")

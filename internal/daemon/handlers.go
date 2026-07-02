@@ -203,11 +203,12 @@ func (d *Daemon) handleApplyRuleset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := d.SetPanelRuleset(r.Context(), "", body.Rules); err != nil {
+	warning, err := d.SetPanelRuleset(r.Context(), "", body.Rules)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": warning})
 }
 
 // statusResp is returned by GET /v1/status.

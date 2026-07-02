@@ -451,6 +451,22 @@ func TestCreateRule_AcceptsUnresolvableButValidHost(t *testing.T) {
 	}
 }
 
+func TestSetPanelRuleset_ReturnsWarningForUnresolved(t *testing.T) {
+	d := newTestDaemon(t)
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		return in, false, fmt.Errorf("dns: bad.invalid: no such host")
+	}
+	warning, err := d.SetPanelRuleset(context.Background(), "rev1", []nft.Rule{
+		{Proto: "tcp", SrcPort: 8080, DestHost: "bad.invalid", DestPort: 80},
+	})
+	if err != nil {
+		t.Fatalf("SetPanelRuleset should not error on unresolved: %v", err)
+	}
+	if warning == "" {
+		t.Fatal("expected non-empty warning for unresolved rule")
+	}
+}
+
 func TestCreateRule_RejectsSyntacticallyInvalidHost(t *testing.T) {
 	d := newTestDaemon(t)
 	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "4212", ExitPort: 80, ListenPort: 12000})

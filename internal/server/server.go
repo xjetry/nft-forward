@@ -190,7 +190,7 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 	}
 	rules := buildRules(s.DB, ruleHops)
 	rev := computeRev(rules)
-	if err := s.Dispatcher.Dispatch(nodeID, rules, rev); err != nil {
+	if _, err := s.Dispatcher.Dispatch(nodeID, rules, rev); err != nil {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
 	}

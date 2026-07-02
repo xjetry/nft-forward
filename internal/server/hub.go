@@ -301,12 +301,12 @@ func (ac *agentConn) dispatchAck(env wsproto.Envelope) {
 	}
 }
 
-func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) error {
+func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (string, error) {
 	h.mu.RLock()
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("node %d not connected", nodeID)
+		return "", fmt.Errorf("node %d not connected", nodeID)
 	}
 	id := ac.nextID()
 	ch := make(chan json.RawMessage, 1)
@@ -326,16 +326,16 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) error
 	case raw := <-ch:
 		var ack wsproto.ApplyAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return fmt.Errorf("malformed apply_ack: %w", err)
+			return "", fmt.Errorf("malformed apply_ack: %w", err)
 		}
 		if !ack.OK {
-			return fmt.Errorf("apply rejected: %s", ack.Error)
+			return "", fmt.Errorf("apply rejected: %s", ack.Error)
 		}
-		return nil
+		return ack.Warning, nil
 	case <-time.After(applyAckTimeout):
-		return errors.New("apply_ack timeout")
+		return "", errors.New("apply_ack timeout")
 	case <-ac.closed:
-		return errors.New("connection closed before ack")
+		return "", errors.New("connection closed before ack")
 	}
 }
 

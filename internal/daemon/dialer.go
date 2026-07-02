@@ -46,7 +46,7 @@ type DialerConfig struct {
 	PortRange    string
 
 	GetState func() (OwnerRuleset, AgentMeta)
-	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) error
+	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) (warning string, err error)
 
 	// OnMigrated is called after a successful migrate_rules handshake.
 	// The daemon clears the tui segment so rules now live server-side only.
@@ -407,13 +407,16 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 				}
 				ok := true
 				errMsg := ""
+				warning := ""
 				if d.cfg.OnApply != nil {
-					if err := d.cfg.OnApply(ctx, ar.Rev, ar.Rules); err != nil {
+					w, err := d.cfg.OnApply(ctx, ar.Rev, ar.Rules)
+					warning = w
+					if err != nil {
 						ok = false
 						errMsg = err.Error()
 					}
 				}
-				ap, err := json.Marshal(wsproto.ApplyAck{Rev: ar.Rev, OK: ok, Error: errMsg})
+				ap, err := json.Marshal(wsproto.ApplyAck{Rev: ar.Rev, OK: ok, Error: errMsg, Warning: warning})
 				if err != nil {
 					log.Printf("dialer: marshal %s: %v", wsproto.TypeApplyAck, err)
 					continue

@@ -24,13 +24,13 @@ func EnsureSelfNode(d *sql.DB) (*db.Node, error) {
 type Dispatcher struct {
 	DB        *sql.DB
 	Hub       *Hub
-	SendLocal func(rules []nft.Rule) error // nil → use default unix socket
+	SendLocal func(rules []nft.Rule) (string, error) // nil → use default unix socket
 }
 
-func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) error {
+func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) (string, error) {
 	n, err := db.GetNode(d.DB, nodeID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if n.NodeType == "self" {
 		send := d.SendLocal
@@ -40,15 +40,15 @@ func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) error 
 		return send(rules)
 	}
 	if d.Hub == nil {
-		return fmt.Errorf("hub not wired; cannot dispatch to remote node %d", nodeID)
+		return "", fmt.Errorf("hub not wired; cannot dispatch to remote node %d", nodeID)
 	}
 	return d.Hub.SendApplyRuleset(nodeID, rules, rev)
 }
 
-func sendLocalDefault(rules []nft.Rule) error {
+func sendLocalDefault(rules []nft.Rule) (string, error) {
 	c, err := daemonclient.New(daemonclient.DefaultSocketPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return c.ApplyRuleset(rules)
 }

@@ -279,7 +279,7 @@ func (c *Client) DeleteRule(id string) error {
 // daemon. Used by the server's self-node dispatch path to replicate what the
 // WS apply_ruleset frame does for remote nodes. The daemon replaces its panel
 // segment atomically and applies to the kernel.
-func (c *Client) ApplyRuleset(rules []nft.Rule) error {
+func (c *Client) ApplyRuleset(rules []nft.Rule) (string, error) {
 	if rules == nil {
 		rules = []nft.Rule{}
 	}
@@ -287,14 +287,18 @@ func (c *Client) ApplyRuleset(rules []nft.Rule) error {
 		Rules []nft.Rule `json:"rules"`
 	}{Rules: rules})
 	if err != nil {
-		return err
+		return "", err
 	}
 	buf, code, err := c.do(http.MethodPost, "/v1/apply", body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if code/100 != 2 {
-		return fmt.Errorf("daemon apply: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
+		return "", fmt.Errorf("daemon apply: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
 	}
-	return nil
+	var resp struct {
+		Warning string `json:"warning"`
+	}
+	_ = json.Unmarshal(buf, &resp)
+	return resp.Warning, nil
 }

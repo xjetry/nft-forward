@@ -111,9 +111,10 @@ type ApplyRuleset struct {
 // the ack as malformed — the OK bool is the load-bearing signal, the
 // Error string is human-readable context for it.
 type ApplyAck struct {
-	Rev   string `json:"rev"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	Rev     string `json:"rev"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // CounterSample is a per-rule traffic delta since the last counters
