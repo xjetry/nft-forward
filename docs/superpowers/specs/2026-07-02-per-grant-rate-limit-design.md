@@ -25,7 +25,7 @@ UPDATE rules SET bandwidth_mbps = 0;
 
 ## API
 
-- 新增 `POST /users/{uid}/nodes/{nid}/rate-limit`，body `{"rate_limit_mbytes": N}`（admin 组）。校验 N ≥ 0；落库后对该节点重下发并写审计 `grant.set_rate_limit`。与 quota 端点同形。
+- 新增 `POST /users/{uid}/nodes/{nid}/rate-limit`，body `{"rate_limit_mbytes": N}`（admin 组）。校验 N ≥ 0；落库后对该节点重下发并写审计 `user.set_node_rate_limit`（与 `user.set_node_quota` 命名惯例一致）。与 quota 端点同形。
 - grant 出现的所有响应（用户详情、my dashboard、批量预览等）带出 `rate_limit_mbytes`。
 - `/grants/batch-apply` 的 grants 元素接受 `rate_limit_mbytes`。
 - 删除 `POST /rules/{id}/bandwidth` 路由与 `apiSetRuleBandwidth`。
@@ -34,7 +34,7 @@ UPDATE rules SET bandwidth_mbps = 0;
 
 分组信息随规则携带，不新增消息段：
 
-- `nft.Rule` 新增数据面字段 `ShapeGroup int64`（json `shape_group,omitempty`，取 `user_nodes` 的 rowid：upsert 下稳定，revoke+regrant 视为新 grant、新组）与 `RateMBytes int`（json `rate_mbytes,omitempty`）。旧 agent 解 JSON 忽略未知字段，天然兼容。
+- `nft.Rule` 新增数据面字段 `ShapeGroup int64`（json `shape_group,omitempty`，取 `user_nodes` 的 rowid：upsert 下稳定；user_nodes 是复合主键的普通 rowid 表，revoke 删除最大 rowid 行后新插入可能复用该 id——极低概率下存活到 revoke 之后的旧连接会被计入复用者的桶，连接结束即自愈，属已接受近似）与 `RateMBytes int`（json `rate_mbytes,omitempty`）。旧 agent 解 JSON 忽略未知字段，天然兼容。
 - `buildRules` 按 (owner, 规则所属面板节点) 查 grant 填这两个字段；同时把线上的旧字段 `bandwidth_mbps` 填为等效 Mbit 值（≈ rate × 8.389），让**未升级的旧 agent 以"每规则各限 X"降级执行**，升级后自动变为共享总桶。
 - 字段优先级不变量：agent 侧凡 `shape_group`+`rate_mbytes` 有效即走分组限速并忽略 `bandwidth_mbps`；仅有 `bandwidth_mbps`（旧 server）时保留现有每规则限速路径。同一份下发内两种形态不会混出现（新 server 只在有 grant 时才填限速，两套字段同源）。
 - `computeRev` 继续只剥离 RuleID/RuleName/OwnerName 三个展示字段；`shape_group`/`rate_mbytes` 参与 rev 哈希，保证改限速能触发重下发。首次升级会因新字段引起一次性全量重推，无害。
@@ -55,7 +55,7 @@ UPDATE rules SET bandwidth_mbps = 0;
 现有 mark 机制有根本缺陷：mark 打在 nat prerouting 链，nat 链只有连接首包遍历，且无 connmark 保存/恢复，后续包与整个回程全部落入不限速的默认 class。本次一并修复：
 
 - 首包：prerouting DNAT 规则内先 `meta mark set (0x10000 | shape_group)` 再 `ct mark set meta mark`——首包自身立即带 mark 参与分类，同时把 mark 存入 conntrack；偏移使组 mark 与旧式端口 mark（≤ 0xFFFF）空间不相交，混合过渡期互不误伤。
-- 每包：新增 filter 类 prerouting 链（mangle 优先级），`ct mark != 0` 时 `meta mark set ct mark` 恢复——转发流量双向都经 prerouting，一条恢复规则覆盖两个方向。
+- 每包：新增 filter 类 prerouting 链（mangle 优先级），`ct mark and 0xffff0000 == 0x10000` 时 `meta mark set ct mark` 恢复——只认本系统组 mark 空间（高 16 位恒 0x0001），不劫持宿主机其他组件（策略路由、外部 QoS）设置的 connmark；转发流量双向都经 prerouting，一条恢复规则覆盖两个方向。
 - tc：每组一个 HTB class（`classid 1:<shape_group>`，rate=ceil=X MB/s，以 bit 精确换算 X × 8388608 bit/s），fw filter 按 mark（`0x10000 | shape_group`）分类到该 class。有效组的规则不再产生按端口的 class；旧式 `bandwidth_mbps` 每端口 class 路径保留以兼容旧 server。
 - `shape_group > 0xFFFF` 时该组回退旧式每规则端口 mark 限速（tc class minor 仅 16 位；grant rowid 实际远小于此）。
 - connmark 跨 re-apply 持久：组的 mark 值直接取自稳定的 `shape_group` 而非任何本地序号分配，重下发前后同一连接的分类保持正确。
