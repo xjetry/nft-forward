@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,32 @@ func IsHostname(s string) bool {
 		}
 	}
 	return true
+}
+
+// PlausibleHostname reports whether s could ever resolve as a DNS name. It
+// builds on IsHostname (which already rejects IPs and illegal characters) and
+// additionally rejects a name whose rightmost label is all-numeric: a numeric
+// TLD can never exist, so such a string is a user error (a bare port like
+// "4212", or a mistyped address like "1.2.3.999") rather than a resolvable host.
+func PlausibleHostname(s string) bool {
+	if !IsHostname(s) {
+		return false
+	}
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	last := labels[len(labels)-1]
+	if last == "" {
+		return false
+	}
+	for _, r := range last {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+	return false
 }
 
 // Resolver wraps net.LookupHost so tests can stub the network call.
