@@ -13,15 +13,18 @@ export function parseGrantText(text, allNodes) {
       const name = parts[0]
       let maxForwards = 10
       let quotaGB = 0
+      let rateMBytes = 0
       for (let i = 1; i < parts.length; i++) {
         const p = parts[i]
         const mMatch = p.match(/^max=(\d+)$/i)
         if (mMatch) { maxForwards = Number(mMatch[1]); continue }
         const qMatch = p.match(/^quota=([\d.]+)\s*GB$/i)
         if (qMatch) { quotaGB = Number(qMatch[1]); continue }
+        const rMatch = p.match(/^rate=(\d+)$/i)
+        if (rMatch) { rateMBytes = Number(rMatch[1]); continue }
       }
       const node = nodeMap[name]
-      return { name, maxForwards, quotaGB, nodeId: node?.id || null, found: !!node }
+      return { name, maxForwards, quotaGB, rateMBytes, nodeId: node?.id || null, found: !!node }
     })
 }
 
@@ -45,6 +48,7 @@ export default function PasteGrantsModal({ open, onClose, onDone, allNodes, allU
         node_name: p.name,
         max_forwards: applySettings ? p.maxForwards : 10,
         traffic_quota_bytes: applySettings ? Math.round(p.quotaGB * 1073741824) : 0,
+        rate_limit_mbytes: applySettings ? p.rateMBytes : 0,
       }))
       await api.post('/grants/batch-apply', { user_ids: userIds.map(Number), grants })
       toast(`已授权 ${valid.length} 个节点给 ${userIds.length} 个用户`)
@@ -61,7 +65,7 @@ export default function PasteGrantsModal({ open, onClose, onDone, allNodes, allU
         <div>
           <label className="fl block mb-1.5">授权文本</label>
           <textarea className="input-field font-mono w-full" rows={8} value={text} onChange={e => setText(e.target.value)}
-            placeholder={'gateway-hk | max=10 | quota=5GB\nrelay-jp | max=20'} />
+            placeholder={'gateway-hk | max=10 | quota=5GB | rate=10\nrelay-jp | max=20'} />
         </div>
         <div>
           <label className="fl block mb-1.5">目标用户 <span className="text-ink-mut font-normal text-xs">(可多选)</span></label>
@@ -75,13 +79,14 @@ export default function PasteGrantsModal({ open, onClose, onDone, allNodes, allU
         {parsed.length > 0 && (
           <div className="border border-line rounded-lg overflow-auto max-h-[40vh]">
             <table className="tbl">
-              <thead><tr><th>节点</th><th>规则上限</th><th>流量配额</th><th>状态</th></tr></thead>
+              <thead><tr><th>节点</th><th>规则上限</th><th>流量配额</th><th>限速</th><th>状态</th></tr></thead>
               <tbody>
                 {parsed.map((p, i) => (
                   <tr key={i} className={p.found ? '' : 'bg-red-50 dark:bg-red-900/10'}>
                     <td className={`font-mono text-sm ${p.found ? '' : 'text-red-500'}`}>{p.name}</td>
                     <td className="font-mono text-sm">{applySettings ? p.maxForwards : 10}</td>
                     <td className="font-mono text-sm">{applySettings ? `${p.quotaGB}GB` : '不限'}</td>
+                    <td className="font-mono text-sm">{applySettings && p.rateMBytes ? `${p.rateMBytes}MB/s` : '不限'}</td>
                     <td>{p.found ? <Badge color="blue">就绪</Badge> : <Badge color="red">未找到</Badge>}</td>
                   </tr>
                 ))}

@@ -322,6 +322,28 @@ function PerNodeQuotaForm({ userId, nodeId, quotaBytes, onDone }) {
   )
 }
 
+function PerNodeRateForm({ userId, nodeId, rateMBytes, onDone }) {
+  const [mb, setMb] = useState(String(rateMBytes || 0))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    const n = Math.max(0, Math.round(Number(mb) || 0))
+    try {
+      await api.post(`/users/${userId}/nodes/${nodeId}/rate-limit`, { rate_limit_mbytes: n })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <input className="input-field font-mono" type="number" min="0" value={mb}
+        onChange={e => setMb(e.target.value)} style={{ width: 64 }} title="0 = 不限，同节点所有规则共享" />
+      <span className="text-xs text-ink-mut">MB/s</span>
+      <button type="submit" className="btn-secondary text-xs">设限速</button>
+    </form>
+  )
+}
+
 function LandingSourceForm({ userId, subURL, uris, nodes, blurred, onDone }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
@@ -523,6 +545,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
       parts.push(`max=${g?.max_forwards ?? 10}`)
       const gb = g?.traffic_quota_bytes ? Number((g.traffic_quota_bytes / 1073741824).toFixed(2)) : 0
       parts.push(`quota=${gb}GB`)
+      parts.push(`rate=${g?.rate_limit_mbytes || 0}`)
       return parts.join(' | ')
     })
     const text = lines.join('\n')
@@ -560,7 +583,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">限速</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -575,6 +598,9 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
                 </td>
                 <td className="px-3 py-2">
                   <PerNodeQuotaForm userId={userId} nodeId={n.id} quotaBytes={grantByNode[n.id]?.traffic_quota_bytes} onDone={onDone} />
+                </td>
+                <td className="px-3 py-2">
+                  <PerNodeRateForm userId={userId} nodeId={n.id} rateMBytes={grantByNode[n.id]?.rate_limit_mbytes} onDone={onDone} />
                 </td>
                 <td className="px-3 py-2 font-mono text-sm">
                   {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}

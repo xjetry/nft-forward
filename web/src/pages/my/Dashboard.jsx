@@ -173,7 +173,7 @@ export default function MyDashboard() {
         {tabNodes.length > 0 ? (<>
           {/* Desktop table */}
           {!isMobile && <table className="tbl">
-            <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>本节点上限</th></tr></thead>
+            <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>限速</th><th>本节点上限</th></tr></thead>
             <tbody>
               {tabNodes.map(n => {
                 const g = grantByNode[n.id]
@@ -195,6 +195,7 @@ export default function MyDashboard() {
                       )}
                     </td>
                     <td className="font-mono text-xs">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</td>
+                    <td className="font-mono text-xs">{g?.rate_limit_mbytes > 0 ? `${g.rate_limit_mbytes} MB/s` : '不限'}</td>
                     <td className="font-mono">{g?.max_forwards ?? '--'}</td>
                   </tr>
                 )
@@ -222,6 +223,10 @@ export default function MyDashboard() {
                     </>}
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</span>
+                    {g?.rate_limit_mbytes > 0 && <>
+                      <span className="text-ink-mut">·</span>
+                      <span className="font-mono">{g.rate_limit_mbytes} MB/s</span>
+                    </>}
                   </div>
                 </div>
               )

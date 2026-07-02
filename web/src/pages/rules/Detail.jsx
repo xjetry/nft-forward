@@ -98,8 +98,6 @@ export default function RulesDetail() {
             </span>
             <span className="text-ink-soft font-semibold">流量</span>
             <span className="font-mono text-ink-mut">{fmtBytes(rule.total_bytes || 0)}</span>
-            <span className="text-ink-soft font-semibold">限速</span>
-            <span className="font-mono text-ink-mut">{rule.bandwidth_mbps > 0 ? `${rule.bandwidth_mbps} Mbps` : '不限'}</span>
             {rule.comment && <>
               <span className="text-ink-soft font-semibold">备注</span>
               <span className="text-ink-soft">{rule.comment}</span>
@@ -141,14 +139,6 @@ export default function RulesDetail() {
         ) : <Empty title="暂无跳数据" />}
       </div>
 
-      {/* Bandwidth limit */}
-      <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">限速</h3><span className="text-xs text-ink-mut">0 = 不限速</span></div>
-        <div className="p-5">
-          <BandwidthForm ruleId={rule.id} current={rule.bandwidth_mbps || 0} onDone={load} />
-        </div>
-      </div>
-
       {/* Actions */}
       <div className="flex items-center gap-3 flex-wrap mt-5">
         <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
@@ -163,30 +153,6 @@ export default function RulesDetail() {
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
         nodes={nodes} initial={ruleToForm(rule)} onSubmit={saveEdit} />
     </Layout>
-  )
-}
-
-function BandwidthForm({ ruleId, current, onDone }) {
-  const [mbps, setMbps] = useState(String(current || 0))
-  const [loading, setLoading] = useState(false)
-  const toast = useToast()
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      await api.post(`/rules/${ruleId}/bandwidth`, { bandwidth_mbps: mbps ? Number(mbps) : 0 })
-      toast('限速已更新并重下发')
-      onDone()
-    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
-  }
-
-  return (
-    <form onSubmit={submit} className="inline-flex items-center gap-2">
-      <input className="input-field font-mono" type="number" min="0" max="100000" value={mbps} onChange={e => setMbps(e.target.value)} placeholder="0" style={{ width: 110, height: 30, fontSize: 13, padding: '0 8px' }} />
-      <span className="text-xs text-ink-mut">Mbps</span>
-      <button type="submit" disabled={loading} className="btn-primary text-xs">保存限速</button>
-    </form>
   )
 }
 
