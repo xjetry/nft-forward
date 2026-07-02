@@ -464,6 +464,10 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/unidirectional", s.apiSetNodeUnidirectional)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
+			r.Post("/nodes/{id}/roles", s.apiUpdateNodeRolesMask)
+			r.Get("/nodes/{id}/bindings", s.apiListNodeBindings)
+			r.Post("/nodes/{id}/bindings", s.apiUpdateNodeBindings)
+			r.Get("/node-bindings", s.apiListAllNodeBindings)
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)

@@ -166,3 +166,46 @@ func TestSetNodeRelayHostV6RejectsWhenDeclared(t *testing.T) {
 		t.Errorf("RelayHostV6 = %q, want unchanged 2001:db8::9 (declared field must reject manual edits)", got.RelayHostV6)
 	}
 }
+
+func TestNodeRolesAndBindingsEndpoints(t *testing.T) {
+	d := openDB(t)
+	up, _ := db.CreateNode(d, "entry-hk", "", "")
+	mid, _ := db.CreateNode(d, "akari", "", "")
+	cookie := loginAsAdmin(t, d)
+	s, _ := New(d)
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		s.Router().ServeHTTP(w, req)
+		return w
+	}
+
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/roles", mid.ID), `{"roles":3}`); w.Code != 200 {
+		t.Fatalf("set roles: %d %s", w.Code, w.Body.String())
+	}
+	n, _ := db.GetNode(d, mid.ID)
+	if n.Roles != 3 {
+		t.Fatalf("roles want 3, got %d", n.Roles)
+	}
+	// downstream must have via role to be bound
+	body := fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d,"mode":"kernel"}]}`, up.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/bindings", mid.ID), body); w.Code != 200 {
+		t.Fatalf("set bindings: %d %s", w.Code, w.Body.String())
+	}
+	if w := do("GET", fmt.Sprintf("/api/nodes/%d/bindings", mid.ID), ""); w.Code != 200 ||
+		!bytes.Contains(w.Body.Bytes(), []byte(`"mode":"kernel"`)) {
+		t.Fatalf("list bindings: %d %s", w.Code, w.Body.String())
+	}
+	if w := do("GET", "/api/node-bindings", ""); w.Code != 200 ||
+		!bytes.Contains(w.Body.Bytes(), []byte(fmt.Sprintf(`"upstream_node_id":%d`, up.ID))) {
+		t.Fatalf("list all: %d %s", w.Code, w.Body.String())
+	}
+	// remove via role then try to bind -> 400
+	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/bindings", mid.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("bind non-via: want 400, got %d", w.Code)
+	}
+}

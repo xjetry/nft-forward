@@ -644,6 +644,101 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		Roles int64 `json:"roles"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.Roles&^(db.NodeRoleEntry|db.NodeRoleVia) != 0 || body.Roles == 0 {
+		jsonErr(w, http.StatusBadRequest, "roles invalid")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err := db.UpdateNodeRoles(s.DB, id, body.Roles); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.roles", strconv.FormatInt(id, 10), strconv.FormatInt(body.Roles, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiListNodeBindings(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	bs, err := db.ListBindingsForDownstream(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"bindings": bs})
+}
+
+func (s *Server) apiListAllNodeBindings(w http.ResponseWriter, r *http.Request) {
+	bs, err := db.ListAllNodeBindings(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"bindings": bs})
+}
+
+func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.Roles&db.NodeRoleVia == 0 {
+		jsonErr(w, http.StatusBadRequest, "node is not a middle layer; enable the middle layer role first")
+		return
+	}
+	var body struct {
+		Bindings []struct {
+			UpstreamNodeID int64  `json:"upstream_node_id"`
+			Mode           string `json:"mode"`
+		} `json:"bindings"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request format")
+		return
+	}
+	bs := make([]db.NodeBinding, len(body.Bindings))
+	for i, b := range body.Bindings {
+		if b.UpstreamNodeID == id {
+			jsonErr(w, http.StatusBadRequest, "cannot bind to self")
+			return
+		}
+		if _, err := db.GetNode(s.DB, b.UpstreamNodeID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "upstream node not found")
+			return
+		}
+		bs[i] = db.NodeBinding{UpstreamNodeID: b.UpstreamNodeID, DownstreamNodeID: id, Mode: b.Mode}
+	}
+	if err := db.ReplaceBindingsForDownstream(s.DB, id, bs); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.bindings", strconv.FormatInt(id, 10), fmt.Sprintf("%d edges", len(bs)))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiRenameNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
