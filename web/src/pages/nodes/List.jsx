@@ -395,12 +395,16 @@ function NodeStatus({ node }) {
   if (node.node_type === 'composite') {
     return node.online === 1 ? <Badge color="green">在线</Badge> : <Badge color="gray">离线</Badge>
   }
-  // A disconnected agent is offline regardless of when it last synced; a stale
-  // "已同步" on an offline node misrepresents its real state.
-  if (node.online !== 1) return <Badge color="gray">离线</Badge>
+  // Error/warning outrank connectivity: they explain why the node needs
+  // attention, so they stay visible while offline instead of being hidden
+  // behind a silent "离线" — matches the detail page header's priority
+  // (disabled > error > warning > online > offline).
   const lastErr = nullStr(node.last_error)
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
   if (node.last_warning) return <Badge color="amber" title={node.last_warning}>警告</Badge>
+  // A disconnected agent is offline regardless of when it last synced; a stale
+  // "已同步" on an offline node misrepresents its real state.
+  if (node.online !== 1) return <Badge color="gray">离线</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
   return <Badge color="amber">待同步</Badge>
 }
