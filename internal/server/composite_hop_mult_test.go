@@ -147,4 +147,17 @@ func TestCompositeHopMultUpdateIgnoresTrafficMultiplier(t *testing.T) {
 	if comp.RateMultiplier != 4.0 {
 		t.Fatalf("composite rate_multiplier want unchanged 4.0, got %v", comp.RateMultiplier)
 	}
+
+	// Direct rate-multiplier edits work on composites like any other node —
+	// the column is the single source of truth for composite pricing.
+	adminJSON(t, s, admin, "POST", "/api/nodes/"+itoa(compID)+"/rate-multiplier", map[string]any{
+		"rate_multiplier": 6.5,
+	})
+	comp, err = db.GetNode(d, compID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp.RateMultiplier != 6.5 {
+		t.Fatalf("composite rate_multiplier after direct edit want 6.5, got %v", comp.RateMultiplier)
+	}
 }

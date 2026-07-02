@@ -800,13 +800,10 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	node, err := db.GetNode(s.DB, id)
-	if err != nil {
+	// Composite nodes are edited like any other: composite pricing lives on
+	// the node's own rate_multiplier column, not on its hop rows.
+	if _, err := db.GetNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-	if node.NodeType == "composite" {
-		jsonErr(w, http.StatusBadRequest, "组合节点的倍率由各跳子节点决定")
 		return
 	}
 	var body struct {
