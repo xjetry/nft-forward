@@ -91,10 +91,7 @@ type Rule struct {
 	EntryListenPort int           `json:"entry_listen_port"`
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
-	// BandwidthMbps caps the rule's throughput (0 = unlimited). The data plane
-	// shapes it via tc HTB (kernel) / a token bucket (userspace).
-	BandwidthMbps int   `json:"bandwidth_mbps"`
-	CreatedAt     int64 `json:"created_at"`
+	CreatedAt       int64         `json:"created_at"`
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
@@ -560,12 +557,14 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 // exit_uri exists as a column (migration 0010) but is no longer read or
 // written: user proxy URIs are kept client-side only, so the column is left
 // out of the projection rather than dropped (dropping needs a table rebuild).
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,bandwidth_mbps,created_at`
+// bandwidth_mbps is likewise dead (shaping moved to the per-grant rate limit
+// on user_nodes) and stays out of the projection.
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.BandwidthMbps, &rl.CreatedAt); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1

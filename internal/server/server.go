@@ -286,6 +286,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	if hopCounts == nil {
 		hopCounts = map[int64]int{}
 	}
+	shapes, _ := db.GrantShapes(d)
 
 	rules := make([]nft.Rule, 0, len(ruleHops))
 	for _, rh := range ruleHops {
@@ -300,10 +301,19 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 		if r := ruleMap[rh.RuleID]; r != nil {
 			rule.RuleID = r.ID
 			rule.RuleName = r.Name
-			rule.BandwidthMbps = r.BandwidthMbps
 			if r.OwnerID.Valid {
 				if u := users[r.OwnerID.Int64]; u != nil {
 					rule.OwnerName = u.Username
+				}
+				// Shaping is priced by the grant on the rule's panel node —
+				// the same node the quota is tracked on — then applied at
+				// every hop.
+				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, r.NodeID}]; ok {
+					rule.ShapeGroup = gs.GrantID
+					rule.RateMBytes = int(gs.RateLimitMBytes)
+					// Legacy mirror so pre-group agents still shape
+					// (per rule, approximate): MB/s (2^20 bytes) → Mbit/s.
+					rule.BandwidthMbps = int((gs.RateLimitMBytes*8388608 + 500000) / 1000000)
 				}
 			}
 		}

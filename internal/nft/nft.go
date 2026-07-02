@@ -43,6 +43,15 @@ type Rule struct {
 	RuleName  string `json:"rule_name,omitempty"`
 	OwnerName string `json:"owner_name,omitempty"`
 	HopCount  int    `json:"hop_count,omitempty"`
+	// ShapeGroup/RateMBytes carry the per-grant shared rate limit: every rule
+	// in the same group (one user's rules on one panel node, priced by one
+	// grant) shares a single RateMBytes MB/s bucket, both directions combined.
+	// ShapeGroup is the panel-side grant id; 0 = no group. When the group is
+	// valid the data plane ignores the legacy per-rule BandwidthMbps, which
+	// new panels still fill so pre-group agents degrade to an approximate
+	// per-rule cap.
+	ShapeGroup int64 `json:"shape_group,omitempty"`
+	RateMBytes int   `json:"rate_mbytes,omitempty"`
 }
 
 // EffectiveMode normalizes the mode: an empty or unrecognized value means
@@ -53,6 +62,18 @@ func (r Rule) EffectiveMode() string {
 		return ModeUserspace
 	}
 	return ModeKernel
+}
+
+// GroupShapeMark returns the fwmark for a validly group-shaped rule, or 0.
+// The 0x10000 offset keeps group marks disjoint from legacy per-port marks
+// (ports are ≤ 0xFFFF). Groups whose id exceeds 16 bits cannot become a tc
+// class minor and fall back to legacy shaping — callers must treat 0 as "not
+// group-shaped", never as "unshaped".
+func GroupShapeMark(r Rule) uint32 {
+	if r.ShapeGroup > 0 && r.RateMBytes > 0 && r.ShapeGroup <= 0xFFFF {
+		return uint32(0x10000 | r.ShapeGroup)
+	}
+	return 0
 }
 
 func (r Rule) Display() string {

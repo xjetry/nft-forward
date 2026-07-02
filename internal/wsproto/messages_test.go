@@ -2,6 +2,7 @@ package wsproto
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,33 @@ func TestApplyRulesetEncodesRules(t *testing.T) {
 	}
 	if got.Rev != "rev42" || len(got.Rules) != 1 || got.Rules[0].DestIP != "10.0.0.1" {
 		t.Fatalf("apply_ruleset roundtrip mismatch: %+v", got)
+	}
+}
+
+func TestApplyRulesetShapeFieldsRoundtrip(t *testing.T) {
+	ar := ApplyRuleset{
+		Rev: "r1",
+		Rules: []nft.Rule{
+			{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, ShapeGroup: 7, RateMBytes: 12},
+		},
+	}
+	b, err := json.Marshal(ar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ApplyRuleset
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Rules[0].ShapeGroup != 7 || got.Rules[0].RateMBytes != 12 {
+		t.Fatalf("shape fields roundtrip mismatch: %+v", got.Rules[0])
+	}
+
+	// omitempty: unshaped rules must not emit the new keys, keeping payloads
+	// byte-identical for old panels/agents.
+	b2, _ := json.Marshal(ApplyRuleset{Rules: []nft.Rule{{Proto: "tcp", SrcPort: 1, DestIP: "1.1.1.1", DestPort: 1}}})
+	if strings.Contains(string(b2), "shape_group") || strings.Contains(string(b2), "rate_mbytes") {
+		t.Fatalf("zero-value rule leaked shape keys: %s", b2)
 	}
 }
 

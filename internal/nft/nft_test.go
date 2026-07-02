@@ -407,3 +407,20 @@ func TestRule_OwnerNameRoundTripAndOmitempty(t *testing.T) {
 		t.Fatalf("empty owner_name should be omitted, got: %s", bare)
 	}
 }
+
+func TestGroupShapeMark(t *testing.T) {
+	cases := []struct {
+		r    Rule
+		want uint32
+	}{
+		{Rule{ShapeGroup: 5, RateMBytes: 10}, 0x10005},
+		{Rule{ShapeGroup: 0, RateMBytes: 10}, 0},
+		{Rule{ShapeGroup: 5, RateMBytes: 0}, 0},
+		{Rule{ShapeGroup: 0x10000, RateMBytes: 10}, 0}, // minor is 16-bit; oversize falls back to legacy shaping
+	}
+	for i, c := range cases {
+		if got := GroupShapeMark(c.r); got != c.want {
+			t.Errorf("case %d: mark = %#x, want %#x", i, got, c.want)
+		}
+	}
+}
