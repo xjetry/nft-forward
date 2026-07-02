@@ -30,6 +30,8 @@ export default function NodeDetail() {
   const [unidirectional, setUnidirectional] = useState(false)
   const [useGhProxy, setUseGhProxy] = useState(false)
   const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
+  const [cmdRelayHost, setCmdRelayHost] = useState('')
+  const [cmdRelayHostV6, setCmdRelayHostV6] = useState('')
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -127,7 +129,9 @@ export default function NodeDetail() {
   const portRangePart = node.port_range && node.port_range !== '10001-20000'
     ? ` \\\n  --port-range ${node.port_range}`
     : ''
-  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${portRangePart}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
+  const relayHostPart = cmdRelayHost.trim() ? ` \\\n  --relay-host ${cmdRelayHost.trim()}` : ''
+  const relayHostV6Part = cmdRelayHostV6.trim() ? ` \\\n  --relay-host-v6 ${cmdRelayHostV6.trim()}` : ''
+  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${portRangePart}${relayHostPart}${relayHostV6Part}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
 
   return (
     <Layout>
@@ -331,6 +335,13 @@ export default function NodeDetail() {
               <input className="input-field font-mono" style={{ height: 30, maxWidth: 280 }} value={ghProxy}
                 onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
             )}
+          </div>
+          <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
+            <span className="text-ink-soft">中继地址声明（双出口机器用，可空）</span>
+            <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHost}
+              onChange={e => setCmdRelayHost(e.target.value)} placeholder="IPv4 / 域名（可选）" />
+            <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHostV6}
+              onChange={e => setCmdRelayHostV6(e.target.value)} placeholder="IPv6（可选）" />
           </div>
           <div className="relative bg-[#1e1e2e] dark:bg-app border border-line rounded-[10px] px-5 py-[18px]">
             <button onClick={() => copyToClipboard(installCmd).then(() => toast('已复制')).catch(() => toast('复制失败', 'error'))}
