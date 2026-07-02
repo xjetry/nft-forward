@@ -474,24 +474,6 @@ func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
 	return err
 }
 
-func SetNodeRelayHostDeclared(d *sql.DB, id int64, declared bool) error {
-	v := 0
-	if declared {
-		v = 1
-	}
-	_, err := d.Exec(`UPDATE nodes SET relay_host_declared=? WHERE id=?`, v, id)
-	return err
-}
-
-func SetNodeRelayHostV6Declared(d *sql.DB, id int64, declared bool) error {
-	v := 0
-	if declared {
-		v = 1
-	}
-	_, err := d.Exec(`UPDATE nodes SET relay_host_v6_declared=? WHERE id=?`, v, id)
-	return err
-}
-
 func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
 	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
 	return err
@@ -513,6 +495,24 @@ func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
 		portRange = DefaultPortRange
 	}
 	_, err := d.Exec(`UPDATE nodes SET port_range=? WHERE id=?`, portRange, id)
+	return err
+}
+
+func SetNodeRelayHostDeclared(d *sql.DB, id int64, declared bool) error {
+	v := 0
+	if declared {
+		v = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET relay_host_declared=? WHERE id=?`, v, id)
+	return err
+}
+
+func SetNodeRelayHostV6Declared(d *sql.DB, id int64, declared bool) error {
+	v := 0
+	if declared {
+		v = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET relay_host_v6_declared=? WHERE id=?`, v, id)
 	return err
 }
 

@@ -601,3 +601,126 @@ func TestHubNeverOverwritesManualRelayHost(t *testing.T) {
 		t.Errorf("RelayHost = %q, want unchanged 203.0.113.9 (manual value must not be overwritten)", got.RelayHost)
 	}
 }
+
+func TestHubAppliesDeclaredRelayHost(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		DeclaredRelayHost: "203.0.113.50",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "203.0.113.50" {
+		t.Errorf("RelayHost = %q, want 203.0.113.50 (declared value)", got.RelayHost)
+	}
+	if !got.RelayHostDeclared {
+		t.Error("RelayHostDeclared should be true after a hello carrying DeclaredRelayHost")
+	}
+}
+
+func TestHubDeclaredRelayHostOverridesExistingValue(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, "10.0.0.5"); err != nil {
+		t.Fatal(err)
+	}
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		DeclaredRelayHost: "203.0.113.50",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "203.0.113.50" {
+		t.Errorf("RelayHost = %q, want 203.0.113.50 (declared value must override a pre-existing one)", got.RelayHost)
+	}
+}
+
+func TestHubIgnoresInvalidDeclaredRelayHost(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		DeclaredRelayHost: "2001:db8::1", // v6 literal is invalid for the v4 field
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "" {
+		t.Errorf("RelayHost = %q, want empty (invalid declared value must be ignored)", got.RelayHost)
+	}
+	if got.RelayHostDeclared {
+		t.Error("RelayHostDeclared should stay false when the declared value was rejected")
+	}
+}
+
+func TestHubClearingDeclaredRelayHostUnlocksValue(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		DeclaredRelayHost: "203.0.113.50",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+	syncByPing(t, c)
+
+	// Reconnect without a declared value, as if the operator removed the
+	// --relay-host flag and restarted the daemon.
+	c2 := dialWS(t, srv)
+	hp2, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64"})
+	sendJSON(t, c2, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp2})
+	_ = recvEnvelope(t, c2)
+	syncByPing(t, c2)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostDeclared {
+		t.Error("RelayHostDeclared should be false after a hello with no declared value")
+	}
+	if got.RelayHost != "203.0.113.50" {
+		t.Errorf("RelayHost = %q, want unchanged 203.0.113.50 (unlocking must not blank the field)", got.RelayHost)
+	}
+}
+
+func TestHubAppliesDeclaredRelayHostV6(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	c := dialWS(t, srv)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+		DeclaredRelayHostV6: "2001:db8::50",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostV6 != "2001:db8::50" {
+		t.Errorf("RelayHostV6 = %q, want 2001:db8::50 (declared value)", got.RelayHostV6)
+	}
+	if !got.RelayHostV6Declared {
+		t.Error("RelayHostV6Declared should be true after a hello carrying DeclaredRelayHostV6")
+	}
+}

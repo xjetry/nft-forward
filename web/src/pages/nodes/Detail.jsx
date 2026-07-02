@@ -257,17 +257,23 @@ export default function NodeDetail() {
               </form>
             </ConfigField>
 
-            <ConfigField label="中继地址（数据面）" hint="中继链路用它作为上一跳打向本节点的目标地址">
+            <ConfigField
+              label="中继地址（数据面）"
+              hint={node.relay_host_declared ? '由 daemon 启动参数 --relay-host 管理，UI 不可修改；如需变更请更新节点配置后重启 daemon' : '中继链路用它作为上一跳打向本节点的目标地址'}
+            >
               <form onSubmit={saveRelay} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IP 或域名" />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IP 或域名" disabled={node.relay_host_declared} />
+                <button type="submit" className="btn-primary flex-none px-5" disabled={node.relay_host_declared}>保存</button>
               </form>
             </ConfigField>
 
-            <ConfigField label="IPv6 中继地址" hint="设置后该节点可转发 IPv6 目标，留空表示不支持 IPv6">
+            <ConfigField
+              label="IPv6 中继地址"
+              hint={node.relay_host_v6_declared ? '由 daemon 启动参数 --relay-host-v6 管理，UI 不可修改；如需变更请更新节点配置后重启 daemon' : '设置后该节点可转发 IPv6 目标，留空表示不支持 IPv6'}
+            >
               <form onSubmit={saveRelayV6} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={relayHostV6} onChange={e => setRelayHostV6(e.target.value)} placeholder="数据面公网 IPv6 地址" />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <input className="input-field font-mono flex-1" value={relayHostV6} onChange={e => setRelayHostV6(e.target.value)} placeholder="数据面公网 IPv6 地址" disabled={node.relay_host_v6_declared} />
+                <button type="submit" className="btn-primary flex-none px-5" disabled={node.relay_host_v6_declared}>保存</button>
               </form>
             </ConfigField>
 

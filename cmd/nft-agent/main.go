@@ -37,6 +37,8 @@ func runDaemon(args []string) int {
 		connectURL     string
 		panelTokenFile string
 		portRange      string
+		relayHost      string
+		relayHostV6    string
 	)
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
@@ -46,6 +48,8 @@ func runDaemon(args []string) int {
 	fs.StringVar(&connectURL, "connect", "", "panel WebSocket URL (e.g. wss://panel/v1/agents); empty = tui/standalone mode")
 	fs.StringVar(&panelTokenFile, "panel-token-file", "/etc/nft-forward/panel.token", "bearer token file (required when --connect is set)")
 	fs.StringVar(&portRange, "port-range", "", "端口范围（如 10001-20000），上报给面板")
+	fs.StringVar(&relayHost, "relay-host", "", "显式声明数据面 IPv4 地址/域名，覆盖面板的自动识别（用于双出口等场景）")
+	fs.StringVar(&relayHostV6, "relay-host-v6", "", "显式声明数据面 IPv6 地址，覆盖面板的自动识别")
 	if err := fs.Parse(args); err != nil {
 		// Tolerate unknown flags so a binary upgrade that predates a
 		// newly-added install.sh flag doesn't crash the daemon.
@@ -77,12 +81,14 @@ func runDaemon(args []string) int {
 	}
 
 	cfg := daemon.Config{
-		SocketPath: socketPath,
-		StatePath:  statePath,
-		GroupName:  groupName,
-		Iface:      iface,
-		ConnectURL: connectURL,
-		PortRange:  portRange,
+		SocketPath:          socketPath,
+		StatePath:           statePath,
+		GroupName:           groupName,
+		Iface:               iface,
+		ConnectURL:          connectURL,
+		PortRange:           portRange,
+		DeclaredRelayHost:   relayHost,
+		DeclaredRelayHostV6: relayHostV6,
 	}
 	if connectURL != "" {
 		tok, err := os.ReadFile(panelTokenFile)

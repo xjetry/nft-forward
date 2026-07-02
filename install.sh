@@ -261,6 +261,8 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
   --port-range R                   agent 占用的中继端口范围，格式 START-END（默认 10001-20000）
+  --relay-host HOST                agent 数据面 IPv4 地址/域名声明，覆盖面板自动识别（双出口中转机场景）
+  --relay-host-v6 HOST             agent 数据面 IPv6 地址声明，覆盖面板自动识别
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :7788
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
   --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；
@@ -548,6 +550,8 @@ mode=""
 panel_url=""
 token=""
 port_range=""
+relay_host=""
+relay_host_v6=""
 addr=""
 purge=0
 RESET_PW=""
@@ -571,6 +575,10 @@ while [[ $# -gt 0 ]]; do
     --token=*) token="${1#*=}"; shift ;;
     --port-range) require_val --port-range "${2:-}"; port_range="$2"; shift 2 ;;
     --port-range=*) port_range="${1#*=}"; shift ;;
+    --relay-host) require_val --relay-host "${2:-}"; relay_host="$2"; shift 2 ;;
+    --relay-host=*) relay_host="${1#*=}"; shift ;;
+    --relay-host-v6) require_val --relay-host-v6 "${2:-}"; relay_host_v6="$2"; shift 2 ;;
+    --relay-host-v6=*) relay_host_v6="${1#*=}"; shift ;;
     --addr) require_val --addr "${2:-}"; addr="$2"; shift 2 ;;
     --addr=*) addr="${1#*=}"; shift ;;
     --release) require_val --release "${2:-}"; RELEASE="$2"; RELEASE_EXPLICIT=1; shift 2 ;;
@@ -816,7 +824,10 @@ EOF
     install -m 0600 /dev/stdin /etc/nft-forward/panel.token <<<"$token"
     range_arg=""
     [[ -n "$port_range" ]] && range_arg=" --port-range $port_range"
-    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}"
+    relay_arg=""
+    [[ -n "$relay_host" ]] && relay_arg+=" --relay-host $relay_host"
+    [[ -n "$relay_host_v6" ]] && relay_arg+=" --relay-host-v6 $relay_host_v6"
+    write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}${relay_arg}"
     systemctl daemon-reload
     # enable --now 对已运行的 daemon 是 no-op，不会重启；装 agent 时 daemon 往往
     # 已在运行（纯 daemon 段或先前角色），必须 restart 才能让新写入的 --connect
