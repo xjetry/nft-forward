@@ -92,6 +92,14 @@ func TestSetNodeRelayHostAcceptsIPv4AndHostname(t *testing.T) {
 	if code := setNodeRelayHost(t, s, admin, n.ID, "203.0.113.9"); code != http.StatusOK {
 		t.Fatalf("relay-host with IPv4 literal: status = %d, want 200", code)
 	}
+	gotV4, err := db.GetNode(d, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotV4.RelayHost != "203.0.113.9" {
+		t.Errorf("RelayHost = %q, want 203.0.113.9", gotV4.RelayHost)
+	}
+
 	if code := setNodeRelayHost(t, s, admin, n.ID, "relay.example.com"); code != http.StatusOK {
 		t.Fatalf("relay-host with hostname: status = %d, want 200", code)
 	}

@@ -530,6 +530,56 @@ func TestHubReconcilesDirtyV6RelayHostOnConnect(t *testing.T) {
 	}
 }
 
+// dialWSWithForwardedFor dials like dialWS but sets X-Forwarded-For on the
+// handshake request, letting a test simulate a v6 connectIP without needing
+// an actual v6-reachable listener (httptest.Server only binds v4 loopback).
+func dialWSWithForwardedFor(t *testing.T, srv *httptest.Server, forwardedFor string) *websocket.Conn {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/"
+	opts := &websocket.DialOptions{HTTPHeader: http.Header{"X-Forwarded-For": []string{forwardedFor}}}
+	c, _, err := websocket.Dial(context.Background(), url, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close(websocket.StatusNormalClosure, "") })
+	return c
+}
+
+// TestHubPrefersFreshConnectIPOverStaleV6RelayHost covers a node whose
+// relay_host still holds pre-split v6 data (see fillNodeRelayHosts) that
+// reconnects with a v6 connectIP different from the stale value. The
+// connectIP observed on THIS connection must win relay_host_v6, since the
+// agent's real v6 address may have moved on since the stale data was
+// written; the old value must not be allowed to claim the field first and
+// block the fresher one from ever landing.
+func TestHubPrefersFreshConnectIPOverStaleV6RelayHost(t *testing.T) {
+	srv, hub, n := newHubTestServer(t)
+	const staleV6 = "2001:db8::dead" // pre-split leftover, sitting in relay_host
+	const freshV6 = "2001:db8::cafe" // this connection's observed connectIP
+	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, staleV6); err != nil {
+		t.Fatal(err)
+	}
+	c := dialWSWithForwardedFor(t, srv, freshV6)
+	hp, _ := json.Marshal(wsproto.Hello{
+		NodeToken: "tok-good", AgentVersion: "v1", OS: "linux", Arch: "amd64",
+	})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	_ = recvEnvelope(t, c)
+
+	syncByPing(t, c)
+
+	got, err := db.GetNode(hub.DB, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostV6 != freshV6 {
+		t.Errorf("RelayHostV6 = %q, want %s (this connection's connectIP, not the stale relay_host value)", got.RelayHostV6, freshV6)
+	}
+	if got.RelayHost != "" {
+		t.Errorf("RelayHost = %q, want empty (stale v6 literal evicted, no v4 source available to re-fill it)", got.RelayHost)
+	}
+}
+
 func TestHubNeverOverwritesManualRelayHost(t *testing.T) {
 	srv, hub, n := newHubTestServer(t)
 	if err := db.UpdateNodeRelayHost(hub.DB, n.ID, "203.0.113.9"); err != nil {

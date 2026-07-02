@@ -417,23 +417,27 @@ func extractIP(r *http.Request) string {
 //
 // relay_host must always hold a v4 literal or hostname: an IPv6 literal
 // found there can only be leftover data from before the two fields were
-// split by address family. Such a value is migrated to relay_host_v6 (kept
-// only if that field is still empty, so a real manual v6 config wins) and
-// evicted from relay_host so the empty-field seeding below can re-fill it
-// with a proper v4 value. This makes stale data self-heal on the node's
-// next connection instead of persisting forever.
+// split by address family. Such a value is evicted from relay_host
+// unconditionally, so the empty-field seeding below can re-fill it with a
+// proper v4 value. It is migrated into relay_host_v6 only when this
+// connection didn't itself supply a fresher v6 connectIP: connectIP is
+// always more authoritative than data carried over from before the split,
+// since the agent's address may well have changed since that data was
+// written. This makes stale data self-heal on the node's next connection
+// instead of persisting forever, without letting the stale value block a
+// fresher one from landing.
 func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 string) {
+	connectIsV6 := false
+	if ip := net.ParseIP(connectIP); ip != nil {
+		connectIsV6 = ip.To4() == nil
+	}
 	if ip := net.ParseIP(node.RelayHost); ip != nil && ip.To4() == nil {
-		if node.RelayHostV6 == "" {
+		if node.RelayHostV6 == "" && !(connectIsV6 && connectIP != "") {
 			_ = db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost)
 			node.RelayHostV6 = node.RelayHost
 		}
 		_ = db.UpdateNodeRelayHost(d, node.ID, "")
 		node.RelayHost = ""
-	}
-	connectIsV6 := false
-	if ip := net.ParseIP(connectIP); ip != nil {
-		connectIsV6 = ip.To4() == nil
 	}
 	if node.RelayHost == "" {
 		if !connectIsV6 && connectIP != "" {
