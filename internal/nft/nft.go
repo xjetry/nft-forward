@@ -192,7 +192,14 @@ func RenderRuleset(rules []Rule) string {
 			continue
 		}
 		mark := ""
-		if r.BandwidthMbps > 0 {
+		if m := GroupShapeMark(r); m != 0 {
+			// Stamp the first packet and its conntrack entry in one go; the
+			// restore_mark chain re-stamps every later packet (both
+			// directions) so the whole connection lands in the group's tc
+			// class. nat prerouting only sees a connection's first packet,
+			// which is why the mark must be persisted via ct mark.
+			mark = fmt.Sprintf("meta mark set 0x%x ct mark set meta mark ", m)
+		} else if r.BandwidthMbps > 0 {
 			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
 		if IsLoopback(r.DestIP) && IsIPv6(r.DestIP) {
@@ -206,6 +213,19 @@ func RenderRuleset(rules []Rule) string {
 		}
 	}
 	b.WriteString("\t}\n")
+	hasGroup := false
+	for _, r := range rules {
+		if GroupShapeMark(r) != 0 {
+			hasGroup = true
+			break
+		}
+	}
+	if hasGroup {
+		b.WriteString("\tchain restore_mark {\n")
+		b.WriteString("\t\ttype filter hook prerouting priority mangle; policy accept;\n")
+		b.WriteString("\t\tct mark != 0 meta mark set ct mark\n")
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	for _, r := range rules {

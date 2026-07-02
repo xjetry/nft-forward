@@ -424,3 +424,54 @@ func TestGroupShapeMark(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderRuleset_GroupShaping(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 5, RateMBytes: 10},
+	})
+	// First packet: stamp the packet and store the mark on the conntrack
+	// entry in one DNAT rule.
+	if !strings.Contains(out, "meta mark set 0x10005 ct mark set meta mark dnat ip to 10.0.0.2:80") {
+		t.Fatalf("missing group mark on DNAT rule:\n%s", out)
+	}
+	// Every later packet, both directions: restore the mark before routing so
+	// tc's egress fw filter classifies the whole connection.
+	if !strings.Contains(out, "chain restore_mark") ||
+		!strings.Contains(out, "type filter hook prerouting priority mangle; policy accept;") ||
+		!strings.Contains(out, "ct mark != 0 meta mark set ct mark") {
+		t.Fatalf("missing restore_mark chain:\n%s", out)
+	}
+}
+
+func TestRenderRuleset_LegacyPortMark(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, BandwidthMbps: 50},
+	})
+	if !strings.Contains(out, "meta mark set 8080 dnat ip to 10.0.0.2:80") {
+		t.Fatalf("legacy per-port mark missing:\n%s", out)
+	}
+	if strings.Contains(out, "restore_mark") {
+		t.Fatalf("legacy-only ruleset must not emit the restore chain:\n%s", out)
+	}
+}
+
+func TestRenderRuleset_GroupOverridesLegacyMirror(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 5, RateMBytes: 10, BandwidthMbps: 84},
+	})
+	if strings.Contains(out, "meta mark set 8080 ") {
+		t.Fatalf("group-shaped rule must not also carry the legacy port mark:\n%s", out)
+	}
+}
+
+func TestRenderRuleset_OversizeGroupFallsBackToLegacy(t *testing.T) {
+	out := RenderRuleset([]Rule{
+		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 0x10000, RateMBytes: 10, BandwidthMbps: 84},
+	})
+	if !strings.Contains(out, "meta mark set 8080 ") {
+		t.Fatalf("oversize group must fall back to the legacy port mark:\n%s", out)
+	}
+	if strings.Contains(out, "restore_mark") {
+		t.Fatalf("no valid group → no restore chain:\n%s", out)
+	}
+}
