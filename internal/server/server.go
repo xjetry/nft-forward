@@ -190,11 +190,12 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 	}
 	rules := buildRules(s.DB, ruleHops)
 	rev := computeRev(rules)
-	if _, err := s.Dispatcher.Dispatch(nodeID, rules, rev); err != nil {
+	warning, err := s.Dispatcher.Dispatch(nodeID, rules, rev)
+	if err != nil {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
 	}
-	_ = db.MarkNodeApplied(s.DB, nodeID, "")
+	_ = db.MarkNodeApplied(s.DB, nodeID, warning)
 	return nil
 }
 
@@ -205,6 +206,10 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 	if err := s.dispatchToNode(nodeID); err != nil {
 		setFlash(w, fmt.Sprintf("%s 已保存，但下发到节点失败：%v", action, err))
 		log.Printf("dispatch node %d (%s): %v", nodeID, action, err)
+		return
+	}
+	if n, err := db.GetNode(s.DB, nodeID); err == nil && n.LastWarning != "" {
+		setFlash(w, fmt.Sprintf("%s 已保存，但 %s", action, n.LastWarning))
 	}
 }
 
