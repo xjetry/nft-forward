@@ -33,6 +33,8 @@ func runServer(args []string) int {
 	var (
 		addr, dbPath, bootstrapPw    string
 		resetAdminPw, resetAdminUser string
+		backupInterval               time.Duration
+		backupKeep                   int
 	)
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	fs.StringVar(&addr, "addr", ":8080", "panel HTTP address")
@@ -40,6 +42,8 @@ func runServer(args []string) int {
 	fs.StringVar(&bootstrapPw, "bootstrap-admin-password", "", "set admin password on first boot")
 	fs.StringVar(&resetAdminPw, "reset-admin-password", "", "reset admin password and exit")
 	fs.StringVar(&resetAdminUser, "reset-admin-username", "admin", "admin username for reset")
+	fs.DurationVar(&backupInterval, "backup-interval", 24*time.Hour, "local DB backup interval (0 disables)")
+	fs.IntVar(&backupKeep, "backup-keep", 14, "number of local DB backups to retain")
 	fs.Parse(args)
 
 	if resetAdminPw != "" {
@@ -54,6 +58,8 @@ func runServer(args []string) int {
 	if err := bootstrap(d, bootstrapPw); err != nil {
 		log.Fatalf("bootstrap: %v", err)
 	}
+	stopBackups := db.StartBackups(d, dbPath, backupInterval, backupKeep)
+	defer stopBackups()
 
 	srv, err := server.New(d)
 	if err != nil {

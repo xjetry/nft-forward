@@ -300,6 +300,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 		if r := ruleMap[rh.RuleID]; r != nil {
 			rule.RuleID = r.ID
 			rule.RuleName = r.Name
+			rule.BandwidthMbps = r.BandwidthMbps
 			if r.OwnerID.Valid {
 				if u := users[r.OwnerID.Int64]; u != nil {
 					rule.OwnerName = u.Username
@@ -396,6 +397,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/rules/{id}", s.apiGetRule)
 			r.Put("/rules/{id}", s.apiUpdateRule)
 			r.Delete("/rules/{id}", s.apiDeleteRule)
+			r.Post("/rules/{id}/bandwidth", s.apiSetRuleBandwidth)
 			r.Post("/rules/{id}/hops/{pos}/reallocate", s.apiReallocateRuleHop)
 
 			r.Get("/users/{id}", s.apiGetUser)

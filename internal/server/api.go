@@ -1542,6 +1542,36 @@ func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// apiSetRuleBandwidth sets a rule's bandwidth cap (Mbps, 0 = unlimited) and
+// re-dispatches the affected nodes so tc/userspace shaping takes effect.
+func (s *Server) apiSetRuleBandwidth(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		BandwidthMbps int `json:"bandwidth_mbps"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.BandwidthMbps < 0 {
+		jsonErr(w, http.StatusBadRequest, "带宽不能为负")
+		return
+	}
+	nodes, err := db.SetRuleBandwidth(s.DB, id, body.BandwidthMbps)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.apiDispatchFanout(nodes)
+	db.WriteAudit(s.DB, u.ID, "rule.set_bandwidth", strconv.FormatInt(id, 10), strconv.Itoa(body.BandwidthMbps))
+	jsonOK(w, map[string]any{"ok": true, "bandwidth_mbps": body.BandwidthMbps})
+}
+
 func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

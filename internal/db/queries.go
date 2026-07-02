@@ -91,7 +91,10 @@ type Rule struct {
 	EntryListenPort int           `json:"entry_listen_port"`
 	Comment         string        `json:"comment"`
 	Disabled        bool          `json:"disabled"`
-	CreatedAt       int64         `json:"created_at"`
+	// BandwidthMbps caps the rule's throughput (0 = unlimited). The data plane
+	// shapes it via tc HTB (kernel) / a token bucket (userspace).
+	BandwidthMbps int   `json:"bandwidth_mbps"`
+	CreatedAt     int64 `json:"created_at"`
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
@@ -557,16 +560,29 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 // exit_uri exists as a column (migration 0010) but is no longer read or
 // written: user proxy URIs are kept client-side only, so the column is left
 // out of the projection rather than dropped (dropping needs a table rebuild).
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,bandwidth_mbps,created_at`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.BandwidthMbps, &rl.CreatedAt); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1
 	return rl, nil
+}
+
+// SetRuleBandwidth sets a rule's bandwidth cap in Mbps (0 = unlimited) and
+// returns the node IDs whose kernel state must be re-pushed so the data plane
+// picks up the new shaping.
+func SetRuleBandwidth(d *sql.DB, ruleID int64, mbps int) ([]int64, error) {
+	if mbps < 0 {
+		mbps = 0
+	}
+	if _, err := d.Exec(`UPDATE rules SET bandwidth_mbps=? WHERE id=?`, mbps, ruleID); err != nil {
+		return nil, err
+	}
+	return queryInt64s(d, `SELECT DISTINCT node_id FROM rule_hops WHERE rule_id=?`, ruleID)
 }
 
 const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes`
