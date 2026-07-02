@@ -48,6 +48,13 @@ export default function MyRuleDetail() {
 
   const { rule, nodes = [], node_by_id = {}, show_rate } = data
   const node = node_by_id[rule.node_id]
+  // Names resolve only through node_by_id — the granted-node map the page
+  // already has in scope — so an unresolvable via (rare: node revoked after
+  // the rule was built) silently drops from the chain instead of showing a
+  // bare id the user has no way to recognize.
+  const entryName = node?.name || `#${rule.node_id}`
+  const viaNames = (rule.via_node_ids || []).map(id => node_by_id[id]?.name).filter(Boolean)
+  const nodeChain = viaNames.length ? [entryName, ...viaNames].join(' → ') : entryName
 
   const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
 
@@ -126,7 +133,7 @@ export default function MyRuleDetail() {
             <span className="text-ink-soft font-semibold">名称</span>
             <span className="font-semibold">{rule.name}</span>
             <span className="text-ink-soft font-semibold">节点</span>
-            <span className="font-mono">{node?.name || `#${rule.node_id}`}</span>
+            <span className="font-mono">{nodeChain}</span>
             <span className="text-ink-soft font-semibold">协议</span>
             <span><ProtoBadge proto={rule.proto} /></span>
             <span className="text-ink-soft font-semibold">出口</span>
