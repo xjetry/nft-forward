@@ -65,6 +65,16 @@ export function NodeTypeBadge({ type }) {
   return <Badge color="green">{nodeTypeIcon.single}单点</Badge>
 }
 
+// Bare colored glyph for cramped spots like table cells: the same icons as
+// NodeTypeBadge without the pill, so a rule row can flag single vs composite
+// at a glance without widening the column.
+export function NodeTypeIcon({ type }) {
+  if (!type) return null
+  if (type === 'composite') return <span className="inline-flex text-violet-500 flex-none" title="组合节点">{nodeTypeIcon.composite}</span>
+  if (type === 'self') return <span className="inline-flex text-blue-500 flex-none" title="面板自身">{nodeTypeIcon.self}</span>
+  return <span className="inline-flex flex-none" title="单点节点">{nodeTypeIcon.single}</span>
+}
+
 /* ---------- NodeStackBadge ---------- */
 // 组合节点的入口可达地址来自首跳，出口 IPv6 转发能力来自尾跳（与
 // RegenerateRule 里 exitIsIPv6 校验最后一跳 relay_host_v6 的语义一致）；

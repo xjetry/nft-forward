@@ -18,6 +18,7 @@ type ruleView struct {
 	Entry       string
 	Exit        string
 	EntryNodeID int64
+	EntryMode   string
 	OwnerName   string
 }
 
@@ -26,13 +27,17 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
 	entry := "—"
 	var entryNodeID int64
+	entryMode := ""
+	if len(hops) > 0 {
+		entryMode = hops[0].Mode
+	}
 	if len(hops) > 0 && r.EntryListenPort > 0 {
 		entryNodeID = hops[0].NodeID
 		if n, err := db.GetNode(s.DB, hops[0].NodeID); err == nil && n.RelayHost != "" {
 			entry = net.JoinHostPort(n.RelayHost, strconv.Itoa(r.EntryListenPort))
 		}
 	}
-	return ruleView{Rule: r, Entry: entry, Exit: exit, EntryNodeID: entryNodeID}
+	return ruleView{Rule: r, Entry: entry, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode}
 }
 
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
@@ -45,6 +50,9 @@ type ruleListItem struct {
 	Entry       string `json:"entry"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
+	// EntryMode is the first hop's forwarding mode; for single-node rules this
+	// is the rule's mode and prefills the edit form's kernel/userspace picker.
+	EntryMode string `json:"entry_mode"`
 	// ExitKind is "landing" when the exit host:port matches one of the owner's
 	// admin-assigned landing nodes, else "custom". LandingURI is the original
 	// (direct) proxy URI; RelayURI is that URI with its host:port rewritten to
@@ -71,7 +79,7 @@ type nodeHopView struct {
 
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID}
+	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode}
 }
 
 // classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to

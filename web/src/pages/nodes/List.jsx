@@ -321,6 +321,26 @@ function SortArrow({ col, sort }) {
   )
 }
 
+// 打开弹窗时才拉一次用户列表；授权只对普通用户有意义，管理员天然全量可见。
+function useGrantableUsers(open) {
+  const [users, setUsers] = useState(null)
+  useEffect(() => {
+    if (!open || users) return
+    api.get('/users').then(d => setUsers((d.users || []).filter(u => u.role === 'user'))).catch(() => setUsers([]))
+  }, [open, users])
+  return users || []
+}
+
+function GrantUsersField({ users, value, onChange }) {
+  return (
+    <>
+      <label className="text-[13px] font-semibold text-ink-soft">授权用户 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
+      <Select multiple searchable placeholder="不授权，可稍后在用户详情添加" value={value} onChange={onChange}
+        options={users.map(u => ({ value: u.id, label: u.username }))} />
+    </>
+  )
+}
+
 function AddNodeModal({ open, onClose, onDone }) {
   const [name, setName] = useState('')
   const [secret, setSecret] = useState('')
@@ -328,7 +348,9 @@ function AddNodeModal({ open, onClose, onDone }) {
   const [portEnd, setPortEnd] = useState('20000')
   const [rateMult, setRateMult] = useState('1')
   const [unidirectional, setUnidirectional] = useState(false)
+  const [userIds, setUserIds] = useState([])
   const [loading, setLoading] = useState(false)
+  const users = useGrantableUsers(open)
   const toast = useToast()
   const navigate = useNavigate()
 
@@ -338,9 +360,12 @@ function AddNodeModal({ open, onClose, onDone }) {
     try {
       const portRange = `${portStart || '10001'}-${portEnd || '20000'}`
       const rm = parseFloat(rateMult)
-      const res = await api.post('/nodes', { name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1, unidirectional })
+      const res = await api.post('/nodes', {
+        name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1, unidirectional,
+        user_ids: userIds.length ? userIds.map(Number) : undefined,
+      })
       toast('节点已添加')
-      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1'); setUnidirectional(false)
+      setName(''); setSecret(''); setPortStart('10001'); setPortEnd('20000'); setRateMult('1'); setUnidirectional(false); setUserIds([])
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
@@ -364,6 +389,7 @@ function AddNodeModal({ open, onClose, onDone }) {
             </button>
             <span className="text-xs text-ink-mut">当前：{unidirectional ? '单向' : '双向'}</span>
           </div>
+          <GrantUsersField users={users} value={userIds} onChange={setUserIds} />
         </div>
         <div className="flex gap-2">
           <div className="flex-1">
@@ -412,7 +438,9 @@ function NodeStatus({ node }) {
 function CompositeNodeModal({ open, onClose, nodes, onDone }) {
   const [name, setName] = useState('')
   const [hops, setHops] = useState([{ node_id: '', mode: 'userspace' }])
+  const [userIds, setUserIds] = useState([])
   const [loading, setLoading] = useState(false)
+  const users = useGrantableUsers(open)
   const toast = useToast()
   const navigate = useNavigate()
 
@@ -442,10 +470,12 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
         name,
         node_type: 'composite',
         hops: validHops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
+        user_ids: userIds.length ? userIds.map(Number) : undefined,
       })
       toast('组合节点已创建')
       setName('')
       setHops([{ node_id: '', mode: 'userspace' }])
+      setUserIds([])
       if (res?.node?.id) navigate(`/nodes/${res.node.id}`)
       else onDone()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
@@ -457,6 +487,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
         <div className="grid grid-cols-[140px_1fr] gap-4 items-center">
           <label className="text-[13px] font-semibold text-ink-soft">名称</label>
           <input className="input-field" value={name} onChange={e => setName(e.target.value)} required placeholder="例如 hk-jp-chain" />
+          <GrantUsersField users={users} value={userIds} onChange={setUserIds} />
         </div>
 
         <div>

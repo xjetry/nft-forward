@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner } from './ui'
+import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner, NodeTypeIcon } from './ui'
 import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -80,7 +80,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               onClick={onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
               <td className="font-semibold">{r.name}</td>
-              <td><span className="font-mono text-ink-soft">{node?.name || `#${r.node_id}`}</span></td>
+              <td>
+                <span className="inline-flex items-center gap-1.5 font-mono text-ink-soft">
+                  <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}
+                </span>
+              </td>
               <td className="font-mono text-xs !whitespace-normal">
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5 mb-1">
@@ -142,7 +146,9 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </div>
             </div>
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
-              <span className="font-mono">{node?.name || `#${r.node_id}`}</span>
+              <span className="inline-flex items-center gap-1 font-mono">
+                <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}
+              </span>
               {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
               <span className="text-ink-mut">·</span>
               <span className="font-mono text-ink-mut">{fmtBytes(r.total_bytes || 0)}</span>

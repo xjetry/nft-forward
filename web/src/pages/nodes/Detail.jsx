@@ -36,19 +36,35 @@ export default function NodeDetail() {
   const blurred = useBlur()
   const confirm = useConfirm()
 
+  const applyData = (d) => {
+    setData(d)
+    setName(d.node?.name || '')
+    setRelayHost(d.node?.relay_host || '')
+    setRelayHostV6(d.node?.relay_host_v6 || '')
+    setPortRange(d.node?.port_range || '')
+    setRateMult(String(d.node?.rate_multiplier ?? 1))
+    setUnidirectional(!!d.node?.unidirectional)
+  }
   const load = () => {
     setLoading(true)
-    api.get(`/nodes/${id}`).then(d => {
-      setData(d)
-      setName(d.node?.name || '')
-      setRelayHost(d.node?.relay_host || '')
-      setRelayHostV6(d.node?.relay_host_v6 || '')
-      setPortRange(d.node?.port_range || '')
-      setRateMult(String(d.node?.rate_multiplier ?? 1))
-      setUnidirectional(!!d.node?.unidirectional)
-    }).catch(console.error).finally(() => setLoading(false))
+    api.get(`/nodes/${id}`).then(applyData).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(load, [id])
+
+  // 离线的实体节点每 3 秒静默轮询：安装命令跑完、agent 一连上面板，页面即自动
+  // 切到在线视图，无需手动刷新。上线后 offline 翻转，定时器随 effect 清理停止；
+  // 轮询期间只更新展示数据不动表单，避免覆盖正在编辑的输入。
+  const offline = !!data?.node && data.node.node_type !== 'composite' && data.node.online !== 1
+  useEffect(() => {
+    if (!offline) return
+    const t = setInterval(() => {
+      api.get(`/nodes/${id}`).then(d => {
+        if (d?.node?.online === 1) { applyData(d); toast('节点已上线') }
+        else setData(d)
+      }).catch(() => { /* 网络抖动，等下一轮 */ })
+    }, 3000)
+    return () => clearInterval(t)
+  }, [offline, id])
 
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="节点不存在" /></Layout>
@@ -396,6 +412,7 @@ export default function NodeDetail() {
             <h2 className="m-0 text-[15px] font-bold">已授权用户</h2>
             <span className="text-[12.5px] text-ink-mut">{grantedUsers.length} 人</span>
           </div>
+          <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} onChanged={load} />
           {grantedUsers.length ? (
             <div className="tbl-scroll">
             <table className="tbl">
@@ -411,7 +428,7 @@ export default function NodeDetail() {
                     <td className="text-right">
                       <button onClick={async () => {
                         if (!await confirm({ title: '取消授权', message: `确定取消 ${g.username} 对该节点的授权？`, confirmText: '取消授权', danger: true })) return
-                        try { await api.delete(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); load() }
+                        try { await api.del(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); load() }
                         catch (e) { toast(e.message, 'error') }
                       }} className="text-red-500 text-xs font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0">取消授权</button>
                     </td>
@@ -468,6 +485,56 @@ function HeaderStatus({ node }) {
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
       {text}
     </span>
+  )
+}
+
+/* 多选下拉直接编辑该节点的授权集合：默认选中已授权用户，保存时按 diff
+   新增走 grant（默认转发上限同用户页）、移除走 revoke。移除会让该用户在此
+   节点的规则失去授权依据，所以先确认。 */
+function GrantEditor({ nodeId, grantedUsers, onChanged }) {
+  const [allUsers, setAllUsers] = useState(null)
+  const [sel, setSel] = useState(grantedUsers.map(g => String(g.user_id)))
+  const [saving, setSaving] = useState(false)
+  const toast = useToast()
+  const confirm = useConfirm()
+
+  // 只在授权集合真实变化时重置选择，静默轮询刷新不打断编辑中的下拉。
+  const grantedKey = grantedUsers.map(g => g.user_id).sort((a, b) => a - b).join(',')
+  useEffect(() => { setSel(grantedUsers.map(g => String(g.user_id))) }, [grantedKey])
+  useEffect(() => {
+    api.get('/users').then(d => setAllUsers((d.users || []).filter(u => u.role === 'user'))).catch(() => setAllUsers([]))
+  }, [])
+
+  // 已授权但不在用户列表里的（角色变更等）也要可见，否则无法取消勾选。
+  const byId = new Map((allUsers || []).map(u => [String(u.id), u.username]))
+  for (const g of grantedUsers) if (!byId.has(String(g.user_id))) byId.set(String(g.user_id), g.username)
+  const options = [...byId].map(([value, label]) => ({ value, label }))
+
+  const grantedIds = new Set(grantedUsers.map(g => String(g.user_id)))
+  const added = sel.filter(v => !grantedIds.has(v))
+  const removed = [...grantedIds].filter(v => !sel.includes(v))
+  const dirty = added.length > 0 || removed.length > 0
+
+  const save = async () => {
+    if (removed.length && !(await confirm({
+      title: '取消授权',
+      message: `将取消 ${removed.length} 名用户对该节点的授权，其在此节点的规则会失去授权依据。继续？`,
+      confirmText: '继续', danger: true,
+    }))) return
+    setSaving(true)
+    try {
+      for (const uid of added) await api.post(`/users/${uid}/grants`, { node_id: Number(nodeId) })
+      for (const uid of removed) await api.del(`/users/${uid}/grants/${nodeId}`)
+      toast('授权已更新')
+    } catch (err) { toast(err.message, 'error') } finally { setSaving(false); onChanged() }
+  }
+
+  return (
+    <div className="flex items-center gap-2 mb-3 max-w-xl">
+      <Select multiple searchable className="flex-1" placeholder="选择要授权的用户…"
+        value={sel} onChange={setSel} options={options} />
+      <button onClick={save} disabled={saving || !dirty} className="btn-primary flex-none px-5">保存</button>
+    </div>
   )
 }
 

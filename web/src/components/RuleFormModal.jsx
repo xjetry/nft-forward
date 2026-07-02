@@ -3,7 +3,7 @@ import { Modal, Select, ProbeButton, nodeStack } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel' }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -107,6 +107,21 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
           <label className="fl">协议</label>
           <Select value={form.proto} onChange={v => set('proto', v)} style={{ maxWidth: 200 }}
             options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]} />
+          {/* 组合节点的模式在节点配置里按跳设置，这里只对单点规则开放 */}
+          {(() => {
+            const selNode = nodes.find(n => String(n.id) === String(form.node_id))
+            if (!selNode || selNode.node_type === 'composite') return null
+            return (
+              <>
+                <label className="fl">转发模式</label>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <Select value={form.mode || 'kernel'} onChange={v => set('mode', v)} style={{ width: 160 }}
+                    options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                  <span className="text-xs text-ink-mut">内核态支持 TCP/UDP；用户态仅 TCP，UDP 自动走内核态</span>
+                </div>
+              </>
+            )
+          })()}
           <label className="fl">入口端口 <span className="text-ink-mut font-normal text-xs">(可选)</span></label>
           <input className="input-field font-mono" type="number" min="1" max="65535" value={form.entry_port} onChange={e => set('entry_port', e.target.value)}
             placeholder="留空自动分配" style={{ maxWidth: 200 }} />
@@ -182,6 +197,7 @@ export function ruleToForm(rule) {
     exit_kind: rule.exit_kind === 'landing' ? 'landing' : 'custom',
     entry_port: '',
     comment: rule.comment || '',
+    mode: rule.entry_mode || 'kernel',
   }
 }
 

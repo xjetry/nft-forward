@@ -49,6 +49,7 @@ export default function MyRuleDetail() {
   const saveEdit = async (form) => {
     await api.put(`/my/rules/${rule.id}`, {
       node_id: Number(form.node_id), name: form.name, proto: form.proto,
+      mode: form.mode || undefined,
       exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
       comment: form.comment || undefined,
     })

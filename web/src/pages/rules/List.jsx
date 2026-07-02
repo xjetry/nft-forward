@@ -167,6 +167,7 @@ export default function RulesList() {
         onSubmit={async (form) => {
           const res = await api.post('/rules', {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
+            mode: form.mode || undefined,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
           })
@@ -180,6 +181,7 @@ export default function RulesList() {
         onSubmit={async (form) => {
           await api.put(`/rules/${editRule.id}`, {
             node_id: Number(form.node_id), name: form.name, proto: form.proto,
+            mode: form.mode || undefined,
             exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
             comment: form.comment || undefined,
           })

@@ -293,6 +293,24 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// defaultGrantMaxForwards is the per-node forward cap applied when a grant is
+// created without an explicit value.
+const defaultGrantMaxForwards = 10
+
+// grantInitialUsers grants the given users access to a freshly created node
+// with the same defaults the per-user grant endpoint applies (max_forwards
+// fallback, quota inherited from the global user quota). Grant failures do
+// not fail node creation; the grants can be re-applied from the user pages.
+func (s *Server) grantInitialUsers(actorID, nodeID int64, userIDs []int64) {
+	for _, uid := range userIDs {
+		if err := db.GrantNode(s.DB, uid, nodeID, defaultGrantMaxForwards, 0); err != nil {
+			log.Printf("grant user %d on new node %d: %v", uid, nodeID, err)
+			continue
+		}
+		db.WriteAudit(s.DB, actorID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
+	}
+}
+
 func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
@@ -302,6 +320,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		PortRange      string  `json:"port_range"`
 		RateMultiplier float64 `json:"rate_multiplier"`
 		Unidirectional bool    `json:"unidirectional"`
+		UserIDs        []int64 `json:"user_ids"`
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
@@ -352,6 +371,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		}
 		n, _ = db.GetNode(s.DB, n.ID)
 		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
+		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
 		jsonOK(w, map[string]any{"node": n})
 		return
 	}
@@ -382,6 +402,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		n, _ = db.GetNode(s.DB, n.ID)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
+	s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
 	_ = s.apiDispatch(n.ID)
 	jsonOK(w, map[string]any{"node": n})
 }
@@ -1200,7 +1221,10 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		Hops      []struct {
+		// Mode is the forwarding mode for a single-node rule; composite chains
+		// carry per-hop modes in the node config and ignore it.
+		Mode string `json:"mode"`
+		Hops []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
@@ -1230,26 +1254,12 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
 		}
 	} else if body.NodeID > 0 {
-		// Check if node is composite => expand node_hops
-		node, err := db.GetNode(s.DB, body.NodeID)
-		if err != nil {
-			jsonErr(w, http.StatusNotFound, "节点不存在")
+		derived, derr := s.hopsForNode(body.NodeID, body.Mode)
+		if derr != nil {
+			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
 		}
-		if node.NodeType == "composite" {
-			nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
-			if len(nodeHops) == 0 {
-				jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
-				return
-			}
-			hops = make([]db.HopInput, len(nodeHops))
-			for i, nh := range nodeHops {
-				hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
-			}
-		} else {
-			// Single-node rule: 1 hop
-			hops = []db.HopInput{{NodeID: body.NodeID}}
-		}
+		hops = derived
 	} else {
 		jsonErr(w, http.StatusBadRequest, "需指定 node_id 或 hops")
 		return
@@ -1354,10 +1364,11 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 }
 
 // hopsForNode expands a logical entry node into the chain of hops a rule runs
-// over: a single node yields one hop on itself; a composite yields its ordered
-// sub-node hops (carrying each hop's forwarding mode). Used when (re)pointing a
-// rule at a node so create and edit derive the chain the same way.
-func (s *Server) hopsForNode(nodeID int64) ([]db.HopInput, error) {
+// over: a single node yields one hop on itself carrying singleMode as its
+// forwarding mode; a composite yields its ordered sub-node hops (each hop's
+// mode comes from the node config, so singleMode is ignored). Used when
+// (re)pointing a rule at a node so create and edit derive the chain the same way.
+func (s *Server) hopsForNode(nodeID int64, singleMode string) ([]db.HopInput, error) {
 	node, err := db.GetNode(s.DB, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("节点不存在")
@@ -1373,7 +1384,7 @@ func (s *Server) hopsForNode(nodeID int64) ([]db.HopInput, error) {
 		}
 		return hops, nil
 	}
-	return []db.HopInput{{NodeID: nodeID}}, nil
+	return []db.HopInput{{NodeID: nodeID, Mode: singleMode}}, nil
 }
 
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
@@ -1395,7 +1406,11 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
-		Hops      []struct {
+		// Mode is the forwarding mode for a single-node rule; empty keeps the
+		// current mode so clients that don't send it can't silently reset a
+		// userspace rule back to kernel.
+		Mode string `json:"mode"`
+		Hops []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
@@ -1425,12 +1440,17 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	var hops []db.HopInput
 	switch {
 	case body.NodeID > 0:
-		derived, derr := s.hopsForNode(body.NodeID)
+		derived, derr := s.hopsForNode(body.NodeID, body.Mode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
 		}
 		hops = derived
+		if body.Mode == "" && body.NodeID == rl.NodeID && len(hops) == 1 {
+			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) == 1 {
+				hops[0].Mode = existing[0].Mode
+			}
+		}
 		rl.NodeID = body.NodeID
 	case len(body.Hops) == 0:
 		existing, err := db.ListRuleHops(s.DB, id)
@@ -1671,7 +1691,7 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.MaxForwards <= 0 {
-		body.MaxForwards = 10
+		body.MaxForwards = defaultGrantMaxForwards
 	}
 	ids := body.NodeIDs
 	if len(ids) == 0 && body.NodeID != 0 {
@@ -2168,6 +2188,9 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
+		// Mode is the forwarding mode for a single-node rule; composite chains
+		// carry per-hop modes in the node config and ignore it.
+		Mode string `json:"mode"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2189,13 +2212,6 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check node grant
-	node, err := db.GetNode(s.DB, body.NodeID)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-
 	// The grant on the selected node both authorizes the request and carries
 	// the per-node forward cap. A composite node is the unit of authorization:
 	// granting it authorizes the whole chain, so the check is on the composite
@@ -2206,19 +2222,10 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var hops []db.HopInput
-	if node.NodeType == "composite" {
-		nodeHops, _ := db.ListNodeHops(s.DB, body.NodeID)
-		if len(nodeHops) == 0 {
-			jsonErr(w, http.StatusBadRequest, "组合节点无子节点")
-			return
-		}
-		hops = make([]db.HopInput, len(nodeHops))
-		for i, nh := range nodeHops {
-			hops[i] = db.HopInput{NodeID: nh.HopNodeID, Mode: nh.Mode}
-		}
-	} else {
-		hops = []db.HopInput{{NodeID: body.NodeID}}
+	hops, derr := s.hopsForNode(body.NodeID, body.Mode)
+	if derr != nil {
+		jsonErr(w, http.StatusBadRequest, derr.Error())
+		return
 	}
 
 	if body.EntryPort > 0 {
@@ -2311,6 +2318,10 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Exit      string `json:"exit"`
 		EntryPort int    `json:"entry_port"`
 		Comment   string `json:"comment"`
+		// Mode is the forwarding mode for a single-node rule; empty keeps the
+		// current mode so clients that don't send it can't silently reset a
+		// userspace rule back to kernel.
+		Mode string `json:"mode"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2339,10 +2350,15 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "无权使用该节点")
 		return
 	}
-	hops, derr := s.hopsForNode(nodeID)
+	hops, derr := s.hopsForNode(nodeID, body.Mode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
+	}
+	if body.Mode == "" && nodeID == rl.NodeID && len(hops) == 1 {
+		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) == 1 {
+			hops[0].Mode = existing[0].Mode
+		}
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
 		hops[0].DesiredPort = body.EntryPort
