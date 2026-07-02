@@ -20,17 +20,21 @@ const maxConnsPerPort = 1024
 // listener is one userspace TCP forward: a net.Listener plus the hot-updatable
 // dial target and rate limiter shared by all of its connections.
 type listener struct {
-	port     int
-	ln       net.Listener
-	tgt      atomic.Pointer[target]
-	lim      atomic.Pointer[rate.Limiter]
+	port int
+	ln   net.Listener
+	tgt  atomic.Pointer[target]
+	lim  atomic.Pointer[rate.Limiter]
+	// limDown mirrors lim for the upstream→client direction. Group-shaped
+	// rules point both at the same shared limiter (the cap is the combined
+	// two-way total); legacy per-rule caps leave it nil (download unshaped).
+	limDown   atomic.Pointer[rate.Limiter]
 	bytesUp   atomic.Int64
 	bytesDown atomic.Int64
-	pool     atomic.Pointer[connPool]
-	poolSize int
+	pool      atomic.Pointer[connPool]
+	poolSize  int
 
 	sem    chan struct{} // counting semaphore; cap == maxConnsPerPort
-	conns  sync.Map     // net.Conn -> struct{}; only so close() can tear them down
+	conns  sync.Map      // net.Conn -> struct{}; only so close() can tear them down
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -45,7 +49,6 @@ func openListener(r nft.Rule, poolSize int) (*listener, error) {
 	addr := targetAddr(r)
 	l := &listener{port: r.SrcPort, ln: ln, ctx: ctx, cancel: cancel, sem: make(chan struct{}, maxConnsPerPort), poolSize: poolSize}
 	l.tgt.Store(&target{addr: addr})
-	l.lim.Store(makeLimiter(r.BandwidthMbps))
 	if poolSize > 0 {
 		l.pool.Store(newConnPool(addr, poolSize))
 	}
@@ -129,9 +132,9 @@ func (l *listener) handle(client net.Conn) {
 		halfCloseWrite(upstream)
 		done <- struct{}{}
 	}()
-	// Return path (upstream→client): counted but unshaped.
+	// Return path (upstream→client): counted; shaped only under a group bucket.
 	go func() {
-		relayCopy(l.ctx, client, upstream, nil, &l.bytesDown)
+		relayCopy(l.ctx, client, upstream, &l.limDown, &l.bytesDown)
 		halfCloseWrite(client)
 		done <- struct{}{}
 	}()
@@ -170,11 +173,15 @@ func (l *listener) close() {
 type userspaceBackend struct {
 	mu        sync.Mutex
 	listeners map[int]*listener
-	poolSize  int
+	// groups holds one shared limiter per shape group, stable across
+	// Reconcile calls: rate changes SetLimit the existing limiter instead of
+	// replacing it, so bucket state (accumulated debt) survives a re-apply.
+	groups   map[int64]*rate.Limiter
+	poolSize int
 }
 
 func newUserspaceBackend() *userspaceBackend {
-	return &userspaceBackend{listeners: map[int]*listener{}, poolSize: envPoolSize()}
+	return &userspaceBackend{listeners: map[int]*listener{}, groups: map[int64]*rate.Limiter{}, poolSize: envPoolSize()}
 }
 
 // Reconcile makes the running listener set match rules. New listeners open
@@ -188,6 +195,27 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 	desired := make(map[int]nft.Rule, len(rules))
 	for _, r := range rules {
 		desired[r.SrcPort] = r
+	}
+
+	desiredGroups := map[int64]int{}
+	for _, r := range rules {
+		if r.ShapeGroup > 0 && r.RateMBytes > 0 {
+			desiredGroups[r.ShapeGroup] = r.RateMBytes
+		}
+	}
+	for sg, mb := range desiredGroups {
+		bytesPerSec := float64(mb) * 1048576
+		if lim, ok := b.groups[sg]; ok {
+			lim.SetLimit(rate.Limit(bytesPerSec))
+			lim.SetBurst(groupBurst(bytesPerSec))
+		} else {
+			b.groups[sg] = rate.NewLimiter(rate.Limit(bytesPerSec), groupBurst(bytesPerSec))
+		}
+	}
+	for sg := range b.groups {
+		if _, ok := desiredGroups[sg]; !ok {
+			delete(b.groups, sg)
+		}
 	}
 
 	var opened []*listener
@@ -212,7 +240,7 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 		newAddr := targetAddr(r)
 		oldTgt := l.tgt.Load()
 		l.tgt.Store(&target{addr: newAddr})
-		l.lim.Store(makeLimiter(r.BandwidthMbps))
+		b.setLimits(l, r)
 		if oldTgt != nil && oldTgt.addr != newAddr && b.poolSize > 0 {
 			if p := l.pool.Load(); p != nil {
 				p.Close()
@@ -228,6 +256,21 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 		}
 	}
 	return nil
+}
+
+// setLimits points a listener's limiters at the right bucket: group-shaped
+// rules share the group's bidirectional limiter; legacy per-rule caps (from
+// pre-group panels) keep their historical semantics — a private bucket, upload
+// only.
+func (b *userspaceBackend) setLimits(l *listener, r nft.Rule) {
+	if r.ShapeGroup > 0 && r.RateMBytes > 0 {
+		g := b.groups[r.ShapeGroup]
+		l.lim.Store(g)
+		l.limDown.Store(g)
+		return
+	}
+	l.lim.Store(makeLimiter(r.BandwidthMbps))
+	l.limDown.Store(nil)
 }
 
 func (b *userspaceBackend) Counters() []Counter {
@@ -247,6 +290,7 @@ func (b *userspaceBackend) Close() {
 		l.close()
 		delete(b.listeners, port)
 	}
+	b.groups = map[int64]*rate.Limiter{}
 }
 
 func (b *userspaceBackend) SetPoolSize(n int) {

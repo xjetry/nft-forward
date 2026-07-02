@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -461,5 +462,108 @@ func TestUserspace_RateLimitPaces(t *testing.T) {
 	}
 	if elapsed > 15*time.Second {
 		t.Fatalf("transfer absurdly slow: %v", elapsed)
+	}
+}
+
+// echoOnce asserts the relay still forwards by writing a small payload and
+// reading the echo back on the same connection.
+func echoOnce(conn net.Conn) error {
+	msg := []byte("ping")
+	if _, err := conn.Write(msg); err != nil {
+		return err
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return err
+	}
+	if !bytes.Equal(buf, msg) {
+		return fmt.Errorf("echo mismatch: %q", buf)
+	}
+	return nil
+}
+
+// Two listeners in one shape group share a single bidirectional bucket: the
+// echoed traffic of both ports combined is paced by one 1 MB/s limiter. With
+// independent buckets the transfer would finish several times faster.
+func TestUserspace_GroupSharedBucketPacesAggregate(t *testing.T) {
+	upstreamAddr, stop := echoServer(t)
+	defer stop()
+	host, portStr, _ := net.SplitHostPort(upstreamAddr)
+	upPort, _ := strconv.Atoi(portStr)
+
+	p1, p2 := freePort(t), freePort(t)
+	be := newUserspaceBackend()
+	defer be.Close()
+
+	rules := []nft.Rule{
+		{ID: "g1", Proto: "tcp", SrcPort: p1, DestIP: host, DestPort: upPort, Mode: nft.ModeUserspace, ShapeGroup: 9, RateMBytes: 1},
+		{ID: "g2", Proto: "tcp", SrcPort: p2, DestIP: host, DestPort: upPort, Mode: nft.ModeUserspace, ShapeGroup: 9, RateMBytes: 1},
+	}
+	if err := be.Reconcile(rules); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// 1 MB payload per port; echo doubles it: 4 MB total through a 1 MB/s
+	// bucket with a 1 MB burst → ≥ ~3s. Assert a loose lower bound.
+	const per = 1 << 20
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, p := range []int{p1, p2} {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+			if err != nil {
+				t.Errorf("dial %d: %v", port, err)
+				return
+			}
+			defer conn.Close()
+			go conn.Write(make([]byte, per))
+			if _, err := io.ReadFull(conn, make([]byte, per)); err != nil {
+				t.Errorf("read back %d: %v", port, err)
+			}
+		}(p)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	if elapsed < 2*time.Second {
+		t.Fatalf("aggregate transfer too fast for a shared 1 MB/s bucket: %v", elapsed)
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("transfer absurdly slow: %v", elapsed)
+	}
+}
+
+// A rate change hot-updates the shared bucket without restarting listeners:
+// an established connection keeps working across Reconcile.
+func TestUserspace_GroupRateHotUpdate(t *testing.T) {
+	upstreamAddr, stop := echoServer(t)
+	defer stop()
+	host, portStr, _ := net.SplitHostPort(upstreamAddr)
+	upPort, _ := strconv.Atoi(portStr)
+
+	listen := freePort(t)
+	be := newUserspaceBackend()
+	defer be.Close()
+
+	mk := func(mb int) []nft.Rule {
+		return []nft.Rule{{ID: "g", Proto: "tcp", SrcPort: listen, DestIP: host, DestPort: upPort, Mode: nft.ModeUserspace, ShapeGroup: 3, RateMBytes: mb}}
+	}
+	if err := be.Reconcile(mk(1)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", listen), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := echoOnce(conn); err != nil {
+		t.Fatalf("echo before update: %v", err)
+	}
+	if err := be.Reconcile(mk(50)); err != nil {
+		t.Fatalf("reconcile update: %v", err)
+	}
+	if err := echoOnce(conn); err != nil {
+		t.Fatalf("echo after update (listener must not restart): %v", err)
 	}
 }

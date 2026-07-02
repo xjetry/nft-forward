@@ -75,6 +75,16 @@ func makeLimiter(mbps int) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(bytesPerSec), burst)
 }
 
+// groupBurst sizes a shared bucket's burst: one second of quota, floored at
+// the copy buffer so a single WaitN can never exceed the burst.
+func groupBurst(bytesPerSec float64) int {
+	burst := int(bytesPerSec)
+	if burst < relayBufSize {
+		burst = relayBufSize
+	}
+	return burst
+}
+
 // meteredReader rate-limits and/or counts each Read. limPtr may hold nil
 // (unlimited); counter may be nil (don't count this direction).
 type meteredReader struct {
