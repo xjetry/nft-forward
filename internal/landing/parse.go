@@ -282,6 +282,67 @@ func rewriteSS(uri string, newHost string, newPort int) (string, error) {
 	return "ss://" + base64.StdEncoding.EncodeToString([]byte(payload)) + query + frag, nil
 }
 
+// RewriteName returns uri with its display name replaced, leaving the
+// connection endpoint and credentials untouched — the mirror of
+// RewriteEndpoint. The name lives in the URL fragment for authority-style
+// URIs and ss, in the "ps" field for vmess, and in the "Name =" prefix for
+// snell lines.
+func RewriteName(uri, name string) (string, error) {
+	idx := strings.Index(uri, "://")
+	if idx <= 0 {
+		return renameSnell(uri, name)
+	}
+	switch strings.ToLower(uri[:idx]) {
+	case "vmess":
+		return renameVMess(uri, name)
+	default:
+		return renameFragment(uri, name)
+	}
+}
+
+// renameFragment swaps (or appends) the URL fragment. Percent-encoding via
+// EscapedFragment keeps spaces and non-ASCII round-trippable through both the
+// Go parser and the browser's decodeURIComponent.
+func renameFragment(uri, name string) (string, error) {
+	if h := strings.Index(uri, "#"); h >= 0 {
+		uri = uri[:h]
+	}
+	u := url.URL{Fragment: name}
+	return uri + "#" + u.EscapedFragment(), nil
+}
+
+func renameVMess(uri, name string) (string, error) {
+	dec, ok := b64Decode(uri[len("vmess://"):])
+	if !ok {
+		return "", errInvalid
+	}
+	var m map[string]any
+	if err := json.Unmarshal(dec, &m); err != nil {
+		return "", errInvalid
+	}
+	m["ps"] = name
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return "vmess://" + base64.StdEncoding.EncodeToString(b), nil
+}
+
+// renameSnell replaces the name before the first '=' — later '=' signs belong
+// to key=value params (psk, version) and must stay put.
+func renameSnell(line, name string) (string, error) {
+	eqIdx := strings.Index(line, "=")
+	if eqIdx < 0 {
+		return "", errInvalid
+	}
+	rest := strings.TrimSpace(line[eqIdx+1:])
+	parts := strings.SplitN(rest, ",", -1)
+	if len(parts) < 3 || strings.TrimSpace(strings.ToLower(parts[0])) != "snell" {
+		return "", errInvalid
+	}
+	return name + " =" + line[eqIdx+1:], nil
+}
+
 // DecodeSubscription turns a subscription response body into the list of proxy
 // URI lines it carries, accepting either a base64-encoded blob or plain text.
 func DecodeSubscription(body []byte) []string {

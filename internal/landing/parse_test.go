@@ -277,3 +277,41 @@ func TestDecodeSubscription(t *testing.T) {
 		}
 	})
 }
+
+// RewriteName must round-trip through the parser: the rewritten URI parses
+// back to the new name with the endpoint untouched, for every protocol shape
+// the parser accepts.
+func TestRewriteNameRoundTrip(t *testing.T) {
+	uris := []string{
+		"vless://u@1.2.3.4:443?type=tcp#Old",
+		"trojan://u@5.6.7.8:8443#Old",
+		"vless://u@1.2.3.4:443",
+		"vmess://" + base64.StdEncoding.EncodeToString([]byte(`{"add":"9.9.9.9","port":"443","ps":"Old"}`)),
+		"ss://YWVzLTEyOC1nY206cGFzcw==@1.2.3.4:8388#Old",
+		"Old = snell, 1.2.3.4, 443, psk = xxx, version = 5",
+	}
+	const newName = "香港 01"
+	for _, uri := range uris {
+		got, err := RewriteName(uri, newName)
+		if err != nil {
+			t.Fatalf("%s: %v", uri, err)
+		}
+		nodes := ParseURIs([]string{got})
+		if len(nodes) != 1 || nodes[0].Name != newName {
+			t.Fatalf("%s -> %s: parsed %+v", uri, got, nodes)
+		}
+		orig := ParseURIs([]string{uri})[0]
+		if nodes[0].Host != orig.Host || nodes[0].Port != orig.Port || nodes[0].Protocol != orig.Protocol {
+			t.Fatalf("%s: endpoint changed, %+v vs %+v", uri, nodes[0], orig)
+		}
+	}
+}
+
+func TestRewriteNameMalformed(t *testing.T) {
+	if _, err := RewriteName("not a proxy uri", "x"); err == nil {
+		t.Fatal("malformed uri must error")
+	}
+	if _, err := RewriteName("vmess://!!!", "x"); err == nil {
+		t.Fatal("undecodable vmess must error")
+	}
+}
