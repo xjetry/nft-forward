@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -40,6 +41,19 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// jsonRegenerateErr reports a RegenerateRule error over HTTP. A duplicate
+// physical node in the resolved chain is a conflict between the entry/via
+// selections the caller picked, not a malformed request, so it maps to 409;
+// every other RegenerateRule failure (bad relay host, exhausted ports, ...)
+// stays 400.
+func jsonRegenerateErr(w http.ResponseWriter, err error) {
+	code := http.StatusBadRequest
+	if errors.Is(err, db.ErrDuplicateChainNode) {
+		code = http.StatusConflict
+	}
+	jsonErr(w, code, err.Error())
 }
 
 // ensureNonNilSlices replaces nil slices with empty slices so JSON
@@ -1475,7 +1489,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -1747,7 +1761,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2584,7 +2598,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2750,7 +2764,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {

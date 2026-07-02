@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -537,6 +538,13 @@ func FillUserRuleCounts(d DBTX, users []*User) error {
 	return nil
 }
 
+// ErrDuplicateChainNode is returned by RegenerateRule when the resolved chain
+// visits the same physical node twice (e.g. a composite entry and a via
+// sharing a machine). It's a configuration conflict between the entry and
+// via selections, not a malformed request, so callers surfacing it over HTTP
+// should map it to 409 rather than 400.
+var ErrDuplicateChainNode = errors.New("同一节点不能在链路中重复")
+
 // RegenerateRule rewrites rule r's hops for the given ordered hops and returns
 // the copyable entry endpoint, the secondary v6 endpoint (non-empty only for
 // entry_family "both"), plus the set of nodes whose kernel state must be
@@ -566,7 +574,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	seen := map[int64]bool{}
 	for i, hop := range hops {
 		if seen[hop.NodeID] {
-			return "", "", nil, fmt.Errorf("同一节点不能在链路中重复")
+			return "", "", nil, ErrDuplicateChainNode
 		}
 		seen[hop.NodeID] = true
 

@@ -110,6 +110,28 @@ func TestViaChainValidation(t *testing.T) {
 	}
 }
 
+// 组合入口的子节点与 via 引用同一物理节点时，链路会展开出重复的物理跳；
+// 这是配置冲突而非请求格式错误，必须是 409。
+func TestViaChainDuplicatePhysicalNodeConflict(t *testing.T) {
+	d := openDB(t)
+	x, _ := db.CreateNode(d, "x", "", "")
+	y, _ := db.CreateNode(d, "y", "", "")
+	_ = db.UpdateNodeRelayHost(d, x.ID, "1.1.1.1")
+	_ = db.UpdateNodeRelayHost(d, y.ID, "2.2.2.2")
+	entry := makeComposite(t, d, "entry-comp", x.ID, y.ID)
+	bindVia(t, d, entry.ID, x.ID, "userspace")
+
+	uid, cookie := loginAsUser(t, d, 10)
+	_ = db.GrantNode(d, uid, entry.ID, 5, 0)
+	_ = db.GrantNode(d, uid, x.ID, 5, 0)
+
+	s, _ := New(d)
+	rec := createMyRuleVia(t, s, cookie, entry.ID, []int64{x.ID}, "dup-node")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // 编辑防降级：不带 via_node_ids 的编辑保留原路径。
 func TestEditWithoutViaFieldKeepsPath(t *testing.T) {
 	d := openDB(t)
