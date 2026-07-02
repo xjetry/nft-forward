@@ -141,6 +141,7 @@ export function Layout({ children }) {
                 </NavGroup>
                 <NavGroup label="转发">
                   <SideLink to="/my/rules" icon={<IconForwards />}>我的规则</SideLink>
+                  {(hasLocalProxies(user.username) || user.has_landing_source) && <SideLink to="/my/landing" icon={<IconProxy />}>落地节点</SideLink>}
                   {(hasLocalProxies(user.username) || user.has_landing_source) && <SideLink to="/proxies" icon={<IconProxy />}>我的代理</SideLink>}
                 </NavGroup>
               </>
