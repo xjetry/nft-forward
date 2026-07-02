@@ -14,7 +14,8 @@ import (
 
 // landingNodesFor resolves a user's admin-assigned landing nodes by merging the
 // manually pasted URIs with the nodes parsed from the subscription URL (if any).
-// Manual URIs come first so they win on a host:port collision in landingIndex.
+// Manual URIs come first so they win on a host:port collision downstream
+// (e.g. in dedupLandingNodes).
 // The user's own URIs are deliberately not handled here — they live only in the
 // browser (localStorage) and never reach the server, so the user's node info is
 // not exposed. force bypasses the subscription cache.
@@ -105,19 +106,6 @@ func (s *Server) redispatchUserExit(userID int64, host string, port int) {
 			log.Printf("landing: re-dispatch node %d for exit %s:%d: %v", n, host, port, err)
 		}
 	}
-}
-
-// landingIndex keys landing nodes by "host:port" for exit classification. The
-// first node for a key wins, so manual URIs take precedence over subscription.
-func landingIndex(nodes []landing.Node) map[string]landing.Node {
-	m := make(map[string]landing.Node, len(nodes))
-	for _, n := range nodes {
-		key := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
-		if _, ok := m[key]; !ok {
-			m[key] = n
-		}
-	}
-	return m
 }
 
 // landingIndexFromDB builds the exit-classification index from the user's

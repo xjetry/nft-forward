@@ -8,10 +8,10 @@ import (
 )
 
 func TestClassifyExit(t *testing.T) {
-	idx := landingIndex([]landing.Node{
-		{Name: "HK-01", Protocol: "vless", Host: "1.2.3.4", Port: 443,
+	idx := map[string]landing.Node{
+		"1.2.3.4:443": {Name: "HK-01", Protocol: "vless", Host: "1.2.3.4", Port: 443,
 			URI: "vless://uuid@1.2.3.4:443?security=reality&sni=a.com#HK-01"},
-	})
+	}
 
 	t.Run("landing match yields relay uri with entry endpoint", func(t *testing.T) {
 		it := ruleListItem{Rule: &db.Rule{ExitHost: "1.2.3.4", ExitPort: 443},
