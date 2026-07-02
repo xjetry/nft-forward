@@ -105,6 +105,21 @@ func New(cfg Config) (*Daemon, error) {
 	}, nil
 }
 
+// downgradePanelRule turns a panel-pushed rule into a standalone tui rule:
+// fresh local id, panel metadata cleared. Group shaping is dropped with it —
+// the limit is priced by a panel-side grant that no longer governs this
+// daemon — while the self-contained legacy per-rule cap is kept.
+func downgradePanelRule(r nft.Rule) nft.Rule {
+	r.ID = nft.NewRuleID()
+	r.RuleID = 0
+	r.RuleName = ""
+	r.OwnerName = ""
+	r.HopCount = 0
+	r.ShapeGroup = 0
+	r.RateMBytes = 0
+	return r
+}
+
 // Bootstrap loads persisted state and re-applies it so the kernel ruleset
 // reflects the last known good configuration immediately on daemon startup.
 // Must be called before Run.
@@ -138,12 +153,7 @@ func (d *Daemon) Bootstrap() error {
 	if d.connectURL == "" && len(owners["panel"]) > 0 {
 		downgraded := make([]nft.Rule, len(owners["panel"]))
 		for i, r := range owners["panel"] {
-			downgraded[i] = r
-			downgraded[i].ID = nft.NewRuleID()
-			downgraded[i].RuleID = 0
-			downgraded[i].RuleName = ""
-			downgraded[i].OwnerName = ""
-			downgraded[i].HopCount = 0
+			downgraded[i] = downgradePanelRule(r)
 		}
 		owners["tui"] = append(owners["tui"], downgraded...)
 		delete(owners, "panel")
