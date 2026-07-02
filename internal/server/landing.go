@@ -120,6 +120,25 @@ func landingIndex(nodes []landing.Node) map[string]landing.Node {
 	return m
 }
 
+// landingIndexFromDB builds the exit-classification index from the user's
+// materialized landing set — the same table that drives metering and push
+// exclusion, so the badge can never disagree with billing. No subscription
+// fetch happens on this path.
+func (s *Server) landingIndexFromDB(userID int64) map[string]landing.Node {
+	exits, err := db.PresentLandingExitsForUser(s.DB, userID)
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]landing.Node, len(exits))
+	for _, e := range exits {
+		key := net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
+		if _, ok := m[key]; !ok {
+			m[key] = landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI}
+		}
+	}
+	return m
+}
+
 // hasDynamicSource reports whether the user has a subscription URL (a refresh
 // button only makes sense then; a manual-only source is static).
 func hasDynamicSource(u *db.User) bool { return strings.TrimSpace(u.LandingSubURL) != "" }

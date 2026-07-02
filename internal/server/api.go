@@ -1209,18 +1209,16 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		byID[u.ID] = u
 		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
 	}
-	// Per-owner landing index, resolved once per owner (subscriptions are cached
-	// in s.Landing). The admin list only needs the kind badge, so withURI=false
-	// — no relay URI is computed here.
+	// Per-owner landing index, built once per owner from the materialized landing
+	// set — the same table that drives metering, so the badge matches billing.
+	// The admin list only needs the kind badge, so withURI=false — no relay URI
+	// is computed here.
 	idxByOwner := map[int64]map[string]landing.Node{}
 	ownerIndex := func(ownerID int64) map[string]landing.Node {
 		if idx, ok := idxByOwner[ownerID]; ok {
 			return idx
 		}
-		var idx map[string]landing.Node
-		if u := byID[ownerID]; u != nil {
-			idx = landingIndex(s.landingNodesFor(u, false))
-		}
+		idx := s.landingIndexFromDB(ownerID)
 		idxByOwner[ownerID] = idx
 		return idx
 	}
@@ -1384,7 +1382,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	if rl.OwnerID.Valid {
 		if u, e := db.GetUserByID(s.DB, rl.OwnerID.Int64); e == nil {
 			ownerName = u.Username
-			idx = landingIndex(s.landingNodesFor(u, false))
+			idx = s.landingIndexFromDB(rl.OwnerID.Int64)
 			if u.BillingRate > 0 {
 				billingRate = u.BillingRate
 			}
@@ -2149,7 +2147,7 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	db.FillRuleTraffic(s.DB, rules)
-	idx := landingIndex(s.landingNodesFor(u, false))
+	idx := s.landingIndexFromDB(u.ID)
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
 	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	// A user is granted the composite itself, not its hop children, so the
@@ -2218,7 +2216,7 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
-	idx := landingIndex(s.landingNodesFor(u, false))
+	idx := s.landingIndexFromDB(u.ID)
 	item := s.buildRuleListItem(rl, "")
 	item.classifyExit(idx, true)
 	if n := grantedByID[rl.NodeID]; n != nil {

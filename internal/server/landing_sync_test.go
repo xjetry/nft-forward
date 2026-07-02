@@ -127,6 +127,29 @@ func TestMyLandingNodesCarriesLedger(t *testing.T) {
 	}
 }
 
+func TestLandingIndexFromDB(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 10)
+	db.SyncUserLandingExits(d, uid, []db.LandingExitInput{
+		{Host: "1.2.3.4", Port: 443, Name: "HK", Protocol: "vless", URI: "vless://u@1.2.3.4:443#HK"},
+	}, "", "")
+	// absent rows must not classify
+	db.SyncUserLandingExits(d, uid, nil, "", "")
+	db.SyncUserLandingExits(d, uid, []db.LandingExitInput{
+		{Host: "5.6.7.8", Port: 8443, Name: "TW", Protocol: "trojan", URI: "trojan://u@5.6.7.8:8443#TW"},
+	}, "", "")
+	s, _ := New(d)
+
+	idx := s.landingIndexFromDB(uid)
+	if _, ok := idx["1.2.3.4:443"]; ok {
+		t.Fatal("absent exit must not be in the index")
+	}
+	n, ok := idx["5.6.7.8:8443"]
+	if !ok || n.Name != "TW" || n.URI == "" {
+		t.Fatalf("present exit missing or incomplete: %+v", n)
+	}
+}
+
 func TestMyLandingNodesStaleFallback(t *testing.T) {
 	d := openDB(t)
 	uid, cookie := loginAsUser(t, d, 10)
