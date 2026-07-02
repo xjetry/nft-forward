@@ -48,6 +48,11 @@ export default function MyLandingNodes() {
 
   const refresh = () => { load(true); toast('已刷新订阅') }
 
+  /* Quotas are enforced per host:port regardless of which URI won the merge,
+     so the ledger lookup must not depend on the row's source: a user pasting
+     their own copy of an admin-assigned node keeps seeing its quota. */
+  const ledger = new Map((serverNodes || []).map(n => [`${n.host}:${n.port}`, n]))
+
   const allNodes = mergeLanding(localNodes, serverNodes)
   const nodes = allNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING))
 
@@ -85,12 +90,16 @@ export default function MyLandingNodes() {
                   <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
                   <td className="font-mono text-xs">
-                    {n.source === 'local' ? '—' : (
-                      <>
-                        {fmtTrafficGB(n.used_bytes, n.quota_bytes)}
-                        {n.exceeded && <Badge color="red">已超额</Badge>}
-                      </>
-                    )}
+                    {(() => {
+                      const ex = ledger.get(`${n.host}:${n.port}`)
+                      if (!ex) return '—'
+                      return (
+                        <>
+                          {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
+                          {ex.exceeded && <Badge color="red">已超额</Badge>}
+                        </>
+                      )
+                    })()}
                   </td>
                   <td>{n.source === 'local' ? <Badge color="blue">本地</Badge> : <Badge color="gray">分配</Badge>}</td>
                   <td className="text-right">
