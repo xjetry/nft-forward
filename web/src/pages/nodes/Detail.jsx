@@ -222,8 +222,10 @@ export default function NodeDetail() {
             </ConfigField>
           </section>
         ) : (
-        /* ===== TWO COLUMN: 基本信息 + 节点配置 ===== */
+        /* ===== TWO COLUMN: 基本信息 + 安装命令 | 节点配置 ===== */
         <div className="grid grid-cols-1 lg:grid-cols-[1.55fr_1fr] gap-[18px] items-start">
+
+          <div className="flex flex-col gap-[18px] min-w-0">
 
           {/* 基本信息 */}
           <section className={`${card} px-[26px] py-[22px]`}>
@@ -265,6 +267,47 @@ export default function NodeDetail() {
               </div>
             )}
           </section>
+
+          {/* 安装命令（实体节点专属）— desktop only */}
+          {node.node_type !== 'self' && (
+          <section className={`${card} px-[26px] py-[22px] hidden md:block`}>
+            <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
+              <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
+              <span className="text-[12.5px] text-ink-mut">在目标节点（已安装 nftables，root 用户）执行下列命令即可</span>
+            </div>
+            {!panel_url_configured && (
+              <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-[13px]">
+                尚未设置面板地址，下面用你当前访问的域名 <code className="bg-amber-100 px-1 rounded">{panel_url}</code> 推断。如 agent 走不同地址，请到<Link to="/nodes" className="text-blue-600 font-semibold">节点页</Link>设置后再复制。
+              </div>
+            )}
+            <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                <input type="checkbox" checked={useGhProxy} onChange={e => setUseGhProxy(e.target.checked)} className="accent-blue-600" />
+                <span className="text-ink-soft">使用 gh-proxy（GitHub 受限网络）</span>
+              </label>
+              {useGhProxy && (
+                <input className="input-field font-mono" style={{ height: 30, maxWidth: 280 }} value={ghProxy}
+                  onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
+              )}
+            </div>
+            <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
+              <span className="text-ink-soft">中继地址声明（双出口机器用，可空）</span>
+              <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHost}
+                onChange={e => setCmdRelayHost(e.target.value)} placeholder="IPv4 / 域名（可选）" />
+              <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHostV6}
+                onChange={e => setCmdRelayHostV6(e.target.value)} placeholder="IPv6（可选）" />
+            </div>
+            <div className="relative bg-[#1e1e2e] dark:bg-app border border-line rounded-[10px] px-5 py-[18px]">
+              <button onClick={() => copyToClipboard(installCmd).then(() => toast('已复制')).catch(() => toast('复制失败', 'error'))}
+                className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-[#a0a4b0] bg-[#2a2a3c] border border-[#3a3a4c] px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-[#33334a] transition-colors">复制</button>
+              <pre className="m-0 font-mono text-[13px] leading-[1.75] text-[#e8ecf3] whitespace-pre-wrap break-all">
+                <SensText blurred={blurred}>{installCmd}</SensText>
+              </pre>
+            </div>
+          </section>
+          )}
+
+          </div>
 
           {/* 节点配置 — desktop only */}
           <section className={`${card} px-6 py-[22px] flex-col gap-[18px] hidden md:flex`}>
@@ -328,45 +371,6 @@ export default function NodeDetail() {
           <div className="hidden md:block">
             <CompositeHopsCard nodeId={id} hops={nodeHops} singleNodes={data.single_nodes || []} onDone={load} />
           </div>
-        )}
-
-        {/* ===== 安装命令（实体节点专属）— desktop only ===== */}
-        {!isComposite && node.node_type !== 'self' && (
-        <section className={`${card} px-[26px] py-[22px] hidden md:block`}>
-          <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
-            <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
-            <span className="text-[12.5px] text-ink-mut">在目标节点（已安装 nftables，root 用户）执行下列命令即可</span>
-          </div>
-          {!panel_url_configured && (
-            <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-[13px]">
-              尚未设置面板地址，下面用你当前访问的域名 <code className="bg-amber-100 px-1 rounded">{panel_url}</code> 推断。如 agent 走不同地址，请到<Link to="/nodes" className="text-blue-600 font-semibold">节点页</Link>设置后再复制。
-            </div>
-          )}
-          <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
-            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-              <input type="checkbox" checked={useGhProxy} onChange={e => setUseGhProxy(e.target.checked)} className="accent-blue-600" />
-              <span className="text-ink-soft">使用 gh-proxy（GitHub 受限网络）</span>
-            </label>
-            {useGhProxy && (
-              <input className="input-field font-mono" style={{ height: 30, maxWidth: 280 }} value={ghProxy}
-                onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
-            )}
-          </div>
-          <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
-            <span className="text-ink-soft">中继地址声明（双出口机器用，可空）</span>
-            <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHost}
-              onChange={e => setCmdRelayHost(e.target.value)} placeholder="IPv4 / 域名（可选）" />
-            <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHostV6}
-              onChange={e => setCmdRelayHostV6(e.target.value)} placeholder="IPv6（可选）" />
-          </div>
-          <div className="relative bg-[#1e1e2e] dark:bg-app border border-line rounded-[10px] px-5 py-[18px]">
-            <button onClick={() => copyToClipboard(installCmd).then(() => toast('已复制')).catch(() => toast('复制失败', 'error'))}
-              className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-[#a0a4b0] bg-[#2a2a3c] border border-[#3a3a4c] px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-[#33334a] transition-colors">复制</button>
-            <pre className="m-0 font-mono text-[13px] leading-[1.75] text-[#e8ecf3] whitespace-pre-wrap break-all">
-              <SensText blurred={blurred}>{installCmd}</SensText>
-            </pre>
-          </div>
-        </section>
         )}
 
         {/* ===== 经过该节点的规则 ===== */}

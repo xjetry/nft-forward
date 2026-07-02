@@ -326,8 +326,11 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState(0)
   const ref = useRef(null)
+  const menuRef = useRef(null)
   useEffect(() => {
     if (!open) { setQuery(''); setActiveTab(0); return }
+    // 触发器靠近视口底部时菜单会被裁掉，自动滚动让菜单完整露出；已可见则不动。
+    menuRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -384,7 +387,7 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
         <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1.5 w-full bg-surface border border-line rounded-[11px] shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] overflow-hidden">
+        <div ref={menuRef} className="absolute z-50 mt-1.5 w-full bg-surface border border-line rounded-[11px] shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] overflow-hidden">
           {useTabs && (
             <div className="flex border-b border-line-soft">
               {sections.map((s, i) => (

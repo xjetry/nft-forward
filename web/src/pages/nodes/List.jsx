@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
 import { Layout, useToast } from '../../components/Layout'
-import { Loading, Empty, Badge, Modal, Confirm, NodeTypeBadge, NodeStackBadge, useConfirm, Select } from '../../components/ui'
+import { Loading, Empty, Badge, Modal, Confirm, NodeStackBadge, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
 
 export default function NodeList() {
@@ -190,7 +190,7 @@ export default function NodeList() {
           <div ref={listRef} className="relative hidden md:block">
           <table className="tbl">
             <thead><tr>
-              <th className="w-14">ID</th><th>名称</th><th>类型</th><th>版本</th><th>最近同步</th><th>状态</th>
+              <th className="w-14">ID</th><th>名称</th><th>IP 栈</th><th>版本</th><th>最近同步</th><th>状态</th>
               <th className="cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
                 <span className="inline-flex items-center">流量<SortArrow col="traffic" sort={sort} /></span>
               </th>
@@ -222,7 +222,6 @@ export default function NodeList() {
                   </td>
                   <td>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <NodeTypeBadge type={n.node_type} />
                       <NodeStackBadge node={n} />
                     </div>
                   </td>
@@ -288,8 +287,6 @@ export default function NodeList() {
                   <NodeStatus node={n} />
                 </div>
                 <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
-                  <NodeTypeBadge type={n.node_type} />
-                  <span className="text-ink-mut">·</span>
                   <span className="font-mono text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</span>
                   {speeds[n.id] && <>
                     <span className="text-ink-mut">·</span>
