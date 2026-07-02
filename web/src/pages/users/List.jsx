@@ -7,6 +7,7 @@ import { Loading, Empty, Badge, Modal, useConfirm, Select } from '../../componen
 import { copyToClipboard } from '../../lib/clipboard'
 import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
 import PasteGrantsModal from './PasteGrantsModal'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 export default function UserList() {
   const [data, setData] = useState(null)
@@ -14,6 +15,7 @@ export default function UserList() {
   const [showCreate, setShowCreate] = useState(false)
   const [showPaste, setShowPaste] = useState(false)
   const [allNodes, setAllNodes] = useState([])
+  const isMobile = useIsMobile()
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState(null) // null | 'expires_asc' | 'expires_desc'
   const { user: currentUser } = useUser()
@@ -81,7 +83,7 @@ export default function UserList() {
         ) : (
           <TableScroll>
           {/* Desktop table */}
-          <table className="tbl hidden md:table">
+          {!isMobile && <table className="tbl">
             <thead><tr><th className="w-12">ID</th><th>用户名</th><th>角色</th><th>规则配额</th><th>流量</th><th>状态</th><th className="cursor-pointer select-none whitespace-nowrap" onClick={toggleExpirySort}>到期{sortBy === 'expires_asc' ? ' ↑' : sortBy === 'expires_desc' ? ' ↓' : ''}</th><th>备注</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {filtered.map(u => {
@@ -124,9 +126,9 @@ export default function UserList() {
                 )
               })}
             </tbody>
-          </table>
+          </table>}
           {/* Mobile cards */}
-          <div className="md:hidden">
+          {isMobile && <div>
             {filtered.map(u => (
               <Link key={u.id} to={`/users/${u.id}`} className="mobile-card block no-underline text-ink">
                 <div className="flex items-center justify-between mb-1">
@@ -150,7 +152,7 @@ export default function UserList() {
                 </div>
               </Link>
             ))}
-          </div>
+          </div>}
           </TableScroll>
         )}
       </Panel>

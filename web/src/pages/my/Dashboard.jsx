@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../../lib/api'
 import { pct, fmtTrafficGB, fmtDate, isExpired, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { Layout } from '../../components/Layout'
 import { Loading, Empty, Badge, NodeTypeBadge } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
@@ -14,6 +15,7 @@ export default function MyDashboard() {
   const [editingUsername, setEditingUsername] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const speeds = useSpeed()
+  const isMobile = useIsMobile()
 
   const [token, setToken] = useState(null)
   const [tokenLoading, setTokenLoading] = useState(true)
@@ -168,7 +170,7 @@ export default function MyDashboard() {
         )}
         {tabNodes.length > 0 ? (<>
           {/* Desktop table */}
-          <table className="tbl hidden md:table">
+          {!isMobile && <table className="tbl">
             <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>本节点上限</th></tr></thead>
             <tbody>
               {tabNodes.map(n => {
@@ -196,9 +198,9 @@ export default function MyDashboard() {
                 )
               })}
             </tbody>
-          </table>
+          </table>}
           {/* Mobile cards */}
-          <div className="md:hidden">
+          {isMobile && <div>
             {tabNodes.map(n => {
               const g = grantByNode[n.id]
               return (
@@ -222,7 +224,7 @@ export default function MyDashboard() {
                 </div>
               )
             })}
-          </div>
+          </div>}
         </>) : nodes.length > 0 ? (
           <Empty title={tab === 'composite' ? '暂无已授权的组合节点' : '暂无已授权的单点节点'} />
         ) : <Empty title="管理员尚未为您授权任何节点" desc="请联系管理员。" />}

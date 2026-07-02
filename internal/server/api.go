@@ -276,12 +276,22 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeOnline(s.DB, nodes)
-	rules, _ := db.ListAllRules(s.DB)
-	db.FillRuleTraffic(s.DB, rules)
-	users, _ := db.ListUsers(s.DB)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
-	jsonOK(w, map[string]any{"nodes": nodes, "rules": rules, "users": users, "node_by_id": nodeByID, "node_traffic": nodeTraffic})
+	// The dashboard only shows aggregates over rules/users, so compute them
+	// server-side instead of shipping the full rules and users arrays (plus a
+	// node_by_id map the UI never read) on every load.
+	ruleCount, _ := db.CountAllRules(s.DB)
+	ruleCountByNode, _ := db.RuleCountByNode(s.DB)
+	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
+	userCount, _ := db.CountUsers(s.DB)
+	jsonOK(w, map[string]any{
+		"nodes":              nodes,
+		"node_traffic":       nodeTraffic,
+		"rule_count":         ruleCount,
+		"rule_count_by_node": ruleCountByNode,
+		"total_bytes":        totalBytes,
+		"user_count":         userCount,
+	})
 }
 
 // --- Nodes ---

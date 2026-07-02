@@ -1,8 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
 
+// sameSpeeds reports whether two speed maps carry the same up/down values, so
+// the hook can skip a re-render when nothing changed (the server pushes every
+// second even while every node is idle).
+function sameSpeeds(a, b) {
+  const ak = Object.keys(a), bk = Object.keys(b)
+  if (ak.length !== bk.length) return false
+  for (const k of bk) {
+    const x = a[k], y = b[k]
+    if (!x || x.up !== y.up || x.down !== y.down) return false
+  }
+  return true
+}
+
 export function useSpeed() {
   const [speeds, setSpeeds] = useState({})
   const wsRef = useRef(null)
+  const speedsRef = useRef({})
 
   useEffect(() => {
     let unmounted = false
@@ -19,7 +33,10 @@ export function useSpeed() {
           if (data.speeds) {
             const map = {}
             for (const s of data.speeds) map[s.node_id] = s
-            setSpeeds(map)
+            if (!sameSpeeds(speedsRef.current, map)) {
+              speedsRef.current = map
+              setSpeeds(map)
+            }
           }
         } catch {}
       }

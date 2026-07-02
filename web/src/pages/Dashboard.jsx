@@ -5,11 +5,13 @@ import { fmtBytes, fmtTime } from '../lib/fmt'
 import { Layout, useBlur, useUser } from '../components/Layout'
 import { Loading, Empty, Badge, SensText, NodeTypeBadge } from '../components/ui'
 import { ProxyURIEditor } from '../components/ProxyURIEditor'
+import { useIsMobile } from '../lib/useIsMobile'
 
 export default function Dashboard() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const blurred = useBlur()
+  const isMobile = useIsMobile()
   const { user } = useUser()
 
   useEffect(() => {
@@ -19,12 +21,11 @@ export default function Dashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { nodes = [], rules = [], users = [], node_traffic = {} } = data
+  const { nodes = [], node_traffic = {}, rule_count = 0, rule_count_by_node = {}, total_bytes = 0, user_count = 0 } = data
   const onlineCount = nodes.filter(n => !n.disabled && n.online === 1).length
   const offline = nodes.filter(n => n.disabled || n.online !== 1).map(n => n.name)
-  const totalBytes = rules.reduce((s, r) => s + (r.total_bytes || 0), 0)
-  const ruleCount = {}
-  rules.forEach(r => { ruleCount[r.node_id] = (ruleCount[r.node_id] || 0) + 1 })
+  const totalBytes = total_bytes
+  const ruleCount = rule_count_by_node
 
   return (
     <Layout>
@@ -37,14 +38,14 @@ export default function Dashboard() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-[22px]">
-        <StatCard label="活跃转发" value={rules.length} sub="正在转发的规则"
+        <StatCard label="活跃转发" value={rule_count} sub="正在转发的规则"
           icon={<path d="M5 12h14M13 6l6 6-6 6"/>} />
         <StatCard label="在线节点" value={onlineCount} unit={` /${nodes.length}`}
           sub={offline.length ? `${offline.slice(0, 2).join('、')}${offline.length > 2 ? ` 等 ${offline.length} 个` : ''} 离线` : '全部在线'} accent
           icon={<><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></>} />
         <StatCard label="总流量" value={fmtBytes(totalBytes)} sub="累计上下行"
           icon={<><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></>} />
-        <StatCard label="用户" value={users.length} sub="系统用户数"
+        <StatCard label="用户" value={user_count} sub="系统用户数"
           icon={<><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/></>} />
       </div>
 
@@ -54,7 +55,7 @@ export default function Dashboard() {
           <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
           {nodes.length ? (<>
             {/* Desktop table */}
-            <table className="tbl hidden md:table">
+            {!isMobile && <table className="tbl">
               <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>流量</th><th>状态</th><th>心跳</th></tr></thead>
               <tbody>
                 {nodes.map(n => (
@@ -69,9 +70,9 @@ export default function Dashboard() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table>}
             {/* Mobile cards */}
-            <div className="md:hidden">
+            {isMobile && <div>
               {nodes.map(n => (
                 <Link key={n.id} to={`/nodes/${n.id}`} className="mobile-card block no-underline text-ink">
                   <div className="flex items-center justify-between mb-1.5">
@@ -87,7 +88,7 @@ export default function Dashboard() {
                   </div>
                 </Link>
               ))}
-            </div>
+            </div>}
           </>) : <Empty title="暂无节点" />}
         </div>
 

@@ -4,6 +4,12 @@ import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner,
 import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
+import { createLimiter } from '../lib/limiter'
+import { useIsMobile } from '../lib/useIsMobile'
+
+// Cap concurrent connectivity probes so "test all" doesn't fire one request per
+// rule at once (each fans out to every hop on the server side).
+const probeLimit = createLimiter(6)
 
 /* Shared rule table for both the admin (`/rules`) and user (`/my/rules`) lists.
    variant drives the columns that differ: admin shows id/owner and links to a
@@ -25,6 +31,7 @@ function SortArrow({ dir }) {
 
 export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, onEdit, onCopy, onRowClick, probeAllTrigger }) {
   const isAdmin = variant === 'admin'
+  const isMobile = useIsMobile()
   const [sort, setSort] = useState({ col: null, dir: null })
   const { copyFmt } = useCopyFmt()
 
@@ -47,9 +54,10 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
     return sort.dir === 'asc' ? c : -c
   })
 
-  return (<>
-    {/* Desktop table */}
-    <table className="tbl hidden md:table">
+  if (isMobile) return renderCards()
+
+  return (
+    <table className="tbl">
       <thead>
         <tr>
           {isAdmin && <th className="w-12">ID</th>}
@@ -131,8 +139,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
         })}
       </tbody>
     </table>
-    {/* Mobile cards */}
-    <div className="md:hidden">
+  )
+
+  function renderCards() {
+    return (
+    <div>
       {sorted.map(r => {
         const node = nodeMap[r.node_id]
         return (
@@ -166,7 +177,8 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
         )
       })}
     </div>
-  </>)
+    )
+  }
 }
 
 function ProbeIconButton({ ruleId, probeAllTrigger }) {
@@ -178,7 +190,7 @@ function ProbeIconButton({ ruleId, probeAllTrigger }) {
   }, [probeAllTrigger])
   const probe = () => {
     setState('loading')
-    fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json()).then(d => {
+    probeLimit(() => fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json())).then(d => {
       if (d.hops?.length) {
         const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
         const joined = parts.join(' → ')

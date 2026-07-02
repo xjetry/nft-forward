@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { useSpeed, fmtSpeed } from '../../lib/useSpeed'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, Modal, Confirm, NodeStackBadge, useConfirm, Select } from '../../components/ui'
 import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
@@ -19,6 +20,7 @@ export default function NodeList() {
   // set, but the preference is a local view choice, not server state.
   const [onlyVisible, setOnlyVisible] = useState(() => localStorage.getItem('nodes.onlyVisible') !== '0')
   const speeds = useSpeed()
+  const isMobile = useIsMobile()
   const toast = useToast()
   const confirm = useConfirm()
   const navigate = useNavigate()
@@ -187,7 +189,7 @@ export default function NodeList() {
             : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
         ) : (<>
           {/* Desktop table */}
-          <div ref={listRef} className="relative hidden md:block">
+          {!isMobile && <div ref={listRef} className="relative">
           <table className="tbl">
             <thead><tr>
               <th className="w-14">ID</th><th>名称</th><th>IP 栈</th><th>版本</th><th>最近同步</th><th>状态</th>
@@ -273,9 +275,9 @@ export default function NodeList() {
                 pinMode.zone === 'bottom' ? 'bg-amber-500 text-white' : 'bg-white/90 text-amber-400 border border-amber-200'}`}>置底 ↓</div>
             </div>
           )}
-          </div>
+          </div>}
           {/* Mobile cards */}
-          <div className="md:hidden">
+          {isMobile && <div>
             {filtered.map(n => (
               <Link key={n.id} to={`/nodes/${n.id}`} className="mobile-card block no-underline text-ink">
                 <div className="flex items-center justify-between mb-1">
@@ -296,7 +298,7 @@ export default function NodeList() {
                 </div>
               </Link>
             ))}
-          </div>
+          </div>}
         </>)}
         </TableScroll>
       </Panel>

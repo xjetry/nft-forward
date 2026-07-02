@@ -382,6 +382,39 @@ func CountRulesForUser(d *sql.DB, userID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM rules WHERE owner_id=?`, userID)
 }
 
+// CountAllRules returns the total number of rules.
+func CountAllRules(d *sql.DB) (int, error) {
+	return count(d, `SELECT COUNT(*) FROM rules`)
+}
+
+// RuleCountByNode returns rule counts grouped by entry node, for the dashboard's
+// per-node rule tally without shipping the whole rules list to the client.
+func RuleCountByNode(d *sql.DB) (map[int64]int, error) {
+	rows, err := d.Query(`SELECT node_id, COUNT(*) FROM rules GROUP BY node_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]int{}
+	for rows.Next() {
+		var nodeID int64
+		var c int
+		if err := rows.Scan(&nodeID, &c); err != nil {
+			return nil, err
+		}
+		m[nodeID] = c
+	}
+	return m, rows.Err()
+}
+
+// TotalRuleTrafficBytes sums per-rule traffic (the entry hop's total_bytes,
+// matching FillRuleTraffic) across all rules, for the dashboard total.
+func TotalRuleTrafficBytes(d *sql.DB) (int64, error) {
+	var total int64
+	err := d.QueryRow(`SELECT COALESCE(SUM(total_bytes),0) FROM rule_hops WHERE position=0`).Scan(&total)
+	return total, err
+}
+
 // DeleteRulesForUserNode removes the rules a user owns that enter at nodeID
 // (rule.node_id = nodeID, covering both single-node rules and composite rules
 // whose composite node is nodeID) and returns the physical node IDs whose

@@ -58,11 +58,9 @@ export default function RulesList() {
     setLocalVer(v => v + 1)
   }
 
-  const load = (ownerIDs) => {
-    const ids = ownerIDs ?? selectedOwners
+  const load = () => {
     setLoading(true)
-    const params = ids.size > 0 ? `?owner_ids=${[...ids].join(',')}` : ''
-    api.get(`/rules${params}`)
+    api.get(`/rules`)
       .then(d => {
         setData(d)
         if (d.users?.length) setUsers(d.users)
@@ -72,7 +70,9 @@ export default function RulesList() {
   }
   useEffect(load, [])
 
-  if (loading) return <Layout><Loading /></Layout>
+  // Only blank the page on the first load; later reloads (delete/edit) keep the
+  // current list on screen instead of flashing a full-page spinner.
+  if (loading && !data) return <Layout><Loading /></Layout>
 
   const { rules: allRulesRaw = [], nodes = [] } = data || {}
   const nodeMap = {}
@@ -89,6 +89,10 @@ export default function RulesList() {
 
   const q = search.trim().toLowerCase()
   let filtered = rules
+  // Owner and node filters are both applied client-side: the initial load
+  // already fetched every rule, so re-requesting a subset per filter change was
+  // pure waste.
+  if (selectedOwners.size > 0) filtered = filtered.filter(r => r.owner_id?.Valid && selectedOwners.has(r.owner_id.Int64))
   if (selectedNodes.size > 0) filtered = filtered.filter(r => selectedNodes.has(r.node_id))
   if (q) filtered = filtered.filter(r => {
     const node = nodeMap[r.node_id]
@@ -98,10 +102,8 @@ export default function RulesList() {
 
   const filterActive = selectedOwners.size > 0 || selectedNodes.size > 0
   const clearFilters = () => {
-    const nextOwners = new Set()
-    setSelectedOwners(nextOwners)
+    setSelectedOwners(new Set())
     setSelectedNodes(new Set())
-    load(nextOwners)
   }
 
   const userOptions = users.map(u => ({ value: u.id, label: u.username }))
@@ -126,7 +128,7 @@ export default function RulesList() {
               icon={<svg className="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>}
               options={userOptions}
               selected={selectedOwners}
-              onChange={next => { setSelectedOwners(next); load(next) }}
+              onChange={setSelectedOwners}
               searchPlaceholder="搜索用户…"
             />
             <FilterDropdown
