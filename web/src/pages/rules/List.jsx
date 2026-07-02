@@ -43,7 +43,7 @@ export default function RulesList() {
       const ep = splitEndpoint(r.entry)
       const node = localIdx.get(key)
       const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
-      if (relay) return { ...r, exit_kind: 'landing', landing_name: node.name, relay_uri: relay }
+      if (relay) return { ...r, exit_kind: 'landing', landing_name: node.name, landing_protocol: node.protocol, relay_uri: relay }
     }
     return r
   }

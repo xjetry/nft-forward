@@ -23,6 +23,9 @@ func TestClassifyExit(t *testing.T) {
 		if it.LandingName != "HK-01" {
 			t.Errorf("landing_name = %q", it.LandingName)
 		}
+		if it.LandingProtocol != "vless" {
+			t.Errorf("landing_protocol = %q, want vless", it.LandingProtocol)
+		}
 		want := "vless://uuid@relay.example:10001?security=reality&sni=a.com#HK-01"
 		if it.RelayURI != want {
 			t.Errorf("relay_uri = %q, want %q", it.RelayURI, want)

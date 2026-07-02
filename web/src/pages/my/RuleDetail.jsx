@@ -119,7 +119,7 @@ export default function MyRuleDetail() {
             <span><ProtoBadge proto={rule.proto} /></span>
             <span className="text-ink-soft font-semibold">出口</span>
             <span className="font-mono inline-flex items-center gap-2">
-              <ExitKindBadge kind={rule.exit_kind} />
+              <ExitKindBadge kind={rule.exit_kind} protocol={rule.landing_protocol} />
               {rule.exit_kind === 'landing' && rule.landing_name
                 ? <span className="font-sans">{rule.landing_name}</span>
                 : <SensText blurred={blurred}>{exitOf(rule) || '--'}</SensText>}

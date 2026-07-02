@@ -112,3 +112,57 @@ func TestSetNodeRelayHostAcceptsIPv4AndHostname(t *testing.T) {
 		t.Errorf("RelayHost = %q, want relay.example.com", got.RelayHost)
 	}
 }
+
+func TestSetNodeRelayHostRejectsWhenDeclared(t *testing.T) {
+	d := openDB(t)
+	n, _ := db.CreateNode(d, "n1", "https://p", "t1")
+	if err := db.UpdateNodeRelayHost(d, n.ID, "203.0.113.9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetNodeRelayHostDeclared(d, n.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	if code := setNodeRelayHost(t, s, admin, n.ID, "198.51.100.1"); code != http.StatusConflict {
+		t.Fatalf("relay-host on a declared field: status = %d, want 409", code)
+	}
+	got, err := db.GetNode(d, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHost != "203.0.113.9" {
+		t.Errorf("RelayHost = %q, want unchanged 203.0.113.9 (declared field must reject manual edits)", got.RelayHost)
+	}
+}
+
+func TestSetNodeRelayHostV6RejectsWhenDeclared(t *testing.T) {
+	d := openDB(t)
+	n, _ := db.CreateNode(d, "n1", "https://p", "t1")
+	if err := db.UpdateNodeRelayHostV6(d, n.ID, "2001:db8::9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetNodeRelayHostV6Declared(d, n.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := New(d)
+	admin := loginAsAdmin(t, d)
+
+	body, _ := json.Marshal(map[string]string{"relay_host_v6": "2001:db8::99"})
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/nodes/%d/relay-host-v6", n.ID), bytes.NewReader(body))
+	req.AddCookie(admin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("relay-host-v6 on a declared field: status = %d, want 409", rec.Code)
+	}
+	got, err := db.GetNode(d, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelayHostV6 != "2001:db8::9" {
+		t.Errorf("RelayHostV6 = %q, want unchanged 2001:db8::9 (declared field must reject manual edits)", got.RelayHostV6)
+	}
+}

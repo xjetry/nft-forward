@@ -88,7 +88,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                     {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
-                    <ExitKindBadge kind={r.exit_kind} />
+                    <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
                     {(() => {
                       const exitLabel = !isAdmin && r.exit_kind === 'landing' && r.landing_name
                         ? <span className="font-sans">{r.landing_name}</span>

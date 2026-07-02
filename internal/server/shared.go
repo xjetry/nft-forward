@@ -52,12 +52,13 @@ type ruleListItem struct {
 	// landing directly. RelayURI is populated only where the copy action is
 	// offered (detail and the user's own list). Matches against the user's own
 	// browser-local URIs happen client-side, not here.
-	ExitKind       string  `json:"exit_kind"`
-	LandingName    string  `json:"landing_name,omitempty"`
-	LandingURI     string  `json:"landing_uri,omitempty"`
-	RelayURI       string  `json:"relay_uri,omitempty"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	BillingRate    float64 `json:"billing_rate"`
+	ExitKind        string  `json:"exit_kind"`
+	LandingName     string  `json:"landing_name,omitempty"`
+	LandingProtocol string  `json:"landing_protocol,omitempty"`
+	LandingURI      string  `json:"landing_uri,omitempty"`
+	RelayURI        string  `json:"relay_uri,omitempty"`
+	RateMultiplier  float64 `json:"rate_multiplier"`
+	BillingRate     float64 `json:"billing_rate"`
 }
 
 // nodeHopView adds the resolved child node name to a composite node's hop so
@@ -82,6 +83,7 @@ func (it *ruleListItem) classifyExit(idx map[string]landing.Node, withURI bool) 
 	if node, ok := idx[it.Exit]; ok {
 		it.ExitKind = "landing"
 		it.LandingName = node.Name
+		it.LandingProtocol = node.Protocol
 		it.LandingURI = node.URI
 		if withURI && entryOK {
 			if u, err := landing.RewriteEndpoint(node.URI, relayHost, relayPort); err == nil {

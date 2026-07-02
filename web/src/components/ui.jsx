@@ -90,9 +90,12 @@ export function NodeStackBadge({ node }) {
 
 /* ---------- ExitKindBadge ---------- */
 // Distinguishes a landing-node exit (resolved from the user's subscription)
-// from a custom host:port exit.
-export function ExitKindBadge({ kind }) {
-  if (kind === 'landing') return <Badge color="blue">落地</Badge>
+// from a custom host:port exit. Landing exits show the concrete protocol
+// (vless/ss/snell/...) rather than a generic label, since that's what the
+// user actually needs to know about the exit; falls back to "落地" for
+// older data with no recorded protocol.
+export function ExitKindBadge({ kind, protocol }) {
+  if (kind === 'landing') return <Badge color="blue">{protocol || '落地'}</Badge>
   return <Badge color="gray">自定义</Badge>
 }
 
