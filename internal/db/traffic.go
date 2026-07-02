@@ -18,8 +18,9 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 	return err
 }
 
-// ResetAllUserTraffic zeroes the global traffic counter and all per-node counters
-// for a user. Both must be cleared together so accounting stays consistent.
+// ResetAllUserTraffic zeroes the global traffic counter, all per-node counters
+// and the landing-exit ledger for a user. All three must be cleared together
+// so accounting stays consistent.
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -30,6 +31,9 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0 WHERE user_id=?`, userID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -78,7 +82,8 @@ func HopMultipliers(d *sql.DB) (map[int64]map[int64]float64, error) {
 }
 
 // CheckAndResetTrafficCycle checks whether the user's traffic reset window has
-// elapsed since the last reset. If so, it zeros all counters and records the
+// elapsed since the last reset. If so, it zeros the global counter, all
+// per-node counters and the landing-exit ledger together and records the
 // reset timestamp. Returns true if a reset occurred.
 //
 // traffic_reset_days == 0 means the user is never auto-reset.
@@ -111,6 +116,9 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 		return false, err
 	}
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
