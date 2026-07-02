@@ -258,7 +258,7 @@ func (s *Server) regenerateRuleByID(ruleID int64) ([]int64, error) {
 	}
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

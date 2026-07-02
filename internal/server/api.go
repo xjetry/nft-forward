@@ -1318,7 +1318,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		// Explicit hops provided
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
 		}
 	} else if body.NodeID > 0 {
 		derived, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
@@ -1567,7 +1567,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		hops = make([]db.HopInput, len(existing))
 		for i, h := range existing {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 		}
 		// A header-only edit still owns the exit segment: an explicit
 		// exit_mode (or the single-node legacy mode) applies to the last hop
@@ -1580,7 +1580,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	default:
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
 		}
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
@@ -1663,7 +1663,7 @@ func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 	}
 	var avoid map[int64]int
 	if body.Port > 0 {

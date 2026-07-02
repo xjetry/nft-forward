@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
@@ -263,6 +264,29 @@ type HopInput struct {
 	Mode        string
 	DesiredPort int
 	Comment     string
+	// ViaNodeID is the logical-segment node this hop belongs to, written to
+	// rule_hops.via_node_id. RegenerateRule falls back to the rule's node_id
+	// when a caller leaves this 0, so no code path can write 0 provenance.
+	ViaNodeID int64
+}
+
+// encodeViaNodeIDs/decodeViaNodeIDs marshal the rule's middle-layer path for
+// the TEXT column; a broken value decodes to an empty path rather than erroring
+// (the chain snapshot in rule_hops still drives the data plane).
+func encodeViaNodeIDs(ids []int64) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+func decodeViaNodeIDs(s string) []int64 {
+	var ids []int64
+	if s == "" || json.Unmarshal([]byte(s), &ids) != nil {
+		return nil
+	}
+	return ids
 }
 
 // CreateRule inserts the rule header; hops are written by RegenerateRule.
@@ -274,8 +298,8 @@ func CreateRule(d DBTX, r *Rule) (int64, error) {
 	if r.EntryFamily == "" {
 		r.EntryFamily = "v4"
 	}
-	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,comment,created_at,entry_family) VALUES (?,?,?,?,?,?,?,?,?)`,
-		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, now(), r.EntryFamily)
+	res, err := d.Exec(`INSERT INTO rules(node_id,owner_id,name,proto,exit_host,exit_port,comment,created_at,entry_family,via_node_ids) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		r.NodeID, r.OwnerID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, now(), r.EntryFamily, encodeViaNodeIDs(r.ViaNodeIDs))
 	if err != nil {
 		return 0, err
 	}
@@ -294,8 +318,8 @@ func UpdateRuleHeader(d DBTX, r *Rule) error {
 	if r.EntryFamily == "" {
 		r.EntryFamily = "v4"
 	}
-	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=?,entry_family=? WHERE id=?`,
-		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.EntryFamily, r.ID)
+	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=?,entry_family=?,via_node_ids=? WHERE id=?`,
+		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.EntryFamily, encodeViaNodeIDs(r.ViaNodeIDs), r.ID)
 	return err
 }
 
@@ -536,6 +560,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		desiredPort int
 		comment     string
 		portSegs    [][2]int // parsed from the node's port_range column
+		viaNodeID   int64
 	}
 	rs := make([]resolved, len(hops))
 	seen := map[int64]bool{}
@@ -560,7 +585,14 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if r.Proto == "udp" {
 			mode = "kernel" // userspace relay is TCP-only
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs}
+		// A caller that leaves ViaNodeID unset (older call sites, or a hop
+		// that has no explicit segment of its own) inherits the rule's entry
+		// node so rule_hops.via_node_id is never left at the zero value.
+		viaNodeID := hop.ViaNodeID
+		if viaNodeID == 0 {
+			viaNodeID = r.NodeID
+		}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, viaNodeID: viaNodeID}
 	}
 
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
@@ -672,8 +704,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if fwdComment == "" {
 			fwdComment = fmt.Sprintf("链路 %s · 第%d跳", r.Name, i+1)
 		}
-		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,?,?,?,?,?,?,?,?)`,
-			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment); err != nil {
+		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,via_node_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment, h.viaNodeID); err != nil {
 			return "", "", nil, err
 		}
 		affected[h.nodeID] = true

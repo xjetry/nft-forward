@@ -41,11 +41,11 @@ type User struct {
 }
 
 type Node struct {
-	ID                  int64          `json:"id"`
-	Name                string         `json:"name"`
-	NodeType            string         `json:"node_type"`
-	OwnerID             *int64         `json:"owner_id,omitempty"`
-	Address             string         `json:"address"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	NodeType string `json:"node_type"`
+	OwnerID  *int64 `json:"owner_id,omitempty"`
+	Address  string `json:"address"`
 	// Secret is the node's WS auth credential — the only thing an agent presents
 	// to connect. It must never be serialized to user-facing responses (a granted
 	// user could otherwise impersonate the node). json:"-" makes leaking it opt-in:
@@ -105,21 +105,30 @@ type Rule struct {
 	// endpoint advertises: "v4" (default), "v6", or "both". Validated and
 	// resolved against the entry node's relay_host/relay_host_v6 in RegenerateRule.
 	EntryFamily string `json:"entry_family"`
+	// ViaNodeIDs is the ordered middle-layer path the rule's chain runs
+	// through (entry excluded). Persisted so node_id edits re-derive the same
+	// chain; empty for plain single/composite rules.
+	ViaNodeIDs []int64 `json:"via_node_ids"`
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
 }
 
 type RuleHop struct {
-	ID            int64  `json:"id"`
-	RuleID        int64  `json:"rule_id"`
-	Position      int    `json:"position"`
-	NodeID        int64  `json:"node_id"`
-	Proto         string `json:"proto"`
-	ListenPort    int    `json:"listen_port"`
-	TargetHost    string `json:"target_host"`
-	TargetPort    int    `json:"target_port"`
-	Mode          string `json:"mode"`
+	ID         int64  `json:"id"`
+	RuleID     int64  `json:"rule_id"`
+	Position   int    `json:"position"`
+	NodeID     int64  `json:"node_id"`
+	Proto      string `json:"proto"`
+	ListenPort int    `json:"listen_port"`
+	TargetHost string `json:"target_host"`
+	TargetPort int    `json:"target_port"`
+	Mode       string `json:"mode"`
+	// ViaNodeID is the logical-segment node this physical hop was expanded
+	// from (entry segment = the rule's node_id; explicit-hops path = the
+	// hop's own node). Quota suppression, per-grant accounting and shaping
+	// group hops by it rather than by physical node.
+	ViaNodeID     int64  `json:"via_node_id"`
 	Comment       string `json:"comment"`
 	LastBytes     int64  `json:"last_bytes"`
 	LastBytesUp   int64  `json:"last_bytes_up"`
@@ -577,23 +586,25 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 // out of the projection rather than dropped (dropping needs a table rebuild).
 // bandwidth_mbps is likewise dead (shaping moved to the per-grant rate limit
 // on user_nodes) and stays out of the projection.
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family,via_node_ids`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily); err != nil {
+	var viaJSON string
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1
+	rl.ViaNodeIDs = decodeViaNodeIDs(viaJSON)
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes,via_node_id`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes, &h.ViaNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil
