@@ -611,6 +611,32 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		ruleMap = map[int64]*db.Rule{}
 	}
 
+	// Landing-exit ledger lookups for this batch: which (owner, host, port)
+	// triples are present landing exits, and each rule's final hop position —
+	// the only hop whose bytes reach the exit ledger, since middle hops target
+	// system relay addresses. On a load error the batch skips exit metering
+	// entirely (under-counting beats mis-counting).
+	ownerSet := map[int64]bool{}
+	for _, r := range ruleMap {
+		if r.OwnerID.Valid {
+			ownerSet[r.OwnerID.Int64] = true
+		}
+	}
+	ownerIDs := make([]int64, 0, len(ownerSet))
+	for id := range ownerSet {
+		ownerIDs = append(ownerIDs, id)
+	}
+	exitSet, err := db.PresentLandingExitSet(h.DB, ownerIDs)
+	if err != nil {
+		log.Printf("hub: node %d load landing exit set: %v", nodeID, err)
+		exitSet = nil
+	}
+	maxPos, err := db.MaxHopPositions(h.DB, ruleIDs)
+	if err != nil {
+		log.Printf("hub: node %d load hop positions: %v", nodeID, err)
+		exitSet = nil
+	}
+
 	node, err := db.GetNode(h.DB, nodeID)
 	if err != nil {
 		log.Printf("hub: node %d load for billing direction: %v", nodeID, err)
@@ -632,6 +658,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	hopWrites := map[int64]*hopWrite{}
 	userNodeAdds := map[userNode]int64{}
 	userAdds := map[int64]int64{}
+	exitAdds := map[db.UserExitKey]int64{}
 
 	for _, s := range samples {
 		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
@@ -651,6 +678,19 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			continue
 		}
 		r := ruleMap[rh.RuleID]
+
+		// Exit ledger: final hop only, raw and unweighted — it records real
+		// traffic to the destination, independent of billing multipliers and
+		// the node's unidirectional setting. Growth must mark the pair touched
+		// itself: a downlink-only batch on a unidirectional node bills 0 and
+		// would otherwise never reach the quota callback.
+		if r != nil && r.OwnerID.Valid && totalDelta > 0 && len(exitSet) > 0 && rh.Position == maxPos[rh.RuleID] {
+			key := db.UserExitKey{UserID: r.OwnerID.Int64, Host: r.ExitHost, Port: r.ExitPort}
+			if exitSet[key] {
+				exitAdds[key] += totalDelta
+				touched[userNode{key.UserID, nodeID}] = true
+			}
+		}
 
 		// Compute weighted = billedDelta × mult × billingRate.
 		// Direct nodes use the node's own rate_multiplier; composite hops
@@ -727,7 +767,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	// Flush every accumulated mutation in a single transaction: one commit (one
 	// fsync) for the whole batch instead of 3-5 auto-commits per sample.
-	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 {
+	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 {
 		if tx, err := h.DB.Begin(); err != nil {
 			log.Printf("hub: node %d counters tx begin: %v", nodeID, err)
 		} else {
@@ -756,6 +796,20 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 				if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, uid); err != nil {
 					log.Printf("hub: user %d traffic add: %v", uid, err)
+					ok = false
+					break
+				}
+			}
+			for k, delta := range exitAdds {
+				if !ok {
+					break
+				}
+				// A zero-row hit means the row was flipped absent and deleted
+				// between load and flush; dropping one batch is the intent of
+				// that deletion.
+				if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = used_bytes + ?, updated_at = ? WHERE user_id=? AND host=? AND port=?`,
+					delta, time.Now().Unix(), k.UserID, k.Host, k.Port); err != nil {
+					log.Printf("hub: user %d exit %s:%d ledger add: %v", k.UserID, k.Host, k.Port, err)
 					ok = false
 					break
 				}
