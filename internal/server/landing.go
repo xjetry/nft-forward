@@ -191,17 +191,57 @@ func (s *Server) apiSubFetch(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"nodes": nodes})
 }
 
-// apiMyLandingNodes returns the current user's landing nodes for the create-rule
-// picker and the landing-nodes nav page. ?refresh=1 bypasses the subscription
-// cache.
+// myLandingNodeView is a landing node plus its exit-ledger fields for the
+// user's landing page.
+type myLandingNodeView struct {
+	landing.Node
+	QuotaBytes int64 `json:"quota_bytes"`
+	UsedBytes  int64 `json:"used_bytes"`
+	Exceeded   bool  `json:"exceeded"`
+}
+
+// apiMyLandingNodes returns the current user's landing nodes for the
+// create-rule picker and the landing-nodes nav page. ?refresh=1 bypasses the
+// subscription cache. A failed resolution serves the last materialized
+// snapshot (stale=true) — billing classification runs on the snapshot, so the
+// list the user sees should match it rather than silently shrink.
 func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	force := r.URL.Query().Get("refresh") == "1"
-	nodes := s.landingNodesFor(u, force)
+	nodes, ok := s.resolveLandingExits(u, force)
+	stale := false
+	if ok {
+		s.syncLandingExits(u, nodes)
+	} else {
+		stale = true
+		if exits, err := db.PresentLandingExitsForUser(s.DB, u.ID); err == nil {
+			nodes = make([]landing.Node, 0, len(exits))
+			for _, e := range exits {
+				nodes = append(nodes, landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI})
+			}
+		}
+	}
+	ledger := map[string]*db.LandingExit{}
+	if exits, err := db.ListUserLandingExits(s.DB, u.ID); err == nil {
+		for _, e := range exits {
+			ledger[net.JoinHostPort(e.Host, strconv.Itoa(e.Port))] = e
+		}
+	}
+	views := make([]myLandingNodeView, 0, len(nodes))
+	for _, n := range nodes {
+		v := myLandingNodeView{Node: n}
+		if e := ledger[net.JoinHostPort(n.Host, strconv.Itoa(n.Port))]; e != nil {
+			v.QuotaBytes = e.QuotaBytes
+			v.UsedBytes = e.UsedBytes
+			v.Exceeded = e.QuotaBytes > 0 && e.UsedBytes >= e.QuotaBytes
+		}
+		views = append(views, v)
+	}
 	jsonOK(w, map[string]any{
-		"nodes":       nodes,
+		"nodes":       views,
 		"has_source":  hasLandingSource(u),
 		"has_dynamic": hasDynamicSource(u),
+		"stale":       stale,
 	})
 }
 
