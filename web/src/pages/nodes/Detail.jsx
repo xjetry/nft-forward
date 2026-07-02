@@ -655,6 +655,10 @@ function RolesCard({ node, onDone }) {
   const [roles, setRoles] = useState(node.roles ?? 1)
   const [saving, setSaving] = useState(false)
   const toast = useToast()
+  // NodeDetail stays mounted when only the :id param changes (e.g. following a
+  // composite link in the rules table), so mount-time seeding alone would keep
+  // the previous node's checkboxes and save its bitmask onto the new node.
+  useEffect(() => setRoles(node.roles ?? 1), [node.id, node.roles])
   const toggle = (bit) => setRoles(r => r ^ bit)
   const save = async () => {
     if (!roles) { toast('至少保留一个角色', 'error'); return }
