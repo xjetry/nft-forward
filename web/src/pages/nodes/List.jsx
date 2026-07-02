@@ -148,6 +148,7 @@ export default function NodeList() {
 
   return (
     <Layout>
+      <div className="h-full flex flex-col">
       <PageHeader title="节点" count={nodes.length} unit="个节点" />
 
       {/* Node list */}
@@ -193,7 +194,7 @@ export default function NodeList() {
               <th className="cursor-pointer select-none" onClick={() => cycleSort('traffic')}>
                 <span className="inline-flex items-center">流量<SortArrow col="traffic" sort={sort} /></span>
               </th>
-              <th className="cursor-pointer select-none" onClick={() => cycleSort('speed')}>
+              <th className="cursor-pointer select-none min-w-[170px]" onClick={() => cycleSort('speed')}>
                 <span className="inline-flex items-center">速度<SortArrow col="speed" sort={sort} /></span>
               </th>
               <th className="text-right">操作</th>
@@ -235,7 +236,7 @@ export default function NodeList() {
                   </td>
                   <td><NodeStatus node={n} /></td>
                   <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</td>
-                  <td className="font-mono text-xs whitespace-nowrap">
+                  <td className="font-mono text-xs whitespace-nowrap min-w-[170px]">
                     {speeds[n.id] ? (
                       <>
                         <span className="text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
@@ -302,6 +303,7 @@ export default function NodeList() {
         </>)}
         </TableScroll>
       </Panel>
+      </div>
 
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />
       <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes.filter(n => n.node_type !== 'composite')} onDone={() => { setShowComposite(false); load() }} />
@@ -398,6 +400,7 @@ function NodeStatus({ node }) {
   if (node.online !== 1) return <Badge color="gray">离线</Badge>
   const lastErr = nullStr(node.last_error)
   if (lastErr) return <Badge color="red" title={lastErr}>错误</Badge>
+  if (node.last_warning) return <Badge color="amber" title={node.last_warning}>警告</Badge>
   if (node.last_apply_at?.Valid) return <Badge color="green">已同步</Badge>
   return <Badge color="amber">待同步</Badge>
 }

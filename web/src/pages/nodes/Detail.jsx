@@ -239,6 +239,11 @@ export default function NodeDetail() {
                 </InfoRow>
               )}
             </div>
+            {node.last_warning && !nullStr(node.last_error) && (
+              <div className="mt-2 text-[12.5px] text-[#b25000] bg-[#fef6ec] border border-[#f6d9ac] rounded-lg px-3 py-2 break-all">
+                {node.last_warning}
+              </div>
+            )}
           </section>
 
           {/* 节点配置 — desktop only */}
@@ -433,6 +438,8 @@ function HeaderStatus({ node }) {
     text = '已禁用'; cls = 'text-[#c2520a] bg-[#fdeede] border-[#f6d4ac]'; dot = '#e0892f'
   } else if (nullStr(node.last_error)) {
     text = '错误'; cls = 'text-[#b42318] bg-[#fef3f2] border-[#f1c7c2]'; dot = '#e5484d'
+  } else if (node.last_warning) {
+    text = '警告'; cls = 'text-[#b25000] bg-[#fef6ec] border-[#f6d9ac]'; dot = '#e0892f'
   } else if (node.online === 1) {
     text = node.last_apply_at?.Valid ? '在线 · 已同步' : '在线 · 待同步'
     cls = 'text-[#0a8a4f] bg-[#e7f7ee] border-[#c6ecd6]'; dot = '#22b46e'
