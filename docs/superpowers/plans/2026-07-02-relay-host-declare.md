@@ -324,12 +324,12 @@ git commit -m "feat(db): add relay_host_declared/relay_host_v6_declared columns"
 **Files:**
 - Modify: `internal/wsproto/messages.go:73-90`（`Hello` struct）
 - Modify: `internal/server/api.go:2521-2526`（提取 `isValidRelayHostV6`）、`internal/server/api.go:648-680`（`apiSetNodeRelayHostV6` 改用它）
-- Modify: `internal/server/hub.go:149-153`（`ServeWS` 接入）、新增 `applyDeclaredRelayHosts` 函数
+- Modify: `internal/server/hub.go:149-153`（`ServeWS` 接入）、`internal/server/hub.go:429-448`（`fillNodeRelayHosts` 加 `declaredV4, declaredV6` 参数，压制无效声明值触发的自动填充）、新增 `applyDeclaredRelayHosts` 函数
 - Test: `internal/server/hub_test.go`
 
 **Interfaces:**
 - Consumes: `db.Node.RelayHostDeclared/RelayHostV6Declared`、`db.SetNodeRelayHostDeclared/SetNodeRelayHostV6Declared`、`db.UpdateNodeRelayHost/UpdateNodeRelayHostV6`（均来自 Task 1）；已有的 `isValidRelayHost`
-- Produces: `wsproto.Hello.DeclaredRelayHost/DeclaredRelayHostV6 string`；`isValidRelayHostV6(host string) bool`；`applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 string)`
+- Produces: `wsproto.Hello.DeclaredRelayHost/DeclaredRelayHostV6 string`；`isValidRelayHostV6(host string) bool`；`applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 string)`；`fillNodeRelayHosts` 签名变为 `(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string)`——后续任务里若有代码直接调用它，需要带上这两个新参数
 
 - [ ] **Step 1: Hello 协议加字段**
 
@@ -615,7 +615,106 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 }
 ```
 
-- [ ] **Step 6: 接入 ServeWS**
+- [ ] **Step 6: fillNodeRelayHosts 加两个参数，压制无效声明值触发的自动填充**
+
+`applyDeclaredRelayHosts` 对不合法的声明值只记日志、不写库，字段照旧为空。如果 `fillNodeRelayHosts` 保持原样不变，紧接着执行到 `if node.RelayHost == ""` 分支时会看到字段仍为空，转而用 connectIP 自动填充——等于用连接观测到的地址悄悄顶替了被拒绝的声明值，这正是本功能要避免的行为（也会让 Step 3 里 `TestHubIgnoresInvalidDeclaredRelayHost` 断言的"无效声明值时字段保持空"失败）。所以 `fillNodeRelayHosts` 需要知道"这次握手是否带了某个家族的声明值（无论合法与否）"，带了就跳过对应家族的自动填充。
+
+`internal/server/hub.go:429-448` 现状：
+
+```go
+func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6 string) {
+	connectIsV6 := false
+	if ip := net.ParseIP(connectIP); ip != nil {
+		connectIsV6 = ip.To4() == nil
+	}
+	if ip := net.ParseIP(node.RelayHost); ip != nil && ip.To4() == nil {
+		if node.RelayHostV6 == "" && !(connectIsV6 && connectIP != "") {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost)
+			node.RelayHostV6 = node.RelayHost
+		}
+		_ = db.UpdateNodeRelayHost(d, node.ID, "")
+		node.RelayHost = ""
+	}
+	if node.RelayHost == "" {
+		if !connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, connectIP)
+		} else if probedV4 != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, probedV4)
+		}
+	}
+	if node.RelayHostV6 == "" {
+		if connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, connectIP)
+		} else if probedV6 != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, probedV6)
+		}
+	}
+}
+```
+
+改成（函数头部文档注释也要补一句，说明新参数的作用——它解释的是"为什么自动填充有时不会发生"，是理解这个函数行为的必要信息，不是可选的旁注）：
+
+```go
+// fillNodeRelayHosts seeds relay_host/relay_host_v6 for a node that hasn't
+// had them set yet. connectIP (the address the panel observed this WS
+// connection arrive from) is authoritative for whichever family it belongs
+// to — it reflects the address as seen after any NAT, unlike a locally
+// self-probed address. The agent's self-probed address only fills the
+// OTHER family, the one this connection didn't use. Never overwrites a
+// manually-configured value (only fires when the DB field is still empty).
+//
+// declaredV4/declaredV6 come from this same hello's applyDeclaredRelayHosts
+// call. A non-empty declared value — even one that failed validation and so
+// was never written — means the operator expressed intent for that family;
+// auto-filling it from connectIP would silently paper over a rejected
+// declaration with the very kind of address (the connection's outbound
+// route) the declare feature exists to override. So a non-empty declared
+// value suppresses auto-fill for its family regardless of whether it was
+// valid. Nodes that never declare anything see declaredV4/declaredV6 always
+// empty, so this guard is always true for them and behavior is unchanged.
+//
+// relay_host must always hold a v4 literal or hostname: an IPv6 literal
+// found there can only be leftover data from before the two fields were
+// split by address family. Such a value is evicted from relay_host
+// unconditionally, so the empty-field seeding below can re-fill it with a
+// proper v4 value. It is migrated into relay_host_v6 only when this
+// connection didn't itself supply a fresher v6 connectIP: connectIP is
+// always more authoritative than data carried over from before the split,
+// since the agent's address may well have changed since that data was
+// written. This makes stale data self-heal on the node's next connection
+// instead of persisting forever, without letting the stale value block a
+// fresher one from landing.
+func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string) {
+	connectIsV6 := false
+	if ip := net.ParseIP(connectIP); ip != nil {
+		connectIsV6 = ip.To4() == nil
+	}
+	if ip := net.ParseIP(node.RelayHost); ip != nil && ip.To4() == nil {
+		if node.RelayHostV6 == "" && !(connectIsV6 && connectIP != "") {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost)
+			node.RelayHostV6 = node.RelayHost
+		}
+		_ = db.UpdateNodeRelayHost(d, node.ID, "")
+		node.RelayHost = ""
+	}
+	if node.RelayHost == "" && declaredV4 == "" {
+		if !connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, connectIP)
+		} else if probedV4 != "" {
+			_ = db.UpdateNodeRelayHost(d, node.ID, probedV4)
+		}
+	}
+	if node.RelayHostV6 == "" && declaredV6 == "" {
+		if connectIsV6 && connectIP != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, connectIP)
+		} else if probedV6 != "" {
+			_ = db.UpdateNodeRelayHostV6(d, node.ID, probedV6)
+		}
+	}
+}
+```
+
+- [ ] **Step 7: 接入 ServeWS**
 
 `internal/server/hub.go:149-153` 现状：
 
@@ -635,10 +734,10 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
 	applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
-	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6)
+	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
 ```
 
-- [ ] **Step 7: 跑测试确认通过**
+- [ ] **Step 8: 跑测试确认通过**
 
 Run: `go test ./internal/server/... -run 'TestHubAppliesDeclaredRelayHost|TestHubDeclaredRelayHostOverridesExistingValue|TestHubIgnoresInvalidDeclaredRelayHost|TestHubClearingDeclaredRelayHostUnlocksValue|TestHubAppliesDeclaredRelayHostV6' -v`
 Expected: PASS（5 项全过）
@@ -646,7 +745,7 @@ Expected: PASS（5 项全过）
 Run: `go test ./internal/server/... ./internal/wsproto/...`
 Expected: PASS（确认没有破坏既有的 `fillNodeRelayHosts`/hub 测试）
 
-- [ ] **Step 8: gofmt + 提交**
+- [ ] **Step 9: gofmt + 提交**
 
 Run: `gofmt -w internal/wsproto/messages.go internal/server/hub.go internal/server/api.go internal/server/hub_test.go`
 Expected: 无输出（`messages.go`/`api.go` 在本次改动前就不是 gofmt 干净状态，格式化后可能看到少量本次未触及的历史对齐变化，属预期行为）

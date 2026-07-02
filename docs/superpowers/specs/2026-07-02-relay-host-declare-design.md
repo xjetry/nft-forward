@@ -84,7 +84,7 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 
 `apiSetNodeRelayHostV6`（`internal/server/api.go`）目前把"必须是合法 IPv6 字面量、且不能是 v4-mapped"这条校验内联写在 handler 里，没有独立函数。本次改动把它提成一个包级函数 `isValidRelayHostV6(host string) bool`（跟 `isValidRelayHost` 并列），API handler 和 `applyDeclaredRelayHosts` 都调用它，避免同一段校验逻辑写两份。
 
-`fillNodeRelayHosts` 本身不需要改：声明生效后字段非空，它内部各个 `if node.RelayHost == ""` 分支自然不会再介入；执行顺序是先 `applyDeclaredRelayHosts` 再 `fillNodeRelayHosts`。
+执行顺序是先 `applyDeclaredRelayHosts` 再 `fillNodeRelayHosts`。声明值合法时，字段已非空，`fillNodeRelayHosts` 内部各个 `if node.RelayHost == ""` 分支自然不会再介入。但声明值**不合法**时字段仍为空——此时不能任由 `fillNodeRelayHosts` 按老逻辑用 connectIP 自动填充，否则会用连接观测到的（很可能就是错误的出口）IP 悄悄顶替被拒绝的声明值，违背运维显式声明的意图。因此 `fillNodeRelayHosts` 需要新增 `declaredV4, declaredV6 string` 两个参数，把两处 `if node.RelayHost == ""` / `if node.RelayHostV6 == ""` 的守卫分别改成 `&& declaredV4 == ""` / `&& declaredV6 == ""`：只要这次握手带了非空声明值（无论校验是否通过），就跳过对应家族的自动填充。对没有声明值的节点（`declaredV4`/`declaredV6` 恒为空字符串）该守卫恒真，行为与改动前完全一致，无回归。
 
 校验失败（声明值不合法）时只记日志、不中断握手——跟现有 `fillNodeRelayHosts` 对 `UpdateNodeRelayHost` 错误的处理方式一致（忽略错误，不影响连接建立）。这条路径是自动化的按连接同步，不是管理员的显式操作，不写 `WriteAudit`，跟 `fillNodeRelayHosts` 现状保持一致。
 
