@@ -397,7 +397,6 @@ func (s *Server) Router() http.Handler {
 			r.Get("/rules/{id}", s.apiGetRule)
 			r.Put("/rules/{id}", s.apiUpdateRule)
 			r.Delete("/rules/{id}", s.apiDeleteRule)
-			r.Post("/rules/{id}/bandwidth", s.apiSetRuleBandwidth)
 			r.Post("/rules/{id}/hops/{pos}/reallocate", s.apiReallocateRuleHop)
 
 			r.Get("/users/{id}", s.apiGetUser)
@@ -413,6 +412,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/reset-days", s.apiSetResetDays)
 			r.Post("/users/{id}/nodes/{nodeID}/max-forwards", s.apiSetPerNodeMaxForwards)
 			r.Post("/users/{id}/nodes/{nodeID}/quota", s.apiSetPerNodeQuota)
+			r.Post("/users/{id}/nodes/{nodeID}/rate-limit", s.apiSetPerNodeRateLimit)
 			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
 
 			r.Get("/users", s.apiListUsers)

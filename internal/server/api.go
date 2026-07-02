@@ -1552,36 +1552,6 @@ func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// apiSetRuleBandwidth sets a rule's bandwidth cap (Mbps, 0 = unlimited) and
-// re-dispatches the affected nodes so tc/userspace shaping takes effect.
-func (s *Server) apiSetRuleBandwidth(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	var body struct {
-		BandwidthMbps int `json:"bandwidth_mbps"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	if body.BandwidthMbps < 0 {
-		jsonErr(w, http.StatusBadRequest, "带宽不能为负")
-		return
-	}
-	nodes, err := db.SetRuleBandwidth(s.DB, id, body.BandwidthMbps)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.apiDispatchFanout(nodes)
-	db.WriteAudit(s.DB, u.ID, "rule.set_bandwidth", strconv.FormatInt(id, 10), strconv.Itoa(body.BandwidthMbps))
-	jsonOK(w, map[string]any{"ok": true, "bandwidth_mbps": body.BandwidthMbps})
-}
-
 func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -2702,6 +2672,46 @@ func (s *Server) apiSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// apiSetPerNodeRateLimit sets the grant's shared rate limit (MB/s, 0 =
+// unlimited) and re-dispatches every node carrying the grant's rule hops so
+// the data plane picks up the new shaping.
+func (s *Server) apiSetPerNodeRateLimit(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad node id")
+		return
+	}
+	var body struct {
+		RateLimitMBytes int64 `json:"rate_limit_mbytes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.RateLimitMBytes < 0 {
+		jsonErr(w, http.StatusBadRequest, "限速不能为负")
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`,
+		body.RateLimitMBytes, userID, nodeID); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	for _, n := range affected {
+		_ = s.dispatchToNode(n)
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d mbytes=%d", nodeID, body.RateLimitMBytes))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")
@@ -2859,6 +2869,7 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 			NodeName          string `json:"node_name"`
 			MaxForwards       int    `json:"max_forwards"`
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
+			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 		} `json:"grants"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -2900,9 +2911,42 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			mb := g.RateLimitMBytes
+			if mb < 0 {
+				mb = 0
+			}
+			if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`, mb, uid, nid); err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 			db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nid, 10))
 			granted++
 		}
 	}
+
+	// batch grants usually precede rule creation (no-op fanout), but changing
+	// an existing grant's rate limit must take effect on already-active rules.
+	affected := map[int64]bool{}
+	for _, g := range body.Grants {
+		nid, ok := nameToID[g.NodeName]
+		if !ok {
+			continue
+		}
+		for _, uid := range body.UserIDs {
+			ns, err := db.RulesAffectedByNode(s.DB, uid, nid)
+			if err != nil {
+				continue
+			}
+			for _, n := range ns {
+				affected[n] = true
+			}
+		}
+	}
+	nodeIDs := make([]int64, 0, len(affected))
+	for n := range affected {
+		nodeIDs = append(nodeIDs, n)
+	}
+	s.apiDispatchFanout(nodeIDs)
+
 	jsonOK(w, map[string]any{"ok": true, "granted": granted, "skipped_nodes": skipped})
 }

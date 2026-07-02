@@ -572,19 +572,6 @@ func scanRule(r rowScanner) (*Rule, error) {
 	return rl, nil
 }
 
-// SetRuleBandwidth sets a rule's bandwidth cap in Mbps (0 = unlimited) and
-// returns the node IDs whose kernel state must be re-pushed so the data plane
-// picks up the new shaping.
-func SetRuleBandwidth(d *sql.DB, ruleID int64, mbps int) ([]int64, error) {
-	if mbps < 0 {
-		mbps = 0
-	}
-	if _, err := d.Exec(`UPDATE rules SET bandwidth_mbps=? WHERE id=?`, mbps, ruleID); err != nil {
-		return nil, err
-	}
-	return queryInt64s(d, `SELECT DISTINCT node_id FROM rule_hops WHERE rule_id=?`, ruleID)
-}
-
 const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
