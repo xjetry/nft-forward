@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -202,4 +203,132 @@ func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 		"has_source":  hasLandingSource(u),
 		"has_dynamic": hasDynamicSource(u),
 	})
+}
+
+// apiListUserLandingExits returns the user's materialized landing-exit set
+// for the admin quota card. ?refresh=1 re-resolves the source first; a failed
+// resolution silently serves the existing snapshot.
+func (s *Server) apiListUserLandingExits(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	target, err := db.GetUserByID(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if r.URL.Query().Get("refresh") == "1" {
+		if nodes, ok := s.resolveLandingExits(target, true); ok {
+			s.syncLandingExits(target, nodes)
+		}
+	}
+	exits, err := db.ListUserLandingExits(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"exits": exits})
+}
+
+// exitBody is the shared request shape addressing one exit row.
+type exitBody struct {
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	QuotaBytes int64  `json:"quota_bytes"`
+}
+
+func (s *Server) apiSetLandingExitQuota(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body exitBody
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if body.QuotaBytes < 0 {
+		jsonErr(w, http.StatusBadRequest, "字节数无效")
+		return
+	}
+	updated, present, err := db.SetUserLandingExitQuota(s.DB, id, body.Host, body.Port, body.QuotaBytes)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !updated {
+		jsonErr(w, http.StatusNotFound, "出口不存在")
+		return
+	}
+	// A lowered quota may start excluding immediately; a raised/cleared one
+	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
+	if present {
+		go s.redispatchUserExit(id, body.Host, body.Port)
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
+		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body exitBody
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	updated, present, err := db.ResetUserLandingExitTraffic(s.DB, id, body.Host, body.Port)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !updated {
+		jsonErr(w, http.StatusNotFound, "出口不存在")
+		return
+	}
+	if present {
+		go s.redispatchUserExit(id, body.Host, body.Port)
+	}
+	db.WriteAudit(s.DB, u.ID, "user.reset_exit_traffic", strconv.FormatInt(id, 10),
+		fmt.Sprintf("%s:%d", body.Host, body.Port))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiDeleteLandingExit(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body exitBody
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	status, err := db.DeleteUserLandingExit(s.DB, id, body.Host, body.Port)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	switch status {
+	case "notfound":
+		jsonErr(w, http.StatusNotFound, "出口不存在")
+		return
+	case "present":
+		jsonErr(w, http.StatusConflict, "在册出口由同步维护，不可删除")
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.delete_exit", strconv.FormatInt(id, 10),
+		fmt.Sprintf("%s:%d", body.Host, body.Port))
+	jsonOK(w, map[string]any{"ok": true})
 }

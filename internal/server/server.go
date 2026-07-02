@@ -491,6 +491,10 @@ func (s *Server) Router() http.Handler {
 			r.Post("/users/{id}/nodes/{nodeID}/quota", s.apiSetPerNodeQuota)
 			r.Post("/users/{id}/nodes/{nodeID}/rate-limit", s.apiSetPerNodeRateLimit)
 			r.Post("/users/{id}/nodes/{nodeID}/reset-traffic", s.apiResetPerNodeTraffic)
+			r.Get("/users/{id}/landing-exits", s.apiListUserLandingExits)
+			r.Post("/users/{id}/landing-exits/quota", s.apiSetLandingExitQuota)
+			r.Post("/users/{id}/landing-exits/reset", s.apiResetLandingExitTraffic)
+			r.Post("/users/{id}/landing-exits/delete", s.apiDeleteLandingExit)
 
 			r.Get("/users", s.apiListUsers)
 			r.Patch("/users/{id}/profile", s.apiUpdateUserProfile)
