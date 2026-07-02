@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/portutil"
+	"nft-forward/internal/resolver"
 	"nft-forward/internal/wsproto"
 )
 
@@ -79,10 +81,14 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 // d.owners; it may modify the map freely. A nil mutate means re-resolve
 // with the current owners unchanged (used by the DNS refresh loop).
 //
-// On success the returned slice is the freshly-resolved rules that were
-// applied, and *committed* reports whether d.owners/d.lastResolved were
-// actually updated (false when resolved rules are identical to the
-// previous set -- the DNS-refresh no-op case).
+// DNS resolution is best-effort: a rule whose host doesn't resolve is held
+// back rather than failing the whole call, so one bad target can't red the
+// rest of the node. *resolved* is the rules that were actually applied;
+// *unresolved* is the rules skipped for lack of an IP -- still persisted (via
+// candidate) so the refresh loop retries them, but never handed to the data
+// plane. *committed* reports whether d.owners/d.lastResolved were actually
+// updated (false when the applyable set is identical to the previous one --
+// the DNS-refresh no-op case).
 //
 // metaFn, if non-nil, is called under d.mu right before commit to let the
 // caller adjust AgentMeta (e.g. record a panel rev).
@@ -95,7 +101,7 @@ func (d *Daemon) reconcileOwners(
 	mutate func(OwnerRuleset),
 	metaFn func(*AgentMeta),
 	saveToDisk bool,
-) (resolved []nft.Rule, committed bool, err error) {
+) (resolved []nft.Rule, unresolved []nft.Rule, committed bool, err error) {
 	d.mu.Lock()
 	candidate := cloneOwners(d.owners)
 	prev := append([]nft.Rule(nil), d.lastResolved...)
@@ -107,26 +113,34 @@ func (d *Daemon) reconcileOwners(
 
 	merged, err := MergedRuleset(candidate)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resolved, _, err = d.resolveFn(rctx, merged)
+	resolved, _, rerr := d.resolveFn(rctx, merged)
 	cancel()
-	if err != nil {
-		return nil, false, err
-	}
-	if err := requireResolvedHosts(resolved); err != nil {
-		return nil, false, err
-	}
-
-	// DNS-refresh callers skip apply+commit when nothing moved.
-	if !saveToDisk && !rulesDiffer(prev, resolved) {
-		return resolved, false, nil
+	// DNS is best-effort: resolveFn returns the best-effort slice even on
+	// partial failure (unresolved hostnames keep their previous DestIP, empty
+	// if never resolved). Hold back the still-unresolved ones instead of
+	// failing the whole apply, so one bad target can't red the whole node.
+	applyable, unresolved := partitionResolved(resolved)
+	if len(unresolved) > 0 {
+		log.Printf("reconcile: holding back %d rule(s) with unresolved target (retry in refresh loop): %v", len(unresolved), rerr)
 	}
 
-	if err := d.applySerialized(ctx, resolved); err != nil {
-		return nil, false, fmt.Errorf("apply: %w", err)
+	// The kernel apply is skipped whenever the applyable set is unchanged
+	// from what's already live -- this covers both the DNS-refresh no-op
+	// case and a write (create/update/delete) whose only effect was to
+	// add/hold a rule that's still unresolved. DNS-refresh callers additionally
+	// skip the commit below (nothing to persist); write callers still commit
+	// so the new/edited rule (even an unresolved one) lands in d.owners and
+	// on disk for the refresh loop to retry.
+	if !rulesDiffer(prev, applyable) {
+		if !saveToDisk {
+			return applyable, unresolved, false, nil
+		}
+	} else if err := d.applySerialized(ctx, applyable); err != nil {
+		return nil, unresolved, false, fmt.Errorf("apply: %w", err)
 	}
 
 	d.mu.Lock()
@@ -137,13 +151,13 @@ func (d *Daemon) reconcileOwners(
 	}
 	if saveToDisk {
 		if err := SaveState(d.statePath, candidate, meta); err != nil {
-			return nil, false, fmt.Errorf("save state: %w", err)
+			return nil, unresolved, false, fmt.Errorf("save state: %w", err)
 		}
 	}
 	d.owners = candidate
 	d.meta = meta
-	d.lastResolved = append([]nft.Rule(nil), resolved...)
-	return resolved, true, nil
+	d.lastResolved = append([]nft.Rule(nil), applyable...)
+	return applyable, unresolved, true, nil
 }
 
 // closeSerialized runs dp.Close under the same reconcileMu as applySerialized
@@ -324,13 +338,17 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		Comment:  req.Comment,
 		Mode:     req.Mode,
 	}
-	if ip := net.ParseIP(req.ExitHost); ip != nil {
-		rule.DestIP = req.ExitHost
-	} else {
+	if net.ParseIP(req.ExitHost) == nil {
+		if !resolver.PlausibleHostname(req.ExitHost) {
+			http.Error(w, "出口地址非法："+req.ExitHost+" 不是合法 IP 或域名", http.StatusBadRequest)
+			return
+		}
 		rule.DestHost = req.ExitHost
+	} else {
+		rule.DestIP = req.ExitHost
 	}
 
-	_, _, err := d.reconcileOwners(r.Context(),
+	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
 			candidate["tui"] = append(candidate["tui"], rule)
 		}, nil, true)
@@ -379,9 +397,14 @@ func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
+	if req.ExitHost != "" && net.ParseIP(req.ExitHost) == nil && !resolver.PlausibleHostname(req.ExitHost) {
+		http.Error(w, "出口地址非法："+req.ExitHost+" 不是合法 IP 或域名", http.StatusBadRequest)
+		return
+	}
+
 	// Local hex ID: update in "tui" segment.
 	found := false
-	_, _, err := d.reconcileOwners(r.Context(),
+	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
 			rules := candidate["tui"]
 			for i := range rules {
@@ -449,7 +472,7 @@ func (d *Daemon) handleDeleteRule(w http.ResponseWriter, r *http.Request, id str
 
 	// Local hex ID: remove from "tui" segment.
 	found := false
-	_, _, err := d.reconcileOwners(r.Context(),
+	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
 			rules := candidate["tui"]
 			for i := range rules {

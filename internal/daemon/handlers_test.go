@@ -427,17 +427,38 @@ func TestCreateRule_ResolvesDestHost(t *testing.T) {
 	}
 }
 
-func TestCreateRule_RejectsUnresolvableHost(t *testing.T) {
+func TestCreateRule_AcceptsUnresolvableButValidHost(t *testing.T) {
+	fake := &fakeDataplane{}
 	d := newTestDaemon(t)
+	d.dp = fake
 	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
-		return in, false, nil
+		// nowhere.invalid 语法合法但解析不了：保持 DestIP 为空并报聚合错误
+		return in, false, fmt.Errorf("dns: nowhere.invalid: no such host")
 	}
 	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "nowhere.invalid", ExitPort: 80, ListenPort: 12000})
 	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
+	if w.Code/100 != 2 {
+		t.Fatalf("status = %d, want 2xx (tolerant): %s", w.Code, w.Body.String())
+	}
+	// 规则入库（供刷新循环重试），但未下发到数据面（DestIP 空被跳过）
+	if len(d.owners["tui"]) != 1 {
+		t.Fatalf("rule should be stored in tui segment, got %+v", d.owners["tui"])
+	}
+	if len(fake.nftCalls) != 0 {
+		t.Fatalf("unresolved rule must not reach dataplane, got %d apply calls", len(fake.nftCalls))
+	}
+}
+
+func TestCreateRule_RejectsSyntacticallyInvalidHost(t *testing.T) {
+	d := newTestDaemon(t)
+	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "4212", ExitPort: 80, ListenPort: 12000})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rules", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+		t.Fatalf("status = %d, want 400 for numeric host", w.Code)
 	}
 }
 

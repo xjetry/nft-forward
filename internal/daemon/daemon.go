@@ -175,12 +175,7 @@ func (d *Daemon) Bootstrap() error {
 		}
 		// Apply only rules that resolved successfully; unresolved hosts
 		// will be picked up by the periodic refresh loop.
-		var applyable []nft.Rule
-		for _, r := range resolved {
-			if r.DestHost == "" || r.DestIP != "" {
-				applyable = append(applyable, r)
-			}
-		}
+		applyable, _ := partitionResolved(resolved)
 		resolved = applyable
 		if len(resolved) > 0 {
 			if err := d.applySerialized(ctx, resolved); err != nil {
@@ -338,7 +333,7 @@ func (d *Daemon) RunWithSignals() error {
 // agent_meta.LastAppliedRev as part of the same SaveState transaction
 // so a reconnect won't replay the same payload.
 func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) error {
-	_, _, err := d.reconcileOwners(ctx,
+	_, _, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			if len(rules) == 0 {
 				delete(candidate, "panel")
@@ -364,7 +359,7 @@ func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Ru
 func (d *Daemon) clearTuiSegment() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _, err := d.reconcileOwners(ctx,
+	_, _, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			delete(candidate, "tui")
 		}, nil, true)

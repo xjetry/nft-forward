@@ -24,16 +24,20 @@ func defaultResolver(r *resolver.Resolver) resolveFunc {
 	}
 }
 
-// requireResolvedHosts returns an error naming the first rule whose DestHost
-// did not resolve to an IP. Callers reject the apply rather than silently
-// pushing an unreachable rule into nftables.
-func requireResolvedHosts(rules []nft.Rule) error {
+// partitionResolved splits rules into those safe to apply now (a literal IP,
+// or a hostname that already resolved to an IP) and those still unresolved (a
+// hostname with no IP yet). Unresolved rules are held back so one bad target
+// can never block the rest; the refresh loop retries them, and callers that
+// care surface them (e.g. as a node-level warning).
+func partitionResolved(rules []nft.Rule) (applyable, unresolved []nft.Rule) {
 	for _, r := range rules {
-		if r.DestHost != "" && r.DestIP == "" {
-			return fmt.Errorf("rule %s/%d: 无法解析目标域名 %s", r.Proto, r.SrcPort, r.DestHost)
+		if r.DestHost == "" || r.DestIP != "" {
+			applyable = append(applyable, r)
+		} else {
+			unresolved = append(unresolved, r)
 		}
 	}
-	return nil
+	return
 }
 
 // refreshOnce performs a single DNS refresh pass: re-resolve and re-apply
@@ -41,7 +45,7 @@ func requireResolvedHosts(rules []nft.Rule) error {
 // d.lastResolved so subsequent passes can detect "nothing moved" without
 // an extra system call.
 func (d *Daemon) refreshOnce(ctx context.Context) error {
-	_, _, err := d.reconcileOwners(ctx, nil, nil, false)
+	_, _, _, err := d.reconcileOwners(ctx, nil, nil, false)
 	if err != nil {
 		return fmt.Errorf("dns refresh: %w", err)
 	}
