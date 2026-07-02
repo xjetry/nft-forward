@@ -19,7 +19,12 @@ func Open(path string) (*sql.DB, error) {
 		// best-effort; if MkdirAll fails the Open below surfaces a real error
 		_ = ensureDir(dir)
 	}
-	d, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	// synchronous=NORMAL is the recommended durability level under WAL: safe
+	// across application crashes, only the last transaction is at risk on OS
+	// power loss. It avoids an fsync per commit, which matters here because the
+	// hot counters path commits frequently and MaxOpenConns(1) serializes every
+	// writer behind those fsyncs.
+	d, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}

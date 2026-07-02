@@ -596,7 +596,17 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		log.Printf("hub: load hop multipliers: %v", err)
 		hopMultipliers = map[int64]map[int64]float64{}
 	}
-	ruleMap, _ := db.RulesByID(h.DB)
+	// Only the rules referenced by this node's hops are ever looked up, so load
+	// just those instead of scanning the whole rules table every counters batch.
+	ruleIDSet := map[int64]bool{}
+	for _, rh := range hopMap {
+		ruleIDSet[rh.RuleID] = true
+	}
+	ruleIDs := make([]int64, 0, len(ruleIDSet))
+	for id := range ruleIDSet {
+		ruleIDs = append(ruleIDs, id)
+	}
+	ruleMap, _ := db.RulesByIDs(h.DB, ruleIDs)
 	if ruleMap == nil {
 		ruleMap = map[int64]*db.Rule{}
 	}
@@ -609,8 +619,19 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	type userNode struct{ userID, nodeID int64 }
 	touched := map[userNode]bool{}
-	cycleChecked := map[int64]bool{}
-	billingRates := map[int64]float64{}
+	// userCache holds each owning user loaded once per batch (nil on load error),
+	// serving both the cycle-reset check and the billing-rate lookup so the same
+	// user isn't queried twice per sample.
+	userCache := map[int64]*db.User{}
+
+	// Accumulate all row mutations and flush them in one transaction after the
+	// loop. Reads, cycle resets and redispatch stay outside any tx: with
+	// MaxOpenConns(1) a tx holds the only connection, so a pool read or a
+	// redispatch goroutine inside it would deadlock.
+	type hopWrite struct{ lastBytes, lastUp, lastDown, addWeighted int64 }
+	hopWrites := map[int64]*hopWrite{}
+	userNodeAdds := map[userNode]int64{}
+	userAdds := map[int64]int64{}
 
 	for _, s := range samples {
 		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
@@ -640,9 +661,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		if hasOwner {
 			userID = r.OwnerID.Int64
 
-			if !cycleChecked[userID] {
-				cycleChecked[userID] = true
-				if u, err := db.GetUserByID(h.DB, userID); err == nil {
+			u, cached := userCache[userID]
+			if !cached {
+				u, _ = db.GetUserByID(h.DB, userID) // nil on error; cache either way
+				userCache[userID] = u
+				if u != nil {
 					if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
 						if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
 							_ = db.SetUserDisabled(h.DB, userID, false, "")
@@ -665,43 +688,84 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 					}
 				}
 			}
-			billingRate, ok := billingRates[userID]
-			if !ok {
-				billingRate = 1.0
-				if u, err := db.GetUserByID(h.DB, userID); err == nil && u.BillingRate > 0 {
-					billingRate = u.BillingRate
-				}
-				billingRates[userID] = billingRate
+			billingRate := 1.0
+			if u != nil && u.BillingRate > 0 {
+				billingRate = u.BillingRate
 			}
 			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
 		}
 
 		// rule_hops: last_bytes are raw (for speed display), total_bytes is
-		// the cumulative billed amount so it matches quota accounting.
-		if _, err := h.DB.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
-			totalDelta, s.BytesUp, s.BytesDown, weighted, rh.ID); err != nil {
-			log.Printf("hub: node %d counters update for %s/%d: %v", nodeID, s.Proto, s.ListenPort, err)
-			continue
+		// the cumulative billed amount so it matches quota accounting. A tcp+udp
+		// hop can fan in as two samples to the same row; last_* take the last
+		// sample's value and addWeighted sums, matching the prior per-sample
+		// UPDATE sequence.
+		w := hopWrites[rh.ID]
+		if w == nil {
+			w = &hopWrite{}
+			hopWrites[rh.ID] = w
 		}
+		w.lastBytes = totalDelta
+		w.lastUp = s.BytesUp
+		w.lastDown = s.BytesDown
+		w.addWeighted += weighted
 
 		if !hasOwner || weighted <= 0 {
 			continue
 		}
 
-		if err := db.AddUserNodeTraffic(h.DB, userID, nodeID, weighted); err != nil {
-			log.Printf("hub: user %d node %d per-node traffic add: %v", userID, nodeID, err)
-		}
+		userNodeAdds[userNode{userID, nodeID}] += weighted
 		if r.NodeID != nodeID && rh.Position == 0 {
-			if err := db.AddUserNodeTraffic(h.DB, userID, r.NodeID, weighted); err != nil {
-				log.Printf("hub: user %d composite node %d per-node traffic add: %v", userID, r.NodeID, err)
-			}
+			userNodeAdds[userNode{userID, r.NodeID}] += weighted
 		}
-		if err := db.AddUserTraffic(h.DB, userID, weighted); err != nil {
-			log.Printf("hub: user %d traffic add: %v", userID, err)
-			continue
-		}
+		userAdds[userID] += weighted
 
 		touched[userNode{userID, nodeID}] = true
+	}
+
+	// Flush every accumulated mutation in a single transaction: one commit (one
+	// fsync) for the whole batch instead of 3-5 auto-commits per sample.
+	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 {
+		if tx, err := h.DB.Begin(); err != nil {
+			log.Printf("hub: node %d counters tx begin: %v", nodeID, err)
+		} else {
+			ok := true
+			for id, w := range hopWrites {
+				if _, err := tx.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
+					w.lastBytes, w.lastUp, w.lastDown, w.addWeighted, id); err != nil {
+					log.Printf("hub: node %d counters rule_hop update: %v", nodeID, err)
+					ok = false
+					break
+				}
+			}
+			for un, delta := range userNodeAdds {
+				if !ok {
+					break
+				}
+				if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = traffic_used_bytes + ? WHERE user_id=? AND node_id=?`, delta, un.userID, un.nodeID); err != nil {
+					log.Printf("hub: user %d node %d per-node traffic add: %v", un.userID, un.nodeID, err)
+					ok = false
+					break
+				}
+			}
+			for uid, delta := range userAdds {
+				if !ok {
+					break
+				}
+				if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, uid); err != nil {
+					log.Printf("hub: user %d traffic add: %v", uid, err)
+					ok = false
+					break
+				}
+			}
+			if ok {
+				if err := tx.Commit(); err != nil {
+					log.Printf("hub: node %d counters tx commit: %v", nodeID, err)
+				}
+			} else {
+				_ = tx.Rollback()
+			}
+		}
 	}
 
 	deltas := make([]counterDelta, 0, len(samples))

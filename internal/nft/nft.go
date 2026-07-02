@@ -197,6 +197,10 @@ func RenderRuleset(rules []Rule) string {
 	b.WriteString("\t}\n")
 	b.WriteString("\tchain account {\n")
 	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
+	// Two counter rules per forwarded rule (original + reply) are intentional:
+	// upload and download are billed and displayed separately. Do not collapse
+	// them into one direction-agnostic counter — that would lose the up/down
+	// split the panel and unidirectional billing rely on.
 	for _, r := range rules {
 		if r.DestIP == "" || IsLoopback(r.DestIP) {
 			continue

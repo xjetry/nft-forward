@@ -329,6 +329,30 @@ func RulesByID(d *sql.DB) (map[int64]*Rule, error) {
 	return m, nil
 }
 
+// RulesByIDs loads only the given rules into a map, so hot paths that already
+// know which rules they touch (e.g. counters for one node) don't scan the whole
+// rules table every batch. An empty id set returns an empty map.
+func RulesByIDs(d *sql.DB, ids []int64) (map[int64]*Rule, error) {
+	m := make(map[int64]*Rule, len(ids))
+	if len(ids) == 0 {
+		return m, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	all, err := listRulesWhere(d, "id IN ("+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range all {
+		m[r.ID] = r
+	}
+	return m, nil
+}
+
 // ListRuleHops returns hops for a rule ordered by position.
 func ListRuleHops(d DBTX, ruleID int64) ([]*RuleHop, error) {
 	return queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE rule_id=? ORDER BY position`, scanRuleHop, ruleID)
