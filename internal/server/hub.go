@@ -427,6 +427,16 @@ func extractIP(r *http.Request) string {
 // written. This makes stale data self-heal on the node's next connection
 // instead of persisting forever, without letting the stale value block a
 // fresher one from landing.
+//
+// declaredV4/declaredV6 come from this same hello's applyDeclaredRelayHosts
+// call. A non-empty declared value — even one that failed validation and so
+// was never written — means the operator expressed intent for that family;
+// auto-filling it from connectIP would silently paper over a rejected
+// declaration with the very kind of address (the connection's outbound
+// route) the declare feature exists to override. So a non-empty declared
+// value suppresses auto-fill for its family regardless of whether it was
+// valid. Nodes that never declare anything see declaredV4/declaredV6 always
+// empty, so this guard is always true for them and behavior is unchanged.
 func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string) {
 	connectIsV6 := false
 	if ip := net.ParseIP(connectIP); ip != nil {
@@ -473,6 +483,8 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 				_ = db.SetNodeRelayHostDeclared(d, node.ID, true)
 				node.RelayHost, node.RelayHostDeclared = declaredV4, true
 			}
+		} else {
+			log.Printf("hub: node %d declared invalid relay_host %q, ignoring", node.ID, declaredV4)
 		}
 	} else if node.RelayHostDeclared {
 		_ = db.SetNodeRelayHostDeclared(d, node.ID, false)
@@ -486,6 +498,8 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 				_ = db.SetNodeRelayHostV6Declared(d, node.ID, true)
 				node.RelayHostV6, node.RelayHostV6Declared = declaredV6, true
 			}
+		} else {
+			log.Printf("hub: node %d declared invalid relay_host_v6 %q, ignoring", node.ID, declaredV6)
 		}
 	} else if node.RelayHostV6Declared {
 		_ = db.SetNodeRelayHostV6Declared(d, node.ID, false)
