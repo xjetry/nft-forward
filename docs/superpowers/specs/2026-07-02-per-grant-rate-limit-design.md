@@ -21,7 +21,7 @@ UPDATE rules SET bandwidth_mbps = 0;
 
 - `rules.bandwidth_mbps` 列保留（SQLite 兼容惯例）但清零并移除全部代码引用：`ruleCols`/`scanRule`/`Rule.BandwidthMbps`(db 层)/`SetRuleBandwidth` 删除。
 - `db.UserNode` 加 `RateLimitMBytes int`（json `rate_limit_mbytes`）。`grants.go` 中所有 SELECT 与 inline scan 同步追加——该文件多处内联 scan，漏改会静默错位。
-- `GrantNode` upsert 的 ON CONFLICT 同步覆盖 `rate_limit_mbytes`（与 max_forwards、traffic_quota_bytes 一致）。
+- `GrantNode` 签名与 upsert 行为不变：ON CONFLICT **不触碰** `rate_limit_mbytes`（重授权不清限速，rowid 稳定即整形组稳定）；限速只经专用 UPDATE 路径写入（rate-limit 端点与 batch-apply）。
 
 ## API
 
