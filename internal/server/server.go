@@ -81,6 +81,11 @@ func (s *Server) expiryEnforcer() {
 // This covers users who are globally disabled (all rules already removed from
 // the kernel) and therefore receive no traffic — without this goroutine they
 // would never reach the cycle-reset check in applyCounters.
+//
+// The re-push runs unconditionally after a reset, not only for re-enabled
+// users: per-grant quota exclusions are evaluated at push time only, so a
+// suppressed rule stays dead until something re-pushes even when the user was
+// never globally disabled.
 func (s *Server) cycleResetEnforcer() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -111,11 +116,13 @@ func (s *Server) cycleResetEnforcer() {
 						log.Printf("cycle: re-enable user %d: %v", u.ID, err)
 						continue
 					}
-					if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
-						for _, n := range nodes {
-							if err := s.dispatchToNode(n); err != nil {
-								log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
-							}
+				}
+				// Quota exclusions are evaluated at push time only; a fresh
+				// cycle must re-push or suppressed rules stay dead.
+				if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
+					for _, n := range nodes {
+						if err := s.dispatchToNode(n); err != nil {
+							log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
 						}
 					}
 				}
