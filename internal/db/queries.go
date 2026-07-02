@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+const (
+	NodeRoleEntry int64 = 1 << 0
+	NodeRoleVia   int64 = 1 << 1
+)
+
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`
@@ -69,6 +74,10 @@ type Node struct {
 	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
 	RateMultiplier      float64        `json:"rate_multiplier"`
 	Unidirectional      bool           `json:"unidirectional"`
+	// Roles is a bitmask of what the node can be used as: NodeRoleEntry means
+	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
+	// behind an upstream node as a middle-layer segment. A node may hold both.
+	Roles int64 `json:"roles"`
 	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
 	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
 	// (entry = first hop's own relay fields, exit = last hop's v6 relay field),
@@ -293,7 +302,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -316,7 +325,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
-		&relayHostDeclared, &relayHostV6Declared,
+		&relayHostDeclared, &relayHostV6Declared, &n.Roles,
 	); err != nil {
 		return nil, err
 	}
@@ -514,6 +523,11 @@ func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
 		v = 1
 	}
 	_, err := d.Exec(`UPDATE nodes SET unidirectional=? WHERE id=?`, v, id)
+	return err
+}
+
+func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
+	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
 	return err
 }
 

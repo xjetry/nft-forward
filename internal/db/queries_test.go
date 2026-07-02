@@ -89,3 +89,38 @@ func TestNodeRelayHostDeclaredRoundTrip(t *testing.T) {
 		t.Error("RelayHostV6Declared should remain true (only the v4 flag was cleared)")
 	}
 }
+
+func TestNodeRolesRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+	n, err := CreateNode(d, "hk-1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Roles != NodeRoleEntry {
+		t.Fatalf("default roles want %d, got %d", NodeRoleEntry, n.Roles)
+	}
+	if err := UpdateNodeRoles(d, n.ID, NodeRoleEntry|NodeRoleVia); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := GetNode(d, n.ID)
+	if got.Roles != NodeRoleEntry|NodeRoleVia {
+		t.Fatalf("roles want %d, got %d", NodeRoleEntry|NodeRoleVia, got.Roles)
+	}
+}
+
+func TestListNodesForUserCarriesRoles(t *testing.T) {
+	d := openTestDB(t)
+	uid, _ := CreateUser(d, "testuser", "hash", "user")
+	n, _ := CreateNode(d, "hk-1", "", "")
+	_ = UpdateNodeRoles(d, n.ID, NodeRoleVia)
+	if err := GrantNode(d, uid, n.ID, 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _, err := ListNodesForUser(d, uid)
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("want 1 node, err=%v n=%d", err, len(nodes))
+	}
+	if nodes[0].Roles != NodeRoleVia {
+		t.Fatalf("roles want %d, got %d", NodeRoleVia, nodes[0].Roles)
+	}
+}
