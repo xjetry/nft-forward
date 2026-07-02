@@ -37,6 +37,8 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
+	actor := userFromCtx(r.Context())
+
 	nodeStr := r.URL.Query().Get("node")
 	if nodeStr != "" {
 		nodeID, err := strconv.ParseInt(nodeStr, 10, 64)
@@ -49,6 +51,15 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(probeResult{Error: "node not found"})
 			return
 		}
+		// A non-admin may probe only through nodes they've been granted, so the
+		// node can't be used as a scanning proxy against arbitrary targets.
+		if actor != nil && actor.Role != "admin" {
+			if _, err := db.CheckNodeAccess(s.DB, actor.ID, nodeID); err != nil {
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(probeResult{Error: "无权操作该节点"})
+				return
+			}
+		}
 		if n.NodeType == "composite" {
 			s.probeCompositeToTarget(w, nodeID, target)
 			return
@@ -59,6 +70,15 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(probeResult{OK: ack.OK, Latency: ack.Latency, Error: ack.Error})
+		return
+	}
+
+	// The node-less branch makes the panel process itself dial the target — an
+	// SSRF primitive into the panel's own network. The UI never uses it (it
+	// always passes a node), so restrict it to admins.
+	if actor == nil || actor.Role != "admin" {
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(probeResult{Error: "无权操作"})
 		return
 	}
 

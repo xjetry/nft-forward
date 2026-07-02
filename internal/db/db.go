@@ -31,7 +31,48 @@ func Open(path string) (*sql.DB, error) {
 		d.Close()
 		return nil, err
 	}
+	if err := hashLegacyAPITokens(d); err != nil {
+		d.Close()
+		return nil, err
+	}
 	return d, nil
+}
+
+// hashLegacyAPITokens converts pre-0025 plaintext api_tokens rows to the
+// hash-at-rest form in place, preserving each token so existing integrations
+// keep working. token_prefix='' marks a not-yet-migrated row; after conversion
+// the prefix is set, so this is idempotent and a no-op on already-hashed DBs.
+// SHA-256 can't be computed in modernc SQLite, so the backfill runs in Go.
+func hashLegacyAPITokens(d *sql.DB) error {
+	rows, err := d.Query(`SELECT id, token FROM api_tokens WHERE token_prefix = ''`)
+	if err != nil {
+		return err
+	}
+	type legacy struct {
+		id    int64
+		token string
+	}
+	var pending []legacy
+	for rows.Next() {
+		var l legacy
+		if err := rows.Scan(&l.id, &l.token); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, l)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, l := range pending {
+		if _, err := d.Exec(`UPDATE api_tokens SET token=?, token_prefix=? WHERE id=?`,
+			HashToken(l.token), tokenPrefix(l.token), l.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrate(d *sql.DB) error {

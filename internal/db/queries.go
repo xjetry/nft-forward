@@ -2,6 +2,7 @@ package db
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -40,7 +41,11 @@ type Node struct {
 	NodeType            string         `json:"node_type"`
 	OwnerID             *int64         `json:"owner_id,omitempty"`
 	Address             string         `json:"address"`
-	Secret              string         `json:"secret"`
+	// Secret is the node's WS auth credential — the only thing an agent presents
+	// to connect. It must never be serialized to user-facing responses (a granted
+	// user could otherwise impersonate the node). json:"-" makes leaking it opt-in:
+	// the admin node-detail endpoint re-adds it explicitly via nodeWithSecret.
+	Secret              string         `json:"-"`
 	RelayHost           string         `json:"relay_host"`
 	RelayHostV6         string         `json:"relay_host_v6"`
 	RelayHostDeclared   bool           `json:"relay_host_declared"`
@@ -115,6 +120,26 @@ func RandToken(n int) string {
 		panic("crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// HashToken derives the at-rest form of a bearer credential (session cookie or
+// API token). These tokens are already high-entropy random values, so a plain
+// SHA-256 is sufficient — no salt/bcrypt needed — and lets lookups stay a single
+// indexed equality match on the hash. Only the hash is ever stored, so a DB
+// leak no longer exposes replayable credentials.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// tokenPrefix returns the first 8 chars of a token for display, or the whole
+// token if shorter. It lets the UI show a recognizable prefix without keeping
+// the full plaintext at rest.
+func tokenPrefix(token string) string {
+	if len(token) < 8 {
+		return token
+	}
+	return token[:8]
 }
 
 func now() int64 { return time.Now().Unix() }
@@ -203,7 +228,7 @@ func UsersByID(d *sql.DB) (map[int64]*User, error) {
 func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	token := RandToken(24)
 	_, err := d.Exec(`INSERT INTO sessions(token, user_id, expires_at, created_at) VALUES (?,?,?,?)`,
-		token, userID, time.Now().Add(ttl).Unix(), now())
+		HashToken(token), userID, time.Now().Add(ttl).Unix(), now())
 	if err != nil {
 		return "", err
 	}
@@ -216,11 +241,11 @@ func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
 		SELECT `+userColsQualified+`
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, token))
+		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, HashToken(token)))
 }
 
 func DeleteSession(d *sql.DB, token string) error {
-	_, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, token)
+	_, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, HashToken(token))
 	return err
 }
 

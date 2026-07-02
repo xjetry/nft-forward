@@ -22,12 +22,13 @@ import (
 )
 
 type Server struct {
-	DB         *sql.DB
-	Hub        *Hub
-	Dispatcher *Dispatcher
-	Landing    *landing.Fetcher
-	stopExpiry chan struct{}
-	stopCycle  chan struct{}
+	DB           *sql.DB
+	Hub          *Hub
+	Dispatcher   *Dispatcher
+	Landing      *landing.Fetcher
+	loginLimiter *loginLimiter
+	stopExpiry   chan struct{}
+	stopCycle    chan struct{}
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -36,7 +37,7 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)

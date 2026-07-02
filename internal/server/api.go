@@ -142,18 +142,32 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Username = strings.TrimSpace(body.Username)
+	limitKey := clientIP(r) + "\x00" + body.Username
+	if s.loginLimiter != nil && !s.loginLimiter.allowed(limitKey) {
+		jsonErr(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
+		return
+	}
 	u, err := db.GetUserByUsername(s.DB, body.Username)
 	if err != nil {
+		if s.loginLimiter != nil {
+			s.loginLimiter.recordFailure(limitKey)
+		}
 		jsonErr(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PwHash), []byte(body.Password)) != nil {
+		if s.loginLimiter != nil {
+			s.loginLimiter.recordFailure(limitKey)
+		}
 		jsonErr(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 	if u.Disabled {
 		jsonErr(w, http.StatusForbidden, "账号已被禁用")
 		return
+	}
+	if s.loginLimiter != nil {
+		s.loginLimiter.recordSuccess(limitKey)
 	}
 	token, err := db.CreateSession(s.DB, u.ID, sessionTTL)
 	if err != nil {
@@ -407,6 +421,16 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"node": n})
 }
 
+// nodeWithSecret re-exposes a node's secret on the admin node-detail response
+// only. db.Node.Secret is json:"-" so it never leaks elsewhere; the embedded
+// pointer promotes every other node field, and the explicit Secret field (at
+// depth 0) shadows the hidden embedded one, serializing back as "secret" for
+// the install-command view.
+type nodeWithSecret struct {
+	*db.Node
+	Secret string `json:"secret"`
+}
+
 func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -465,7 +489,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 
 	grantedUsers, _ := db.ListUsersForNode(s.DB, n.ID)
 	resp := map[string]any{
-		"node": n, "rule_hops": views, "panel_url": panelURL,
+		"node": nodeWithSecret{Node: n, Secret: n.Secret}, "rule_hops": views, "panel_url": panelURL,
 		"panel_url_configured": panelURL != "",
 		"latest_agent_version": serverVersion(),
 		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),
@@ -2724,7 +2748,7 @@ func (s *Server) apiMyGetToken(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]any{
 		"has_token":    true,
-		"token_prefix": t.Token[:8],
+		"token_prefix": t.TokenPrefix,
 		"disabled":     t.Disabled,
 		"created_at":   t.CreatedAt,
 		"last_used_at": lastUsed,
