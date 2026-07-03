@@ -491,14 +491,67 @@ func TotalRuleTrafficBytes(d *sql.DB) (int64, error) {
 // kernel state must be re-pushed. Used when a node grant is revoked so the
 // user's forwarding stops instead of lingering. rule_hops cascade-delete.
 func DeleteRulesForUserNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
-	nodes, err := queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=? AND r.node_id=?`, userID, nodeID)
+	// A rule "uses" a granted logical node when the node is its entry OR one of
+	// its middle layers — both surface as rule_hops.via_node_id == nodeID (the
+	// entry segment's hops carry via_node_id = the rule's node_id). Matching on
+	// via_node_id, not rules.node_id, tears down a via-only rule too, so revoking
+	// a middle-layer grant stops the still-running (still-billing) chain.
+	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT r.id FROM rules r JOIN rule_hops rh ON rh.rule_id=r.id WHERE r.owner_id=? AND rh.via_node_id=?`, userID, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := d.Exec(`DELETE FROM rules WHERE owner_id=? AND node_id=?`, userID, nodeID); err != nil {
+	if len(ruleIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholderList(ruleIDs)
+	nodes, err := queryInt64s(d, `SELECT DISTINCT node_id FROM rule_hops WHERE rule_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := d.Exec(`DELETE FROM rules WHERE id IN (`+ph+`)`, args...); err != nil {
 		return nil, err
 	}
 	return nodes, nil
+}
+
+// DeleteRulesUsingNode removes every rule that runs through nodeID — as a
+// physical hop, as its entry, or as a middle layer — and returns the OTHER
+// physical nodes those rules touched, so their kernel state can be re-pushed
+// after the node (and its rules) are gone. Used when a node is deleted: a rule
+// can't keep running through a node that no longer exists, and a composite's id
+// never appears in rule_hops.node_id, so an FK cascade alone would leave the
+// composite's physical children carrying stale kernel rules.
+func DeleteRulesUsingNode(d *sql.DB, nodeID int64) ([]int64, error) {
+	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT rule_id FROM rule_hops WHERE node_id=? OR via_node_id=?`, nodeID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(ruleIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := placeholderList(ruleIDs)
+	// Sibling physical nodes to re-push, excluding the node being deleted (its
+	// kernel state goes away with it).
+	nodes, err := queryInt64s(d, `SELECT DISTINCT node_id FROM rule_hops WHERE rule_id IN (`+ph+`) AND node_id<>?`, append(append([]any{}, args...), nodeID)...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := d.Exec(`DELETE FROM rules WHERE id IN (`+ph+`)`, args...); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+// placeholderList builds an "?,?,..." fragment and the matching args slice for
+// an IN clause over int64 ids.
+func placeholderList(ids []int64) (string, []any) {
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	return strings.Join(ph, ","), args
 }
 
 // RulesReferencingNode returns the distinct rule IDs that have a hop on the

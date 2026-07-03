@@ -99,18 +99,47 @@ func (s *Server) probeCompositeToTarget(w http.ResponseWriter, compositeID int64
 		json.NewEncoder(w).Encode(probeResult{Error: "no hops"})
 		return
 	}
-	lastHop := hops[len(hops)-1]
-	nodeName := fmt.Sprintf("#%d", lastHop.HopNodeID)
-	if n, err := db.GetNode(s.DB, lastHop.HopNodeID); err == nil {
-		nodeName = n.Name
+	// Only the last child dials the real target, so it's the only leg with a
+	// concrete data-plane endpoint to probe outside a rule — inter-child legs
+	// have no listen port until the composite is instantiated in a rule (use the
+	// rule-level chain probe for full per-hop latency). Still, report every
+	// child: a dead middle child means the composite can't work, so its liveness
+	// must fold into the overall result rather than being ignored while the exit
+	// leg alone reports OK.
+	results := make([]hopProbe, len(hops))
+	allOK := true
+	total := 0
+	for i, h := range hops {
+		n, gerr := db.GetNode(s.DB, h.HopNodeID)
+		name := fmt.Sprintf("#%d", h.HopNodeID)
+		if gerr == nil {
+			name = n.Name
+		}
+		hp := hopProbe{Node: name}
+		if i == len(hops)-1 {
+			hp.Target = target
+			ack, perr := s.Hub.SendProbe(h.HopNodeID, target)
+			switch {
+			case perr != nil:
+				hp.Error = perr.Error()
+			case !ack.OK:
+				if hp.Error = ack.Error; hp.Error == "" {
+					hp.Error = "不通"
+				}
+			default:
+				hp.Latency = ack.Latency
+			}
+		} else if gerr != nil || n.Online != 1 || n.Disabled {
+			hp.Error = "节点离线"
+		}
+		if hp.Error != "" {
+			allOK = false
+		} else {
+			total += hp.Latency
+		}
+		results[i] = hp
 	}
-	ack, err := s.Hub.SendProbe(lastHop.HopNodeID, target)
-	if err != nil {
-		json.NewEncoder(w).Encode(probeResult{Error: err.Error(), Hops: []hopProbe{{Node: nodeName, Target: target, Error: err.Error()}}})
-		return
-	}
-	hp := hopProbe{Node: nodeName, Target: target, Latency: ack.Latency, Error: ack.Error}
-	json.NewEncoder(w).Encode(probeResult{OK: ack.OK, Latency: ack.Latency, Hops: []hopProbe{hp}, Error: ack.Error})
+	json.NewEncoder(w).Encode(probeResult{OK: allOK, Latency: total, Hops: results})
 }
 
 func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {

@@ -397,6 +397,14 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 			return
 		}
+		childIDs := make([]int64, len(body.Hops))
+		for i, h := range body.Hops {
+			childIDs[i] = h.NodeID
+		}
+		if err := s.validateCompositeChildren(childIDs); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		n, err := db.CreateNode(s.DB, body.Name, "", "")
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -636,6 +644,18 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 		return
 	}
+	childIDs := make([]int64, len(body.Hops))
+	for i, hu := range body.Hops {
+		if hu.NodeID == 0 {
+			jsonErr(w, http.StatusBadRequest, "子节点 ID 不能为空")
+			return
+		}
+		childIDs[i] = hu.NodeID
+	}
+	if err := s.validateCompositeChildren(childIDs); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	hops := make([]db.NodeHop, len(body.Hops))
 	for i, hu := range body.Hops {
 		mode := strings.ToLower(strings.TrimSpace(hu.Mode))
@@ -646,12 +666,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
 			return
 		}
-		hopNodeID := hu.NodeID
-		if hopNodeID == 0 {
-			jsonErr(w, http.StatusBadRequest, "子节点 ID 不能为空")
-			return
-		}
-		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: 0}
+		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hu.NodeID, Mode: mode, TrafficMultiplier: 0}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -1091,6 +1106,35 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if node.NodeType == "composite" {
+		// A composite is logical: it never appears as a physical hop, so it can't
+		// be spliced out of a chain the way a physical mid-hop can. A rule running
+		// through a deleted composite (as entry or middle layer) therefore can't
+		// survive — delete those rules and re-push their sibling physical nodes so
+		// the composite's children don't keep stale kernel state (the FK cascade
+		// alone would drop the rules but never touch the children).
+		rerun, err := db.DeleteRulesUsingNode(s.DB, id)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := db.DeleteNode(s.DB, id); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
+		s.apiDispatchFanout(rerun)
+		jsonOK(w, map[string]any{"ok": true})
+		return
+	}
+	// A physical node: re-wire the rules it participated in, splicing it out of
+	// each chain (its hop rows FK-cascade away on delete, and rewire
+	// re-materializes the surviving hops onto their new neighbors).
 	affectedRules, _ := db.RulesReferencingNode(s.DB, id)
 	if err := db.DeleteNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1479,10 +1523,18 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	var vias []int64
 
 	if len(body.Hops) > 0 {
-		// Explicit hops provided
+		// Explicit hops: an admin-only escape hatch for arbitrary chains, so role
+		// and binding-edge fitness are intentionally not enforced here. The
+		// no_direct_exit invariant is a hard safety rule and still applies — a
+		// node that forbids launching the exit must not be seated at the exit
+		// even on this path.
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
 			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
+		}
+		if name, bad := s.exitHopForbidsDirect(hops); bad {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("节点 %s 禁止直接转发，必须在其后选择线路层", name))
+			return
 		}
 	} else if body.NodeID > 0 {
 		vias = viasOf(body.ViaNodeIDs)
@@ -1635,6 +1687,39 @@ func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 // caller's policy. The composite flag tells edit handlers which fields count
 // as an explicit exit-mode request: any chain beyond a bare single node never
 // honors the legacy mode alias.
+// validateCompositeChildren rejects a composite whose member is missing or is
+// itself a composite. Composites are flat combos of single nodes; a nested
+// composite would put a composite id into rule_hops.node_id at expansion time,
+// where no agent exists to serve it. The composite editors already offer only
+// single nodes — this is the authoritative server-side guard for direct API use.
+func (s *Server) validateCompositeChildren(childIDs []int64) error {
+	for _, cid := range childIDs {
+		n, err := db.GetNode(s.DB, cid)
+		if err != nil {
+			return fmt.Errorf("子节点 %d 不存在", cid)
+		}
+		if n.NodeType == "composite" {
+			return fmt.Errorf("组合节点不能嵌套组合节点（%s）", n.Name)
+		}
+	}
+	return nil
+}
+
+// exitHopForbidsDirect reports whether the chain's final physical hop is a
+// no_direct_exit node (which would launch the exit segment it is forbidden to
+// launch), returning that node's name. Shared by the derived and explicit-hops
+// rule-building paths so neither can seat a no-direct-exit node at the exit.
+func (s *Server) exitHopForbidsDirect(hops []db.HopInput) (string, bool) {
+	if len(hops) == 0 {
+		return "", false
+	}
+	n, err := db.GetNode(s.DB, hops[len(hops)-1].NodeID)
+	if err != nil {
+		return "", false // a missing node is caught downstream by RegenerateRule
+	}
+	return n.Name, n.NoDirectExit
+}
+
 func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string) ([]db.HopInput, bool, error) {
 	entryNode, err := db.GetNode(s.DB, entryID)
 	if err != nil {
@@ -1648,7 +1733,6 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		return nil, false, err
 	}
 	prev := entryID
-	tail := entryNode
 	prevComposite := entryComposite
 	for _, viaID := range vias {
 		viaNode, err := db.GetNode(s.DB, viaID)
@@ -1677,15 +1761,15 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		}
 		hops = append(hops, seg...)
 		prev = viaID
-		tail = viaNode
 		prevComposite = viaComposite
 	}
-	// The chain's last logical node launches the exit segment; a node marked
-	// no_direct_exit may never do that, so the chain must cascade further.
-	// Checked here — not in the picker — so a hand-crafted request can't
+	// The physical node that actually launches the exit segment is the last hop,
+	// which for a composite tail is its last child — not the logical tail node.
+	// A no_direct_exit node may never launch the exit, so the chain must cascade
+	// further. Checked here — not in the picker — so a hand-crafted request can't
 	// bypass it.
-	if tail.NoDirectExit {
-		return nil, len(vias) > 0, fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择线路层", tail.Name)
+	if name, bad := s.exitHopForbidsDirect(hops); bad {
+		return nil, len(vias) > 0, fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择线路层", name)
 	}
 	composite := entryComposite || len(vias) > 0
 	mode := exitMode
