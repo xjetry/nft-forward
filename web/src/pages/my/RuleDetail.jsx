@@ -7,7 +7,7 @@ import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge 
 import { copyToClipboard } from '../../lib/clipboard'
 import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
-import { parseURIs, landingIndex, mergeLanding, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
+import { parseURIs, landingIndex, mergeLanding, splitEndpoint, rewriteEndpoint, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 
 export default function MyRuleDetail() {
   const { id } = useParams()
@@ -51,7 +51,30 @@ export default function MyRuleDetail() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="规则不存在" /></Layout>
 
-  const { rule, nodes = [], node_by_id = {}, show_rate } = data
+  const { rule: serverRule, nodes = [], node_by_id = {}, show_rate } = data
+
+  // Landing nodes = the user's browser-local proxy URIs plus admin-assigned
+  // ones, both filtered to the landing role. Used for the exit picker and to
+  // enrich this rule below.
+  const serverLandingFiltered = serverLanding.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
+  const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
+  const allLandingIdx = landingIndex(landingNodes)
+
+  // A rule whose exit is one of the user's browser-local proxy URIs gets no
+  // relay URI from the server (the URI never leaves the browser), so rewrite the
+  // rule's entry into it client-side here — the same enrichment the rules list
+  // does — so the detail page can offer a copyable relay URI too.
+  const rule = (() => {
+    if (serverRule.relay_uri) return serverRule
+    const key = serverRule.exit_host && serverRule.exit_port ? `${serverRule.exit_host}:${serverRule.exit_port}` : null
+    if (key && allLandingIdx.has(key) && serverRule.entry) {
+      const ep = splitEndpoint(serverRule.entry)
+      const lnode = allLandingIdx.get(key)
+      const relay = ep && rewriteEndpoint(lnode.uri, ep.host, ep.port)
+      if (relay) return { ...serverRule, exit_kind: 'landing', landing_name: lnode.name, landing_protocol: lnode.protocol, relay_uri: relay }
+    }
+    return serverRule
+  })()
   const node = node_by_id[rule.node_id]
   // Names resolve only through node_by_id — the granted-node map the page
   // already has in scope — so an unresolvable via (rare: node revoked after
@@ -79,11 +102,6 @@ export default function MyRuleDetail() {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
     try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); navigate('/my/rules') } catch (err) { toast(err.message, 'error') }
   }
-
-  // Filter server-assigned nodes by global role table — only landing-marked ones
-  // appear in the exit picker (unconfigured/direct ones are excluded).
-  const serverLandingFiltered = serverLanding.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
-  const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
 
   return (
     <Layout>
