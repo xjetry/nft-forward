@@ -1,5 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
-import { Modal, Select, ProbeButton, nodeStack } from './ui'
+import { Modal, Select, ProbeButton, nodeStack, NodeTypeIcon } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
@@ -91,8 +91,8 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }
 
-  // Select 的 label 必须是纯字符串（既要参与搜索过滤的 .toLowerCase()，
-  // 也不支持渲染 JSX），沿用 landingOptions 那种文本前缀写法标协议栈。
+  // Select 的 label 必须是纯字符串（搜索过滤要 .toLowerCase()）：协议栈、
+  // 倍率走文本前缀；单点/组合的区分走 options 的 icon 字段。
   const fmtStack = (n) => {
     const { entryV4, entryV6, exitV6 } = nodeStack(n)
     const parts = [entryV4 && 'v4', entryV6 && 'v6'].filter(Boolean)
@@ -109,13 +109,14 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     const r = n.rate_multiplier ?? 1
     return r !== 1 ? `${stack}${n.name} (×${r})` : `${stack}${n.name}`
   }
+  const nodeOption = (n) => ({ value: n.id, label: fmtRate(n), icon: <NodeTypeIcon type={n.node_type} /> })
   // Only entry-role nodes can be the rule's entry — roles missing (nodes
   // reported by a server that predates the roles column) default to entry,
   // so old deployments keep working until an admin explicitly narrows roles.
   const entryNodes = nodes.filter(n => ((n.roles ?? 1) & 1) !== 0)
   const groups = [
-    { label: '单点', options: entryNodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
-    { label: '组合', options: entryNodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
+    { label: '单点', options: entryNodes.filter(n => n.node_type !== 'composite').map(nodeOption) },
+    { label: '组合', options: entryNodes.filter(n => n.node_type === 'composite').map(nodeOption) },
   ]
 
   // Show protocol + node remark only — the real connection address is hidden
@@ -211,8 +212,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
             <Fragment key={level}>
               <label className="fl">{level === 0 ? '线路层' : `线路层 ${level + 1}`}</label>
               <Select value={chosen ?? ''} onChange={v => pickVia(level, v)} placeholder="直接转发"
-                options={[{ value: '', label: '直接转发' },
-                  ...cands.map(n => ({ value: n.id, label: fmtRate(n) }))]} />
+                options={[{ value: '', label: '直接转发' }, ...cands.map(nodeOption)]} />
             </Fragment>
           ))}
           {viaChain.length > 0 && (

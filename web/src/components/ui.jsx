@@ -319,10 +319,13 @@ export function ConfirmProvider({ children }) {
 }
 
 /* ---------- Select: styled dropdown replacing native <select> ---------- */
-// options: [{ value, label }]. Single-select (default): value is a scalar,
-// onChange receives the chosen value as a string and the menu closes. Multi-
-// select (multiple=true): value is an array, onChange receives the next array
-// of string values and the menu stays open so several can be picked.
+// options: [{ value, label, icon? }]. label must stay a plain string — search
+// filters on it — so any glyph (e.g. a node-type marker) goes in the optional
+// icon field, rendered before the label in menu items and in the single-select
+// trigger. Single-select (default): value is a scalar, onChange receives the
+// chosen value as a string and the menu closes. Multi-select (multiple=true):
+// value is an array, onChange receives the next array of string values and the
+// menu stays open so several can be picked.
 export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false, tabs = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -377,6 +380,7 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
             {sel && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
           </span>
         )}
+        {o.icon}
         <span className="truncate">{o.label}</span>
       </button>
     )
@@ -385,7 +389,10 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
     <div ref={ref} className={`relative ${className}`} style={style}>
       <button type="button" disabled={disabled} onClick={() => setOpen(o => !o)}
         className="input-field flex items-center justify-between gap-2 text-left disabled:opacity-60 disabled:cursor-not-allowed">
-        <span className={`truncate ${hasSelection ? 'text-ink' : 'text-ink-mut'}`}>{triggerLabel}</span>
+        <span className={`flex items-center gap-1.5 min-w-0 ${hasSelection ? 'text-ink' : 'text-ink-mut'}`}>
+          {selected && selected.icon}
+          <span className="truncate">{triggerLabel}</span>
+        </span>
         <svg className={`w-4 h-4 flex-none text-ink-mut transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       {open && (
