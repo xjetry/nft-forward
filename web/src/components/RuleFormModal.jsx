@@ -84,6 +84,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   const submit = async (e) => {
     e.preventDefault()
     if (!form.node_id) { toast('请选择节点', 'error'); return }
+    if (tailNoDirect) { toast(`节点 ${tailNode.name} 禁止直接转发，必须在其后选择线路层`, 'error'); return }
     if (landingEnabled && form.exit_kind === 'landing' && !form.exit) { toast('请选择出口节点', 'error'); return }
     setLoading(true)
     try {
@@ -155,7 +156,9 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
       const chosen = viaChain[level]
       const cands = viaCandidates(upstream, soFar)
       if (!cands.length && !chosen) break
-      viaLevels.push({ level, cands, chosen })
+      // A no_direct_exit upstream can't terminate the chain here, so this
+      // level loses its 直接转发 option and must pick a layer.
+      viaLevels.push({ level, cands, chosen, mustVia: !!nodeById[upstream]?.no_direct_exit })
       if (!chosen) break
       soFar.push(chosen)
       upstream = chosen
@@ -165,6 +168,10 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   // itself when the chain is empty) — the tail is the node that actually
   // dials the target, so its stack is what the outbound leg depends on.
   const tailNode = viaChain.length ? nodeById[viaChain[viaChain.length - 1]] : nodeById[Number(form.node_id)]
+  // The tail launches the exit segment, which a no_direct_exit node may never
+  // do. The server enforces the same rule when deriving the chain; blocking
+  // submit here just surfaces the error before the round trip.
+  const tailNoDirect = !!tailNode?.no_direct_exit
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
@@ -208,13 +215,23 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               </>
             )
           })()}
-          {viaLevels.map(({ level, cands, chosen }) => (
+          {viaLevels.map(({ level, cands, chosen, mustVia }) => (
             <Fragment key={level}>
               <label className="fl">{level === 0 ? '线路层' : `线路层 ${level + 1}`}</label>
-              <Select value={chosen ?? ''} onChange={v => pickVia(level, v)} placeholder="直接转发"
-                options={[{ value: '', label: '直接转发' }, ...cands.map(nodeOption)]} />
+              <Select value={chosen ?? ''} onChange={v => pickVia(level, v)} placeholder={mustVia ? '-- 选择线路层 --' : '直接转发'}
+                options={[...(mustVia ? [] : [{ value: '', label: '直接转发' }]), ...cands.map(nodeOption)]} />
             </Fragment>
           ))}
+          {tailNoDirect && (
+            <>
+              <label className="fl"></label>
+              <div className="text-xs text-red-600">
+                {viaLevels.length && !viaLevels[viaLevels.length - 1].chosen
+                  ? `节点「${tailNode.name}」禁止直接转发，必须选择线路层。`
+                  : `节点「${tailNode.name}」禁止直接转发，但没有可级联的线路层，无法保存该链路。`}
+              </div>
+            </>
+          )}
           {viaChain.length > 0 && (
             <>
               <label className="fl"></label>

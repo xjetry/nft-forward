@@ -73,6 +73,10 @@ type Node struct {
 	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
 	RateMultiplier      float64        `json:"rate_multiplier"`
 	Unidirectional      bool           `json:"unidirectional"`
+	// NoDirectExit forbids the node from terminating a rule chain: it cannot
+	// launch the exit segment, so a rule entering here must cascade into at
+	// least one more middle layer.
+	NoDirectExit bool `json:"no_direct_exit"`
 	// Roles is a bitmask of what the node can be used as: NodeRoleEntry means
 	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
 	// behind an upstream node as a middle-layer segment. A node may hold both.
@@ -311,7 +315,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -322,7 +326,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared int
+	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
@@ -334,12 +338,13 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&n.SortOrder, &n.RateMultiplier, &unidirectional,
-		&relayHostDeclared, &relayHostV6Declared, &n.Roles,
+		&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
 	); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
 	n.Unidirectional = unidirectional == 1
+	n.NoDirectExit = noDirectExit == 1
 	n.RelayHostDeclared = relayHostDeclared == 1
 	n.RelayHostV6Declared = relayHostV6Declared == 1
 	if ownerID.Valid {
@@ -518,6 +523,15 @@ func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
 
 func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
 	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
+	return err
+}
+
+func UpdateNodeNoDirectExit(d *sql.DB, id int64, v bool) error {
+	n := 0
+	if v {
+		n = 1
+	}
+	_, err := d.Exec(`UPDATE nodes SET no_direct_exit=? WHERE id=?`, n, id)
 	return err
 }
 

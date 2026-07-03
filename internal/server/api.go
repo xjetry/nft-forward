@@ -1001,6 +1001,39 @@ func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// Existing rules are left untouched on purpose: the flag gates chain
+// derivation (create/edit), not already-expanded hops, mirroring how binding
+// mode edits only affect later (re)expansions.
+func (s *Server) apiSetNodeNoDirectExit(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
+	}
+	var body struct {
+		NoDirectExit bool `json:"no_direct_exit"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if err := db.UpdateNodeNoDirectExit(s.DB, id, body.NoDirectExit); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	label := "允许直接转发"
+	if body.NoDirectExit {
+		label = "禁止直接转发"
+	}
+	db.WriteAudit(s.DB, u.ID, "node.set_no_direct_exit", strconv.FormatInt(id, 10), label)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResyncNode(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -1611,6 +1644,7 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		return nil, false, err
 	}
 	prev := entryID
+	tail := entryNode
 	for _, viaID := range vias {
 		viaNode, err := db.GetNode(s.DB, viaID)
 		if err != nil {
@@ -1632,6 +1666,14 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		hops[len(hops)-1].Mode = edge.Mode
 		hops = append(hops, seg...)
 		prev = viaID
+		tail = viaNode
+	}
+	// The chain's last logical node launches the exit segment; a node marked
+	// no_direct_exit may never do that, so the chain must cascade further.
+	// Checked here — not in the picker — so a hand-crafted request can't
+	// bypass it.
+	if tail.NoDirectExit {
+		return nil, len(vias) > 0, fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择线路层", tail.Name)
 	}
 	composite := entryComposite || len(vias) > 0
 	mode := exitMode

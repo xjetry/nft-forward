@@ -461,6 +461,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/upgrade-all", s.apiUpgradeAllNodes)
 			r.Post("/nodes/{id}/rate-multiplier", s.apiSetNodeRateMultiplier)
 			r.Post("/nodes/{id}/unidirectional", s.apiSetNodeUnidirectional)
+			r.Post("/nodes/{id}/no-direct-exit", s.apiSetNodeNoDirectExit)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
 			r.Post("/nodes/{id}/roles", s.apiUpdateNodeRolesMask)

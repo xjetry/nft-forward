@@ -29,6 +29,7 @@ export default function NodeDetail() {
   const [portRange, setPortRange] = useState('')
   const [rateMult, setRateMult] = useState('1')
   const [unidirectional, setUnidirectional] = useState(false)
+  const [noDirectExit, setNoDirectExit] = useState(false)
   const [useGhProxy, setUseGhProxy] = useState(false)
   const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
   const [cmdRelayHost, setCmdRelayHost] = useState('')
@@ -45,6 +46,7 @@ export default function NodeDetail() {
     setPortRange(d.node?.port_range || '')
     setRateMult(String(d.node?.rate_multiplier ?? 1))
     setUnidirectional(!!d.node?.unidirectional)
+    setNoDirectExit(!!d.node?.no_direct_exit)
   }
   const load = () => {
     setLoading(true)
@@ -107,6 +109,10 @@ export default function NodeDetail() {
   const toggleBillingDir = async () => {
     const next = !unidirectional
     try { await api.post(`/nodes/${id}/unidirectional`, { unidirectional: next }); setUnidirectional(next); toast(next ? '已切换为单向计费' : '已切换为双向计费') } catch (err) { toast(err.message, 'error') }
+  }
+  const toggleNoDirectExit = async () => {
+    const next = !noDirectExit
+    try { await api.post(`/nodes/${id}/no-direct-exit`, { no_direct_exit: next }); setNoDirectExit(next); toast(next ? '已禁止直接转发' : '已允许直接转发') } catch (err) { toast(err.message, 'error') }
   }
   const resync = async () => {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
@@ -225,6 +231,14 @@ export default function NodeDetail() {
                 <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
               </form>
+            </ConfigField>
+            <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
+              <div className="flex items-center gap-2">
+                <button onClick={toggleNoDirectExit} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${noDirectExit ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
+                  {noDirectExit ? '禁止直接转发' : '允许直接转发'}
+                </button>
+                <span className="text-xs text-ink-mut">当前：{noDirectExit ? '禁止' : '允许'}</span>
+              </div>
             </ConfigField>
           </section>
         ) : (
@@ -371,6 +385,15 @@ export default function NodeDetail() {
                   {unidirectional ? '单向计费（仅出站）' : '双向计费（出站+入站）'}
                 </button>
                 <span className="text-xs text-ink-mut">当前：{unidirectional ? '单向' : '双向'}</span>
+              </div>
+            </ConfigField>
+
+            <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
+              <div className="flex items-center gap-2">
+                <button onClick={toggleNoDirectExit} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${noDirectExit ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
+                  {noDirectExit ? '禁止直接转发' : '允许直接转发'}
+                </button>
+                <span className="text-xs text-ink-mut">当前：{noDirectExit ? '禁止' : '允许'}</span>
               </div>
             </ConfigField>
           </section>

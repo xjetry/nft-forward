@@ -110,7 +110,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	for rows.Next() {
 		n := &Node{}
 		g := &UserNode{UserID: userID}
-		var disabled, unidirectional, relayHostDeclared, relayHostV6Declared int
+		var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
 		var localMigratedAt, lastSeen sql.NullInt64
 		var agentVersion sql.NullString
 		var ownerID sql.NullInt64
@@ -122,7 +122,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 			&n.SortOrder, &n.RateMultiplier, &unidirectional,
-			&relayHostDeclared, &relayHostV6Declared, &n.Roles,
+			&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.GrantedAt,
 		); err != nil {
 			return nil, nil, err
@@ -132,6 +132,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		n.LastUpgradeError = luError.String
 		n.Disabled = disabled == 1
 		n.Unidirectional = unidirectional == 1
+		n.NoDirectExit = noDirectExit == 1
 		n.RelayHostDeclared = relayHostDeclared == 1
 		n.RelayHostV6Declared = relayHostV6Declared == 1
 		if ownerID.Valid {
