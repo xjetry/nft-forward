@@ -132,6 +132,24 @@ func TestViaChainDuplicatePhysicalNodeConflict(t *testing.T) {
 	}
 }
 
+// 服务端权威校验：仅持有 via 角色（无 entry 角色）的节点不能被当作入口，
+// 即便用户已获得该节点的授权——UI 的入口选择器过滤不能替代服务端校验。
+func TestEntryRoleEnforced(t *testing.T) {
+	d := openDB(t)
+	viaOnly, _ := db.CreateNode(d, "via-only", "", "")
+	_ = db.UpdateNodeRelayHost(d, viaOnly.ID, "1.1.1.1")
+	_ = db.UpdateNodeRoles(d, viaOnly.ID, db.NodeRoleVia)
+
+	uid, cookie := loginAsUser(t, d, 10)
+	_ = db.GrantNode(d, uid, viaOnly.ID, 5, 0)
+
+	s, _ := New(d)
+	rec := createMyRuleVia(t, s, cookie, viaOnly.ID, nil, "r-entry-role")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("via-only as entry: want 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // 编辑防降级：不带 via_node_ids 的编辑保留原路径。
 func TestEditWithoutViaFieldKeepsPath(t *testing.T) {
 	d := openDB(t)

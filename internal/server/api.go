@@ -1571,12 +1571,22 @@ func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 // by each middle-layer (via) segment. Non-final segment tails take the
 // forwarding mode of the binding edge they cross; the final hop takes the
 // rule's exitMode (empty falls back to singleMode for a bare single-node
-// chain — the legacy alias — else the kernel default). Every via must carry
-// the via role and be reachable from its predecessor through a binding edge;
-// grants are the caller's policy. The composite flag tells edit handlers
-// which fields count as an explicit exit-mode request: any chain beyond a
-// bare single node never honors the legacy mode alias.
+// chain — the legacy alias — else the kernel default). The entry node must
+// carry the entry role, and every via must carry the via role and be
+// reachable from its predecessor through a binding edge — this is the
+// authoritative check, since a picker filtering the UI's node list is only
+// a convenience and grants alone don't imply role fitness. Grants remain the
+// caller's policy. The composite flag tells edit handlers which fields count
+// as an explicit exit-mode request: any chain beyond a bare single node never
+// honors the legacy mode alias.
 func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string) ([]db.HopInput, bool, error) {
+	entryNode, err := db.GetNode(s.DB, entryID)
+	if err != nil {
+		return nil, false, fmt.Errorf("节点不存在")
+	}
+	if entryNode.Roles&db.NodeRoleEntry == 0 {
+		return nil, false, fmt.Errorf("节点 %s 不是入口", entryNode.Name)
+	}
 	hops, entryComposite, err := s.expandSegment(entryID)
 	if err != nil {
 		return nil, false, err
