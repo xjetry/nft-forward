@@ -18,6 +18,13 @@ func (s *Server) apiSpeedWS(w http.ResponseWriter, r *http.Request) {
 	defer ws.CloseNow()
 
 	ctx := r.Context()
+
+	// Admins see each node's total throughput; a regular user sees only their
+	// own share of every node, so the granted-nodes list reflects the user's
+	// own speed rather than everyone's traffic on the node.
+	actor := userFromCtx(ctx)
+	perUser := actor != nil && actor.Role != "admin"
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -26,7 +33,12 @@ func (s *Server) apiSpeedWS(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			snap := s.Hub.speedCache.snapshot()
+			var snap []SpeedEntry
+			if perUser {
+				snap = s.Hub.speedCache.snapshotForUser(actor.ID)
+			} else {
+				snap = s.Hub.speedCache.snapshot()
+			}
 			data, err := json.Marshal(map[string]any{"speeds": snap})
 			if err != nil {
 				continue

@@ -858,11 +858,22 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	deltas := make([]counterDelta, 0, len(samples))
 	for _, s := range samples {
+		// Attribute the hop's speed to its rule's owner so the per-user speed
+		// view can filter it. An unmatched hop (rule deleted mid-batch) or an
+		// ownerless admin rule leaves ownerID 0 — it still counts toward the
+		// node total, just not toward any user's share.
+		var ownerID int64
+		if rh, ok := hopMap[s.Proto+"/"+strconv.Itoa(s.ListenPort)]; ok {
+			if r := ruleMap[rh.RuleID]; r != nil && r.OwnerID.Valid {
+				ownerID = r.OwnerID.Int64
+			}
+		}
 		deltas = append(deltas, counterDelta{
 			proto:         s.Proto,
 			listenPortStr: strconv.Itoa(s.ListenPort),
 			bytesUp:       s.BytesUp,
 			bytesDown:     s.BytesDown,
+			ownerID:       ownerID,
 		})
 	}
 	h.speedCache.update(nodeID, deltas)
