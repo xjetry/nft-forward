@@ -97,9 +97,15 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td className="font-mono text-xs !whitespace-normal">
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5 mb-1">
-                    <Badge color="gray">入口</Badge>
+                    <Badge color="gray">{r.entry_v6 ? '入口v4' : '入口'}</Badge>
                     {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
                   </div>
+                  {r.entry_v6 && (
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Badge color="gray">入口v6</Badge>
+                      <CopyText text={r.entry_v6}><SensText blurred={blurred}>{r.entry_v6}</SensText></CopyText>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
                     <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
                     {(() => {
@@ -175,6 +181,12 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                   : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
               </span>
             </div>
+            {r.entry_v6 && (
+              <div className="text-xs text-ink-mut font-mono truncate">
+                <span className="text-ink-mut mr-1">入口v6</span>
+                <SensText blurred={blurred}>{r.entry_v6}</SensText>
+              </div>
+            )}
           </div>
         )
       })}

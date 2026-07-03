@@ -3,7 +3,7 @@ import { Modal, Select, ProbeButton, nodeStack, NodeTypeIcon } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel', entry_family: 'v4', via_node_ids: [] }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel', via_node_ids: [] }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -37,18 +37,6 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     }
     setForm(seed)
   }, [open])
-
-  // A node switch that lands on a single-stack node can't keep a v6/both
-  // entry type — force it back to v4 rather than submitting a family the
-  // new node doesn't support.
-  useEffect(() => {
-    const n = nodes.find(x => String(x.id) === String(form.node_id))
-    if (!n) return
-    const { entryV4, entryV6 } = nodeStack(n)
-    if (!(entryV4 && entryV6)) {
-      setForm(f => f.entry_family === 'v4' ? f : { ...f, entry_family: 'v4' })
-    }
-  }, [form.node_id, nodes])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -198,42 +186,6 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
         <div className="grid grid-cols-[120px_1fr] gap-6 items-center">
           <label className="fl">入口节点</label>
           <Select value={form.node_id} onChange={pickEntry} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
-          {(() => {
-            const selNode = nodes.find(n => String(n.id) === String(form.node_id))
-            if (!selNode) return null
-            const { entryV4, entryV6 } = nodeStack(selNode)
-            if (!(entryV4 && entryV6)) return null
-            const composite = selNode.node_type === 'composite'
-            // IPv6 ingress rides the userspace relay (kernel DNAT can't
-            // cross address families), which is TCP-only. Single-node rules
-            // can be auto-switched here; a composite's entry segment comes
-            // from the node config, so only the hint applies.
-            const pickFamily = (k) => setForm(f => {
-              const next = { ...f, entry_family: k }
-              if (k !== 'v4' && !composite) next.mode = 'userspace'
-              return next
-            })
-            return (
-              <>
-                <label className="fl">入口类型</label>
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <div className="inline-flex gap-1 p-1 rounded-[10px] border border-line bg-surface w-fit">
-                    {[['v4', 'IPv4'], ['v6', 'IPv6'], ['both', 'IPv4+IPv6']].map(([k, lbl]) => (
-                      <button key={k} type="button" onClick={() => pickFamily(k)}
-                        className={`px-4 py-[9px] rounded-[7px] text-[14px] font-semibold transition-colors ${(form.entry_family || 'v4') === k ? 'bg-blue-600 text-white' : 'text-ink-soft hover:text-ink'}`}>
-                        {lbl}
-                      </button>
-                    ))}
-                  </div>
-                  {(form.entry_family === 'v6' || form.entry_family === 'both') && (
-                    <span className="text-xs text-ink-mut">
-                      {composite ? 'v6 入口要求组合节点第一段为用户态转发，且协议仅 TCP' : 'v6 入口走用户态转发，协议仅 TCP'}
-                    </span>
-                  )}
-                </div>
-              </>
-            )
-          })()}
           {viaLevels.map(({ level, cands, chosen, mustVia }) => (
             <Fragment key={level}>
               <label className="fl">{level === 0 ? '线路层' : `线路层 ${level + 1}`}</label>
@@ -285,8 +237,8 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                     options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
                   <span className="text-xs text-ink-mut">
                     {composite
-                      ? '仅作用于最后一跳 → 目标；节点间各跳由组合节点配置决定。用户态仅 TCP，UDP 自动走内核态'
-                      : '内核态支持 TCP/UDP；用户态仅 TCP，UDP 自动走内核态'}
+                      ? '仅作用于最后一跳 → 目标。线路稳定、低丢包时用内核态（性能更好）；跨境或网络不稳定、丢包高时用用户态（更抗抖动）。用户态仅 TCP，UDP 自动走内核态'
+                      : '线路稳定、低丢包时用内核态（性能更好，支持 TCP/UDP）；跨境或网络不稳定、丢包高时用用户态（更抗抖动，仅 TCP，UDP 自动走内核态）'}
                   </span>
                 </div>
               </>
@@ -370,7 +322,6 @@ export function ruleToForm(rule) {
     // 模式字段的语义是出口段（尾跳）；entry_mode 兜底兼容旧列表载荷，
     // 单点规则两者本就相同。
     mode: rule.exit_mode || rule.entry_mode || 'kernel',
-    entry_family: rule.entry_family || 'v4',
     via_node_ids: rule.via_node_ids || [],
   }
 }
@@ -387,14 +338,14 @@ export function copyInitial(rule) {
    it is sent as both exit_mode (the real field) and mode (legacy alias for
    single-node rules, so older servers keep honoring it). via_node_ids is
    always sent (never omitted): the form owns the whole chain, so an empty
-   array means "clear the chain", not "leave it untouched". */
+   array means "clear the chain", not "leave it untouched". entry_family is not
+   sent: the server derives it from the entry node's relay addresses. */
 export function ruleFormToPayload(form) {
   return {
     node_id: Number(form.node_id), name: form.name, proto: form.proto,
     mode: form.mode || undefined, exit_mode: form.mode || undefined,
     exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
     comment: form.comment || undefined,
-    entry_family: form.entry_family || undefined,
     via_node_ids: (form.via_node_ids || []).map(Number),
   }
 }

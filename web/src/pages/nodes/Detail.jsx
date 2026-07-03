@@ -628,8 +628,8 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
         <span className="text-[12.5px] text-ink-mut">{rows.length} 跳</span>
       </div>
       <p className="text-[12.5px] text-ink-mut mb-2.5">
-        拖拽 ⠿ 调整顺序。模式作用于该跳到下一跳之间的段（内核态支持 TCP / UDP / TCP+UDP；用户态仅支持 TCP）；
-        末跳模式在该组合被用作中间层时生效，被用作规则出口时由规则的出口模式覆盖。修改对此后新建的规则生效。
+        拖拽 ⠿ 调整顺序。模式作用于该跳到下一跳之间的段：线路稳定、低丢包用内核态（性能更好，支持 TCP/UDP/TCP+UDP）；
+        跨境或网络不稳定、丢包高用用户态（更抗抖动，仅 TCP）。末跳模式在该组合被用作中间层时生效，被用作规则出口时由规则的出口模式覆盖。修改对此后新建的规则生效。
       </p>
       <div className="space-y-2">
         {rows.map((r, i) => (

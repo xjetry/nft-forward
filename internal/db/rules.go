@@ -662,33 +662,21 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
 	}
 
-	entryFamily := r.EntryFamily
-	if entryFamily == "" {
-		entryFamily = "v4"
-	}
-	if entryFamily != "v4" && entryFamily != "v6" && entryFamily != "both" {
-		return "", "", nil, fmt.Errorf("入口类型 %s 无效", entryFamily)
-	}
-	if entryFamily == "v6" || entryFamily == "both" {
-		if rs[0].relayHostV6 == "" {
-			var name string
-			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[0].nodeID).Scan(&name)
-			return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，无法用作 %s 入口", name, entryFamily)
-		}
-		// IPv6 ingress needs the userspace relay on the entry segment: kernel
-		// DNAT cannot cross address families ("dnat ip to <v4>" never matches
-		// an IPv6 packet, and there is no NAT64), so only the dual-stack
-		// userspace listener can accept v6 clients and dial onward over v4.
-		// The userspace relay is TCP-only, so a UDP leg can never serve v6:
-		// pure udp is coerced to kernel above, and tcp+udp splits its udp
-		// half into a kernel DNAT that would leave the advertised v6 entry
-		// dead for UDP traffic.
-		if rs[0].mode != "userspace" {
-			return "", "", nil, fmt.Errorf("%s 入口需要入口段为用户态转发（内核态 DNAT 无法接收 IPv6 连接）", entryFamily)
-		}
-		if r.Proto != "tcp" {
-			return "", "", nil, fmt.Errorf("%s 入口仅支持 TCP 协议（用户态转发不支持 UDP）", entryFamily)
-		}
+	// The entry family is derived from what the entry node can serve, not chosen
+	// by the caller: a rule exposes an entry endpoint for every IP family its
+	// entry node supports. relay_host (v4) is mandatory (checked above), so the
+	// only question is whether a v6 entry is also offered. v6 ingress rides the
+	// userspace relay (kernel DNAT can't cross address families, and there's no
+	// NAT64), which is TCP-only — so a v6 entry is offered only for a plain TCP
+	// rule; a udp / tcp+udp rule stays v4-only.
+	if rs[0].relayHostV6 != "" && r.Proto == "tcp" {
+		r.EntryFamily = "both"
+		// Silently run the entry segment in userspace — the only mode that
+		// accepts a v6 client and dials onward over v4. Overrides an entry hop
+		// left in kernel mode (single-node, composite first child, explicit hop).
+		rs[0].mode = "userspace"
+	} else {
+		r.EntryFamily = "v4"
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep
@@ -772,7 +760,9 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		affected[h.nodeID] = true
 	}
 
-	if _, err := tx.Exec(`UPDATE rules SET entry_listen_port=? WHERE id=?`, ports[0], r.ID); err != nil {
+	// Persist the derived entry_family alongside the port so list/detail reads
+	// reflect the family this rule actually serves, not whatever the caller sent.
+	if _, err := tx.Exec(`UPDATE rules SET entry_listen_port=?, entry_family=? WHERE id=?`, ports[0], r.EntryFamily, r.ID); err != nil {
 		return "", "", nil, err
 	}
 	r.EntryListenPort = ports[0]
@@ -781,11 +771,10 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	for n := range affected {
 		nodes = append(nodes, n)
 	}
-	entry, entryV6 := EntryAddresses(entryFamily, rs[0].relayHost, rs[0].relayHostV6, ports[0])
+	entry, entryV6 := EntryAddresses(r.EntryFamily, rs[0].relayHost, rs[0].relayHostV6, ports[0])
 	return entry, entryV6, nodes, nil
 }
 
-// RuleHopCounts returns hop count per rule for the given rule IDs.
 // RuleChainNodeIDs returns, per rule, the ordered physical node ids of its
 // hops (position order): the flattened chain from the entry to the hop that
 // dials the target. A composite segment already appears expanded into its child
