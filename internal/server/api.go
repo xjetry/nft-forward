@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -40,6 +41,19 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// jsonRegenerateErr reports a RegenerateRule error over HTTP. A duplicate
+// physical node in the resolved chain is a conflict between the entry/via
+// selections the caller picked, not a malformed request, so it maps to 409;
+// every other RegenerateRule failure (bad relay host, exhausted ports, ...)
+// stays 400.
+func jsonRegenerateErr(w http.ResponseWriter, err error) {
+	code := http.StatusBadRequest
+	if errors.Is(err, db.ErrDuplicateChainNode) {
+		code = http.StatusConflict
+	}
+	jsonErr(w, code, err.Error())
 }
 
 // ensureNonNilSlices replaces nil slices with empty slices so JSON
@@ -303,7 +317,6 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.ResolveCompositeOnline(s.DB, nodes)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
@@ -348,9 +361,11 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
-			// TrafficMultiplier is optional; a pointer distinguishes "not
-			// sent" (inherit the child node's rate multiplier) from an
-			// explicit value, including an explicit 0.
+			// TrafficMultiplier is deprecated and ignored: a composite's
+			// billing multiplier is its own rate_multiplier column now
+			// (set via the top-level RateMultiplier field), not a per-hop
+			// sum. The field stays so older clients still get a valid
+			// decode.
 			TrafficMultiplier *float64 `json:"traffic_multiplier"`
 		} `json:"hops"`
 	}
@@ -387,17 +402,18 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			if mode == "" {
 				mode = "userspace"
 			}
-			mult := 0.0
-			if h.TrafficMultiplier != nil && *h.TrafficMultiplier >= 0 {
-				mult = *h.TrafficMultiplier
-			} else if child, err := db.GetNode(s.DB, h.NodeID); err == nil {
-				mult = child.RateMultiplier
-			}
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: mult}
+			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: 0}
 		}
 		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		// Create can't distinguish an unset multiplier from an explicit 0: an
+		// absent JSON field decodes to 0 too. So 0 keeps the default 1.0 here;
+		// configuring a node as free (0) is done afterward via the dedicated
+		// rate-multiplier endpoint, which alone treats 0 as the free marker.
+		if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
+			_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 		}
 		n, _ = db.GetNode(s.DB, n.ID)
 		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
@@ -412,6 +428,8 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Absent field and explicit 0 are indistinguishable on create, so 0 keeps
+	// the default 1.0; free (0) is set later via the dedicated endpoint.
 	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
 		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 	}
@@ -564,13 +582,14 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"node_hops": nodeHops})
 }
 
-// apiUpdateNodeHops replaces a composite node's hop chain (membership, order,
-// per-hop mode and traffic multiplier). The config modes shape rules
-// subsequently created on the composite, and only for the inter-node
-// segments: the exit segment's mode belongs to the rule (see hopsForNode), so
-// the stored last-hop mode stays dormant until a reorder turns that hop into
-// an inter-node one. Existing rules keep the modes captured when they were
-// expanded.
+// apiUpdateNodeHops replaces a composite node's hop chain (membership, order
+// and per-hop mode). The config modes shape rules subsequently created on the
+// composite, and only for the inter-node segments: the exit segment's mode
+// belongs to the rule (see hopsForChain), so the stored last-hop mode stays
+// dormant until a reorder turns that hop into an inter-node one. Existing
+// rules keep the modes captured when they were expanded. The multiplier is no
+// longer a per-hop attribute — a composite's billing multiplier is its own
+// rate_multiplier column, so hop rows carry a dormant 0 here.
 func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -588,8 +607,11 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type hopUpdate struct {
-		NodeID            int64   `json:"node_id"`
-		Mode              string  `json:"mode"`
+		NodeID int64  `json:"node_id"`
+		Mode   string `json:"mode"`
+		// TrafficMultiplier is deprecated and ignored: a composite's billing
+		// multiplier is its own rate_multiplier column now, not a per-hop
+		// sum. The field stays so older clients still get a valid decode.
 		TrafficMultiplier float64 `json:"traffic_multiplier"`
 	}
 	var body struct {
@@ -618,11 +640,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "子节点 ID 不能为空")
 			return
 		}
-		mult := hu.TrafficMultiplier
-		if mult < 0 {
-			mult = 1.0
-		}
-		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: mult}
+		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hopNodeID, Mode: mode, TrafficMultiplier: 0}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -643,6 +661,119 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.update_hops", strconv.FormatInt(id, 10), node.Name)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		Roles int64 `json:"roles"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.Roles&^(db.NodeRoleEntry|db.NodeRoleVia) != 0 || body.Roles == 0 {
+		jsonErr(w, http.StatusBadRequest, "roles invalid")
+		return
+	}
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err := db.UpdateNodeRoles(s.DB, id, body.Roles); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.roles", strconv.FormatInt(id, 10), strconv.FormatInt(body.Roles, 10))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+func (s *Server) apiListNodeBindings(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	bs, err := db.ListBindingsForDownstream(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"bindings": bs})
+}
+
+func (s *Server) apiListAllNodeBindings(w http.ResponseWriter, r *http.Request) {
+	bs, err := db.ListAllNodeBindings(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"bindings": bs})
+}
+
+func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.Roles&db.NodeRoleVia == 0 {
+		jsonErr(w, http.StatusBadRequest, "node is not a middle layer; enable the middle layer role first")
+		return
+	}
+	var body struct {
+		Bindings []struct {
+			UpstreamNodeID int64  `json:"upstream_node_id"`
+			Mode           string `json:"mode"`
+		} `json:"bindings"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request format")
+		return
+	}
+	bs := make([]db.NodeBinding, len(body.Bindings))
+	seenUpstream := make(map[int64]bool, len(body.Bindings))
+	for i, b := range body.Bindings {
+		if b.UpstreamNodeID == id {
+			jsonErr(w, http.StatusBadRequest, "cannot bind to self")
+			return
+		}
+		if seenUpstream[b.UpstreamNodeID] {
+			jsonErr(w, http.StatusBadRequest, "上游节点重复")
+			return
+		}
+		seenUpstream[b.UpstreamNodeID] = true
+		if _, err := db.GetNode(s.DB, b.UpstreamNodeID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "upstream node not found")
+			return
+		}
+		// The schema and the design for junction segments both default a
+		// binding edge to userspace; only NormalizeForwardMode's caller-wide
+		// fallback is kernel, which would silently override that default for
+		// a row that omitted mode.
+		mode := strings.ToLower(strings.TrimSpace(b.Mode))
+		if mode == "" {
+			mode = "userspace"
+		}
+		if mode != "kernel" && mode != "userspace" {
+			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+			return
+		}
+		bs[i] = db.NodeBinding{UpstreamNodeID: b.UpstreamNodeID, DownstreamNodeID: id, Mode: mode}
+	}
+	if err := db.ReplaceBindingsForDownstream(s.DB, id, bs); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.bindings", strconv.FormatInt(id, 10), fmt.Sprintf("%d edges", len(bs)))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -802,13 +933,10 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	node, err := db.GetNode(s.DB, id)
-	if err != nil {
+	// Composite nodes are edited like any other: composite pricing lives on
+	// the node's own rate_multiplier column, not on its hop rows.
+	if _, err := db.GetNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-	if node.NodeType == "composite" {
-		jsonErr(w, http.StatusBadRequest, "组合节点的倍率由各跳子节点决定")
 		return
 	}
 	var body struct {
@@ -818,8 +946,11 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	// 0 is a deliberate free marker (billing accrues no global usage for the
+	// node). A negative value is invalid input, not free, so it falls back to the
+	// neutral 1.0 rather than persisting as a free 0.
 	if body.RateMultiplier < 0 {
-		body.RateMultiplier = 0
+		body.RateMultiplier = 1.0
 	}
 	if err := db.UpdateNodeRateMultiplier(s.DB, id, body.RateMultiplier); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1217,7 +1348,6 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	}
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
@@ -1280,13 +1410,17 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForNode.
+		// legacy alias honored for single-node rules only — see hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (edits keep the stored path — old clients must not silently
+		// strip layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -1313,15 +1447,19 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var hops []db.HopInput
+	// vias is the persisted middle-layer path; only the entry-node branch
+	// derives a chain from it, so an explicit-hops request keeps it empty.
+	var vias []int64
 
 	if len(body.Hops) > 0 {
 		// Explicit hops provided
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
 		}
 	} else if body.NodeID > 0 {
-		derived, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+		vias = viasOf(body.ViaNodeIDs)
+		derived, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
@@ -1367,6 +1505,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		ExitPort:    exitPort,
 		Comment:     strings.TrimSpace(body.Comment),
 		EntryFamily: entryFamily,
+		ViaNodeIDs:  vias,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -1377,7 +1516,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -1403,7 +1542,6 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	ownerName := ""
@@ -1431,19 +1569,13 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// hopsForNode expands a logical entry node into the chain of hops a rule runs
-// over: a single node yields one hop on itself; a composite yields its ordered
-// sub-node hops. The composite config's modes only cover the inter-node
-// segments — the exit segment (last hop -> exit target) belongs to the rule,
-// so the last hop carries the request's exitMode (empty falls back to the
-// kernel default, same as a single-node rule). singleMode is the legacy alias
-// honored for single-node rules only: clients predating exit_mode always sent
-// mode prefilled from the first hop, so letting it reach a composite's exit
-// hop would rewrite the exit segment on every edit from a stale web bundle.
-// The composite return flag tells edit handlers which fields count as an
-// explicit mode request. Used when (re)pointing a rule at a node so create
-// and edit derive the chain the same way.
-func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []db.HopInput, composite bool, err error) {
+// expandSegment expands one logical node into its physical hops: a single node
+// is itself; a composite is its ordered children with the config's inter-node
+// modes. Every hop carries the segment's logical node id for provenance. Mode
+// of the segment's tail hop is left as stored (dormant for composites) — the
+// chain assembler overwrites it with the junction edge mode or the rule's
+// exit mode.
+func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 	node, err := db.GetNode(s.DB, nodeID)
 	if err != nil {
 		return nil, false, fmt.Errorf("节点不存在")
@@ -1453,24 +1585,69 @@ func (s *Server) hopsForNode(nodeID int64, singleMode, exitMode string) (hops []
 		if len(nh) == 0 {
 			return nil, true, fmt.Errorf("组合节点无子节点")
 		}
-		hops = make([]db.HopInput, len(nh))
+		hops := make([]db.HopInput, len(nh))
 		for i, h := range nh {
-			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode, ViaNodeID: nodeID}
 		}
-		// The exit segment belongs to the rule, never the composite config:
-		// an empty exitMode deliberately lands on the kernel default (same
-		// as a single-node rule) instead of the config's stored tail mode,
-		// so a rule's exit behavior is fully determined by its own fields.
-		// Same-node edits that omit the mode keep the rule's current one via
-		// the callers' explicit-mode check.
-		hops[len(hops)-1].Mode = exitMode
 		return hops, true, nil
 	}
+	return []db.HopInput{{NodeID: nodeID, Mode: "", ViaNodeID: nodeID}}, false, nil
+}
+
+// hopsForChain assembles a rule's physical chain: the entry segment followed
+// by each middle-layer (via) segment. Non-final segment tails take the
+// forwarding mode of the binding edge they cross; the final hop takes the
+// rule's exitMode (empty falls back to singleMode for a bare single-node
+// chain — the legacy alias — else the kernel default). The entry node must
+// carry the entry role, and every via must carry the via role and be
+// reachable from its predecessor through a binding edge — this is the
+// authoritative check, since a picker filtering the UI's node list is only
+// a convenience and grants alone don't imply role fitness. Grants remain the
+// caller's policy. The composite flag tells edit handlers which fields count
+// as an explicit exit-mode request: any chain beyond a bare single node never
+// honors the legacy mode alias.
+func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string) ([]db.HopInput, bool, error) {
+	entryNode, err := db.GetNode(s.DB, entryID)
+	if err != nil {
+		return nil, false, fmt.Errorf("节点不存在")
+	}
+	if entryNode.Roles&db.NodeRoleEntry == 0 {
+		return nil, false, fmt.Errorf("节点 %s 不是入口", entryNode.Name)
+	}
+	hops, entryComposite, err := s.expandSegment(entryID)
+	if err != nil {
+		return nil, false, err
+	}
+	prev := entryID
+	for _, viaID := range vias {
+		viaNode, err := db.GetNode(s.DB, viaID)
+		if err != nil {
+			return nil, true, fmt.Errorf("中间层节点不存在")
+		}
+		if viaNode.Roles&db.NodeRoleVia == 0 {
+			return nil, true, fmt.Errorf("节点 %s 不是中间层", viaNode.Name)
+		}
+		edge, err := db.GetNodeBinding(s.DB, prev, viaID)
+		if err != nil {
+			return nil, true, fmt.Errorf("中间层 %s 未绑定到所选上游", viaNode.Name)
+		}
+		seg, _, err := s.expandSegment(viaID)
+		if err != nil {
+			return nil, true, err
+		}
+		// The junction (previous segment's tail -> this segment's head) is an
+		// inter-node leg owned by the binding edge, not by the rule.
+		hops[len(hops)-1].Mode = edge.Mode
+		hops = append(hops, seg...)
+		prev = viaID
+	}
+	composite := entryComposite || len(vias) > 0
 	mode := exitMode
-	if mode == "" {
+	if mode == "" && !composite {
 		mode = singleMode
 	}
-	return []db.HopInput{{NodeID: nodeID, Mode: mode}}, false, nil
+	hops[len(hops)-1].Mode = mode
+	return hops, composite, nil
 }
 
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
@@ -1496,13 +1673,17 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForNode.
+		// hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
 		} `json:"hops"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (keep the stored path — old clients must not silently strip
+		// layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -1528,33 +1709,45 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Three ways to resolve the chain, in priority order:
-	//   node_id  -> re-derive from the selected entry node (single/composite);
-	//               this is how the entry node gets switched.
+	//   node_id / via_node_ids -> re-derive from the selected entry node and
+	//               middle-layer path (single/composite); this is how the entry
+	//               node or the via path gets switched. A sent via_node_ids
+	//               field alone (even with node_id absent) re-derives so an
+	//               explicit empty list can clear the layers.
 	//   hops     -> explicit chain (reorder/mode edits).
 	//   neither  -> keep the existing chain; RegenerateRule reuses each node's
 	//               current listen port so a header-only edit doesn't churn the
 	//               entry endpoint or installed ports.
 	var hops []db.HopInput
 	switch {
-	case body.NodeID > 0:
-		derived, composite, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+	case body.NodeID > 0 || body.ViaNodeIDs != nil:
+		entryID := body.NodeID
+		if entryID == 0 {
+			entryID = rl.NodeID
+		}
+		vias := rl.ViaNodeIDs
+		if body.ViaNodeIDs != nil {
+			vias = *body.ViaNodeIDs
+		}
+		derived, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
 		}
 		hops = derived
-		// A same-node edit without an explicit exit-segment mode keeps the
+		// A same-entry edit without an explicit exit-segment mode keeps the
 		// exit hop's current mode, so clients that don't send one can't
-		// silently reset a userspace exit back to kernel. Composite chains
-		// only treat exit_mode as explicit — the legacy mode field never was
-		// an exit-segment request for them.
+		// silently reset a userspace exit back to kernel. Any chain beyond a
+		// bare single node treats only exit_mode as explicit — the legacy mode
+		// field never was an exit-segment request for them.
 		explicit := body.ExitMode != "" || (!composite && body.Mode != "")
-		if !explicit && body.NodeID == rl.NodeID {
+		if !explicit && entryID == rl.NodeID {
 			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
 				hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 			}
 		}
-		rl.NodeID = body.NodeID
+		rl.NodeID = entryID
+		rl.ViaNodeIDs = vias
 	case len(body.Hops) == 0:
 		existing, err := db.ListRuleHops(s.DB, id)
 		if err != nil {
@@ -1567,7 +1760,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		hops = make([]db.HopInput, len(existing))
 		for i, h := range existing {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 		}
 		// A header-only edit still owns the exit segment: an explicit
 		// exit_mode (or the single-node legacy mode) applies to the last hop
@@ -1580,7 +1773,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	default:
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
 		}
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
@@ -1605,7 +1798,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -1663,7 +1856,7 @@ func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 	}
 	var avoid map[int64]int
 	if body.Port > 0 {
@@ -1715,9 +1908,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRateMultiplier(s.DB, allNodes)
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	db.FillRuleTraffic(s.DB, rules)
 	// The landing_nodes preview doubles as a sync point: any successful
@@ -2199,19 +2390,13 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	// in the user's granted set — resolve over the full node list, then project
 	// the result onto the granted nodes so the dashboard shows accurate status.
 	db.ResolveCompositeOnline(s.DB, nodes)
-	db.ResolveCompositeRateMultiplier(s.DB, nodes)
 	onlineByID := make(map[int64]int, len(nodes))
-	rateByID := make(map[int64]float64, len(nodes))
 	for _, n := range nodes {
 		onlineByID[n.ID] = n.Online
-		rateByID[n.ID] = n.RateMultiplier
 	}
 	for _, gn := range grantedNodes {
 		if o, ok := onlineByID[gn.ID]; ok {
 			gn.Online = o
-		}
-		if r, ok := rateByID[gn.ID]; ok {
-			gn.RateMultiplier = r
 		}
 	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
@@ -2227,7 +2412,6 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	idx := s.landingIndexFromDB(u.ID)
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
@@ -2258,10 +2442,22 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		item.BillingRate = br
 		views = append(views, item)
 	}
+	grantedSet := make(map[int64]bool)
+	for _, n := range grantedNodes {
+		grantedSet[n.ID] = true
+	}
+	allEdges, _ := db.ListAllNodeBindings(s.DB)
+	edges := make([]*db.NodeBinding, 0, len(allEdges))
+	for _, e := range allEdges {
+		if grantedSet[e.UpstreamNodeID] && grantedSet[e.DownstreamNodeID] {
+			edges = append(edges, e)
+		}
+	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"rules": views, "nodes": grantedNodes,
 		"node_by_id": grantedByID, "show_rate": showRate == "1",
+		"bindings": edges,
 	})
 }
 
@@ -2279,7 +2475,6 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
@@ -2333,9 +2528,13 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForNode.
+		// legacy alias honored for single-node rules only — see hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" apart from an explicit empty list; each via is authorized on
+		// its own grant just like the entry node.
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -2375,7 +2574,18 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hops, _, derr := s.hopsForNode(body.NodeID, body.Mode, body.ExitMode)
+	// Each middle-layer node is authorized on its own grant before the chain
+	// is validated, so a revoked via is rejected as forbidden rather than
+	// falling through to the role/binding checks.
+	vias := viasOf(body.ViaNodeIDs)
+	for _, viaID := range vias {
+		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			return
+		}
+	}
+
+	hops, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
@@ -2414,6 +2624,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		ExitPort:    exitPort,
 		Comment:     strings.TrimSpace(body.Comment),
 		EntryFamily: entryFamily,
+		ViaNodeIDs:  vias,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
@@ -2424,7 +2635,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2476,9 +2687,13 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForNode.
+		// hopsForChain.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
+		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
+		// sent" (keep the stored path — old clients must not silently strip
+		// layers) apart from an explicit empty list (clear the layers).
+		ViaNodeIDs *[]int64 `json:"via_node_ids"`
 		// EntryFamily selects the entry endpoint's IP family: "v4" (default),
 		// "v6", or "both". Empty defaults to "v4".
 		EntryFamily string `json:"entry_family"`
@@ -2503,27 +2718,43 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	nodeID := rl.NodeID
+	entryID := rl.NodeID
 	if body.NodeID > 0 {
-		nodeID = body.NodeID
+		entryID = body.NodeID
+	}
+	// Absent via_node_ids keeps the stored path so a header-only edit can't
+	// silently strip the middle layers; an explicit list (empty included)
+	// replaces it.
+	vias := rl.ViaNodeIDs
+	if body.ViaNodeIDs != nil {
+		vias = *body.ViaNodeIDs
 	}
 	// The grant on the target node authorizes the rule and carries the per-node
 	// cap; a composite is the unit of authorization (granting it covers the
 	// whole chain), so the check is on the selected node itself.
-	grant, gerr := db.GetNodeGrant(s.DB, u.ID, nodeID)
+	grant, gerr := db.GetNodeGrant(s.DB, u.ID, entryID)
 	if gerr != nil {
 		jsonErr(w, http.StatusForbidden, "无权使用该节点")
 		return
 	}
-	hops, composite, derr := s.hopsForNode(nodeID, body.Mode, body.ExitMode)
+	// Each middle-layer node is authorized on its own grant before the chain
+	// is validated, so a revoked via is rejected as forbidden rather than
+	// falling through to the role/binding checks.
+	for _, viaID := range vias {
+		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
+			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			return
+		}
+	}
+	hops, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
 	}
-	// Same-node edits without an explicit exit-segment mode keep the exit
+	// Same-entry edits without an explicit exit-segment mode keep the exit
 	// hop's current mode (see the admin update handler for the rationale).
 	explicit := body.ExitMode != "" || (!composite && body.Mode != "")
-	if !explicit && nodeID == rl.NodeID {
+	if !explicit && entryID == rl.NodeID {
 		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
 			hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 		}
@@ -2538,8 +2769,8 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	// Per-node cap only when moving to a different node — the rule already
 	// counts against its current node, so a same-node edit can't exceed it.
-	if nodeID != rl.NodeID {
-		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, nodeID); cnt+1 > grant.MaxForwards {
+	if entryID != rl.NodeID {
+		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, entryID); cnt+1 > grant.MaxForwards {
 			jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
 			return
 		}
@@ -2549,7 +2780,8 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusConflict, err.Error())
 		return
 	}
-	rl.NodeID = nodeID
+	rl.NodeID = entryID
+	rl.ViaNodeIDs = vias
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
 	rl.Comment = strings.TrimSpace(body.Comment)
 	// Absent entry_family keeps the stored family — only an explicit value
@@ -2569,7 +2801,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		jsonRegenerateErr(w, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -2888,7 +3120,6 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	db.ResolveCompositeRateMultiplier(s.DB, grantedNodes)
 	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
 
 	nodeViews := make([]map[string]any, 0, len(grantedNodes))

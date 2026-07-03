@@ -91,6 +91,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <td>
                 <span className="inline-flex items-center gap-1.5 font-mono text-ink-soft">
                   <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}
+                  {!isAdmin && r.via_node_ids?.length > 0 && <span className="text-ink-mut text-[11px] font-sans">+{r.via_node_ids.length}层</span>}
                 </span>
               </td>
               <td className="font-mono text-xs !whitespace-normal">
@@ -159,6 +160,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
               <span className="inline-flex items-center gap-1 font-mono">
                 <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}
+                {!isAdmin && r.via_node_ids?.length > 0 && <span className="text-ink-mut text-[11px] font-sans">+{r.via_node_ids.length}层</span>}
               </span>
               {isAdmin && r.owner_name && <><span className="text-ink-mut">·</span><span>{r.owner_name}</span></>}
               <span className="text-ink-mut">·</span>

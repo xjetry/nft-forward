@@ -15,6 +15,10 @@ export default function MyRuleDetail() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
+  // The single-rule endpoint doesn't carry the binding graph (only the list
+  // endpoint computes the granted-intersection edges) — fetch it alongside
+  // so the edit modal's middle-layer cascade has candidates to offer.
+  const [bindings, setBindings] = useState([])
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -35,6 +39,7 @@ export default function MyRuleDetail() {
   const load = () => {
     setLoading(true)
     api.get(`/my/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
+    api.get('/my/rules').then(d => setBindings(d?.bindings || [])).catch(console.error)
   }
   useEffect(load, [id])
 
@@ -43,6 +48,13 @@ export default function MyRuleDetail() {
 
   const { rule, nodes = [], node_by_id = {}, show_rate } = data
   const node = node_by_id[rule.node_id]
+  // Names resolve only through node_by_id — the granted-node map the page
+  // already has in scope — so an unresolvable via (rare: node revoked after
+  // the rule was built) silently drops from the chain instead of showing a
+  // bare id the user has no way to recognize.
+  const entryName = node?.name || `#${rule.node_id}`
+  const viaNames = (rule.via_node_ids || []).map(id => node_by_id[id]?.name).filter(Boolean)
+  const nodeChain = viaNames.length ? [entryName, ...viaNames].join(' → ') : entryName
 
   const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
 
@@ -121,7 +133,7 @@ export default function MyRuleDetail() {
             <span className="text-ink-soft font-semibold">名称</span>
             <span className="font-semibold">{rule.name}</span>
             <span className="text-ink-soft font-semibold">节点</span>
-            <span className="font-mono">{node?.name || `#${rule.node_id}`}</span>
+            <span className="font-mono">{nodeChain}</span>
             <span className="text-ink-soft font-semibold">协议</span>
             <span><ProtoBadge proto={rule.proto} /></span>
             <span className="text-ink-soft font-semibold">出口</span>
@@ -153,7 +165,7 @@ export default function MyRuleDetail() {
 
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} landingNodes={landingNodes} initial={showEdit ? ruleToForm(rule) : null}
+        nodes={nodes} landingNodes={landingNodes} bindings={bindings} initial={showEdit ? ruleToForm(rule) : null}
         onSubmit={saveEdit} showRate={show_rate} />
     </Layout>
   )

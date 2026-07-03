@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { Modal, Select, ProbeButton, nodeStack } from './ui'
 import { useToast } from './Layout'
 import { tryParseURI } from '../lib/landing'
 
-const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel', entry_family: 'v4' }
+const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custom', entry_port: '', comment: '', mode: 'kernel', entry_family: 'v4', via_node_ids: [] }
 
 /* Shared create/edit form for forwarding rules, used by both the admin
    (`/rules`) and user (`/my/rules`) pages so create, edit and copy share one
@@ -19,7 +19,7 @@ const EMPTY = { node_id: '', name: '', proto: 'tcp', exit: '', exit_kind: 'custo
    the browser, so the modal only deals in host:port here; the rules page
    resolves the relay URI client-side. Admin callers omit the prop and keep the
    plain host:port box. */
-export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, initial, onSubmit, onAddProxyURI, showRate }) {
+export function RuleFormModal({ open, onClose, title, submitLabel = '保存', nodes = [], landingNodes, bindings = [], initial, onSubmit, onAddProxyURI, showRate }) {
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(false)
   const toast = useToast()
@@ -51,6 +51,19 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   }, [form.node_id, nodes])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Switching the entry invalidates any chosen middle-layer chain — the
+  // binding graph downstream of the old entry has nothing to do with the
+  // new one. This lives in the picker's own onChange rather than an effect
+  // keyed on form.node_id: the seed effect above also assigns node_id (from
+  // `initial`, together with its own via_node_ids) every time the modal
+  // opens, and an effect can't tell that assignment apart from a real user
+  // switch — it would wipe the edit prefill's chain right after seeding it.
+  // Select fires onChange even when the clicked option is already selected,
+  // and it emits string values while a seeded node_id may be a number — the
+  // String() comparison keeps a same-entry reselect from clearing the chain.
+  const pickEntry = (v) => setForm(f =>
+    String(v) === String(f.node_id) ? f : { ...f, node_id: v, via_node_ids: [] })
 
   const handleExitBlur = () => {
     if (!landingEnabled || form.exit_kind !== 'custom') return
@@ -96,9 +109,13 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     const r = n.rate_multiplier ?? 1
     return r !== 1 ? `${stack}${n.name} (×${r})` : `${stack}${n.name}`
   }
+  // Only entry-role nodes can be the rule's entry — roles missing (nodes
+  // reported by a server that predates the roles column) default to entry,
+  // so old deployments keep working until an admin explicitly narrows roles.
+  const entryNodes = nodes.filter(n => ((n.roles ?? 1) & 1) !== 0)
   const groups = [
-    { label: '单点', options: nodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
-    { label: '组合', options: nodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
+    { label: '单点', options: entryNodes.filter(n => n.node_type !== 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
+    { label: '组合', options: entryNodes.filter(n => n.node_type === 'composite').map(n => ({ value: n.id, label: fmtRate(n) })) },
   ]
 
   // Show protocol + node remark only — the real connection address is hidden
@@ -108,12 +125,52 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     label: `${n.protocol ? `[${n.protocol}] ` : ''}${n.name || '(未命名)'}`,
   }))
 
+  // Cascaded middle-layer picker: chain[i]'s candidates are the binding
+  // graph's downstreams of chain[i-1] (chain[-1] = the entry), narrowed to
+  // nodes we actually have (the my-side list is already the granted
+  // intersection) with the via role, excluding the entry itself and any
+  // node already on the chain. Missing roles default to "not a via node"
+  // (the opposite default from entry) — an unrolled node shouldn't silently
+  // become choosable as a middle hop. Candidates empty and nothing chosen
+  // at a level means stop rendering further levels — "有框就有得选".
+  const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]))
+  const viaChain = (form.via_node_ids || []).map(Number).filter(id => nodeById[id])
+  const viaCandidates = (upstreamId, chainSoFar) =>
+    bindings
+      .filter(b => b.upstream_node_id === upstreamId)
+      .map(b => nodeById[b.downstream_node_id])
+      .filter(n => n && ((n.roles ?? 0) & 2) !== 0)
+      .filter(n => n.id !== Number(form.node_id) && !chainSoFar.includes(n.id))
+  const pickVia = (level, v) => setForm(f => {
+    const next = (f.via_node_ids || []).slice(0, level)
+    if (v) next.push(Number(v))
+    return { ...f, via_node_ids: next }
+  })
+  const viaLevels = []
+  if (form.node_id) {
+    let upstream = Number(form.node_id)
+    const soFar = []
+    for (let level = 0; ; level++) {
+      const chosen = viaChain[level]
+      const cands = viaCandidates(upstream, soFar)
+      if (!cands.length && !chosen) break
+      viaLevels.push({ level, cands, chosen })
+      if (!chosen) break
+      soFar.push(chosen)
+      upstream = chosen
+    }
+  }
+  // Exit-capability hints follow the chain tail (the last via, or the entry
+  // itself when the chain is empty) — the tail is the node that actually
+  // dials the target, so its stack is what the outbound leg depends on.
+  const tailNode = viaChain.length ? nodeById[viaChain[viaChain.length - 1]] : nodeById[Number(form.node_id)]
+
   return (
     <Modal open={open} onClose={onClose} title={title}>
       <form onSubmit={submit} className="space-y-[22px]">
         <div className="grid grid-cols-[120px_1fr] gap-6 items-center">
           <label className="fl">入口节点</label>
-          <Select value={form.node_id} onChange={v => set('node_id', v)} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
+          <Select value={form.node_id} onChange={pickEntry} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
           {(() => {
             const selNode = nodes.find(n => String(n.id) === String(form.node_id))
             if (!selNode) return null
@@ -150,6 +207,26 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               </>
             )
           })()}
+          {viaLevels.map(({ level, cands, chosen }) => (
+            <Fragment key={level}>
+              <label className="fl">{level === 0 ? '线路层' : `线路层 ${level + 1}`}</label>
+              <Select value={chosen ?? ''} onChange={v => pickVia(level, v)} placeholder="直接转发"
+                options={[{ value: '', label: '直接转发' },
+                  ...cands.map(n => ({ value: n.id, label: fmtRate(n) }))]} />
+            </Fragment>
+          ))}
+          {viaChain.length > 0 && (
+            <>
+              <label className="fl"></label>
+              <div className="text-xs text-ink-mut">
+                <span className="font-mono">
+                  {[nodeById[Number(form.node_id)]?.name, ...viaChain.map(id => nodeById[id]?.name), '目标']
+                    .filter(Boolean).join(' → ')}
+                </span>
+                <span className="ml-2">链路更长的规则占用更多全局转发名额</span>
+              </div>
+            </>
+          )}
           <label className="fl">名称</label>
           <input className="input-field" value={form.name} onChange={e => set('name', e.target.value)} required placeholder="规则名称" />
           <label className="fl">协议</label>
@@ -160,7 +237,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
           {(() => {
             const selNode = nodes.find(n => String(n.id) === String(form.node_id))
             if (!selNode) return null
-            const composite = selNode.node_type === 'composite'
+            // The mode field governs the outbound leg (tail → target): a
+            // composite entry already has that split internally, and a via
+            // chain extends it the same way, so either makes this the
+            // "出口段" (vs. the whole rule) regardless of the entry's own type.
+            const composite = tailNode?.node_type === 'composite' || viaChain.length > 0
             return (
               <>
                 <label className="fl">{composite ? '出口段模式' : '转发模式'}</label>
@@ -255,6 +336,7 @@ export function ruleToForm(rule) {
     // 单点规则两者本就相同。
     mode: rule.exit_mode || rule.entry_mode || 'kernel',
     entry_family: rule.entry_family || 'v4',
+    via_node_ids: rule.via_node_ids || [],
   }
 }
 
@@ -268,7 +350,9 @@ export function copyInitial(rule) {
    of the payload shape for every rules page, so a new field can't silently
    go missing from one of the call sites. form.mode is the exit-segment mode;
    it is sent as both exit_mode (the real field) and mode (legacy alias for
-   single-node rules, so older servers keep honoring it). */
+   single-node rules, so older servers keep honoring it). via_node_ids is
+   always sent (never omitted): the form owns the whole chain, so an empty
+   array means "clear the chain", not "leave it untouched". */
 export function ruleFormToPayload(form) {
   return {
     node_id: Number(form.node_id), name: form.name, proto: form.proto,
@@ -276,5 +360,6 @@ export function ruleFormToPayload(form) {
     exit: form.exit, entry_port: form.entry_port ? Number(form.entry_port) : undefined,
     comment: form.comment || undefined,
     entry_family: form.entry_family || undefined,
+    via_node_ids: (form.via_node_ids || []).map(Number),
   }
 }

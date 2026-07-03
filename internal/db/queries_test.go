@@ -89,3 +89,74 @@ func TestNodeRelayHostDeclaredRoundTrip(t *testing.T) {
 		t.Error("RelayHostV6Declared should remain true (only the v4 flag was cleared)")
 	}
 }
+
+func TestNodeRolesRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+	n, err := CreateNode(d, "hk-1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Roles != NodeRoleEntry {
+		t.Fatalf("default roles want %d, got %d", NodeRoleEntry, n.Roles)
+	}
+	if err := UpdateNodeRoles(d, n.ID, NodeRoleEntry|NodeRoleVia); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := GetNode(d, n.ID)
+	if got.Roles != NodeRoleEntry|NodeRoleVia {
+		t.Fatalf("roles want %d, got %d", NodeRoleEntry|NodeRoleVia, got.Roles)
+	}
+}
+
+func TestListNodesForUserCarriesRoles(t *testing.T) {
+	d := openTestDB(t)
+	uid, _ := CreateUser(d, "testuser", "hash", "user")
+	n, _ := CreateNode(d, "hk-1", "", "")
+	_ = UpdateNodeRoles(d, n.ID, NodeRoleVia)
+	if err := GrantNode(d, uid, n.ID, 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _, err := ListNodesForUser(d, uid)
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("want 1 node, err=%v n=%d", err, len(nodes))
+	}
+	if nodes[0].Roles != NodeRoleVia {
+		t.Fatalf("roles want %d, got %d", NodeRoleVia, nodes[0].Roles)
+	}
+}
+
+func TestRuleViaRoundTripAndHopProvenance(t *testing.T) {
+	d := openTestDB(t)
+	a, _ := CreateNode(d, "entry", "", "")
+	b, _ := CreateNode(d, "mid", "", "")
+	_ = UpdateNodeRelayHost(d, a.ID, "1.1.1.1")
+	_ = UpdateNodeRelayHost(d, b.ID, "2.2.2.2")
+
+	r := &Rule{NodeID: a.ID, Name: "x", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443,
+		ViaNodeIDs: []int64{b.ID}}
+	tx, _ := d.Begin()
+	id, err := CreateRule(tx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ID = id
+	hops := []HopInput{
+		{NodeID: a.ID, Mode: "userspace", ViaNodeID: a.ID},
+		{NodeID: b.ID, Mode: "kernel", ViaNodeID: b.ID},
+	}
+	if _, _, _, err := RegenerateRule(tx, r, hops, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := GetRule(d, id)
+	if len(got.ViaNodeIDs) != 1 || got.ViaNodeIDs[0] != b.ID {
+		t.Fatalf("via round-trip failed: %+v", got.ViaNodeIDs)
+	}
+	rh, _ := ListRuleHops(d, id)
+	if len(rh) != 2 || rh[0].ViaNodeID != a.ID || rh[1].ViaNodeID != b.ID {
+		t.Fatalf("hop provenance wrong: %+v", rh)
+	}
+}

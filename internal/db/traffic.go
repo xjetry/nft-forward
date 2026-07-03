@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -63,26 +64,61 @@ func NodeTrafficSums(d *sql.DB) (map[int64]int64, error) {
 	return m, rows.Err()
 }
 
-// HopMultipliers returns per-hop multipliers keyed by (compositeNodeID, physicalNodeID).
-// Each hop can carry a different multiplier so a physical node can be priced
-// differently depending on which composite chain it participates in.
-func HopMultipliers(d *sql.DB) (map[int64]map[int64]float64, error) {
-	rows, err := d.Query(`SELECT node_id, hop_node_id, traffic_multiplier FROM node_hops`)
+// NodeRateMultipliers returns every node's rate_multiplier keyed by id. The
+// entry node's value is the whole rule's billing multiplier — middle-layer
+// and composite-child hops don't stack their own factors (a composite entry
+// carries the baked composite factor on its own column). A stored 0 is a
+// deliberate free marker and is returned as-is; billing treats it as free (no
+// global usage) and falls back to 1.0 only for a negative or absent value.
+func NodeRateMultipliers(d *sql.DB) (map[int64]float64, error) {
+	rows, err := d.Query(`SELECT id, rate_multiplier FROM nodes`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	m := make(map[int64]map[int64]float64)
+	m := map[int64]float64{}
 	for rows.Next() {
-		var compositeID, hopID int64
+		var id int64
 		var mult float64
-		if err := rows.Scan(&compositeID, &hopID, &mult); err != nil {
+		if err := rows.Scan(&id, &mult); err != nil {
 			return nil, err
 		}
-		if m[compositeID] == nil {
-			m[compositeID] = make(map[int64]float64)
+		m[id] = mult
+	}
+	return m, rows.Err()
+}
+
+// SegmentFirstHops maps each rule's segment-first hop positions to the
+// segment's logical node id. Per-grant byte accounting charges a segment's
+// grant exactly once per counter batch — at its first hop — since every hop
+// of a segment carries the same bytes.
+func SegmentFirstHops(d *sql.DB, ruleIDs []int64) (map[int64]map[int]int64, error) {
+	if len(ruleIDs) == 0 {
+		return map[int64]map[int]int64{}, nil
+	}
+	args := make([]any, len(ruleIDs))
+	ph := make([]string, len(ruleIDs))
+	for i, id := range ruleIDs {
+		args[i] = id
+		ph[i] = "?"
+	}
+	rows, err := d.Query(`SELECT rule_id, MIN(position), via_node_id FROM rule_hops
+		WHERE rule_id IN (`+strings.Join(ph, ",")+`) GROUP BY rule_id, via_node_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]map[int]int64{}
+	for rows.Next() {
+		var ruleID, via int64
+		var pos int
+		if err := rows.Scan(&ruleID, &pos, &via); err != nil {
+			return nil, err
 		}
-		m[compositeID][hopID] = mult
+		if m[ruleID] == nil {
+			m[ruleID] = map[int]int64{}
+		}
+		m[ruleID][pos] = via
 	}
 	return m, rows.Err()
 }
@@ -140,18 +176,18 @@ func NodesExceedingQuota(d *sql.DB, userID int64) ([]int64, error) {
 }
 
 // RulesAffectedByNode returns the distinct hop-node IDs of all rules owned by
-// userID that include nodeID as one of their hops. Matching covers both physical
-// hops (rh2.node_id = nodeID) and composite nodes declared as the rule's entry
-// node (r.node_id = nodeID), since composite quotas are tracked on the composite
-// node ID rather than any individual physical hop.
+// userID whose chain runs a segment of the given logical node (entry or via).
+// Grants — and thus quotas — live on logical nodes, so a rule is affected when
+// any of its hops was expanded from nodeID's segment (rh2.via_node_id = nodeID);
+// the entry segment's via is rules.node_id, so this covers composite/entry
+// grants without a separate clause.
 func RulesAffectedByNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
 	return queryInt64s(d, `
 		SELECT DISTINCT rh.node_id
 		FROM rule_hops rh
 		JOIN rules r ON r.id = rh.rule_id
 		WHERE r.owner_id = ?
-		  AND (rh.rule_id IN (
-		          SELECT rh2.rule_id FROM rule_hops rh2 WHERE rh2.node_id = ?
-		      )
-		      OR r.node_id = ?)`, userID, nodeID, nodeID)
+		  AND rh.rule_id IN (
+		      SELECT rh2.rule_id FROM rule_hops rh2 WHERE rh2.via_node_id = ?)`,
+		userID, nodeID)
 }

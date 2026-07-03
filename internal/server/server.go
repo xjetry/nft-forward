@@ -372,10 +372,10 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 				if u := users[r.OwnerID.Int64]; u != nil {
 					rule.OwnerName = u.Username
 				}
-				// Shaping is priced by the grant on the rule's panel node —
-				// the same node the quota is tracked on — then applied at
-				// every hop.
-				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, r.NodeID}]; ok {
+				// Shaping follows the hop's logical segment's grant: the entry
+				// segment reads the entry grant, a middle-layer segment reads the
+				// layer grant — the same logical node its quota is tracked on.
+				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, rh.ViaNodeID}]; ok {
 					rule.ShapeGroup = gs.GrantID
 					rule.RateMBytes = int(gs.RateLimitMBytes)
 					// Legacy mirror so pre-group agents still shape
@@ -464,6 +464,10 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/unidirectional", s.apiSetNodeUnidirectional)
 			r.Get("/nodes/{id}/hops", s.apiListNodeHops)
 			r.Post("/nodes/{id}/hops", s.apiUpdateNodeHops)
+			r.Post("/nodes/{id}/roles", s.apiUpdateNodeRolesMask)
+			r.Get("/nodes/{id}/bindings", s.apiListNodeBindings)
+			r.Post("/nodes/{id}/bindings", s.apiUpdateNodeBindings)
+			r.Get("/node-bindings", s.apiListAllNodeBindings)
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)

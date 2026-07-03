@@ -232,6 +232,17 @@ func targetIPInCIDR(ip net.IP, list string) bool {
 
 func nullInt64(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: true} }
 
+// viasOf dereferences the optional middle-layer path from a request body: a
+// nil pointer (field absent) yields a nil slice so callers keep the stored
+// path, while a non-nil pointer — including an explicit empty array — yields
+// its value so the client can deliberately clear the layers.
+func viasOf(p *[]int64) []int64 {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 // checkUserRuleQuota verifies a user hasn't exceeded their global max_forwards
 // limit or per-node grant limits.
 func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops int) error {
@@ -258,7 +269,7 @@ func (s *Server) regenerateRuleByID(ruleID int64) ([]int64, error) {
 	}
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

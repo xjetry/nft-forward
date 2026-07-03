@@ -36,7 +36,7 @@
    - downstream 须具有中间层角色（应用层校验）。
    绑定/解绑/改边模式只影响此后新建或重推的规则，存量规则保持物化快照——与 `node_hops` 编辑的既有语义一致。
 3. `rules.via_node_ids TEXT NOT NULL DEFAULT '[]'`：有序 JSON 数组，所选中间层节点 ID。链的推导来源必须持久化在规则上：凡带 `node_id` 的编辑路径会从节点配置重推链（`internal/server/api.go` 的 `hopsForNode` 消费方），若路径只存在于 rule_hops 快照中，一次编辑就会把中间层静默剥掉。
-4. `rule_hops.via_node_id INTEGER NOT NULL`：溯源列，该物理跳所属逻辑段的节点 ID（入口段 = `rules.node_id` 的值，各层段 = 层节点 ID）。存量行 backfill 为所属规则的 `node_id`。配额压制、via 授权记账、grant 限速分组、链路展示都依赖它。
+4. `rule_hops.via_node_id INTEGER NOT NULL`：溯源列，该物理跳所属逻辑段的节点 ID（入口段 = `rules.node_id` 的值，各层段 = 层节点 ID）。存量行分两步 backfill：组合入口规则（整链为一个入口段）回填为入口 `node_id`；非组合入口（显式多跳/TUI 链）规则每跳回填为自身 `node_id`，使下游各跳保留各自逻辑段、其 per-node 授权继续计量与压制。单跳规则不受影响（该跳 `node_id` 本就等于 `rules.node_id`）。配额压制、via 授权记账、grant 限速分组、链路展示都依赖它。
 5. `node_hops.traffic_multiplier` 废除读写。迁移时先将每个组合节点的 `nodes.rate_multiplier` 置为其各跳倍率之和（等值于现状的有效计费值与 `×N` 显示值，存量组合规则计费金额不变），此后该列保留为休眠列、代码不再读写，不做物理删除。
 
 ## 链的推导与物化
@@ -69,6 +69,7 @@
 | 落地出口账本 | 末跳原始字节（up+down，双向） | 不变 |
 | 配额压制 | 任一物理跳授权或 `rules.node_id` 授权超额 → 整链撤下 | 匹配条件扩展到 `via_node_id`：via 授权超额同样压整链（`ActiveRuleHopsForPush`、`RulesAffectedByNode`） |
 
+- 入口 `rate_multiplier`：`0` 表示免费（全局用量不计），负值/缺失按 `1.0` 兜底；专属配额与出口账本仍按原始字节累计。免费只能经专属倍率端点配置（创建接口无法区分缺省与显式 0，故创建时 0 仍取默认 1.0）。
 - via 授权的 `rate_limit_mbytes` 沿用 grant shaping 机制，shaping 组作用在该层段首个物理跳（由溯源列标注归属）。
 - 规则数配额 `max_forwards` 仅对入口授权计数；via 授权上的该字段对经过规则不生效，避免一条规则在多处授权同时占名额造成难排查的 409。via 的容量控制交给配额与限速。
 - 用户全局 `max_forwards` 仍按物理跳数计：选择中间层的规则占用更多名额，表单需提示。
@@ -96,7 +97,7 @@
 ## 迁移与兼容
 
 - `nodes.roles` 默认全部为入口，管理员手工为 akari 等节点打中间层角色；
-- `rule_hops.via_node_id` backfill 为所属规则的 `node_id`；
+- `rule_hops.via_node_id` 两步 backfill：组合入口规则回填为入口 `node_id`，非组合入口（显式多跳）规则每跳回填为自身 `node_id`，保留下游 per-node 授权计量；
 - 组合节点 `rate_multiplier := Σ(node_hops.traffic_multiplier)`，保证存量计费连续；
 - 专属配额从加权值切换为原始字节：存量已用量数字不回算，此后按新口径累加，倍率≠1 的授权会出现一次性口径变化；
 - 不带 `via_node_ids` 的旧请求保留现值；不带 `roles` 的节点创建默认入口角色。

@@ -18,6 +18,7 @@ export default function RulesDetail() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
+  const [bindings, setBindings] = useState([])
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -25,6 +26,7 @@ export default function RulesDetail() {
   const load = () => {
     setLoading(true)
     api.get(`/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
+    api.get('/node-bindings').then(d => setBindings(d?.bindings || [])).catch(console.error)
   }
   useEffect(load, [id])
 
@@ -126,14 +128,16 @@ export default function RulesDetail() {
         {hops.length ? (
           <TableBox>
           <table className="tbl">
-            <thead><tr><th className="w-10">#</th><th>节点</th><th>监听端口</th><th>目标</th><th>模式</th><th>流量</th><th className="text-right">操作</th></tr></thead>
+            <thead><tr><th className="w-10">#</th><th>节点</th><th>所属段</th><th>监听端口</th><th>目标</th><th>模式</th><th>流量</th><th className="text-right">操作</th></tr></thead>
             <tbody>
               {hops.map(h => {
                 const hopNode = node_by_id?.[h.node_id]
+                const viaNode = node_by_id?.[h.via_node_id]
                 return (
                   <tr key={h.position}>
                     <td className="font-mono text-xs text-ink-mut">{h.position + 1}</td>
                     <td className="font-semibold"><Link to={`/nodes/${h.node_id}`} className="text-blue-600 hover:underline">{hopNode?.name || `#${h.node_id}`}</Link></td>
+                    <td className="font-mono text-xs text-ink-soft">{viaNode?.name || `#${h.via_node_id}`}</td>
                     <td className="font-mono">:{h.listen_port}</td>
                     <td className="font-mono"><SensText blurred={blurred}>{h.target_host ? `${h.target_host}:${h.target_port}` : '--'}</SensText></td>
                     <td><ModeBadge mode={h.mode} /></td>
@@ -162,7 +166,7 @@ export default function RulesDetail() {
 
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} initial={ruleToForm(rule)} onSubmit={saveEdit} />
+        nodes={nodes} bindings={bindings} initial={ruleToForm(rule)} onSubmit={saveEdit} />
     </Layout>
   )
 }

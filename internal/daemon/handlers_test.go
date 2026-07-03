@@ -16,6 +16,7 @@ import (
 
 	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/wsproto"
 )
 
 type fakeDataplane struct {
@@ -725,5 +726,89 @@ func TestPickLocalFreePort(t *testing.T) {
 	}
 	if port < 10001 || port > 20000 {
 		t.Fatalf("port %d out of range", port)
+	}
+}
+
+func TestPanelHopCount(t *testing.T) {
+	d := &Daemon{owners: OwnerRuleset{
+		"panel": {
+			{ID: "a1", RuleID: 5, HopCount: 3},
+			{ID: "a2", RuleID: 6, HopCount: 1},
+		},
+		"tui": {{ID: "b1"}},
+	}}
+	if got := d.panelHopCount(5); got != 3 {
+		t.Fatalf("want 3, got %d", got)
+	}
+	if got := d.panelHopCount(6); got != 1 {
+		t.Fatalf("want 1, got %d", got)
+	}
+	if got := d.panelHopCount(99); got != 0 {
+		t.Fatalf("unknown rule want 0, got %d", got)
+	}
+}
+
+func TestUpdateRuleRoutesChainRowsToRuleHopEdit(t *testing.T) {
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: ack}
+	})
+	ok := func(env wsproto.Envelope) wsproto.Envelope {
+		ack, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
+		return wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ack}
+	}
+	fh.onAck(wsproto.TypeRuleHopEdit, ok)
+	fh.onAck(wsproto.TypeRuleUpdate, ok)
+	hubSrv := httptest.NewServer(fh.handler(t))
+	defer hubSrv.Close()
+
+	d, srv := newTestServer(t, &fakeDataplane{})
+	defer srv.Close()
+	dl := NewDialer(DialerConfig{
+		URL: "ws" + strings.TrimPrefix(hubSrv.URL, "http") + "/", Token: "tok", AgentVersion: "v1",
+		GetState: func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
+		OnApply:  func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _, _ = dl.runOnce(ctx) }()
+	waitConnected(t, dl)
+	d.dialer.Store(dl)
+	d.mu.Lock()
+	d.owners = OwnerRuleset{"panel": {
+		{ID: "x1", RuleID: 5, HopCount: 3},
+		{ID: "x2", RuleID: 6, HopCount: 1},
+	}}
+	d.mu.Unlock()
+
+	put := func(id, body string) int {
+		req := httptest.NewRequest(http.MethodPut, "/v1/rules/"+id, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		d.handleRulesWithID(w, req)
+		return w.Code
+	}
+	if code := put("5", `{"listen_port":12345,"mode":"userspace","comment":"c"}`); code != http.StatusOK {
+		t.Fatalf("chain-row edit: want 200, got %d", code)
+	}
+	if code := put("6", `{"proto":"tcp","exit_host":"9.9.9.9","exit_port":443}`); code != http.StatusOK {
+		t.Fatalf("single-hop edit: want 200, got %d", code)
+	}
+	var sawHopEdit, sawUpdate bool
+	for _, f := range fh.Frames() {
+		switch f.Type {
+		case wsproto.TypeRuleHopEdit:
+			sawHopEdit = true
+			var e wsproto.RuleHopEdit
+			_ = json.Unmarshal(f.Payload, &e)
+			if e.RuleID != 5 || e.ListenPort != 12345 || e.Mode != "userspace" {
+				t.Fatalf("rule_hop_edit payload wrong: %+v", e)
+			}
+		case wsproto.TypeRuleUpdate:
+			sawUpdate = true
+		}
+	}
+	if !sawHopEdit || !sawUpdate {
+		t.Fatalf("want both channels used, hopEdit=%v update=%v", sawHopEdit, sawUpdate)
 	}
 }

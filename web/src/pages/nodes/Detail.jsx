@@ -213,11 +213,17 @@ export default function NodeDetail() {
 
         {/* ===== 组合节点：仅名称配置（desktop only） ===== */}
         {isComposite ? (
-          <section className={`${card} px-[26px] py-[22px] hidden md:block`}>
-            <h2 className="m-0 mb-[18px] text-[15px] font-bold">节点配置</h2>
+          <section className={`${card} px-[26px] py-[22px] hidden md:flex flex-col gap-[18px]`}>
+            <h2 className="m-0 text-[15px] font-bold">节点配置</h2>
             <ConfigField label="节点名称">
               <form onSubmit={saveName} className="flex gap-2 max-w-md">
                 <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
+                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+              </form>
+            </ConfigField>
+            <ConfigField label="倍率" hint="组合节点自身的计费倍率，作用于整条链路承担的流量">
+              <form onSubmit={saveRateMult} className="flex gap-2 max-w-md">
+                <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
               </form>
             </ConfigField>
@@ -353,7 +359,7 @@ export default function NodeDetail() {
               </form>
             </ConfigField>
 
-            <ConfigField label="倍率" hint="创建组合节点时默认继承此值，影响流量计费">
+            <ConfigField label="倍率" hint="影响该节点承担流量的计费">
               <form onSubmit={saveRateMult} className="flex gap-2">
                 <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
                 <button type="submit" className="btn-primary flex-none px-5">保存</button>
@@ -371,6 +377,12 @@ export default function NodeDetail() {
           </section>
         </div>
         )}
+
+        {/* ===== 节点角色 ===== */}
+        <RolesCard node={node} onDone={load} />
+
+        {/* ===== 上游绑定（中间层节点专属） ===== */}
+        {(node.roles & 2) !== 0 && <BindingsCard node={node} onDone={load} />}
 
         {/* ===== 组合节点跳序 — desktop only ===== */}
         {isComposite && (
@@ -551,7 +563,7 @@ function GrantEditor({ nodeId, grantedUsers, onChanged }) {
 function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
   const [rows, setRows] = useState(initHops.map(h => ({
     node_id: h.hop_node_id, node_name: h.node_name || `#${h.hop_node_id}`,
-    mode: h.mode, mult: String(h.traffic_multiplier ?? 1),
+    mode: h.mode,
   })))
   const [saving, setSaving] = useState(false)
   const [dragIdx, setDragIdx] = useState(null)
@@ -560,11 +572,11 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
   const nodeById = Object.fromEntries(singleNodes.map(n => [n.id, n]))
   const dirty = rows.length !== initHops.length || rows.some((r, i) => {
     const h = initHops[i]
-    return !h || r.node_id !== h.hop_node_id || r.mode !== h.mode || r.mult !== String(h.traffic_multiplier ?? 1)
+    return !h || r.node_id !== h.hop_node_id || r.mode !== h.mode
   })
 
   const setField = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r))
-  const addHop = () => setRows(rs => [...rs, { node_id: '', node_name: '', mode: 'userspace', mult: '1' }])
+  const addHop = () => setRows(rs => [...rs, { node_id: '', node_name: '', mode: 'userspace' }])
   const removeHop = (i) => setRows(rs => rs.filter((_, j) => j !== i))
   const onDrop = (toIdx) => {
     if (dragIdx === null || dragIdx === toIdx) { setDragIdx(null); return }
@@ -583,10 +595,7 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
     setSaving(true)
     try {
       await api.post(`/nodes/${nodeId}/hops`, {
-        hops: rows.map(r => ({
-          node_id: Number(r.node_id), mode: r.mode,
-          traffic_multiplier: parseFloat(r.mult) >= 0 ? parseFloat(r.mult) : 1,
-        }))
+        hops: rows.map(r => ({ node_id: Number(r.node_id), mode: r.mode }))
       })
       toast('已保存')
       onDone()
@@ -625,9 +634,6 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
               <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
                 options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
             )}
-            <input className="input-field font-mono" type="number" min="0" step="0.1"
-              value={r.mult} onChange={e => setField(i, 'mult', e.target.value)}
-              style={{ width: 80 }} title="倍率" />
             {rows.length > 2 && (
               <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
             )}
@@ -637,6 +643,106 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
       <div className="flex items-center gap-3 pt-3">
         <button type="button" onClick={addHop} className="btn-secondary text-xs">+ 添加一跳</button>
         <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存</button>
+      </div>
+    </section>
+  )
+}
+
+// A node's role bitmask controls where it can appear in a rule chain: entry
+// (bit0) lets a rule start here, via (bit1) lets other nodes bind behind it as
+// a middle layer. Both bits can be set at once; at least one must stay set or
+// the node becomes unreachable from any rule.
+function RolesCard({ node, onDone }) {
+  const [roles, setRoles] = useState(node.roles ?? 1)
+  const [saving, setSaving] = useState(false)
+  const toast = useToast()
+  // NodeDetail stays mounted when only the :id param changes (e.g. following a
+  // composite link in the rules table), so mount-time seeding alone would keep
+  // the previous node's checkboxes and save its bitmask onto the new node.
+  useEffect(() => setRoles(node.roles ?? 1), [node.id, node.roles])
+  const toggle = (bit) => setRoles(r => r ^ bit)
+  const save = async () => {
+    if (!roles) { toast('至少保留一个角色', 'error'); return }
+    setSaving(true)
+    try { await api.post(`/nodes/${node.id}/roles`, { roles }); toast('已保存'); onDone() }
+    catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
+  }
+  return (
+    <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
+      <h2 className="m-0 text-[15px] font-bold mb-1.5">节点角色</h2>
+      <p className="text-[12.5px] text-ink-mut mb-2.5">
+        入口：可被规则选为入口。中间层：可绑定到上游节点之后，供规则级联选用。可同时勾选。
+      </p>
+      <div className="flex items-center gap-5">
+        {[[1, '入口'], [2, '中间层']].map(([bit, label]) => (
+          <label key={bit} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={(roles & bit) !== 0} onChange={() => toggle(bit)} />{label}
+          </label>
+        ))}
+        <button onClick={save} disabled={saving || roles === (node.roles ?? 1)} className="btn-primary ml-auto">保存</button>
+      </div>
+    </section>
+  )
+}
+
+// Bindings are edges of the middle-layer graph: this node (downstream) lists
+// which nodes it may sit behind. The candidate list is the full node roster
+// fetched here rather than reused from the composite hop picker, since that
+// picker is scoped to single nodes only and would silently drop composite
+// upstreams from the choices.
+function BindingsCard({ node, onDone }) {
+  const [rows, setRows] = useState(null) // [{upstream_node_id, mode}]
+  const [allNodes, setAllNodes] = useState([])
+  const [saving, setSaving] = useState(false)
+  const toast = useToast()
+  useEffect(() => {
+    api.get(`/nodes/${node.id}/bindings`)
+      .then(d => setRows((d.bindings || []).map(b => ({ upstream_node_id: b.upstream_node_id, mode: b.mode }))))
+      .catch(() => setRows([]))
+    api.get('/nodes').then(d => setAllNodes(d.nodes || [])).catch(() => setAllNodes([]))
+  }, [node.id])
+  if (!rows) return null
+  const candidates = allNodes.filter(n => n.id !== node.id)
+  const addRow = () => setRows(rs => [...rs, { upstream_node_id: '', mode: 'userspace' }])
+  const setRow = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r))
+  const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i))
+  const addAll = () => setRows(candidates.map(n => ({ upstream_node_id: n.id, mode: 'userspace' })))
+  const save = async () => {
+    if (rows.some(r => !r.upstream_node_id)) { toast('请为每一行选择上游节点，或删除空行', 'error'); return }
+    setSaving(true)
+    try {
+      await api.post(`/nodes/${node.id}/bindings`, {
+        bindings: rows.map(r => ({ upstream_node_id: Number(r.upstream_node_id), mode: r.mode })),
+      })
+      toast('已保存'); onDone()
+    } catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
+  }
+  return (
+    <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
+      <div className="flex items-baseline gap-2.5 mb-1.5">
+        <h2 className="m-0 text-[15px] font-bold">上游绑定</h2>
+        <span className="text-[12.5px] text-ink-mut">{rows.length} 条</span>
+      </div>
+      <p className="text-[12.5px] text-ink-mut mb-2.5">
+        绑定后，选中这些上游（入口或中间层）的规则可以级联接入本节点。模式作用于衔接段
+        （上游段尾跳 → 本层首跳）；修改对此后新建的规则生效。
+      </p>
+      <div className="space-y-2">
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
+            <Select className="flex-1" placeholder="-- 选择上游节点 --" searchable value={r.upstream_node_id}
+              onChange={v => setRow(i, 'upstream_node_id', v)}
+              options={candidates.filter(n => n.id === Number(r.upstream_node_id) || !rows.some((rr, j) => j !== i && Number(rr.upstream_node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
+            <Select value={r.mode} onChange={v => setRow(i, 'mode', v)} style={{ width: 120 }}
+              options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+            <button type="button" onClick={() => removeRow(i)} className="btn-danger-sm text-xs px-1.5">×</button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3 pt-3">
+        <button type="button" onClick={addRow} className="btn-secondary text-xs">+ 添加上游</button>
+        <button type="button" onClick={addAll} className="btn-secondary text-xs">全选</button>
+        <button onClick={save} disabled={saving} className="btn-primary">保存</button>
       </div>
     </section>
   )

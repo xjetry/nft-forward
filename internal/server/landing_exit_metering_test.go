@@ -19,8 +19,9 @@ func exitUsed(t *testing.T, d *sql.DB, uid int64) int64 {
 }
 
 // Chain rule n1→n2, exit 8.8.8.8:443. Only the final hop's raw bytes reach the
-// exit ledger; user/grant ledgers keep their existing (weighted, every-hop)
-// accounting untouched.
+// exit ledger. The global user quota is billed once, at the entry hop — the
+// same 1000 bytes flow through both hops, so entry-only billing counts them a
+// single time regardless of chain length.
 func TestExitLedgerCountsFinalHopOnly(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 100)
@@ -43,8 +44,8 @@ func TestExitLedgerCountsFinalHopOnly(t *testing.T) {
 		t.Fatalf("exit ledger wants the final hop's 1000 raw bytes, got %d", used)
 	}
 	u, _ := db.GetUserByID(d, uid)
-	if u.TrafficUsedBytes != 2000 {
-		t.Fatalf("user ledger must keep every-hop accounting (2000), got %d", u.TrafficUsedBytes)
+	if u.TrafficUsedBytes != 1000 {
+		t.Fatalf("user ledger bills the entry hop once (1000), got %d", u.TrafficUsedBytes)
 	}
 }
 

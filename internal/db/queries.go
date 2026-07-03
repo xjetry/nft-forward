@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+const (
+	NodeRoleEntry int64 = 1 << 0
+	NodeRoleVia   int64 = 1 << 1
+)
+
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`
@@ -36,11 +41,11 @@ type User struct {
 }
 
 type Node struct {
-	ID                  int64          `json:"id"`
-	Name                string         `json:"name"`
-	NodeType            string         `json:"node_type"`
-	OwnerID             *int64         `json:"owner_id,omitempty"`
-	Address             string         `json:"address"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	NodeType string `json:"node_type"`
+	OwnerID  *int64 `json:"owner_id,omitempty"`
+	Address  string `json:"address"`
 	// Secret is the node's WS auth credential — the only thing an agent presents
 	// to connect. It must never be serialized to user-facing responses (a granted
 	// user could otherwise impersonate the node). json:"-" makes leaking it opt-in:
@@ -69,12 +74,17 @@ type Node struct {
 	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
 	RateMultiplier      float64        `json:"rate_multiplier"`
 	Unidirectional      bool           `json:"unidirectional"`
+	// Roles is a bitmask of what the node can be used as: NodeRoleEntry means
+	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
+	// behind an upstream node as a middle-layer segment. A node may hold both.
+	Roles int64 `json:"roles"`
 	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
 	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
-	// (entry = first hop's own relay fields, exit = last hop's v6 relay field),
-	// the same pattern RateMultiplier above uses for hop aggregation. Single/
-	// self nodes leave them empty; callers fall back to the node's own
-	// RelayHost/RelayHostV6 in that case.
+	// (entry = first hop's own relay fields, exit = last hop's v6 relay field).
+	// RateMultiplier above needs no such resolution: it is a real column on
+	// every node, composite included. Single/self nodes leave the relay-stack
+	// fields empty; callers fall back to the node's own RelayHost/RelayHostV6
+	// in that case.
 	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
 	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
 	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
@@ -96,21 +106,30 @@ type Rule struct {
 	// endpoint advertises: "v4" (default), "v6", or "both". Validated and
 	// resolved against the entry node's relay_host/relay_host_v6 in RegenerateRule.
 	EntryFamily string `json:"entry_family"`
+	// ViaNodeIDs is the ordered middle-layer path the rule's chain runs
+	// through (entry excluded). Persisted so node_id edits re-derive the same
+	// chain; empty for plain single/composite rules.
+	ViaNodeIDs []int64 `json:"via_node_ids"`
 	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
 	// from the entry hop so list/detail responses can show per-rule traffic.
 	TotalBytes int64 `json:"total_bytes"`
 }
 
 type RuleHop struct {
-	ID            int64  `json:"id"`
-	RuleID        int64  `json:"rule_id"`
-	Position      int    `json:"position"`
-	NodeID        int64  `json:"node_id"`
-	Proto         string `json:"proto"`
-	ListenPort    int    `json:"listen_port"`
-	TargetHost    string `json:"target_host"`
-	TargetPort    int    `json:"target_port"`
-	Mode          string `json:"mode"`
+	ID         int64  `json:"id"`
+	RuleID     int64  `json:"rule_id"`
+	Position   int    `json:"position"`
+	NodeID     int64  `json:"node_id"`
+	Proto      string `json:"proto"`
+	ListenPort int    `json:"listen_port"`
+	TargetHost string `json:"target_host"`
+	TargetPort int    `json:"target_port"`
+	Mode       string `json:"mode"`
+	// ViaNodeID is the logical-segment node this physical hop was expanded
+	// from (entry segment = the rule's node_id; explicit-hops path = the
+	// hop's own node). Quota suppression, per-grant accounting and shaping
+	// group hops by it rather than by physical node.
+	ViaNodeID     int64  `json:"via_node_id"`
 	Comment       string `json:"comment"`
 	LastBytes     int64  `json:"last_bytes"`
 	LastBytesUp   int64  `json:"last_bytes_up"`
@@ -293,7 +312,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -316,7 +335,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
-		&relayHostDeclared, &relayHostV6Declared,
+		&relayHostDeclared, &relayHostV6Declared, &n.Roles,
 	); err != nil {
 		return nil, err
 	}
@@ -388,24 +407,6 @@ func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
 		return
 	}
 	resolveCompositeOnline(nodes, hops)
-}
-
-// ResolveCompositeRateMultiplier sets each composite node's RateMultiplier to
-// the sum of its hops' TrafficMultiplier values.
-func ResolveCompositeRateMultiplier(d *sql.DB, nodes []*Node) {
-	hops, err := ListAllNodeHops(d)
-	if err != nil {
-		return
-	}
-	sums := make(map[int64]float64)
-	for _, h := range hops {
-		sums[h.NodeID] += h.TrafficMultiplier
-	}
-	for _, n := range nodes {
-		if n.NodeType == "composite" {
-			n.RateMultiplier = sums[n.ID]
-		}
-	}
 }
 
 // ResolveCompositeRelayStack fills each composite node's EntryRelayHost/
@@ -517,6 +518,11 @@ func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
 	return err
 }
 
+func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
+	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
+	return err
+}
+
 // UpdateNodePortRange sets a node's port_range spec. An empty string resets to
 // the default range. Callers must validate with ValidatePortRange first.
 func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
@@ -563,23 +569,25 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 // out of the projection rather than dropped (dropping needs a table rebuild).
 // bandwidth_mbps is likewise dead (shaping moved to the per-grant rate limit
 // on user_nodes) and stays out of the projection.
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family,via_node_ids`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var disabled int
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily); err != nil {
+	var viaJSON string
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
 		return nil, err
 	}
 	rl.Disabled = disabled == 1
+	rl.ViaNodeIDs = decodeViaNodeIDs(viaJSON)
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes,via_node_id`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes, &h.ViaNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -630,17 +638,10 @@ func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 		AND NOT EXISTS (
 		  SELECT 1 FROM rule_hops rh2
 		  JOIN rules r2 ON r2.id = rh2.rule_id
-		  JOIN user_nodes un ON un.user_id = r2.owner_id AND un.node_id = rh2.node_id
+		  JOIN user_nodes un ON un.user_id = r2.owner_id AND un.node_id = rh2.via_node_id
 		  WHERE rh2.rule_id = rh.rule_id
 		    AND un.traffic_quota_bytes > 0
 		    AND un.traffic_used_bytes >= un.traffic_quota_bytes
-		)
-		AND NOT EXISTS (
-		  SELECT 1 FROM rules r3
-		  JOIN user_nodes un2 ON un2.user_id = r3.owner_id AND un2.node_id = r3.node_id
-		  WHERE r3.id = rh.rule_id
-		    AND un2.traffic_quota_bytes > 0
-		    AND un2.traffic_used_bytes >= un2.traffic_quota_bytes
 		)
 		AND NOT EXISTS (
 		  SELECT 1 FROM rules r4

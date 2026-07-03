@@ -148,3 +148,31 @@ func TestMyListRulesItemShapeIsFlat(t *testing.T) {
 		t.Fatalf("list item should no longer carry path (keys=%v)", keys)
 	}
 }
+
+func TestMyRulesCarriesGrantedBindings(t *testing.T) {
+	d := openDB(t)
+	up, _ := db.CreateNode(d, "entry", "", "")
+	mid, _ := db.CreateNode(d, "akari", "", "")
+	other, _ := db.CreateNode(d, "misaka", "", "")
+	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleVia)
+	_ = db.UpdateNodeRoles(d, other.ID, db.NodeRoleVia)
+	_ = db.ReplaceBindingsForDownstream(d, mid.ID, []db.NodeBinding{{UpstreamNodeID: up.ID, DownstreamNodeID: mid.ID, Mode: "userspace"}})
+	_ = db.ReplaceBindingsForDownstream(d, other.ID, []db.NodeBinding{{UpstreamNodeID: up.ID, DownstreamNodeID: other.ID, Mode: "userspace"}})
+
+	uid, cookie := loginAsUser(t, d, 10)
+	_ = db.GrantNode(d, uid, up.ID, 5, 0)
+	_ = db.GrantNode(d, uid, mid.ID, 5, 0) // other 未授权 → 其边不下发
+
+	s, _ := New(d)
+	req := httptest.NewRequest("GET", "/api/my/rules", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	s.Router().ServeHTTP(w, req)
+	var resp struct {
+		Bindings []db.NodeBinding `json:"bindings"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Bindings) != 1 || resp.Bindings[0].DownstreamNodeID != mid.ID {
+		t.Fatalf("want only granted edge, got %+v", resp.Bindings)
+	}
+}
