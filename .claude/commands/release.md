@@ -34,9 +34,11 @@ Tag message 用英文单行。
 cd web && npm run build && cd ..
 ```
 
-再交叉编译两个二进制：
+再交叉编译两个二进制。**必须先清空 build 目录**：上一次发版留下的 nft-agent 已被 UPX 压缩，而源码未变时 `go build` 会判定输出 up-to-date 直接跳过重写，导致本次 `upx` 报 `AlreadyPackedException`（等于对旧文件重复压缩）：
 
 ```bash
+rm -f build/nft-server build/nft-agent
+
 # 面板：正常 buildinfo（版本号经 VCS stamping 进 nft-server）
 # 必须在 git tag 之后执行，否则版本号不正确
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/nft-server ./cmd/nft-server
