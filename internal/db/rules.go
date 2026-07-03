@@ -733,6 +733,40 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 }
 
 // RuleHopCounts returns hop count per rule for the given rule IDs.
+// RuleChainNodeIDs returns, per rule, the ordered physical node ids of its
+// hops (position order): the flattened chain from the entry to the hop that
+// dials the target. A composite segment already appears expanded into its child
+// nodes here — rule_hops stores the physical chain captured when the rule was
+// built, so this reflects what is actually deployed rather than the composite's
+// current (possibly since-edited) definition.
+func RuleChainNodeIDs(d DBTX, ruleIDs []int64) (map[int64][]int64, error) {
+	if len(ruleIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ruleIDs))
+	args := make([]any, len(ruleIDs))
+	for i, id := range ruleIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := `SELECT rule_id, node_id FROM rule_hops WHERE rule_id IN (` +
+		strings.Join(placeholders, ",") + `) ORDER BY rule_id, position`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64][]int64, len(ruleIDs))
+	for rows.Next() {
+		var rid, nid int64
+		if err := rows.Scan(&rid, &nid); err != nil {
+			return nil, err
+		}
+		m[rid] = append(m[rid], nid)
+	}
+	return m, rows.Err()
+}
+
 func RuleHopCounts(d DBTX, ruleIDs []int64) (map[int64]int, error) {
 	if len(ruleIDs) == 0 {
 		return nil, nil

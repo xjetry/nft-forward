@@ -58,8 +58,15 @@ export default function MyRuleDetail() {
   // the rule was built) silently drops from the chain instead of showing a
   // bare id the user has no way to recognize.
   const entryName = node?.name || `#${rule.node_id}`
+  // The backend chain is the deployed physical path (composites already
+  // flattened into their members); prefer it so display matches what actually
+  // runs. Fall back to entry + logical via names before the rule's first
+  // regeneration, when no physical hops exist yet.
+  const flatNames = (rule.chain || []).map(c => c.name).filter(Boolean)
   const viaNames = (rule.via_node_ids || []).map(id => node_by_id[id]?.name).filter(Boolean)
-  const nodeChain = viaNames.length ? [entryName, ...viaNames].join(' → ') : entryName
+  const nodeChain = flatNames.length
+    ? flatNames.join(' → ')
+    : (viaNames.length ? [entryName, ...viaNames].join(' → ') : entryName)
 
   const exitOf = (r) => (r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : '')
 

@@ -91,6 +91,21 @@ type Node struct {
 	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
 	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
 	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
+	// Hops is not a real column — for a composite node it holds the ordered
+	// member hops (physical child nodes) with their names, filled in-memory by
+	// ResolveCompositeHops so the UI can flatten the composite into its member
+	// chain for display and preview. Empty for single nodes.
+	Hops []NodeChildHop `json:"hops,omitempty"`
+}
+
+// NodeChildHop is one member of a composite node's chain, resolved to its
+// physical child node's name and type for display. Mode is the segment mode the
+// composite stored for that hop.
+type NodeChildHop struct {
+	NodeID   int64  `json:"node_id"`
+	Name     string `json:"name"`
+	NodeType string `json:"node_type"`
+	Mode     string `json:"mode"`
 }
 
 type Rule struct {
@@ -451,6 +466,58 @@ func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 		if last := byID[chain[len(chain)-1].HopNodeID]; last != nil {
 			n.ExitRelayHostV6 = last.RelayHostV6
 		}
+	}
+}
+
+// ResolveCompositeHops fills each composite node's Hops with its ordered member
+// child nodes (resolved to name/type), so the UI can flatten a composite into
+// its physical chain. See the Node struct's doc comment for why Hops isn't a
+// real column.
+func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
+	hasComposite := false
+	for _, n := range nodes {
+		if n.NodeType == "composite" {
+			hasComposite = true
+			break
+		}
+	}
+	if !hasComposite {
+		return
+	}
+	hops, err := ListAllNodeHops(d)
+	if err != nil {
+		return
+	}
+	resolveCompositeHops(nodes, hops)
+}
+
+// resolveCompositeHops is the pure aggregation, split out so tests don't need a
+// DB. hops must be ordered by (node_id, position) — ListAllNodeHops guarantees
+// this — so each composite's member list comes out in chain order.
+func resolveCompositeHops(nodes []*Node, hops []*NodeHop) {
+	byID := make(map[int64]*Node, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	chains := make(map[int64][]*NodeHop)
+	for _, h := range hops {
+		chains[h.NodeID] = append(chains[h.NodeID], h)
+	}
+	for _, n := range nodes {
+		if n.NodeType != "composite" {
+			continue
+		}
+		chain := chains[n.ID]
+		members := make([]NodeChildHop, 0, len(chain))
+		for _, h := range chain {
+			m := NodeChildHop{NodeID: h.HopNodeID, Mode: h.Mode}
+			if child := byID[h.HopNodeID]; child != nil {
+				m.Name = child.Name
+				m.NodeType = child.NodeType
+			}
+			members = append(members, m)
+		}
+		n.Hops = members
 	}
 }
 

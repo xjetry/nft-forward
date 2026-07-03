@@ -167,11 +167,30 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   // Exit-capability hints follow the chain tail (the last via, or the entry
   // itself when the chain is empty) — the tail is the node that actually
   // dials the target, so its stack is what the outbound leg depends on.
+  // The exit probe originates from the tail for the same reason: probing
+  // entry → target would test a path the traffic never takes. A composite
+  // tail is resolved to its own last hop server-side.
   const tailNode = viaChain.length ? nodeById[viaChain[viaChain.length - 1]] : nodeById[Number(form.node_id)]
   // The tail launches the exit segment, which a no_direct_exit node may never
   // do. The server enforces the same rule when deriving the chain; blocking
   // submit here just surfaces the error before the round trip.
   const tailNoDirect = !!tailNode?.no_direct_exit
+
+  // Flatten a chain node into physical member names for display: a composite is
+  // shown as its member nodes (the reference is what's stored/selected; the
+  // preview unpacks it), a single node as itself. Composite children come from
+  // the node payload's resolved `hops`.
+  const flattenNode = (id) => {
+    const n = nodeById[Number(id)]
+    if (!n) return []
+    if (n.node_type === 'composite' && n.hops?.length) {
+      return n.hops.map(h => h.name || `#${h.node_id}`)
+    }
+    return [n.name]
+  }
+  const flatChainNames = form.node_id
+    ? [...flattenNode(form.node_id), ...viaChain.flatMap(flattenNode)]
+    : []
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
@@ -237,8 +256,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               <label className="fl"></label>
               <div className="text-xs text-ink-mut">
                 <span className="font-mono">
-                  {[nodeById[Number(form.node_id)]?.name, ...viaChain.map(id => nodeById[id]?.name), '目标']
-                    .filter(Boolean).join(' → ')}
+                  {[...flatChainNames, '目标'].filter(Boolean).join(' → ')}
                 </span>
                 <span className="ml-2">链路更长的规则占用更多全局转发名额</span>
               </div>
@@ -299,7 +317,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                     ) : (
                       <div className="text-xs text-ink-mut">尚无可用出口节点，请在概览页添加代理 URI 或联系管理员。</div>
                     )}
-                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
                   </div>
                 </>
               ) : (
@@ -307,7 +325,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                   <label className="fl">出口地址</label>
                   <div className="flex items-center gap-3">
                     <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} onBlur={handleExitBlur} required placeholder="host:port 或代理 URI" />
-                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
                   </div>
                 </>
               )}
@@ -317,7 +335,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               <label className="fl">出口</label>
               <div className="flex items-center gap-3">
                 <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
-                {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={form.node_id} />}
+                {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
               </div>
             </>
           )}

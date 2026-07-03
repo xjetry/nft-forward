@@ -78,6 +78,53 @@ func TestViaChainAssembly(t *testing.T) {
 	}
 }
 
+// 组合作为中间层（非末段）：组合的末跳保留组合自身配置的模式，而不是绑定边的
+// 模式——组合被用作中间层时，自己决定其出口段如何转发。作为末段时才由规则的
+// exit_mode 覆盖（见 composite_exit_mode_test.go）。
+func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
+	d := openDB(t)
+	entry, _ := db.CreateNode(d, "entry", "", "")
+	c1, _ := db.CreateNode(d, "c1", "", "")
+	c2, _ := db.CreateNode(d, "c2", "", "")
+	tailVia, _ := db.CreateNode(d, "tail-via", "", "")
+	_ = db.UpdateNodeRelayHost(d, entry.ID, "1.1.1.1")
+	_ = db.UpdateNodeRelayHost(d, c1.ID, "2.2.2.2")
+	_ = db.UpdateNodeRelayHost(d, c2.ID, "3.3.3.3")
+	_ = db.UpdateNodeRelayHost(d, tailVia.ID, "4.4.4.4")
+	// 组合内配置模式设为 kernel，好与两条 userspace 绑定边区分开。
+	mid := makeCompositeHopMode(t, d, "mid", "kernel", c1.ID, c2.ID)
+	bindVia(t, d, entry.ID, mid.ID, "userspace")
+	bindVia(t, d, mid.ID, tailVia.ID, "userspace")
+
+	uid, cookie := loginAsUser(t, d, 11)
+	_ = db.GrantNode(d, uid, entry.ID, 5, 0)
+	_ = db.GrantNode(d, uid, mid.ID, 5, 0)
+	_ = db.GrantNode(d, uid, tailVia.ID, 5, 0)
+
+	s, _ := New(d)
+	body, _ := json.Marshal(map[string]any{
+		"node_id": entry.ID, "via_node_ids": []int64{mid.ID, tailVia.ID},
+		"name": "r-mid", "proto": "tcp", "exit": "9.9.9.9:8443", "exit_mode": "kernel",
+	})
+	req := httptest.NewRequest("POST", "/api/my/rules", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	rules, _ := db.ListRulesByUser(d, uid)
+	// hop0 entry：绑定边 userspace；hop1 c1：组合配置 kernel；
+	// hop2 c2（组合末跳，此处组合是中间层）：组合配置 kernel，不取绑定边 userspace；
+	// hop3 tailVia（规则末跳）：exit_mode kernel。
+	wantModes(t, chainModes(t, s, rules[0].ID), "userspace", "kernel", "kernel", "kernel")
+	hops, _ := db.ListRuleHops(d, rules[0].ID)
+	if hops[0].ViaNodeID != entry.ID || hops[1].ViaNodeID != mid.ID || hops[2].ViaNodeID != mid.ID || hops[3].ViaNodeID != tailVia.ID {
+		t.Fatalf("provenance: %d/%d/%d/%d", hops[0].ViaNodeID, hops[1].ViaNodeID, hops[2].ViaNodeID, hops[3].ViaNodeID)
+	}
+}
+
 // 服务端权威校验：无绑定边 / 无 via 角色 / 无授权 都必须拒绝。
 func TestViaChainValidation(t *testing.T) {
 	d := openDB(t)

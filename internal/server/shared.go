@@ -81,6 +81,20 @@ type ruleListItem struct {
 	RelayURI        string  `json:"relay_uri,omitempty"`
 	RateMultiplier  float64 `json:"rate_multiplier"`
 	BillingRate     float64 `json:"billing_rate"`
+	// Chain is the flattened physical path (entry → the hop that dials the
+	// target, target excluded), with composite segments already expanded into
+	// their member nodes. Sourced from rule_hops so it reflects what is actually
+	// deployed, not a composite's current definition. Empty until the rule's
+	// first regeneration.
+	Chain []chainNode `json:"chain,omitempty"`
+}
+
+// chainNode is one physical hop in a rule's flattened chain, resolved to its
+// node name and type for display.
+type chainNode struct {
+	NodeID   int64  `json:"node_id"`
+	Name     string `json:"name"`
+	NodeType string `json:"node_type"`
 }
 
 // nodeHopView adds the resolved child node name to a composite node's hop so
@@ -94,6 +108,35 @@ type nodeHopView struct {
 func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 	v := s.buildRuleView(r)
 	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, EntryV6: v.EntryV6, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode, ExitMode: v.ExitMode}
+}
+
+// fillRuleChains attaches the flattened physical chain to each item, resolving
+// every hop's node id to its display name/type via nodesByID. A hop whose node
+// can't be resolved is dropped rather than shown as a bare id. nodesByID should
+// span all nodes (composite children included), not just the caller's granted
+// subset, so a composite's members still resolve.
+func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.Node) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]int64, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	chains, err := db.RuleChainNodeIDs(s.DB, ids)
+	if err != nil {
+		return
+	}
+	for i := range items {
+		hopIDs := chains[items[i].ID]
+		chain := make([]chainNode, 0, len(hopIDs))
+		for _, nid := range hopIDs {
+			if n := nodesByID[nid]; n != nil {
+				chain = append(chain, chainNode{NodeID: nid, Name: n.Name, NodeType: n.NodeType})
+			}
+		}
+		items[i].Chain = chain
+	}
 }
 
 // classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to

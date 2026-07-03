@@ -475,9 +475,8 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    // 空行必须显式处理而不是静默过滤：过滤会让"真实尾行"（出口段归规则）
-    // 与界面上按行数标出的尾行错位，倒数第二行会出现一个看似生效实则被
-    // 出口段语义覆盖的模式选择器
+    // 空行必须显式处理而不是静默过滤：过滤会让末跳与界面按行数标出的末跳
+    // 错位，末跳模式（中间层生效、出口被覆盖）会落到错误的行上
     if (hops.some(h => !h.node_id)) {
       toast('请为每一跳选择节点，或删除空行', 'error')
       return
@@ -527,12 +526,13 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
                 <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
                   options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
-                {/* 尾行没有模式可配：出口段（最后一跳 → 目标）的模式在创建规则时选择 */}
-                {i === hops.length - 1 ? (
-                  <span className="text-xs text-ink-mut text-center shrink-0 cursor-help" style={{ width: 110 }} title="出口段（最后一跳 → 目标）的转发模式在创建规则时选择">-</span>
-                ) : (
-                  <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
-                    options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                {/* 每一跳都可配模式，包含末跳：末跳模式在该组合被用作中间层时生效；
+                    被用作规则出口时由规则的出口模式覆盖 */}
+                <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
+                  title={i === hops.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
+                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                {i === hops.length - 1 && (
+                  <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
                 )}
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
                 <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>

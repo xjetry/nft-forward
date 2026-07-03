@@ -1374,6 +1374,7 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
+	db.ResolveCompositeHops(s.DB, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
 	byID := make(map[int64]*db.User, len(allUsers))
@@ -1420,6 +1421,7 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, item)
 	}
+	s.fillRuleChains(views, nodeByID)
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
 }
 
@@ -1620,10 +1622,12 @@ func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 }
 
 // hopsForChain assembles a rule's physical chain: the entry segment followed
-// by each middle-layer (via) segment. Non-final segment tails take the
-// forwarding mode of the binding edge they cross; the final hop takes the
-// rule's exitMode (empty falls back to singleMode for a bare single-node
-// chain — the legacy alias — else the kernel default). The entry node must
+// by each middle-layer (via) segment. At a non-final junction a single-node
+// segment's tail takes the binding edge's mode, while a composite segment
+// mid-chain keeps its own configured last-hop mode (the composite owns how its
+// exit leg forwards; the edge is only checked for reachability). The final hop
+// takes the rule's exitMode (empty falls back to singleMode for a bare
+// single-node chain — the legacy alias — else the kernel default). The entry node must
 // carry the entry role, and every via must carry the via role and be
 // reachable from its predecessor through a binding edge — this is the
 // authoritative check, since a picker filtering the UI's node list is only
@@ -1645,6 +1649,7 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 	}
 	prev := entryID
 	tail := entryNode
+	prevComposite := entryComposite
 	for _, viaID := range vias {
 		viaNode, err := db.GetNode(s.DB, viaID)
 		if err != nil {
@@ -1657,16 +1662,23 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		if err != nil {
 			return nil, true, fmt.Errorf("中间层 %s 未绑定到所选上游", viaNode.Name)
 		}
-		seg, _, err := s.expandSegment(viaID)
+		seg, viaComposite, err := s.expandSegment(viaID)
 		if err != nil {
 			return nil, true, err
 		}
-		// The junction (previous segment's tail -> this segment's head) is an
-		// inter-node leg owned by the binding edge, not by the rule.
-		hops[len(hops)-1].Mode = edge.Mode
+		// The junction is the leg from the previous segment's tail into this
+		// segment's head. A single-node previous segment takes the binding edge's
+		// mode for that leg. A composite previous segment sitting mid-chain owns
+		// how its own exit leg forwards — its last hop keeps the mode configured
+		// in the composite, so we don't overwrite it with the edge. The binding
+		// edge is still required for reachability; only its mode defers here.
+		if !prevComposite {
+			hops[len(hops)-1].Mode = edge.Mode
+		}
 		hops = append(hops, seg...)
 		prev = viaID
 		tail = viaNode
+		prevComposite = viaComposite
 	}
 	// The chain's last logical node launches the exit segment; a node marked
 	// no_direct_exit may never do that, so the chain must cascade further.
@@ -2459,6 +2471,11 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 			n.ExitRelayHostV6 = full.ExitRelayHostV6
 		}
 	}
+	// Attach each granted composite's member chain so the rule form can flatten
+	// it in the live preview, and keep the all-nodes map for resolving saved
+	// rules' physical hops (which may pass through non-granted composite members).
+	db.ResolveCompositeHops(s.DB, grantedNodes)
+	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	br := u.BillingRate
 	if br <= 0 {
@@ -2476,6 +2493,7 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		item.BillingRate = br
 		views = append(views, item)
 	}
+	s.fillRuleChains(views, allByID)
 	grantedSet := make(map[int64]bool)
 	for _, n := range grantedNodes {
 		grantedSet[n.ID] = true
@@ -2522,6 +2540,8 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 			n.ExitRelayHostV6 = full.ExitRelayHostV6
 		}
 	}
+	db.ResolveCompositeHops(s.DB, grantedNodes)
+	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	idx := s.landingIndexFromDB(u.ID)
 	item := s.buildRuleListItem(rl, "")
@@ -2535,6 +2555,9 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	if item.BillingRate <= 0 {
 		item.BillingRate = 1
 	}
+	views := []ruleListItem{item}
+	s.fillRuleChains(views, allByID)
+	item = views[0]
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
 		"rule": item, "nodes": grantedNodes, "node_by_id": grantedByID,
