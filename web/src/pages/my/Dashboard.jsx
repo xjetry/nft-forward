@@ -24,6 +24,14 @@ export default function MyDashboard() {
   const [tokenLoading, setTokenLoading] = useState(true)
   const [showTokenModal, setShowTokenModal] = useState(false)
   const [newToken, setNewToken] = useState('')
+  // 授权节点的展示顺序是个人偏好，只存本浏览器不上服务器；键按用户 id 区分，
+  // 同一浏览器切换账号互不串扰。不在名单里的节点（新授权）按服务器顺序垫底。
+  const [nodeOrder, setNodeOrder] = useState([])
+  const [dragIdx, setDragIdx] = useState(null)
+  useEffect(() => {
+    if (!data?.user?.id) return
+    try { setNodeOrder(JSON.parse(localStorage.getItem(`my.nodeOrder.${data.user.id}`) || '[]')) } catch { setNodeOrder([]) }
+  }, [data?.user?.id])
 
   useEffect(() => {
     api.get('/my').then(setData).catch(console.error).finally(() => setLoading(false))
@@ -77,9 +85,32 @@ export default function MyDashboard() {
 
   const grantByNode = {}
   nodes.forEach((n, i) => { grantByNode[n.id] = grants[i] })
-  const singleNodes = nodes.filter(n => n.node_type !== 'composite')
-  const compositeNodes = nodes.filter(n => n.node_type === 'composite')
+  // 排序在 grantByNode 建好之后：nodes 与 grants 按下标对齐，排序副本不动原数组。
+  const orderIdx = new Map(nodeOrder.map((id, i) => [id, i]))
+  const orderedNodes = [...nodes].sort((a, b) => {
+    const ia = orderIdx.get(a.id) ?? Infinity
+    const ib = orderIdx.get(b.id) ?? Infinity
+    return ia === ib ? 0 : ia - ib
+  })
+  const singleNodes = orderedNodes.filter(n => n.node_type !== 'composite')
+  const compositeNodes = orderedNodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
+  const saveNodeOrder = (ids) => {
+    setNodeOrder(ids)
+    localStorage.setItem(`my.nodeOrder.${user.id}`, JSON.stringify(ids))
+  }
+  const onDropRow = (toIdx) => {
+    if (dragIdx === null || dragIdx === toIdx) { setDragIdx(null); return }
+    const list = [...tabNodes]
+    const [moved] = list.splice(dragIdx, 1)
+    list.splice(toIdx, 0, moved)
+    setDragIdx(null)
+    const other = tab === 'composite' ? singleNodes : compositeNodes
+    const ids = tab === 'composite'
+      ? [...other.map(n => n.id), ...list.map(n => n.id)]
+      : [...list.map(n => n.id), ...other.map(n => n.id)]
+    saveNodeOrder(ids)
+  }
 
   return (
     <Layout>
@@ -177,11 +208,18 @@ export default function MyDashboard() {
           <table className="tbl">
             <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>限速</th><th>本节点上限</th></tr></thead>
             <tbody>
-              {tabNodes.map(n => {
+              {tabNodes.map((n, i) => {
                 const g = grantByNode[n.id]
                 return (
-                  <tr key={n.id}>
-                    <td className="font-semibold">{n.name}</td>
+                  <tr key={n.id}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={() => onDropRow(i)}
+                    className={dragIdx === i ? 'opacity-50' : ''}>
+                    <td className="font-semibold">
+                      <span className="text-ink-mut mr-1.5 select-none cursor-move" title="拖拽排序（仅保存在本浏览器）"
+                        draggable onDragStart={() => setDragIdx(i)}>⠿</span>
+                      {n.name}
+                    </td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
                     {show_rate && <td><Badge color="blue">×{n.rate_multiplier ?? 1}</Badge>{n.unidirectional && <Badge color="amber" className="ml-1">单向</Badge>}</td>}
                     <td><NodeOnline node={n} /></td>
