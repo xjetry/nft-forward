@@ -69,10 +69,20 @@ export default function MyRules() {
   const enrich = (r) => {
     const key = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : null
     if (key && allLandingIdx.has(key) && r.entry) {
-      const ep = splitEndpoint(r.entry)
       const node = allLandingIdx.get(key)
+      const ep = splitEndpoint(r.entry)
       const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
-      if (relay) return { ...r, exit_kind: 'landing', landing_name: node.name, landing_protocol: node.protocol, relay_uri: relay }
+      if (relay) {
+        const out = { ...r, exit_kind: 'landing', landing_name: node.name, landing_protocol: node.protocol, relay_uri: relay }
+        // A dual-stack rule has a second (v6) entry, so offer a matching relay
+        // URI with the v6 endpoint substituted alongside the v4 one.
+        if (r.entry_v6) {
+          const ep6 = splitEndpoint(r.entry_v6)
+          const relay6 = ep6 && rewriteEndpoint(node.uri, ep6.host, ep6.port)
+          if (relay6) out.relay_uri_v6 = relay6
+        }
+        return out
+      }
     }
     return r
   }

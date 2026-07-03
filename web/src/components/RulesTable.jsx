@@ -96,29 +96,53 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               </td>
               <td className="font-mono text-xs !whitespace-normal">
                 <div className="inline-block" onClick={e => e.stopPropagation()}>
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <Badge color="gray">{r.entry_v6 ? '入口v4' : '入口'}</Badge>
-                    {r.entry ? <CopyText text={r.entry}><SensText blurred={blurred}>{r.entry}</SensText></CopyText> : '--'}
-                  </div>
-                  {r.entry_v6 && (
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <Badge color="gray">入口v6</Badge>
-                      <CopyText text={r.entry_v6}><SensText blurred={blurred}>{r.entry_v6}</SensText></CopyText>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
-                    <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
-                    {(() => {
-                      const exitLabel = !isAdmin && r.exit_kind === 'landing' && r.landing_name
-                        ? <span className="font-sans">{r.landing_name}</span>
-                        : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
-                      if (r.relay_uri) {
-                        const yaml = copyFmt === 'yaml' ? uriToClashYaml(r.relay_uri) : null
-                        return <CopyText text={yaml || r.relay_uri}>{exitLabel}</CopyText>
-                      }
-                      return exitLabel
-                    })()}
-                  </div>
+                  {(() => {
+                    // Entry shows the node's name:port (never the raw ip/host);
+                    // the copy still carries the real host:port so a client can
+                    // dial it. A dual-stack rule lists v4 and v6 separately —
+                    // same display, different copied endpoint.
+                    const nodeLabel = node?.name || `#${r.node_id}`
+                    const shown = r.entry_listen_port ? `${nodeLabel}:${r.entry_listen_port}` : nodeLabel
+                    return (
+                      <>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Badge color="gray">{r.entry_v6 ? '入口v4' : '入口'}</Badge>
+                          {r.entry ? <CopyText text={r.entry}><span className="font-sans">{shown}</span></CopyText> : '--'}
+                        </div>
+                        {r.entry_v6 && (
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <Badge color="gray">入口v6</Badge>
+                            <CopyText text={r.entry_v6}><span className="font-sans">{shown}</span></CopyText>
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
+                  {(() => {
+                    const exitLabel = !isAdmin && r.exit_kind === 'landing' && r.landing_name
+                      ? <span className="font-sans">{r.landing_name}</span>
+                      : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>
+                    const proxyRow = (uri, tag) => {
+                      const yaml = copyFmt === 'yaml' ? uriToClashYaml(uri) : null
+                      return (
+                        <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                          <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
+                          {tag && <span className="text-[10px] font-semibold text-ink-mut">{tag}</span>}
+                          <CopyText text={yaml || uri}>{exitLabel}</CopyText>
+                        </div>
+                      )
+                    }
+                    if (r.relay_uri && r.relay_uri_v6) {
+                      return <>{proxyRow(r.relay_uri, 'v4')}{proxyRow(r.relay_uri_v6, 'v6')}</>
+                    }
+                    if (r.relay_uri) return proxyRow(r.relay_uri, null)
+                    return (
+                      <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                        <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
+                        {exitLabel}
+                      </div>
+                    )
+                  })()}
                 </div>
               </td>
               <td><ProtoBadge proto={r.proto} /></td>
@@ -172,21 +196,15 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               <span className="text-ink-mut">·</span>
               <span className="font-mono text-ink-mut">{fmtBytes(r.total_bytes || 0)}</span>
             </div>
-            <div className="text-xs text-ink-mut font-mono truncate">
-              {r.entry ? <SensText blurred={blurred}>{r.entry}</SensText> : '--'}
+            <div className="text-xs text-ink-mut truncate">
+              <span className="font-sans">{r.entry ? (r.entry_listen_port ? `${node?.name || `#${r.node_id}`}:${r.entry_listen_port}` : (node?.name || `#${r.node_id}`)) : '--'}</span>
               <span className="mx-1.5">→</span>
-              <span className="text-ink-soft">
+              <span className="text-ink-soft font-mono">
                 {!isAdmin && r.exit_kind === 'landing' && r.landing_name
                   ? <span className="font-sans">{r.landing_name}</span>
                   : <SensText blurred={blurred}>{exitOf(r) || '--'}</SensText>}
               </span>
             </div>
-            {r.entry_v6 && (
-              <div className="text-xs text-ink-mut font-mono truncate">
-                <span className="text-ink-mut mr-1">入口v6</span>
-                <SensText blurred={blurred}>{r.entry_v6}</SensText>
-              </div>
-            )}
           </div>
         )
       })}
