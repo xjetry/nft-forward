@@ -19,6 +19,10 @@ export default function MyRuleDetail() {
   // endpoint computes the granted-intersection edges) — fetch it alongside
   // so the edit modal's middle-layer cascade has candidates to offer.
   const [bindings, setBindings] = useState([])
+  // Admin-assigned landing nodes live on the server (unlike the user's own
+  // browser-local URIs) — without this fetch the edit modal's exit picker
+  // would only offer local nodes and silently fall back to a custom exit.
+  const [serverLanding, setServerLanding] = useState([])
   const toast = useToast()
   const blurred = useBlur()
   const confirm = useConfirm()
@@ -40,6 +44,7 @@ export default function MyRuleDetail() {
     setLoading(true)
     api.get(`/my/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
     api.get('/my/rules').then(d => setBindings(d?.bindings || [])).catch(console.error)
+    api.get('/my/landing-nodes').then(d => setServerLanding(d?.nodes || [])).catch(console.error)
   }
   useEffect(load, [id])
 
@@ -68,7 +73,10 @@ export default function MyRuleDetail() {
     try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); navigate('/my/rules') } catch (err) { toast(err.message, 'error') }
   }
 
-  const landingNodes = mergeLanding(localNodes, [])
+  // Filter server-assigned nodes by global role table — only landing-marked ones
+  // appear in the exit picker (unconfigured/direct ones are excluded).
+  const serverLandingFiltered = serverLanding.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
+  const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
 
   return (
     <Layout>
