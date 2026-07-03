@@ -795,11 +795,13 @@ function RolesCard({ node, onDone }) {
       <p className="text-[12.5px] text-ink-mut mb-2.5">
         入口：可被规则选为入口。中间层：可绑定到上游节点之后，供规则级联选用。可同时勾选。
       </p>
-      <div className="flex items-center gap-5">
-        {[[1, '入口'], [2, '中间层']].map(([bit, label]) => (
-          <label key={bit} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={(roles & bit) !== 0} onChange={() => toggle(bit)} />{label}
-          </label>
+      <div className="flex items-center gap-1.5">
+        {[[1, '入口', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
+          [2, '中间层', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700']].map(([bit, label, cls]) => (
+          <button key={bit} type="button" onClick={() => toggle(bit)}
+            className={`px-3 py-1 text-[12.5px] font-semibold rounded-md border transition-colors ${
+              (roles & bit) !== 0 ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
+            }`}>{label}</button>
         ))}
         <button onClick={save} disabled={saving || !dirty} className="btn-primary ml-auto">保存</button>
       </div>
