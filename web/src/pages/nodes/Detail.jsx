@@ -671,12 +671,24 @@ function RolesCard({ node, onDone }) {
   const [savedRows, setSavedRows] = useState(null)
   const [loadErr, setLoadErr] = useState(false)
   const [allNodes, setAllNodes] = useState([])
+  // Edges where this node is the upstream: which nodes may cascade in behind
+  // it. Read-only here — each edge is owned and edited by its downstream
+  // node's detail page — so a load failure can safely degrade to "none".
+  const [downstreams, setDownstreams] = useState([])
   const toast = useToast()
   // NodeDetail stays mounted when only the :id param changes (e.g. following a
   // composite link in the rules table), so mount-time seeding alone would keep
   // the previous node's checkboxes and save its bitmask onto the new node.
   useEffect(() => setRoles(node.roles ?? 1), [node.id, node.roles])
   useEffect(() => { setRows(null); setSavedRows(null); setLoadErr(false) }, [node.id])
+  useEffect(() => {
+    let stale = false
+    setDownstreams([])
+    api.get('/node-bindings')
+      .then(d => { if (!stale) setDownstreams((d.bindings || []).filter(b => b.upstream_node_id === node.id)) })
+      .catch(() => { /* 只读展示，失败按无下游处理 */ })
+    return () => { stale = true }
+  }, [node.id])
 
   const viaChecked = (roles & 2) !== 0
   // A failed load must not seed an empty editor: saving replaces the whole
@@ -699,13 +711,16 @@ function RolesCard({ node, onDone }) {
   }, [viaChecked, rows, node.id, loadErr])
   // The candidate list is the full node roster fetched here rather than reused
   // from the composite hop picker, since that picker is scoped to single nodes
-  // only and would silently drop composite upstreams from the choices.
+  // only and would silently drop composite upstreams from the choices. The
+  // read-only downstream list needs the same roster for names, so it shares
+  // this fetch; entry-only nodes with no downstream still skip it entirely.
+  const needNodeNames = viaChecked || downstreams.length > 0
   useEffect(() => {
-    if (!viaChecked) return
+    if (!needNodeNames) return
     let stale = false
     api.get('/nodes').then(d => { if (!stale) setAllNodes(d.nodes || []) }).catch(() => { if (!stale) setAllNodes([]) })
     return () => { stale = true }
-  }, [viaChecked, node.id])
+  }, [needNodeNames, node.id])
 
   const toggle = (bit) => setRoles(r => r ^ bit)
   const candidates = allNodes.filter(n => n.id !== node.id)
@@ -812,6 +827,31 @@ function RolesCard({ node, onDone }) {
               )}
             </>
           )}
+        </div>
+      )}
+      {downstreams.length > 0 && (
+        <div className="mt-4 pt-3.5 border-t border-line-soft">
+          <div className="flex items-baseline gap-2.5 mb-1.5">
+            <h3 className="m-0 text-[13.5px] font-bold">已绑定的下游</h3>
+            <span className="text-[12.5px] text-ink-mut">{downstreams.length} 条</span>
+          </div>
+          <p className="text-[12.5px] text-ink-mut mb-2.5">
+            这些节点把本节点设为上游，选中本节点的规则可以级联接入它们。绑定关系在对应下游节点的详情页编辑。
+          </p>
+          <div className="space-y-2 max-w-xl">
+            {downstreams.map(b => {
+              const n = nodeById[Number(b.downstream_node_id)]
+              return (
+                <div key={b.downstream_node_id} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
+                  <NodeTypeIcon type={n?.node_type} />
+                  <Link to={`/nodes/${b.downstream_node_id}`} className="flex-1 min-w-0 truncate text-[13.5px] text-blue-600 no-underline hover:underline">
+                    {n?.name || `#${b.downstream_node_id}`}
+                  </Link>
+                  <ModeBadge mode={b.mode} />
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </section>
