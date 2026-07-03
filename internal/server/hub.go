@@ -668,6 +668,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	userNodeAdds := map[userNode]int64{}
 	userAdds := map[int64]int64{}
 	exitAdds := map[db.UserExitKey]int64{}
+	// The reporting node's raw ledger: every sampled byte counts, both
+	// directions regardless of unidirectional billing, and before the rule_hop
+	// match below — a sample whose rule was deleted mid-batch is still real
+	// forwarded volume.
+	var rawAdd int64
 
 	for _, s := range samples {
 		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
@@ -676,6 +681,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			s.BytesUp = s.BytesDelta
 		}
 		totalDelta := s.BytesUp + s.BytesDown
+		rawAdd += totalDelta
 		billedDelta := totalDelta
 		if node.Unidirectional {
 			billedDelta = s.BytesUp
@@ -784,12 +790,21 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	// Flush every accumulated mutation in a single transaction: one commit (one
 	// fsync) for the whole batch instead of 3-5 auto-commits per sample.
-	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 {
+	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 || rawAdd > 0 {
 		if tx, err := h.DB.Begin(); err != nil {
 			log.Printf("hub: node %d counters tx begin: %v", nodeID, err)
 		} else {
 			ok := true
+			if rawAdd > 0 {
+				if err := db.AddNodeRawTraffic(tx, nodeID, rawAdd); err != nil {
+					log.Printf("hub: node %d raw traffic add: %v", nodeID, err)
+					ok = false
+				}
+			}
 			for id, w := range hopWrites {
+				if !ok {
+					break
+				}
 				if _, err := tx.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
 					w.lastBytes, w.lastUp, w.lastDown, w.addWeighted, id); err != nil {
 					log.Printf("hub: node %d counters rule_hop update: %v", nodeID, err)

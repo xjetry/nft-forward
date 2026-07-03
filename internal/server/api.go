@@ -322,9 +322,20 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
+	nodeRawTraffic, _ := db.NodeRawTraffic(s.DB)
+	// A load error leaves these maps nil, which JSON-encodes as null and would
+	// bypass the frontend's destructuring defaults (they only cover undefined);
+	// an empty map degrades the column to zeros instead of crashing the page.
+	if nodeTraffic == nil {
+		nodeTraffic = map[int64]int64{}
+	}
+	if nodeRawTraffic == nil {
+		nodeRawTraffic = map[int64]int64{}
+	}
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
 		"node_traffic":         nodeTraffic,
+		"node_raw_traffic":     nodeRawTraffic,
 		"latest_agent_version": serverVersion(),
 		"show_rate_to_user":    showRate == "1",
 	})

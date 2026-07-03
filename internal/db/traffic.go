@@ -64,6 +64,36 @@ func NodeTrafficSums(d *sql.DB) (map[int64]int64, error) {
 	return m, rows.Err()
 }
 
+// AddNodeRawTraffic folds delta raw bytes into the node's cumulative ledger.
+// Raw bytes are the node's real forwarded volume (uplink + downlink), kept
+// apart from billing counters so multipliers, unidirectional billing and user
+// resets never distort them.
+func AddNodeRawTraffic(d DBTX, nodeID, delta int64) error {
+	_, err := d.Exec(`INSERT INTO node_raw_traffic(node_id, raw_bytes) VALUES(?,?)
+		ON CONFLICT(node_id) DO UPDATE SET raw_bytes = raw_bytes + excluded.raw_bytes`,
+		nodeID, delta)
+	return err
+}
+
+// NodeRawTraffic returns every node's cumulative raw bytes keyed by id. Nodes
+// that never reported a counter batch have no row and are absent from the map.
+func NodeRawTraffic(d *sql.DB) (map[int64]int64, error) {
+	rows, err := d.Query(`SELECT node_id, raw_bytes FROM node_raw_traffic`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[int64]int64)
+	for rows.Next() {
+		var nodeID, raw int64
+		if err := rows.Scan(&nodeID, &raw); err != nil {
+			return nil, err
+		}
+		m[nodeID] = raw
+	}
+	return m, rows.Err()
+}
+
 // NodeRateMultipliers returns every node's rate_multiplier keyed by id. The
 // entry node's value is the whole rule's billing multiplier — middle-layer
 // and composite-child hops don't stack their own factors (a composite entry
