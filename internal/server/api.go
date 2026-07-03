@@ -734,16 +734,34 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs := make([]db.NodeBinding, len(body.Bindings))
+	seenUpstream := make(map[int64]bool, len(body.Bindings))
 	for i, b := range body.Bindings {
 		if b.UpstreamNodeID == id {
 			jsonErr(w, http.StatusBadRequest, "cannot bind to self")
 			return
 		}
+		if seenUpstream[b.UpstreamNodeID] {
+			jsonErr(w, http.StatusBadRequest, "上游节点重复")
+			return
+		}
+		seenUpstream[b.UpstreamNodeID] = true
 		if _, err := db.GetNode(s.DB, b.UpstreamNodeID); err != nil {
 			jsonErr(w, http.StatusBadRequest, "upstream node not found")
 			return
 		}
-		bs[i] = db.NodeBinding{UpstreamNodeID: b.UpstreamNodeID, DownstreamNodeID: id, Mode: b.Mode}
+		// The schema and the design for junction segments both default a
+		// binding edge to userspace; only NormalizeForwardMode's caller-wide
+		// fallback is kernel, which would silently override that default for
+		// a row that omitted mode.
+		mode := strings.ToLower(strings.TrimSpace(b.Mode))
+		if mode == "" {
+			mode = "userspace"
+		}
+		if mode != "kernel" && mode != "userspace" {
+			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+			return
+		}
+		bs[i] = db.NodeBinding{UpstreamNodeID: b.UpstreamNodeID, DownstreamNodeID: id, Mode: mode}
 	}
 	if err := db.ReplaceBindingsForDownstream(s.DB, id, bs); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())

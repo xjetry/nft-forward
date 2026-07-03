@@ -209,3 +209,50 @@ func TestNodeRolesAndBindingsEndpoints(t *testing.T) {
 		t.Fatalf("bind non-via: want 400, got %d", w.Code)
 	}
 }
+
+// The node_bindings schema defaults an edge's mode to userspace (the design
+// default for junction segments), an invalid mode must be rejected rather
+// than silently coerced, and two rows naming the same upstream must be
+// rejected instead of hitting the table's PRIMARY KEY and surfacing a raw
+// 500.
+func TestNodeBindingsModeDefaultValidationAndDuplicates(t *testing.T) {
+	d := openDB(t)
+	up, _ := db.CreateNode(d, "up", "", "")
+	mid, _ := db.CreateNode(d, "mid", "", "")
+	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry|db.NodeRoleVia)
+	cookie := loginAsAdmin(t, d)
+	s, _ := New(d)
+
+	do := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", fmt.Sprintf("/api/nodes/%d/bindings", mid.ID), bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		s.Router().ServeHTTP(w, req)
+		return w
+	}
+
+	// Omitted mode must persist as userspace, not NormalizeForwardMode's
+	// kernel default.
+	body := fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d}]}`, up.ID)
+	if w := do(body); w.Code != http.StatusOK {
+		t.Fatalf("omitted mode: want 200, got %d %s", w.Code, w.Body.String())
+	}
+	bs, _ := db.ListBindingsForDownstream(d, mid.ID)
+	if len(bs) != 1 || bs[0].Mode != "userspace" {
+		t.Fatalf("omitted mode want userspace, got %+v", bs)
+	}
+
+	// Unrecognized mode must be rejected, not silently coerced.
+	body = fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d,"mode":"bogus"}]}`, up.ID)
+	if w := do(body); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad mode: want 400, got %d %s", w.Code, w.Body.String())
+	}
+
+	// Two rows naming the same upstream must be rejected as a request error,
+	// not surfaced as the underlying PRIMARY KEY violation.
+	body = fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d,"mode":"kernel"},{"upstream_node_id":%d,"mode":"userspace"}]}`, up.ID, up.ID)
+	if w := do(body); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate upstream: want 400, got %d %s", w.Code, w.Body.String())
+	}
+}
