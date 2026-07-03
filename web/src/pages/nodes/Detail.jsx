@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, NodeStackBadge, useConfirm, Select } from '../../components/ui'
+import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
 
 const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
@@ -385,7 +386,7 @@ export default function NodeDetail() {
             <span className="text-[12.5px] text-ink-mut">{ruleHops.length} 条</span>
           </div>
           {ruleHops.length ? (
-            <div className="tbl-scroll">
+            <TableBox>
             <table className="tbl">
               <thead><tr><th>规则</th><th>用户</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
               <tbody>
@@ -411,7 +412,7 @@ export default function NodeDetail() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </TableBox>
           ) : <div className="pb-4"><Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty></div>}
         </section>
 
@@ -423,7 +424,7 @@ export default function NodeDetail() {
           </div>
           <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} onChanged={load} />
           {grantedUsers.length ? (
-            <div className="tbl-scroll">
+            <TableBox>
             <table className="tbl">
               <thead><tr><th>用户</th><th>单节点配额</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
               <tbody>
@@ -445,7 +446,7 @@ export default function NodeDetail() {
                 ))}
               </tbody>
             </table>
-            </div>
+            </TableBox>
           ) : <div className="pb-4"><Empty title="尚无用户被授权使用此节点" /></div>}
         </section>
 

@@ -4,6 +4,7 @@ import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
+import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
 import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles, ROLE_LANDING, ROLE_DIRECT } from '../../lib/landing'
 import PasteGrantsModal from './PasteGrantsModal'
@@ -136,7 +137,7 @@ export default function UserDetail() {
           <span className="text-[13px] text-ink-mut">{rules.length} 条</span>
         </div>
         {rules.length ? (
-          <div className="tbl-scroll">
+          <TableBox>
           <table className="tbl">
             <thead><tr><th>ID</th><th>名称</th><th>节点</th><th>协议</th><th>入口</th><th>出口</th><th className="text-right">流量</th></tr></thead>
             <tbody>
@@ -155,7 +156,7 @@ export default function UserDetail() {
               ))}
             </tbody>
           </table>
-          </div>
+          </TableBox>
         ) : <Empty title="该用户尚无规则" />}
       </div>
 
@@ -447,7 +448,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
               <AdminRoleBulkToggle nodes={preview.filter((_, i) => sel.has(i))} roleOf={roleOf}
                 onToggle={(bit, on) => handleBulkRole(preview.filter((_, i) => sel.has(i)), bit, on)} />
             </div>
-            <div className="tbl-scroll">
+            <TableBox>
             <table className="tbl">
               <thead><tr>
                 <th className="w-8"><input type="checkbox" className="accent-blue-600"
@@ -512,7 +513,7 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                 })}
               </tbody>
             </table>
-            </div>
+            </TableBox>
           </div>
         )}
       </div>
@@ -709,7 +710,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
         </div>
       )}
       {tabNodes.length > 0 ? (
-        <div className="tbl-scroll">
+        <TableBox>
         <table className="tbl">
           <thead><tr>
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
@@ -749,7 +750,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             ))}
           </tbody>
         </table>
-        </div>
+        </TableBox>
       ) : nodes.length > 0 ? (
         <Empty title={tab === 'composite' ? '暂无已授权的组合节点' : '暂无已授权的单点节点'} />
       ) : (

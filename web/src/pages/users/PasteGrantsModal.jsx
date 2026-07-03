@@ -77,7 +77,7 @@ export default function PasteGrantsModal({ open, onClose, onDone, allNodes, allU
           应用文本中的 per-node 设置
         </label>
         {parsed.length > 0 && (
-          <div className="border border-line rounded-lg overflow-auto max-h-[40vh]">
+          <div className="table-scroll border border-line rounded-lg overflow-auto max-h-[40vh]">
             <table className="tbl">
               <thead><tr><th>节点</th><th>规则上限</th><th>流量配额</th><th>限速</th><th>状态</th></tr></thead>
               <tbody>

@@ -5,6 +5,7 @@ import { fmtBytes, fmtTime, nullStr } from '../lib/fmt'
 import { Layout, useBlur, useUser } from '../components/Layout'
 import { Loading, Empty, Badge, SensText, NodeTypeBadge } from '../components/ui'
 import { ProxyURIEditor } from '../components/ProxyURIEditor'
+import { TableBox } from '../components/page'
 import { useIsMobile } from '../lib/useIsMobile'
 
 export default function Dashboard() {
@@ -55,7 +56,8 @@ export default function Dashboard() {
           <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
           {nodes.length ? (<>
             {/* Desktop table */}
-            {!isMobile && <table className="tbl">
+            {!isMobile && <TableBox>
+            <table className="tbl">
               <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>流量</th><th>状态</th><th>心跳</th></tr></thead>
               <tbody>
                 {nodes.map(n => (
@@ -70,7 +72,8 @@ export default function Dashboard() {
                   </tr>
                 ))}
               </tbody>
-            </table>}
+            </table>
+            </TableBox>}
             {/* Mobile cards */}
             {isMobile && <div>
               {nodes.map(n => (

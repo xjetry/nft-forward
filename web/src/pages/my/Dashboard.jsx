@@ -7,6 +7,7 @@ import { Layout, useToast } from '../../components/Layout'
 import { Loading, Empty, Badge, NodeTypeBadge, useConfirm } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
 import { ProxyURIEditor } from '../../components/ProxyURIEditor'
+import { TableBox } from '../../components/page'
 
 export default function MyDashboard() {
   const [data, setData] = useState(null)
@@ -172,7 +173,8 @@ export default function MyDashboard() {
         )}
         {tabNodes.length > 0 ? (<>
           {/* Desktop table */}
-          {!isMobile && <table className="tbl">
+          {!isMobile && <TableBox>
+          <table className="tbl">
             <thead><tr><th>节点</th><th>类型</th>{show_rate && <th>倍率</th>}<th>状态</th><th>速度</th><th>已用流量</th><th>限速</th><th>本节点上限</th></tr></thead>
             <tbody>
               {tabNodes.map(n => {
@@ -201,7 +203,8 @@ export default function MyDashboard() {
                 )
               })}
             </tbody>
-          </table>}
+          </table>
+          </TableBox>}
           {/* Mobile cards */}
           {isMobile && <div>
             {tabNodes.map(n => {

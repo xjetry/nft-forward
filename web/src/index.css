@@ -112,11 +112,11 @@ html, body { background: var(--color-app); color: var(--color-ink); }
   background: var(--color-raised);
   border-bottom: 1px solid var(--color-line);
 }
-/* Sticky header ONLY inside a TableScroll container (the list pages), so the
-   header stays put while rows scroll. Scoped to .table-scroll so tables that
-   live in normal cards/detail pages (which scroll with the whole content area)
-   don't get a floating header. box-shadow draws the divider because a border on
-   a border-collapse cell doesn't stick reliably. */
+/* Sticky header ONLY inside a local scroll container (TableScroll on list
+   pages, TableBox in cards/detail sections), so the header stays put while the
+   rows scroll. Scoped to .table-scroll so a bare table that scrolls with the
+   whole content area doesn't get a floating header. box-shadow draws the
+   divider because a border on a border-collapse cell doesn't stick reliably. */
 .table-scroll thead th {
   position: sticky;
   top: 0;

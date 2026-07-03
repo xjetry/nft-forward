@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput } from '../../components/page'
+import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
 import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
 import { fmtTrafficGB } from '../../lib/fmt'
 
@@ -62,8 +62,9 @@ export default function MyLandingNodes() {
 
   return (
     <Layout>
+      <div className="h-full flex flex-col">
       <PageHeader title="落地节点" count={nodes.length} unit="个" />
-      <Panel>
+      <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
           {stale && <span className="text-xs text-amber-600 ml-2">订阅刷新失败，显示上次结果</span>}
@@ -75,12 +76,12 @@ export default function MyLandingNodes() {
           )}
         </PanelToolbar>
 
+        <TableScroll>
         {nodes.length === 0 ? (
           <Empty title="暂无落地节点" desc={<>在<Link to="/my" className="text-blue-600 font-semibold">概览页</Link>添加你的代理 URI，或联系管理员配置订阅。</>} />
         ) : filtered.length === 0 ? (
           <Empty title="无匹配节点" desc="试试别的关键词。" />
         ) : (
-          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>已用/总量</th><th>来源</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -109,9 +110,10 @@ export default function MyLandingNodes() {
               ))}
             </tbody>
           </table>
-          </div>
         )}
+        </TableScroll>
       </Panel>
+      </div>
     </Layout>
   )
 }

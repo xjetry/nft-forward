@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/Layout'
 import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { copyToClipboard } from '../lib/clipboard'
-import { PageHeader, Panel, PanelToolbar, SearchInput } from '../components/page'
+import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../components/page'
 import {
   parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING, ROLE_DIRECT,
   landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
@@ -90,8 +90,9 @@ export default function Proxies() {
 
   return (
     <Layout>
+      <div className="h-full flex flex-col">
       <PageHeader title="我的代理" count={allProxies.length} unit="个" />
-      <Panel>
+      <Panel fill>
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
         </PanelToolbar>
@@ -112,6 +113,7 @@ export default function Proxies() {
           )}
         </div>
 
+        <TableScroll>
         {tab === 'landing' ? (
           allLanding.length === 0 ? (
             <Empty title="暂无落地节点" desc="联系管理员配置订阅或在概览页添加代理 URI。" />
@@ -133,7 +135,6 @@ export default function Proxies() {
         ) : filtered.length === 0 ? (
           <Empty title="无匹配" desc="试试别的关键词。" />
         ) : (
-          <div className="tbl-scroll">
           <table className="tbl">
             <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>类型</th><th className="text-right">操作</th></tr></thead>
             <tbody>
@@ -170,9 +171,10 @@ export default function Proxies() {
               })}
             </tbody>
           </table>
-          </div>
         )}
+        </TableScroll>
       </Panel>
+      </div>
     </Layout>
   )
 }

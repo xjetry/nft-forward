@@ -25,9 +25,18 @@ export function Panel({ children, className = '', fill = false }) {
 
 /* Scroll container for a list table inside a `fill` Panel: only the rows
    scroll, while the sticky table header (and the Panel toolbar above) stay
-   fixed. */
+   fixed. tbl-scroll adds horizontal scrolling with a sticky first column on
+   mobile, for pages that render a real table there instead of cards. */
 export function TableScroll({ children }) {
-  return <div className="table-scroll flex-1 min-h-0 overflow-auto">{children}</div>
+  return <div className="table-scroll tbl-scroll flex-1 min-h-0 overflow-auto">{children}</div>
+}
+
+/* Bounded scroll box for tables outside a `fill` Panel (dashboard cards,
+   detail-page sections, modals): grows with its rows up to max-height, then
+   the rows scroll locally under the sticky header instead of stretching the
+   whole page. */
+export function TableBox({ className = '', children }) {
+  return <div className={`table-scroll tbl-scroll overflow-auto max-h-[460px] ${className}`}>{children}</div>
 }
 
 /* Toolbar row inside a Panel — typically a SearchInput plus a primary action. */
