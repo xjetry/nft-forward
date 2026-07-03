@@ -232,8 +232,6 @@ func targetIPInCIDR(ip net.IP, list string) bool {
 
 func nullInt64(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: true} }
 
-// checkUserRuleQuota verifies a user hasn't exceeded their global max_forwards
-// limit or per-node grant limits.
 // viasOf dereferences the optional middle-layer path from a request body: a
 // nil pointer (field absent) yields a nil slice so callers keep the stored
 // path, while a non-nil pointer — including an explicit empty array — yields
@@ -245,6 +243,8 @@ func viasOf(p *[]int64) []int64 {
 	return *p
 }
 
+// checkUserRuleQuota verifies a user hasn't exceeded their global max_forwards
+// limit or per-node grant limits.
 func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops int) error {
 	total, _ := db.CountRulesForUser(s.DB, u.ID)
 	if (total-existingRuleHops)+hopCount > u.MaxForwards {
