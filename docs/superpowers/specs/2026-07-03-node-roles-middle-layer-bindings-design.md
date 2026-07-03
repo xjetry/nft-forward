@@ -69,6 +69,7 @@
 | 落地出口账本 | 末跳原始字节（up+down，双向） | 不变 |
 | 配额压制 | 任一物理跳授权或 `rules.node_id` 授权超额 → 整链撤下 | 匹配条件扩展到 `via_node_id`：via 授权超额同样压整链（`ActiveRuleHopsForPush`、`RulesAffectedByNode`） |
 
+- 入口 `rate_multiplier`：`0` 表示免费（全局用量不计），负值/缺失按 `1.0` 兜底；专属配额与出口账本仍按原始字节累计。免费只能经专属倍率端点配置（创建接口无法区分缺省与显式 0，故创建时 0 仍取默认 1.0）。
 - via 授权的 `rate_limit_mbytes` 沿用 grant shaping 机制，shaping 组作用在该层段首个物理跳（由溯源列标注归属）。
 - 规则数配额 `max_forwards` 仅对入口授权计数；via 授权上的该字段对经过规则不生效，避免一条规则在多处授权同时占名额造成难排查的 409。via 的容量控制交给配额与限速。
 - 用户全局 `max_forwards` 仍按物理跳数计：选择中间层的规则占用更多名额，表单需提示。

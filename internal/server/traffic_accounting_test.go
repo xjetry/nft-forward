@@ -219,17 +219,18 @@ func TestApplyCountersMultiplier(t *testing.T) {
 	}
 }
 
-// rate_multiplier defaults to 1.0, so a non-positive value is an unset column,
-// not a "free" node: billing coerces it back to 1.0. Global usage therefore
-// bills the entry hop at 1.0, and the segment grant accrues the same raw bytes.
-func TestApplyCountersNonPositiveMultiplierBillsAtUnit(t *testing.T) {
+// A rate_multiplier of 0 is a deliberate free marker: global usage accrues
+// nothing and the entry hop's billed total_bytes is 0, while the per-grant quota
+// still charges the raw bytes that actually flowed. Only a negative or absent
+// multiplier falls back to 1.0 (see TestApplyCountersNegativeMultiplierBillsAtUnit).
+func TestApplyCountersZeroMultiplierIsFree(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 100)
 
-	n1, _ := db.CreateNode(d, "unit-relay", "", "")
+	n1, _ := db.CreateNode(d, "free-relay", "", "")
 	db.UpdateNodeRelayHost(d, n1.ID, "3.3.3.3")
-	comp := makeComposite(t, d, "comp-unit", n1.ID)
-	_ = db.UpdateNodeRateMultiplier(d, comp.ID, 0.0)
+	comp := makeComposite(t, d, "comp-free", n1.ID)
+	_ = db.UpdateNodeRateMultiplier(d, comp.ID, 0.0) // free entry
 
 	db.GrantNode(d, uid, comp.ID, 10, 0)
 	db.GrantNode(d, uid, n1.ID, 10, 0)
@@ -237,7 +238,7 @@ func TestApplyCountersNonPositiveMultiplierBillsAtUnit(t *testing.T) {
 	rl := &db.Rule{
 		NodeID:  comp.ID,
 		OwnerID: sql.NullInt64{Int64: uid, Valid: true},
-		Name:    "test-unit", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
+		Name:    "test-free", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
 	}
 	tx, _ := d.Begin()
 	ruleID, _ := db.CreateRule(tx, rl)
@@ -257,9 +258,65 @@ func TestApplyCountersNonPositiveMultiplierBillsAtUnit(t *testing.T) {
 	})
 
 	u, _ := db.GetUserByID(d, uid)
-	// non-positive multiplier coerced to 1.0 → entry billed once at 5000
+	// free entry multiplier (0) → global usage accrues nothing
+	if u.TrafficUsedBytes != 0 {
+		t.Fatalf("free entry multiplier must bill 0 global usage, got %d", u.TrafficUsedBytes)
+	}
+	gc, _ := db.GetNodeGrant(d, uid, comp.ID)
+	// per-grant quota still charges the raw bytes that flowed
+	if gc.TrafficUsedBytes != 5000 {
+		t.Fatalf("free entry per-grant quota want raw 5000, got %d", gc.TrafficUsedBytes)
+	}
+	hops, _ = db.ListRuleHops(d, ruleID)
+	// entry hop stores the billed amount, which is 0 under a free multiplier
+	if hops[0].TotalBytes != 0 {
+		t.Fatalf("free entry hop total_bytes (billed) want 0, got %d", hops[0].TotalBytes)
+	}
+}
+
+// A negative multiplier is invalid input, not a free marker, so billing falls
+// back to 1.0. The dedicated endpoint never persists a negative, so set it via
+// raw SQL to exercise the guard directly.
+func TestApplyCountersNegativeMultiplierBillsAtUnit(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 100)
+
+	n1, _ := db.CreateNode(d, "neg-relay", "", "")
+	db.UpdateNodeRelayHost(d, n1.ID, "4.4.4.4")
+	comp := makeComposite(t, d, "comp-neg", n1.ID)
+	if _, err := d.Exec(`UPDATE nodes SET rate_multiplier = -2.0 WHERE id=?`, comp.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	db.GrantNode(d, uid, comp.ID, 10, 0)
+	db.GrantNode(d, uid, n1.ID, 10, 0)
+
+	rl := &db.Rule{
+		NodeID:  comp.ID,
+		OwnerID: sql.NullInt64{Int64: uid, Valid: true},
+		Name:    "test-neg", Proto: "tcp", ExitHost: "8.8.8.8", ExitPort: 443,
+	}
+	tx, _ := d.Begin()
+	ruleID, _ := db.CreateRule(tx, rl)
+	rl.ID = ruleID
+	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
+		{NodeID: n1.ID, Mode: "kernel", ViaNodeID: comp.ID},
+	}, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	tx.Commit()
+	hops, _ := db.ListRuleHops(d, ruleID)
+
+	s, _ := New(d)
+	s.Hub.applyCounters(hops[0].NodeID, []wsproto.CounterSample{
+		{Proto: "tcp", ListenPort: hops[0].ListenPort, BytesUp: 2500, BytesDown: 2500},
+	})
+
+	u, _ := db.GetUserByID(d, uid)
+	// negative multiplier coerced to 1.0 → entry billed once at 5000
 	if u.TrafficUsedBytes != 5000 {
-		t.Fatalf("non-positive multiplier must bill at unit (5000), got %d", u.TrafficUsedBytes)
+		t.Fatalf("negative multiplier must bill at unit (5000), got %d", u.TrafficUsedBytes)
 	}
 	gc, _ := db.GetNodeGrant(d, uid, comp.ID)
 	// per-segment grant is raw bytes, independent of the billing multiplier

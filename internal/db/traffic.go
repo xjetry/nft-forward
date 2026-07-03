@@ -67,7 +67,9 @@ func NodeTrafficSums(d *sql.DB) (map[int64]int64, error) {
 // NodeRateMultipliers returns every node's rate_multiplier keyed by id. The
 // entry node's value is the whole rule's billing multiplier — middle-layer
 // and composite-child hops don't stack their own factors (a composite entry
-// carries the baked composite factor on its own column).
+// carries the baked composite factor on its own column). A stored 0 is a
+// deliberate free marker and is returned as-is; billing treats it as free (no
+// global usage) and falls back to 1.0 only for a negative or absent value.
 func NodeRateMultipliers(d *sql.DB) (map[int64]float64, error) {
 	rows, err := d.Query(`SELECT id, rate_multiplier FROM nodes`)
 	if err != nil {

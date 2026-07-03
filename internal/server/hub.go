@@ -729,8 +729,12 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 			}
 
-			mult := multipliers[r.NodeID]
-			if mult <= 0 {
+			// Entry multiplier 0 marks a free node: global usage accrues nothing.
+			// Only a negative value or a map-miss (entry node vanished mid-batch)
+			// falls back to 1.0 — a miss must never silently make a rule free.
+			// Per-grant raw-byte quotas and the exit ledger still accrue regardless.
+			mult, ok := multipliers[r.NodeID]
+			if !ok || mult < 0 {
 				mult = 1.0
 			}
 			billingRate := 1.0

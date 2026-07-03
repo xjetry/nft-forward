@@ -408,6 +408,10 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// Create can't distinguish an unset multiplier from an explicit 0: an
+		// absent JSON field decodes to 0 too. So 0 keeps the default 1.0 here;
+		// configuring a node as free (0) is done afterward via the dedicated
+		// rate-multiplier endpoint, which alone treats 0 as the free marker.
 		if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
 			_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 		}
@@ -424,6 +428,8 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Absent field and explicit 0 are indistinguishable on create, so 0 keeps
+	// the default 1.0; free (0) is set later via the dedicated endpoint.
 	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
 		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
 	}
@@ -940,8 +946,11 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	// 0 is a deliberate free marker (billing accrues no global usage for the
+	// node). A negative value is invalid input, not free, so it falls back to the
+	// neutral 1.0 rather than persisting as a free 0.
 	if body.RateMultiplier < 0 {
-		body.RateMultiplier = 0
+		body.RateMultiplier = 1.0
 	}
 	if err := db.UpdateNodeRateMultiplier(s.DB, id, body.RateMultiplier); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
