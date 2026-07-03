@@ -14,12 +14,14 @@ export default function NodeList() {
   const [error, setError] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showComposite, setShowComposite] = useState(false)
-  const [search, setSearch] = useState('')
+  // 搜索词与角色过滤存 sessionStorage：进详情返回后过滤还在，但不像 tab 那样
+  // 跨会话记住——隔天打开还带着旧搜索词会让列表看起来莫名缺节点。
+  const [search, setSearch] = useState(() => sessionStorage.getItem('nodes.search') || '')
+  // 角色过滤位掩码，与 nodes.roles 同构（bit0 入口 / bit1 中间层）；0 表示不过滤，
+  // 选中多个时要求同时具备（用于收窄，而非并集）。
+  const [roleMask, setRoleMask] = useState(() => Number(sessionStorage.getItem('nodes.roleMask')) || 0)
   const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
   const [dragIndex, setDragIndex] = useState(null)
-  // Default on, persisted per-browser: most of the time you want the working
-  // set, but the preference is a local view choice, not server state.
-  const [onlyVisible, setOnlyVisible] = useState(() => localStorage.getItem('nodes.onlyVisible') !== '0')
   const speeds = useSpeed()
   const isMobile = useIsMobile()
   const toast = useToast()
@@ -33,7 +35,8 @@ export default function NodeList() {
   const listRef = useRef(null)
 
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
-  useEffect(() => { localStorage.setItem('nodes.onlyVisible', onlyVisible ? '1' : '0') }, [onlyVisible])
+  useEffect(() => { sessionStorage.setItem('nodes.search', search) }, [search])
+  useEffect(() => { sessionStorage.setItem('nodes.roleMask', String(roleMask)) }, [roleMask])
 
   const load = () => {
     setLoading(true)
@@ -61,10 +64,6 @@ export default function NodeList() {
     try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
   }
 
-  const toggleHidden = async (node) => {
-    try { await api.post(`/nodes/${node.id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message, 'error') }
-  }
-
   if (loading && !data) return <Layout><Loading /></Layout>
   if (!data && error) return <Layout><Empty title="加载失败" desc={error}><button onClick={load} className="btn-secondary text-xs mt-3">重试</button></Empty></Layout>
 
@@ -73,10 +72,15 @@ export default function NodeList() {
   const compositeNodes = nodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
   const q = search.trim().toLowerCase()
-  const visibleNodes = onlyVisible ? tabNodes.filter(n => !n.hidden) : tabNodes
-  const filtered0 = !q ? visibleNodes : visibleNodes.filter(n => (n.name || '').toLowerCase().includes(q))
-  const hiddenCount = tabNodes.length - tabNodes.filter(n => !n.hidden).length
+  const roleFiltered = !roleMask ? tabNodes : tabNodes.filter(n => ((n.roles ?? 1) & roleMask) === roleMask)
+  const filtered0 = !q ? roleFiltered : roleFiltered.filter(n => (n.name || '').toLowerCase().includes(q))
 
+  // 「原始流量」列只在单点 tab 渲染：带着它的排序切去组合 tab，排序仍生效却
+  // 无处显示、无法取消，还会静默禁用拖拽调序——切走时清掉这个不可见排序。
+  const switchTab = (key) => {
+    setTab(key)
+    if (key === 'composite') setSort(s => s.col === 'rawtraffic' ? { col: null, dir: null } : s)
+  }
   const cycleSort = (col) => {
     setSort(s => {
       if (col === 'speed') setSpeedSnap({ ...speeds })
@@ -99,12 +103,12 @@ export default function NodeList() {
     }
     return sort.dir === 'asc' ? d : -d
   })
-  const draggable = !sort.col && !q
+  // 任何过滤/排序生效时都不能拖拽调序：saveOrder 以可见列表为全量重建顺序，
+  // 子集视图下会把被过滤掉的节点从顺序里丢掉。
+  const draggable = !sort.col && !q && !roleMask
   const saveOrder = async (visibleList) => {
-    const seen = new Set(visibleList.map(n => n.id))
-    const hiddenIds = tabNodes.filter(n => n.hidden && !seen.has(n.id)).map(n => n.id)
     const otherIds = (tab === 'composite' ? singleNodes : compositeNodes).map(n => n.id)
-    const tabIds = [...visibleList.map(n => n.id), ...hiddenIds]
+    const tabIds = visibleList.map(n => n.id)
     const allIds = tab === 'composite' ? [...otherIds, ...tabIds] : [...tabIds, ...otherIds]
     const byId = Object.fromEntries(nodes.map(n => [n.id, n]))
     setData(d => ({ ...d, nodes: allIds.map(id => byId[id]) }))
@@ -170,18 +174,21 @@ export default function NodeList() {
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
         </PanelToolbar>
-        <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+        <div className="flex items-center flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
           {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
-            <button key={key} onClick={() => setTab(key)}
+            <button key={key} onClick={() => switchTab(key)}
               className={`px-3 py-0.5 rounded text-xs border transition-colors ${
                 tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
               }`}>{label} {n}</button>
           ))}
-          <label className="ml-auto inline-flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer select-none"
-            title="仅展示未隐藏的节点。隐藏的节点及其规则不在列表显示，但转发照常运行。该偏好保存在本浏览器。">
-            <input type="checkbox" className="accent-blue-600" checked={onlyVisible} onChange={e => setOnlyVisible(e.target.checked)} />
-            仅展示可见节点{hiddenCount > 0 && <span className="text-ink-mut">（{hiddenCount} 个隐藏）</span>}
-          </label>
+          <span className="ml-3 text-xs text-ink-mut select-none">角色</span>
+          {[[1, '入口'], [2, '中间层']].map(([bit, label]) => (
+            <button key={bit} onClick={() => setRoleMask(m => m ^ bit)}
+              title="按节点角色筛选，可叠加（同时选中表示需兼具两种角色）；不选则显示全部"
+              className={`px-3 py-0.5 rounded text-xs border transition-colors ${
+                (roleMask & bit) !== 0 ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
+              }`}>{label}</button>
+          ))}
         </div>
         <TableScroll>
         {nodes.length === 0 ? (
@@ -189,9 +196,7 @@ export default function NodeList() {
         ) : tabNodes.length === 0 ? (
           <Empty title={tab === 'composite' ? '暂无组合节点' : '暂无单点节点'} desc={tab === 'composite' ? '点击右上角「组合节点」创建。' : '点击右上角「添加节点」创建。'} />
         ) : filtered.length === 0 ? (
-          q
-            ? <Empty title="无匹配节点" desc="试试别的关键词。" />
-            : <Empty title="没有可见节点" desc="当前分类的节点都已隐藏，关闭右上「仅展示可见节点」即可查看。" />
+          <Empty title="无匹配节点" desc={roleMask ? '试试别的关键词，或取消上方的角色筛选。' : '试试别的关键词。'} />
         ) : (<>
           {/* Desktop table */}
           {!isMobile && <div ref={listRef} className="relative">
@@ -229,7 +234,6 @@ export default function NodeList() {
                     <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
                       {n.name}
-                      {n.hidden && <Badge color="gray">已隐藏</Badge>}
                       {(n.roles & 2) !== 0 && <Badge color="blue">中间层</Badge>}
                     </span>
                   </td>
@@ -262,10 +266,6 @@ export default function NodeList() {
                   </td>
                   <td className="text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                     <div className="flex gap-2 justify-end">
-                      <button onClick={() => toggleHidden(n)} title={n.hidden ? '显示' : '隐藏'} className="icon-btn">
-                        {n.hidden ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-                        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/></svg>}
-                      </button>
                       {n.node_type !== 'composite' && <button onClick={() => resyncNode(n.id)} title="重新同步" className="icon-btn">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
                       </button>}
@@ -296,7 +296,6 @@ export default function NodeList() {
                   <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
                     <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500' : 'bg-gray-400'}`} />
                     {n.name}
-                    {n.hidden && <Badge color="gray">已隐藏</Badge>}
                     {(n.roles & 2) !== 0 && <Badge color="blue">中间层</Badge>}
                   </span>
                   <NodeStatus node={n} />

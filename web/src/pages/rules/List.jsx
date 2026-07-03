@@ -101,8 +101,7 @@ export default function RulesList() {
   const { rules: allRulesRaw = [], nodes = [] } = data || {}
   const nodeMap = {}
   nodes.forEach(n => { nodeMap[n.id] = n })
-  const allRules = allRulesRaw.map(enrich)
-  const rules = allRules.filter(r => !nodeMap[r.node_id]?.hidden)
+  const rules = allRulesRaw.map(enrich)
 
   const deleteRule = async (rule) => {
     if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
@@ -135,7 +134,7 @@ export default function RulesList() {
   const rulesQuery = searchParams.toString()
 
   const userOptions = users.map(u => ({ value: u.id, label: u.username }))
-  const nodeOptions = nodes.filter(n => !n.hidden).map(n => ({ value: n.id, label: n.name }))
+  const nodeOptions = nodes.map(n => ({ value: n.id, label: n.name }))
 
   return (
     <Layout>

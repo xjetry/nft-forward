@@ -1087,25 +1087,6 @@ func (s *Server) apiToggleNode(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiToggleNodeHidden(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-	if err := db.ToggleNodeHidden(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "node.toggle_hidden", strconv.FormatInt(id, 10), "")
-	jsonOK(w, map[string]any{"ok": true})
-}
-
 func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

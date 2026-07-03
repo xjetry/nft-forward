@@ -63,7 +63,6 @@ type Node struct {
 	LastError           sql.NullString `json:"last_error"`
 	LastWarning         string         `json:"last_warning"`
 	Disabled            bool           `json:"disabled"`
-	Hidden              bool           `json:"hidden"`
 	LocalMigratedAt     *int64         `json:"local_migrated_at,omitempty"`
 	PortRange           string         `json:"port_range"`
 	SortOrder           int64          `json:"sort_order"`
@@ -312,7 +311,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,hidden,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles`
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
@@ -323,7 +322,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
-	var disabled, hidden, unidirectional, relayHostDeclared, relayHostV6Declared int
+	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared int
 	var localMigratedAt, lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
@@ -334,13 +333,12 @@ func scanNode(r rowScanner) (*Node, error) {
 		&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
 		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-		&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
+		&n.SortOrder, &n.RateMultiplier, &unidirectional,
 		&relayHostDeclared, &relayHostV6Declared, &n.Roles,
 	); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
-	n.Hidden = hidden == 1
 	n.Unidirectional = unidirectional == 1
 	n.RelayHostDeclared = relayHostDeclared == 1
 	n.RelayHostV6Declared = relayHostV6Declared == 1
@@ -831,14 +829,6 @@ func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
 
 func ToggleNode(d *sql.DB, id int64) error {
 	_, err := d.Exec(`UPDATE nodes SET disabled = CASE WHEN disabled = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
-	return err
-}
-
-// ToggleNodeHidden flips a node's hidden flag. Hidden is purely a presentation
-// concern — by default the node drops out of the node list and its rules drop
-// out of the rules list — and never affects forwarding, sync, or authorization.
-func ToggleNodeHidden(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET hidden = CASE WHEN hidden = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
 	return err
 }
 

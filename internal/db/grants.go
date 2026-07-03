@@ -110,7 +110,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	for rows.Next() {
 		n := &Node{}
 		g := &UserNode{UserID: userID}
-		var disabled, hidden, unidirectional, relayHostDeclared, relayHostV6Declared int
+		var disabled, unidirectional, relayHostDeclared, relayHostV6Declared int
 		var localMigratedAt, lastSeen sql.NullInt64
 		var agentVersion sql.NullString
 		var ownerID sql.NullInt64
@@ -121,7 +121,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
 			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-			&hidden, &n.SortOrder, &n.RateMultiplier, &unidirectional,
+			&n.SortOrder, &n.RateMultiplier, &unidirectional,
 			&relayHostDeclared, &relayHostV6Declared, &n.Roles,
 			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.GrantedAt,
 		); err != nil {
@@ -131,7 +131,6 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		n.LastUpgradeStatus = luStatus.String
 		n.LastUpgradeError = luError.String
 		n.Disabled = disabled == 1
-		n.Hidden = hidden == 1
 		n.Unidirectional = unidirectional == 1
 		n.RelayHostDeclared = relayHostDeclared == 1
 		n.RelayHostV6Declared = relayHostV6Declared == 1

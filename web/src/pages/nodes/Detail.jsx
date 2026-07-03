@@ -133,9 +133,6 @@ export default function NodeDetail() {
     try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
   }
 
-  const toggleHidden = async () => {
-    try { await api.post(`/nodes/${id}/hidden`); toast(node.hidden ? '已显示节点' : '已隐藏节点'); load() } catch (err) { toast(err.message, 'error') }
-  }
   const remove = async () => {
     if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
     try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message, 'error') }
@@ -177,7 +174,6 @@ export default function NodeDetail() {
                 {isComposite
                   ? (node.disabled && <Badge color="amber">已禁用</Badge>)
                   : <HeaderStatus node={node} />}
-                {node.hidden && <Badge color="gray">已隐藏</Badge>}
               </div>
               {isComposite ? (
                 <div className="mt-2 text-[13px] text-ink-mut">虚拟链路节点，由下列各跳依次转发；自身无 Agent / IP / 同步状态</div>
@@ -207,7 +203,6 @@ export default function NodeDetail() {
             {!isComposite && (
               <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
             )}
-            <button onClick={toggleHidden} title="隐藏后，该节点默认不在节点列表显示，其规则也不在规则列表显示（不影响转发）" className="hidden md:inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">{node.hidden ? '显示节点' : '隐藏节点'}</button>
             <button onClick={remove} className="hidden md:inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">删除节点</button>
             {!isComposite && agentOutdated && (
               <button onClick={upgrade} title={`推送升级到 ${latest_agent_version}`} className="hidden md:inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {latest_agent_version}</button>

@@ -455,7 +455,6 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/upgrade", s.apiUpgradeNode)
 			r.Delete("/nodes/{id}", s.apiDeleteNode)
 			r.Post("/nodes/{id}/toggle", s.apiToggleNode)
-			r.Post("/nodes/{id}/hidden", s.apiToggleNodeHidden)
 			r.Post("/nodes/{id}/owner", s.apiUpdateNodeOwner)
 			r.Post("/nodes/reorder", s.apiReorderNodes)
 			r.Post("/nodes/resync-all", s.apiResyncAllNodes)
