@@ -61,3 +61,36 @@ func TestGrantRolesReadAlignment(t *testing.T) {
 		t.Fatalf("ListUsersForNode roles = %v, want 1", users)
 	}
 }
+
+func TestEffectiveNodeRoles(t *testing.T) {
+	// grant 0 inherits the node mask
+	if got := EffectiveNodeRoles(NodeRoleVia, 0); got != NodeRoleVia {
+		t.Fatalf("inherit = %d, want %d", got, NodeRoleVia)
+	}
+	// override may add a bit the node lacks (via node opened as entry)
+	if got := EffectiveNodeRoles(NodeRoleVia, NodeRoleEntry); got != NodeRoleEntry {
+		t.Fatalf("override-add = %d, want %d", got, NodeRoleEntry)
+	}
+	// override may drop a bit the node has (entry+via node narrowed to via)
+	if got := EffectiveNodeRoles(NodeRoleEntry|NodeRoleVia, NodeRoleVia); got != NodeRoleVia {
+		t.Fatalf("override-narrow = %d, want %d", got, NodeRoleVia)
+	}
+}
+
+func TestSetGrantRoles(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+	nid := createTestNode(t, d, "gr")
+	grantNode(t, d, uid, nid)
+
+	if err := SetGrantRoles(d, uid, nid, NodeRoleEntry); err != nil {
+		t.Fatal(err)
+	}
+	g, err := GetNodeGrant(d, uid, nid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Roles != NodeRoleEntry {
+		t.Fatalf("roles = %d, want %d", g.Roles, NodeRoleEntry)
+	}
+}

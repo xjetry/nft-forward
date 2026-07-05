@@ -15,6 +15,17 @@ const (
 	NodeRoleVia   int64 = 1 << 1
 )
 
+// EffectiveNodeRoles resolves how a specific grant may use a node: the grant's
+// own mask when set, otherwise the node's mask. grantRoles == 0 means inherit;
+// any other value overrides the node mask entirely — it may add or drop bits,
+// the two masks are independent, not subset-constrained.
+func EffectiveNodeRoles(nodeRoles, grantRoles int64) int64 {
+	if grantRoles == 0 {
+		return nodeRoles
+	}
+	return grantRoles
+}
+
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`

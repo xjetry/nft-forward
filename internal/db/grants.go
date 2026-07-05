@@ -81,6 +81,14 @@ func RevokeNode(d *sql.DB, userID, nodeID int64) error {
 	return err
 }
 
+// SetGrantRoles overrides the role mask for one existing grant (0 = inherit the
+// node's mask). It targets an existing (user, node) row; if the user was never
+// granted the node the UPDATE affects nothing.
+func SetGrantRoles(d *sql.DB, userID, nodeID, roles int64) error {
+	_, err := d.Exec(`UPDATE user_nodes SET roles=? WHERE user_id=? AND node_id=?`, roles, userID, nodeID)
+	return err
+}
+
 func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 	row := d.QueryRow(`SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, roles, granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
 	g := &UserNode{}
