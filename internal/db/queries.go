@@ -318,8 +318,11 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	if secret == "" {
 		secret = RandToken(32)
 	}
-	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, sort_order, created_at)
-		VALUES (?,?,?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
+	// New agent nodes default to both roles (entry|via = 3) so a freshly
+	// registered node can be picked as an entry or bound as a middle layer
+	// without an extra edit; the numeric literal mirrors NodeRoleEntry|NodeRoleVia.
+	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, roles, sort_order, created_at)
+		VALUES (?,?,?,3, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
 		name, address, secret, now())
 	if err != nil {
 		return nil, err

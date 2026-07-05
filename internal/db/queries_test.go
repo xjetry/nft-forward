@@ -96,8 +96,8 @@ func TestNodeRolesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n.Roles != NodeRoleEntry {
-		t.Fatalf("default roles want %d, got %d", NodeRoleEntry, n.Roles)
+	if n.Roles != NodeRoleEntry|NodeRoleVia {
+		t.Fatalf("default roles want %d, got %d", NodeRoleEntry|NodeRoleVia, n.Roles)
 	}
 	if err := UpdateNodeRoles(d, n.ID, NodeRoleEntry|NodeRoleVia); err != nil {
 		t.Fatal(err)
