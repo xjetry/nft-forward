@@ -457,7 +457,7 @@ export default function NodeDetail() {
           {grantedUsers.length ? (
             <TableBox>
             <table className="tbl">
-              <thead><tr><th>用户</th><th>单节点配额</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
+              <thead><tr><th>用户</th><th>单节点配额</th><th>用途</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
               <tbody>
                 {grantedUsers.map(g => (
                   <tr key={g.user_id}>
@@ -465,6 +465,7 @@ export default function NodeDetail() {
                       <Link to={`/users/${g.user_id}`} className="text-blue-600 hover:underline">{g.username}</Link>
                     </td>
                     <td className="font-mono">{g.max_forwards}</td>
+                    <td className="text-xs">{g.roles === 1 ? '仅入口' : g.roles === 2 ? '仅中间层' : g.roles === 3 ? '入口+中间层' : '跟随节点'}</td>
                     <td className="text-xs text-ink-mut">{fmtTime(g.granted_at)}</td>
                     <td className="text-right">
                       <button onClick={async () => {

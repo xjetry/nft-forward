@@ -345,6 +345,31 @@ function PerNodeRateForm({ userId, nodeId, rateMBytes, onDone }) {
   )
 }
 
+function PerNodeRolesForm({ userId, nodeId, roles, onDone }) {
+  // 0 = 继承节点掩码；其余是覆盖值（入口=1 / 中间层=2 的组合）。
+  const [val, setVal] = useState(String(roles ?? 0))
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    try {
+      await api.post(`/users/${userId}/nodes/${nodeId}/roles`, { roles: Number(val) })
+      toast('已设置')
+      onDone()
+    } catch (err) { toast(err.message, 'error') }
+  }
+  return (
+    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
+      <select className="input-field" value={val} onChange={e => setVal(e.target.value)} style={{ width: 108 }}>
+        <option value="0">跟随节点</option>
+        <option value="1">仅入口</option>
+        <option value="2">仅中间层</option>
+        <option value="3">入口+中间层</option>
+      </select>
+      <button type="submit" className="btn-secondary text-xs">设用途</button>
+    </form>
+  )
+}
+
 function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
   const [url, setUrl] = useState(subURL || '')
   const [text, setText] = useState(uris || '')
@@ -716,7 +741,7 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
             <th className="w-8"><input type="checkbox" className="accent-blue-600"
               checked={tabNodes.length > 0 && tabNodes.every(n => selected.has(n.id))}
               onChange={toggleAll} /></th>
-            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">限速</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
+            <th>节点</th><th>类型</th><th>节点规则数上限</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">流量配额</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">限速</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">用途</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft">已用</th><th className="px-3 py-2.5 text-left text-xs font-semibold text-ink-soft w-16"></th><th className="text-right">操作</th>
           </tr></thead>
           <tbody>
             {tabNodes.map(n => (
@@ -734,6 +759,9 @@ function GrantedNodesCard({ userId, nodes, grants, allNodes, allUsers, onDone })
                 </td>
                 <td className="px-3 py-2">
                   <PerNodeRateForm userId={userId} nodeId={n.id} rateMBytes={grantByNode[n.id]?.rate_limit_mbytes} onDone={onDone} />
+                </td>
+                <td className="px-3 py-2">
+                  <PerNodeRolesForm userId={userId} nodeId={n.id} roles={grantByNode[n.id]?.roles} onDone={onDone} />
                 </td>
                 <td className="px-3 py-2 font-mono text-sm">
                   {fmtTrafficGB(grantByNode[n.id]?.traffic_used_bytes, grantByNode[n.id]?.traffic_quota_bytes)}
