@@ -54,6 +54,40 @@ func TestSyncUserLandingExitsLifecycle(t *testing.T) {
 	}
 }
 
+func TestSyncSweepsEmptyLedgerResiduals(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+
+	// Two exits materialize; neither carries a ledger.
+	SyncUserLandingExits(d, uid, inputs("a.com", "b.com"), "", "")
+
+	// b.com drops out of the source with an empty ledger — nothing to resume —
+	// so it is deleted outright, not kept as a present=0 "not in source" row.
+	if _, synced, err := SyncUserLandingExits(d, uid, inputs("a.com"), "", ""); err != nil || !synced {
+		t.Fatalf("sync: synced=%v err=%v", synced, err)
+	}
+	if exits, _ := ListUserLandingExits(d, uid); len(exits) != 1 || exits[0].Host != "a.com" {
+		t.Fatalf("empty-ledger residual should be deleted, got %+v", exits)
+	}
+
+	// a.com now carries usage; clearing the whole source keeps it as present=0
+	// because its ledger still enforces and its usage must survive.
+	d.Exec(`UPDATE user_landing_exits SET used_bytes=500 WHERE user_id=? AND host='a.com'`, uid)
+	SyncUserLandingExits(d, uid, nil, "", "")
+	exits, _ := ListUserLandingExits(d, uid)
+	if len(exits) != 1 || exits[0].Present || exits[0].UsedBytes != 500 {
+		t.Fatalf("ledger-bearing exit must be kept present=0, got %+v", exits)
+	}
+
+	// once its ledger is emptied, the next sync sweeps the stale residual even
+	// though it was already at present=0.
+	d.Exec(`UPDATE user_landing_exits SET used_bytes=0 WHERE user_id=?`, uid)
+	SyncUserLandingExits(d, uid, nil, "", "")
+	if exits, _ = ListUserLandingExits(d, uid); len(exits) != 0 {
+		t.Fatalf("emptied residual should be swept, got %+v", exits)
+	}
+}
+
 func TestSyncDiscardsStaleSource(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)

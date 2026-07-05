@@ -50,8 +50,11 @@ type UserExitKey struct {
 
 // SyncUserLandingExits materializes a successfully resolved landing set.
 // Inputs must already be deduplicated by host:port (first wins, manual URIs
-// preceding subscription nodes). Rows missing from the input flip to present=0 —
-// never deleted — and quota/used are never touched here. srcSubURL/srcURIs
+// preceding subscription nodes). Rows missing from the input are swept if their
+// ledger is empty (quota==0 && used==0), since present=0 retention exists only
+// to resume a returning exit's quota/usage and an empty ledger has nothing to
+// resume; ledger-bearing rows flip to present=0 instead so their quota keeps
+// enforcing and usage survives. quota/used are never touched here. srcSubURL/srcURIs
 // are the source values the resolution ran against: if the users row no
 // longer matches (the admin changed the source during a slow subscription
 // fetch), the stale result is discarded with synced=false. The returned keys
@@ -73,8 +76,9 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 	}
 
 	type rowState struct {
-		present   bool
-		overQuota bool
+		present     bool
+		overQuota   bool
+		emptyLedger bool
 	}
 	existing := map[LandingExitKey]rowState{}
 	rows, err := tx.Query(`SELECT host, port, present, quota_bytes, used_bytes FROM user_landing_exits WHERE user_id=?`, userID)
@@ -89,7 +93,7 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 			rows.Close()
 			return nil, false, err
 		}
-		existing[k] = rowState{present: present == 1, overQuota: quota > 0 && used >= quota}
+		existing[k] = rowState{present: present == 1, overQuota: quota > 0 && used >= quota, emptyLedger: quota == 0 && used == 0}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -116,7 +120,20 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 		}
 	}
 	for k, st := range existing {
-		if inInput[k] || !st.present {
+		if inInput[k] {
+			continue
+		}
+		// Dropped out of the source. An empty ledger has nothing to resume, so
+		// sweep it rather than leave a stale "not in source" row — this also
+		// reaches rows already at present=0 whose ledger was later cleared.
+		if st.emptyLedger {
+			if _, err := tx.Exec(`DELETE FROM user_landing_exits WHERE user_id=? AND host=? AND port=?`,
+				userID, k.Host, k.Port); err != nil {
+				return nil, false, err
+			}
+			continue
+		}
+		if !st.present {
 			continue
 		}
 		if _, err := tx.Exec(`UPDATE user_landing_exits SET present=0, updated_at=? WHERE user_id=? AND host=? AND port=?`,
