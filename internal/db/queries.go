@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -334,6 +335,12 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
 const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
+
+// nodeColsQualified is nodeCols with every column prefixed by the "n." alias.
+// user_nodes has its own roles column (the grant-level override), so a query
+// that joins nodes against user_nodes must qualify nodes.roles or the two
+// same-named columns make the SELECT ambiguous.
+var nodeColsQualified = "n." + strings.Join(strings.Split(nodeCols, ","), ",n.")
 
 func GetNode(d *sql.DB, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
