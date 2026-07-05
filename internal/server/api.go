@@ -1625,7 +1625,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if body.NodeID > 0 {
 		vias = viasOf(body.ViaNodeIDs)
-		derived, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
+		derived, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode, nil)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
@@ -1807,12 +1807,31 @@ func (s *Server) exitHopForbidsDirect(hops []db.HopInput) (string, bool) {
 	return n.Name, n.NoDirectExit
 }
 
-func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string) ([]db.HopInput, bool, error) {
+// grantRoleOverrides returns a user's per-grant role overrides keyed by node
+// id, including only grants that actually override (roles != 0). hopsForChain
+// consults it so a node's usability as entry/via is judged by the user's
+// effective role, not the node's global mask. nil/absent entries fall back to
+// the node mask via db.EffectiveNodeRoles.
+func (s *Server) grantRoleOverrides(userID int64) map[int64]int64 {
+	_, grants, err := db.ListNodesForUser(s.DB, userID)
+	if err != nil {
+		return nil
+	}
+	out := map[int64]int64{}
+	for _, g := range grants {
+		if g.Roles != 0 {
+			out[g.NodeID] = g.Roles
+		}
+	}
+	return out
+}
+
+func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string, effRoles map[int64]int64) ([]db.HopInput, bool, error) {
 	entryNode, err := db.GetNode(s.DB, entryID)
 	if err != nil {
 		return nil, false, fmt.Errorf("节点不存在")
 	}
-	if entryNode.Roles&db.NodeRoleEntry == 0 {
+	if db.EffectiveNodeRoles(entryNode.Roles, effRoles[entryID])&db.NodeRoleEntry == 0 {
 		return nil, false, fmt.Errorf("节点 %s 不是入口", entryNode.Name)
 	}
 	hops, entryComposite, err := s.expandSegment(entryID)
@@ -1826,7 +1845,7 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 		if err != nil {
 			return nil, true, fmt.Errorf("中间层节点不存在")
 		}
-		if viaNode.Roles&db.NodeRoleVia == 0 {
+		if db.EffectiveNodeRoles(viaNode.Roles, effRoles[viaID])&db.NodeRoleVia == 0 {
 			return nil, true, fmt.Errorf("节点 %s 不是中间层", viaNode.Name)
 		}
 		edge, err := db.GetNodeBinding(s.DB, prev, viaID)
@@ -1946,7 +1965,11 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		if body.ViaNodeIDs != nil {
 			vias = *body.ViaNodeIDs
 		}
-		derived, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
+		var ownerOverrides map[int64]int64
+		if rl.OwnerID.Valid {
+			ownerOverrides = s.grantRoleOverrides(rl.OwnerID.Int64)
+		}
+		derived, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode, ownerOverrides)
 		if derr != nil {
 			jsonErr(w, http.StatusBadRequest, derr.Error())
 			return
@@ -2813,7 +2836,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hops, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode)
+	hops, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode, s.grantRoleOverrides(u.ID))
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
@@ -2974,7 +2997,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	hops, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode)
+	hops, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode, s.grantRoleOverrides(u.ID))
 	if derr != nil {
 		jsonErr(w, http.StatusBadRequest, derr.Error())
 		return
