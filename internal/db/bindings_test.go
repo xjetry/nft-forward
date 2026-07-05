@@ -54,3 +54,46 @@ func TestNodeBindingsCRUD(t *testing.T) {
 		t.Fatalf("cascade delete failed, edges left: %+v", all)
 	}
 }
+
+func TestUpstreamBindingsReplace(t *testing.T) {
+	d := openTestDB(t)
+	up, _ := CreateNode(d, "entry", "", "")
+	a, _ := CreateNode(d, "mid-a", "", "")
+	b, _ := CreateNode(d, "mid-b", "", "")
+
+	// Seed an unrelated edge that lists `a` behind a different upstream; the
+	// upstream-side replace on `up` must never touch it.
+	if err := ReplaceBindingsForDownstream(d, a.ID, []NodeBinding{
+		{UpstreamNodeID: b.ID, DownstreamNodeID: a.ID, Mode: "kernel"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace `up`'s downstream set with edges to a and b.
+	if err := ReplaceBindingsForUpstream(d, up.ID, []NodeBinding{
+		{UpstreamNodeID: up.ID, DownstreamNodeID: a.ID, Mode: "userspace"},
+		{UpstreamNodeID: up.ID, DownstreamNodeID: b.ID, Mode: "kernel"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ls, _ := ListBindingsForUpstream(d, up.ID)
+	if len(ls) != 2 {
+		t.Fatalf("want 2 downstream edges from up, got %d", len(ls))
+	}
+
+	// The unrelated edge (b -> a) survives the upstream-side replace on `up`.
+	if _, err := GetNodeBinding(d, b.ID, a.ID); err != nil {
+		t.Fatalf("unrelated edge b->a must survive, got %v", err)
+	}
+
+	// Replacing `up` down to a single edge drops the other.
+	if err := ReplaceBindingsForUpstream(d, up.ID, []NodeBinding{
+		{UpstreamNodeID: up.ID, DownstreamNodeID: b.ID, Mode: "kernel"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ls, _ = ListBindingsForUpstream(d, up.ID)
+	if len(ls) != 1 || ls[0].DownstreamNodeID != b.ID {
+		t.Fatalf("want only up->b left, got %+v", ls)
+	}
+}

@@ -54,3 +54,30 @@ func ReplaceBindingsForDownstream(d *sql.DB, downstreamID int64, bindings []Node
 	}
 	return tx.Commit()
 }
+
+func ListBindingsForUpstream(d *sql.DB, upstreamID int64) ([]*NodeBinding, error) {
+	return queryAll(d, `SELECT `+bindingCols+` FROM node_bindings WHERE upstream_node_id=? ORDER BY downstream_node_id`, scanNodeBinding, upstreamID)
+}
+
+// ReplaceBindingsForUpstream swaps the upstream node's full downstream edge set
+// in one transaction. It touches only edges where this node is the upstream, so
+// it never disturbs a downstream node's other upstream edges — the mirror image
+// of ReplaceBindingsForDownstream.
+func ReplaceBindingsForUpstream(d *sql.DB, upstreamID int64, bindings []NodeBinding) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM node_bindings WHERE upstream_node_id=?`, upstreamID); err != nil {
+		return err
+	}
+	for _, b := range bindings {
+		mode := NormalizeForwardMode(b.Mode)
+		if _, err := tx.Exec(`INSERT INTO node_bindings(upstream_node_id, downstream_node_id, mode) VALUES (?,?,?)`,
+			upstreamID, b.DownstreamNodeID, mode); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
