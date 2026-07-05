@@ -25,8 +25,11 @@
 - 绑定边 `node_bindings{upstream_node_id, downstream_node_id, mode}` 不变。mode 是
   衔接段（上游段尾跳 → 下游段首跳）的转发模式，从上游侧或下游侧看都是同一条边的
   同一个值。
-- 迁移：新增一条迁移把存量所有节点设为 `roles=3`（同时具备入口与中间层）。
-- 新建节点默认由 `1` 改为 `3`，保持「所有节点默认两用途」的一致性；同步更新
+- 迁移：新增一条迁移把存量节点设为 `roles=3`（同时具备入口与中间层），但排除
+  `node_type='self'` 的面板内置节点——self 不作链路中间层，赋予 via 只会让它误入
+  绑定候选。
+- 新建节点默认由 `1` 改为 `3`（`CreateNode` 只建真实 agent 节点），保持「所有节点
+  默认两用途」的一致性；`UpsertSelfNode` 的 self 节点不改。同步更新
   `internal/db/queries_test.go` 中默认角色为 entry 的断言。
 
 ## 后端 API
