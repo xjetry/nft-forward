@@ -467,6 +467,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/nodes/{id}/roles", s.apiUpdateNodeRolesMask)
 			r.Get("/nodes/{id}/bindings", s.apiListNodeBindings)
 			r.Post("/nodes/{id}/bindings", s.apiUpdateNodeBindings)
+			r.Get("/nodes/{id}/downstream-bindings", s.apiListNodeDownstreamBindings)
+			r.Post("/nodes/{id}/downstream-bindings", s.apiUpdateNodeDownstreamBindings)
 			r.Get("/node-bindings", s.apiListAllNodeBindings)
 
 			r.Get("/settings", s.apiGetSettings)

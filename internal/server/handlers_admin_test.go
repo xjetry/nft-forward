@@ -256,3 +256,76 @@ func TestNodeBindingsModeDefaultValidationAndDuplicates(t *testing.T) {
 		t.Fatalf("duplicate upstream: want 400, got %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestDownstreamBindingsFromUpstream(t *testing.T) {
+	d := openDB(t)
+	up, _ := db.CreateNode(d, "up", "", "")
+	m1, _ := db.CreateNode(d, "m1", "", "")
+	m2, _ := db.CreateNode(d, "m2", "", "")
+	// New nodes default to entry|via, so m1/m2 already qualify as downstreams.
+	cookie := loginAsAdmin(t, d)
+	s, _ := New(d)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		s.Router().ServeHTTP(w, req)
+		return w
+	}
+
+	// Write two downstream edges from the upstream side.
+	body := fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d,"mode":"kernel"},{"downstream_node_id":%d}]}`, m1.ID, m2.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != 200 {
+		t.Fatalf("set downstream: %d %s", w.Code, w.Body.String())
+	}
+	// Omitted mode persists as userspace.
+	bs, _ := db.ListBindingsForUpstream(d, up.ID)
+	var m2mode string
+	for _, b := range bs {
+		if b.DownstreamNodeID == m2.ID {
+			m2mode = b.Mode
+		}
+	}
+	if len(bs) != 2 || m2mode != "userspace" {
+		t.Fatalf("want 2 edges with m2 userspace, got %+v", bs)
+	}
+	// GET reflects them.
+	if w := do("GET", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), ""); w.Code != 200 ||
+		!bytes.Contains(w.Body.Bytes(), []byte(`"mode":"kernel"`)) {
+		t.Fatalf("list downstream: %d %s", w.Code, w.Body.String())
+	}
+
+	// A downstream lacking the via role is rejected.
+	_ = db.UpdateNodeRoles(d, m1.ID, db.NodeRoleEntry)
+	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d,"mode":"kernel"}]}`, m1.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("downstream without via: want 400, got %d", w.Code)
+	}
+
+	// Self-binding is rejected.
+	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d}]}`, up.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("self-bind: want 400, got %d", w.Code)
+	}
+
+	// Duplicate downstream is rejected.
+	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d},{"downstream_node_id":%d}]}`, m2.ID, m2.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate downstream: want 400, got %d", w.Code)
+	}
+
+	// Invalid mode is rejected.
+	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d,"mode":"bogus"}]}`, m2.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad mode: want 400, got %d", w.Code)
+	}
+
+	// An upstream lacking both roles cannot host downstreams. A roleless node
+	// is impossible via the /roles API, so force it in DB to cover the branch.
+	_ = db.UpdateNodeRoles(d, up.ID, 0)
+	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d}]}`, m2.ID)
+	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("roleless upstream: want 400, got %d", w.Code)
+	}
+}

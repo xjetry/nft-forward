@@ -803,6 +803,93 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+// apiListNodeDownstreamBindings lists the edges where this node is the upstream
+// (the nodes cascading in behind it). Admin only.
+func (s *Server) apiListNodeDownstreamBindings(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	bs, err := db.ListBindingsForUpstream(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{"bindings": bs})
+}
+
+// apiUpdateNodeDownstreamBindings replaces the whole set of edges where this
+// node is the upstream. The node must be able to act as an upstream (entry or
+// via), and every named downstream must carry the via role so it can sit behind
+// this one as a middle layer. Admin only.
+func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	node, err := db.GetNode(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.Roles&(db.NodeRoleEntry|db.NodeRoleVia) == 0 {
+		jsonErr(w, http.StatusBadRequest, "node cannot host downstreams; enable the entry or middle layer role first")
+		return
+	}
+	var body struct {
+		Bindings []struct {
+			DownstreamNodeID int64  `json:"downstream_node_id"`
+			Mode             string `json:"mode"`
+		} `json:"bindings"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request format")
+		return
+	}
+	bs := make([]db.NodeBinding, len(body.Bindings))
+	seen := make(map[int64]bool, len(body.Bindings))
+	for i, b := range body.Bindings {
+		if b.DownstreamNodeID == id {
+			jsonErr(w, http.StatusBadRequest, "cannot bind to self")
+			return
+		}
+		if seen[b.DownstreamNodeID] {
+			jsonErr(w, http.StatusBadRequest, "下游节点重复")
+			return
+		}
+		seen[b.DownstreamNodeID] = true
+		down, err := db.GetNode(s.DB, b.DownstreamNodeID)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "downstream node not found")
+			return
+		}
+		if down.Roles&db.NodeRoleVia == 0 {
+			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中间层角色")
+			return
+		}
+		// Match the downstream-side default: an omitted mode is userspace, not
+		// NormalizeForwardMode's kernel fallback.
+		mode := strings.ToLower(strings.TrimSpace(b.Mode))
+		if mode == "" {
+			mode = "userspace"
+		}
+		if mode != "kernel" && mode != "userspace" {
+			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+			return
+		}
+		bs[i] = db.NodeBinding{UpstreamNodeID: id, DownstreamNodeID: b.DownstreamNodeID, Mode: mode}
+	}
+	if err := db.ReplaceBindingsForUpstream(s.DB, id, bs); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "node.downstream_bindings", strconv.FormatInt(id, 10), fmt.Sprintf("%d edges", len(bs)))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiRenameNode(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
