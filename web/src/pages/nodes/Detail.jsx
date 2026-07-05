@@ -672,208 +672,228 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
 // a middle layer. Both bits can be set at once; at least one must stay set or
 // the node becomes unreachable from any rule.
 //
-// Bindings are edges of the middle-layer graph: this node (downstream) lists
-// which nodes it may sit behind. Checking 中间层 expands the bindings editor
-// inline so roles and bindings can be configured together with one save; the
-// save posts roles first because the bindings endpoint rejects nodes whose
-// stored roles lack the via bit. Unchecking only hides the editor — edited
-// rows stay in memory and stored bindings stay in the DB — so re-checking
-// restores what was there.
+// Each role owns one column and one edge set. The entry column owns downstream
+// edges — nodes that cascade in behind this one, so this node is their upstream
+// — editable from here via the upstream-side API. The via column owns upstream
+// edges — nodes this one sits behind, so this node is their downstream. Each
+// editor loads lazily when its role is checked; a failed load keeps rows null
+// (nothing to save) with a retry, so one transient blip can never overwrite a
+// stored edge set with an empty one on the next save.
+function EdgeEditor({ title, hint, rows, err, onRetry, candidates, idKey, nodeById,
+                      onPick, onMode, onRemove, onAddAll, placeholder }) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2.5 mb-1.5">
+        <h3 className="m-0 text-[13.5px] font-bold">{title}</h3>
+        <span className="text-[12.5px] text-ink-mut">{rows ? `${rows.length} 条` : err ? '' : '加载中…'}</span>
+      </div>
+      <p className="text-[12.5px] text-ink-mut mb-2.5">{hint}</p>
+      {err && (
+        <div className="text-[12.5px] text-red-600 flex items-center gap-2.5">
+          已有绑定加载失败，为避免误覆盖，修好前不会保存绑定。
+          <button type="button" onClick={onRetry} className="btn-secondary text-xs">重试</button>
+        </div>
+      )}
+      {rows && (
+        <>
+          <div className="flex items-center gap-2 mb-2">
+            <Select multiple searchable className="flex-1" placeholder={placeholder}
+              value={rows.map(r => String(r[idKey]))} onChange={onPick}
+              options={candidates.map(n => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> }))} />
+            <button type="button" onClick={onAddAll} className="btn-secondary flex-none text-xs">全选</button>
+          </div>
+          {rows.length > 0 && (
+            <div className="space-y-2">
+              {rows.map((r, i) => {
+                const n = nodeById[Number(r[idKey])]
+                return (
+                  <div key={r[idKey]} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
+                    <NodeTypeIcon type={n?.node_type} />
+                    <span className="flex-1 min-w-0 truncate text-[13.5px]">{n?.name || `#${r[idKey]}`}</span>
+                    <Select value={r.mode} onChange={v => onMode(i, v)} style={{ width: 120 }}
+                      options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                    <button type="button" onClick={() => onRemove(i)} className="btn-danger-sm text-xs px-1.5">×</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function RolesCard({ node, onDone }) {
   const [roles, setRoles] = useState(node.roles ?? 1)
   const [saving, setSaving] = useState(false)
-  // rows === null means bindings not fetched yet; they load lazily on first
-  // expansion so entry-only nodes never pay the extra requests. savedRows
-  // mirrors the server state for dirty tracking.
-  const [rows, setRows] = useState(null) // [{upstream_node_id, mode}]
-  const [savedRows, setSavedRows] = useState(null)
-  const [loadErr, setLoadErr] = useState(false)
   const [allNodes, setAllNodes] = useState([])
-  // Edges where this node is the upstream: which nodes may cascade in behind
-  // it. Read-only here — each edge is owned and edited by its downstream
-  // node's detail page — so a load failure can safely degrade to "none".
-  const [downstreams, setDownstreams] = useState([])
+  // Upstream edges: nodes this one sits behind (this node = downstream).
+  const [upRows, setUpRows] = useState(null)          // [{upstream_node_id, mode}]
+  const [savedUpRows, setSavedUpRows] = useState(null)
+  const [upErr, setUpErr] = useState(false)
+  // Downstream edges: nodes that cascade in behind this one (this node = upstream).
+  const [downRows, setDownRows] = useState(null)      // [{downstream_node_id, mode}]
+  const [savedDownRows, setSavedDownRows] = useState(null)
+  const [downErr, setDownErr] = useState(false)
   const toast = useToast()
-  // NodeDetail stays mounted when only the :id param changes (e.g. following a
-  // composite link in the rules table), so mount-time seeding alone would keep
-  // the previous node's checkboxes and save its bitmask onto the new node.
+
+  const entryChecked = (roles & 1) !== 0
+  const viaChecked = (roles & 2) !== 0
+
+  // NodeDetail stays mounted when only the :id param changes, so re-seed roles
+  // and drop both edge sets whenever the node identity changes.
   useEffect(() => setRoles(node.roles ?? 1), [node.id, node.roles])
-  useEffect(() => { setRows(null); setSavedRows(null); setLoadErr(false) }, [node.id])
   useEffect(() => {
-    let stale = false
-    setDownstreams([])
-    api.get('/node-bindings')
-      .then(d => { if (!stale) setDownstreams((d.bindings || []).filter(b => b.upstream_node_id === node.id)) })
-      .catch(() => { /* 只读展示，失败按无下游处理 */ })
-    return () => { stale = true }
+    setUpRows(null); setSavedUpRows(null); setUpErr(false)
+    setDownRows(null); setSavedDownRows(null); setDownErr(false)
   }, [node.id])
 
-  const viaChecked = (roles & 2) !== 0
-  // A failed load must not seed an empty editor: saving replaces the whole
-  // binding set server-side, so treating an error as "0 条" would let one
-  // transient blip wipe every stored binding on the next save. Keep rows null
-  // (nothing to save) and offer a retry instead. The stale flag drops responses
-  // from a superseded run — un/re-checking 中间层 quickly can leave two fetches
-  // in flight, and the older one must not clobber rows the user already edited.
+  // The candidate roster and both editors' name lookups share one fetch of the
+  // full node list, made once either role is checked.
+  const needNodes = entryChecked || viaChecked
   useEffect(() => {
-    if (!viaChecked || rows !== null || loadErr) return
+    if (!needNodes) return
+    let stale = false
+    api.get('/nodes').then(d => { if (!stale) setAllNodes(d.nodes || []) }).catch(() => { if (!stale) setAllNodes([]) })
+    return () => { stale = true }
+  }, [needNodes, node.id])
+
+  // Lazy-load upstream edges when 中间层 is checked. stale drops superseded
+  // responses; an error keeps rows null so a save never overwrites stored edges.
+  useEffect(() => {
+    if (!viaChecked || upRows !== null || upErr) return
     let stale = false
     api.get(`/nodes/${node.id}/bindings`)
       .then(d => {
         if (stale) return
         const rs = (d.bindings || []).map(b => ({ upstream_node_id: b.upstream_node_id, mode: b.mode }))
-        setRows(rs); setSavedRows(rs)
+        setUpRows(rs); setSavedUpRows(rs)
       })
-      .catch(() => { if (!stale) setLoadErr(true) })
+      .catch(() => { if (!stale) setUpErr(true) })
     return () => { stale = true }
-  }, [viaChecked, rows, node.id, loadErr])
-  // The candidate list is the full node roster fetched here rather than reused
-  // from the composite hop picker, since that picker is scoped to single nodes
-  // only and would silently drop composite upstreams from the choices. The
-  // read-only downstream list needs the same roster for names, so it shares
-  // this fetch; entry-only nodes with no downstream still skip it entirely.
-  const needNodeNames = viaChecked || downstreams.length > 0
-  useEffect(() => {
-    if (!needNodeNames) return
-    let stale = false
-    api.get('/nodes').then(d => { if (!stale) setAllNodes(d.nodes || []) }).catch(() => { if (!stale) setAllNodes([]) })
-    return () => { stale = true }
-  }, [needNodeNames, node.id])
+  }, [viaChecked, upRows, node.id, upErr])
 
-  const toggle = (bit) => setRoles(r => r ^ bit)
-  const candidates = allNodes.filter(n => n.id !== node.id)
+  // Lazy-load downstream edges when 入口 is checked, mirroring the upstream path.
+  useEffect(() => {
+    if (!entryChecked || downRows !== null || downErr) return
+    let stale = false
+    api.get(`/nodes/${node.id}/downstream-bindings`)
+      .then(d => {
+        if (stale) return
+        const rs = (d.bindings || []).map(b => ({ downstream_node_id: b.downstream_node_id, mode: b.mode }))
+        setDownRows(rs); setSavedDownRows(rs)
+      })
+      .catch(() => { if (!stale) setDownErr(true) })
+    return () => { stale = true }
+  }, [entryChecked, downRows, node.id, downErr])
+
   const nodeById = Object.fromEntries(allNodes.map(n => [n.id, n]))
-  // The multi-select owns which upstreams are bound; each picked upstream then
-  // gets its own mode row. Reconciling instead of rebuilding keeps the mode a
-  // row already carries when the selection set changes around it.
-  const pickUpstreams = (next) => setRows(rs => {
+  const toggle = (bit) => setRoles(r => r ^ bit)
+
+  // Upstream candidates: any other node (an upstream may be entry or via).
+  const upCandidates = allNodes.filter(n => n.id !== node.id)
+  // Downstream candidates: other nodes carrying the via role, since a downstream
+  // must be able to sit behind this one as a middle layer.
+  const downCandidates = allNodes.filter(n => n.id !== node.id && (n.roles & 2) !== 0)
+
+  const pickUp = (next) => setUpRows(rs => {
     const keep = rs.filter(r => next.includes(String(r.upstream_node_id)))
     const have = new Set(keep.map(r => String(r.upstream_node_id)))
     const added = next.filter(v => !have.has(v)).map(v => ({ upstream_node_id: Number(v), mode: 'userspace' }))
     return [...keep, ...added]
   })
-  const setRowMode = (i, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, mode: v } : r))
-  const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i))
-  const addAll = () => setRows(rs => candidates.map(n =>
+  const setUpMode = (i, v) => setUpRows(rs => rs.map((r, j) => j === i ? { ...r, mode: v } : r))
+  const removeUp = (i) => setUpRows(rs => rs.filter((_, j) => j !== i))
+  const addAllUp = () => setUpRows(rs => upCandidates.map(n =>
     rs.find(r => Number(r.upstream_node_id) === n.id) || { upstream_node_id: n.id, mode: 'userspace' }))
 
+  const pickDown = (next) => setDownRows(rs => {
+    const keep = rs.filter(r => next.includes(String(r.downstream_node_id)))
+    const have = new Set(keep.map(r => String(r.downstream_node_id)))
+    const added = next.filter(v => !have.has(v)).map(v => ({ downstream_node_id: Number(v), mode: 'userspace' }))
+    return [...keep, ...added]
+  })
+  const setDownMode = (i, v) => setDownRows(rs => rs.map((r, j) => j === i ? { ...r, mode: v } : r))
+  const removeDown = (i) => setDownRows(rs => rs.filter((_, j) => j !== i))
+  const addAllDown = () => setDownRows(rs => downCandidates.map(n =>
+    rs.find(r => Number(r.downstream_node_id) === n.id) || { downstream_node_id: n.id, mode: 'userspace' }))
+
   const rolesDirty = roles !== (node.roles ?? 1)
-  // Hidden edits are not dirty: with 中间层 unchecked they wouldn't be saved,
-  // so they shouldn't light up the save button either.
-  const bindingsDirty = viaChecked && rows !== null && (
-    rows.length !== savedRows.length ||
+  const edgesDirty = (rows, saved) => rows !== null && saved !== null && (
+    rows.length !== saved.length ||
     rows.some((r, i) => {
-      const s = savedRows[i]
-      return !s || Number(r.upstream_node_id) !== Number(s.upstream_node_id) || r.mode !== s.mode
+      const s = saved[i]
+      return !s || JSON.stringify(r) !== JSON.stringify(s)
     })
   )
-  const dirty = rolesDirty || bindingsDirty
+  // Hidden edits are not dirty: an unchecked role's editor won't be saved.
+  const upDirty = viaChecked && edgesDirty(upRows, savedUpRows)
+  const downDirty = entryChecked && edgesDirty(downRows, savedDownRows)
+  const dirty = rolesDirty || upDirty || downDirty
 
-  // onDone runs on failure too: the two POSTs are not a transaction, so roles
-  // may land while bindings error out. Refetching keeps node.roles — the dirty
-  // baseline — in sync with what was actually persisted; otherwise the save
-  // button can go dead while UI and server disagree. onDone must be the silent
-  // refresh: a full reload would remount this card and wipe the edited rows,
-  // which are exactly what the user needs to keep for a retry.
+  // The three POSTs are not one transaction; onDone (a silent refresh) runs on
+  // failure too so the dirty baseline realigns with what actually persisted,
+  // without remounting the card and dropping the still-edited rows.
   const save = async () => {
-    if (!roles) { toast('至少保留一个角色', 'error'); return }
+    if (!roles) { toast('至少保留一个用途', 'error'); return }
     setSaving(true)
     try {
       if (rolesDirty) await api.post(`/nodes/${node.id}/roles`, { roles })
-      if (bindingsDirty) {
-        const bs = rows.map(r => ({ upstream_node_id: Number(r.upstream_node_id), mode: r.mode }))
+      if (upDirty) {
+        const bs = upRows.map(r => ({ upstream_node_id: Number(r.upstream_node_id), mode: r.mode }))
         await api.post(`/nodes/${node.id}/bindings`, { bindings: bs })
-        setSavedRows(bs)
+        setSavedUpRows(bs)
+      }
+      if (downDirty) {
+        const bs = downRows.map(r => ({ downstream_node_id: Number(r.downstream_node_id), mode: r.mode }))
+        await api.post(`/nodes/${node.id}/downstream-bindings`, { bindings: bs })
+        setSavedDownRows(bs)
       }
       toast('已保存')
     } catch (err) { toast(err.message, 'error') } finally { setSaving(false); onDone() }
   }
 
+  const entryCls = 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'
+  const viaCls = 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'
+  const roleBtn = (bit, label, cls) => (
+    <button type="button" onClick={() => toggle(bit)}
+      className={`px-3 py-1 text-[12.5px] font-semibold rounded-md border transition-colors ${
+        (roles & bit) !== 0 ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
+      }`}>{label}</button>
+  )
+
   return (
     <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
-      <h2 className="m-0 text-[15px] font-bold mb-1.5">节点角色</h2>
-      <p className="text-[12.5px] text-ink-mut mb-2.5">
-        入口：可被规则选为入口。中间层：可绑定到上游节点之后，供规则级联选用。可同时勾选。
-      </p>
-      <div className="flex items-center gap-1.5">
-        {[[1, '入口', 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'],
-          [2, '中间层', 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700']].map(([bit, label, cls]) => (
-          <button key={bit} type="button" onClick={() => toggle(bit)}
-            className={`px-3 py-1 text-[12.5px] font-semibold rounded-md border transition-colors ${
-              (roles & bit) !== 0 ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
-            }`}>{label}</button>
-        ))}
+      <div className="flex items-center gap-2 mb-1.5">
+        <h2 className="m-0 text-[15px] font-bold">节点用途</h2>
         <button onClick={save} disabled={saving || !dirty} className="btn-primary ml-auto">保存</button>
       </div>
-      {viaChecked && (
-        <div className="mt-4 pt-3.5 border-t border-line-soft">
-          <div className="flex items-baseline gap-2.5 mb-1.5">
-            <h3 className="m-0 text-[13.5px] font-bold">上游绑定</h3>
-            <span className="text-[12.5px] text-ink-mut">{rows ? `${rows.length} 条` : loadErr ? '' : '加载中…'}</span>
-          </div>
-          <p className="text-[12.5px] text-ink-mut mb-2.5">
-            绑定后，选中这些上游（入口或中间层）的规则可以级联接入本节点。模式作用于衔接段
-            （上游段尾跳 → 本层首跳）；修改对此后新建的规则生效。与角色一起点「保存」生效。
-          </p>
-          {loadErr && (
-            <div className="text-[12.5px] text-red-600 flex items-center gap-2.5">
-              已有绑定加载失败，为避免误覆盖，修好前不会保存绑定。
-              <button type="button" onClick={() => setLoadErr(false)} className="btn-secondary text-xs">重试</button>
-            </div>
-          )}
-          {rows && (
-            <>
-              <div className="flex items-center gap-2 max-w-xl mb-2">
-                <Select multiple searchable className="flex-1" placeholder="选择上游节点…"
-                  value={rows.map(r => String(r.upstream_node_id))} onChange={pickUpstreams}
-                  options={candidates.map(n => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> }))} />
-                <button type="button" onClick={addAll} className="btn-secondary flex-none text-xs">全选</button>
-              </div>
-              {rows.length > 0 && (
-                <div className="space-y-2">
-                  {rows.map((r, i) => {
-                    const n = nodeById[Number(r.upstream_node_id)]
-                    return (
-                      <div key={r.upstream_node_id} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
-                        <NodeTypeIcon type={n?.node_type} />
-                        <span className="flex-1 min-w-0 truncate text-[13.5px]">{n?.name || `#${r.upstream_node_id}`}</span>
-                        <Select value={r.mode} onChange={v => setRowMode(i, v)} style={{ width: 120 }}
-                          options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-                        <button type="button" onClick={() => removeRow(i)} className="btn-danger-sm text-xs px-1.5">×</button>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </>
+      <p className="text-[12.5px] text-ink-mut mb-3">
+        入口：可被规则选为入口，并绑定下游。中间层：可绑定到上游之后供规则级联。至少保留一个。
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+        <div className="md:pr-6 md:border-r border-line-soft">
+          <div className="flex items-center gap-1.5 mb-3">{roleBtn(1, '入口', entryCls)}</div>
+          {entryChecked && (
+            <EdgeEditor title="已绑定的下游" placeholder="选择下游节点…"
+              hint="选中的下游（须为中间层）可在选中本节点的规则里级联接入本节点之后。模式作用于衔接段；修改对此后新建的规则生效。"
+              rows={downRows} err={downErr} onRetry={() => setDownErr(false)}
+              candidates={downCandidates} idKey="downstream_node_id" nodeById={nodeById}
+              onPick={pickDown} onMode={setDownMode} onRemove={removeDown} onAddAll={addAllDown} />
           )}
         </div>
-      )}
-      {downstreams.length > 0 && (
-        <div className="mt-4 pt-3.5 border-t border-line-soft">
-          <div className="flex items-baseline gap-2.5 mb-1.5">
-            <h3 className="m-0 text-[13.5px] font-bold">已绑定的下游</h3>
-            <span className="text-[12.5px] text-ink-mut">{downstreams.length} 条</span>
-          </div>
-          <p className="text-[12.5px] text-ink-mut mb-2.5">
-            这些节点把本节点设为上游，选中本节点的规则可以级联接入它们。绑定关系在对应下游节点的详情页编辑。
-          </p>
-          <div className="space-y-2 max-w-xl">
-            {downstreams.map(b => {
-              const n = nodeById[Number(b.downstream_node_id)]
-              return (
-                <div key={b.downstream_node_id} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
-                  <NodeTypeIcon type={n?.node_type} />
-                  <Link to={`/nodes/${b.downstream_node_id}`} className="flex-1 min-w-0 truncate text-[13.5px] text-blue-600 no-underline hover:underline">
-                    {n?.name || `#${b.downstream_node_id}`}
-                  </Link>
-                  <ModeBadge mode={b.mode} />
-                </div>
-              )
-            })}
-          </div>
+        <div>
+          <div className="flex items-center gap-1.5 mb-3">{roleBtn(2, '中间层', viaCls)}</div>
+          {viaChecked && (
+            <EdgeEditor title="已绑定的上游" placeholder="选择上游节点…"
+              hint="绑定后，选中这些上游（入口或中间层）的规则可以级联接入本节点。模式作用于衔接段；修改对此后新建的规则生效。"
+              rows={upRows} err={upErr} onRetry={() => setUpErr(false)}
+              candidates={upCandidates} idKey="upstream_node_id" nodeById={nodeById}
+              onPick={pickUp} onMode={setUpMode} onRemove={removeUp} onAddAll={addAllUp} />
+          )}
         </div>
-      )}
+      </div>
     </section>
   )
 }
