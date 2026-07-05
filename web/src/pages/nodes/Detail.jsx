@@ -646,6 +646,10 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
                 if (nd) setField(i, 'node_name', nd.name)
               }}
               options={singleNodes.filter(n => n.id === Number(r.node_id) || !rows.some((rr, j) => j !== i && Number(rr.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
+            {r.node_id && (
+              <Link to={`/nodes/${r.node_id}`} title="打开该子节点详情"
+                className="shrink-0 text-ink-mut hover:text-blue-600 text-sm leading-none px-0.5">↗</Link>
+            )}
             {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中间层时生效，
                 被用作规则出口时由规则的出口模式覆盖 */}
             <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
