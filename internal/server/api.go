@@ -3332,6 +3332,41 @@ func (s *Server) apiSetPerNodeRateLimit(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]any{"ok": true})
 }
 
+func (s *Server) apiSetPerNodeRoles(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	userID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeID")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad node id")
+		return
+	}
+	var body struct {
+		Roles int64 `json:"roles"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	// 0 = inherit the node mask; any other value must be a legal entry/via
+	// combination. This only changes what the grantee may do with the node, so
+	// there is no need to constrain it to a subset of the node's own mask.
+	if body.Roles&^(db.NodeRoleEntry|db.NodeRoleVia) != 0 {
+		jsonErr(w, http.StatusBadRequest, "roles invalid")
+		return
+	}
+	if err := db.SetGrantRoles(s.DB, userID, nodeID, body.Roles); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "user.set_node_roles", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d roles=%d", nodeID, body.Roles))
+	jsonOK(w, map[string]any{"ok": true})
+}
+
 func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")

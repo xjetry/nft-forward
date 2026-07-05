@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"nft-forward/internal/db"
@@ -99,5 +101,40 @@ func TestMyNodesReportEffectiveRoles(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("granted node %d missing from my nodes", m.ID)
+	}
+}
+
+// The per-node roles endpoint writes the override; an illegal bit is rejected.
+func TestSetPerNodeRolesEndpoint(t *testing.T) {
+	d := openDB(t)
+	m, _ := db.CreateNode(d, "middle", "", "")
+	uid, _ := loginAsUser(t, d, 23)
+	_ = db.GrantNode(d, uid, m.ID, 5, 0)
+	adminCookie := loginAsAdmin(t, d)
+
+	s, _ := New(d)
+
+	setRoles := func(val int64) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"roles": val})
+		req := httptest.NewRequest("POST",
+			"/api/users/"+strconv.FormatInt(uid, 10)+"/nodes/"+strconv.FormatInt(m.ID, 10)+"/roles",
+			bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(adminCookie)
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := setRoles(db.NodeRoleEntry); rec.Code != http.StatusOK {
+		t.Fatalf("set entry override: %d %s", rec.Code, rec.Body.String())
+	}
+	g, _ := db.GetNodeGrant(d, uid, m.ID)
+	if g.Roles != db.NodeRoleEntry {
+		t.Fatalf("stored roles = %d, want %d", g.Roles, db.NodeRoleEntry)
+	}
+
+	if rec := setRoles(4); rec.Code == http.StatusOK {
+		t.Fatalf("illegal role bit must be rejected; got 200")
 	}
 }
