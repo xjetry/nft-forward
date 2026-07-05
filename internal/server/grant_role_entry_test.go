@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"nft-forward/internal/db"
@@ -51,5 +53,51 @@ func TestViaNodeWithoutOverrideRejectedAsEntry(t *testing.T) {
 	rec := createMyRuleVia(t, s, cookie, m.ID, nil, "should-fail")
 	if rec.Code == http.StatusOK {
 		t.Fatalf("via-only node without override must not be a valid entry; got 200")
+	}
+}
+
+// The my rule-form node list reports the grantee's effective role: a via-only
+// node with an entry override surfaces as entry-capable (bit 0 set).
+func TestMyNodesReportEffectiveRoles(t *testing.T) {
+	d := openDB(t)
+	m, _ := db.CreateNode(d, "middle", "", "")
+	_ = db.UpdateNodeRelayHost(d, m.ID, "2.2.2.2")
+	if err := db.UpdateNodeRoles(d, m.ID, db.NodeRoleVia); err != nil {
+		t.Fatal(err)
+	}
+	uid, cookie := loginAsUser(t, d, 22)
+	_ = db.GrantNode(d, uid, m.ID, 5, 0)
+	if err := db.SetGrantRoles(d, uid, m.ID, db.NodeRoleEntry); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := New(d)
+	req := httptest.NewRequest("GET", "/api/my/rules", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("my rules: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Nodes []struct {
+			ID    int64 `json:"id"`
+			Roles int64 `json:"roles"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, n := range resp.Nodes {
+		if n.ID == m.ID {
+			found = true
+			if n.Roles&db.NodeRoleEntry == 0 {
+				t.Fatalf("middle node effective roles = %d, want entry bit set", n.Roles)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("granted node %d missing from my nodes", m.ID)
 	}
 }

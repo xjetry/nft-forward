@@ -2646,12 +2646,26 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// applyEffectiveRoles overwrites each granted node's Roles with the grantee's
+// effective role (grant override if set, else the node's own mask) so the
+// my-side rule form filters entry/via candidates by what this user may actually
+// do with the node. nodes and grants are index-aligned as ListNodesForUser
+// returns them.
+func applyEffectiveRoles(nodes []*db.Node, grants []*db.UserNode) {
+	for i, n := range nodes {
+		if i < len(grants) && grants[i] != nil {
+			n.Roles = db.EffectiveNodeRoles(n.Roles, grants[i].Roles)
+		}
+	}
+}
+
 func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
 	db.FillRuleTraffic(s.DB, rules)
 	idx := s.landingIndexFromDB(u.ID)
-	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
+	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	applyEffectiveRoles(grantedNodes, grants)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
@@ -2720,7 +2734,8 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
-	grantedNodes, _, _ := db.ListNodesForUser(s.DB, u.ID)
+	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	applyEffectiveRoles(grantedNodes, grants)
 	// A user is granted the composite itself, not its hop children, so the
 	// relay-stack resolver needs the full node list to see the child hosts;
 	// copy the derived fields back onto the (narrower) granted set.
