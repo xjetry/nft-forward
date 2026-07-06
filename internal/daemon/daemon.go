@@ -52,6 +52,14 @@ type Config struct {
 	ConnectToken string
 	PortRange    string
 
+	// ServerLocal marks this daemon as the panel host's own node: it takes
+	// rule pushes from the co-located panel over the unix socket (ConnectURL
+	// stays empty) yet must keep its "panel" segment across restarts instead
+	// of downgrading it to "tui" the way a standalone daemon does — the panel
+	// re-pushes those rules and the two segments would fight over the same
+	// port. Set via cmd/nft-agent's --server-local flag.
+	ServerLocal bool
+
 	// DeclaredRelayHost/DeclaredRelayHostV6, when set, are sent with every
 	// hello as the authoritative data-plane address for this node — see
 	// cmd/nft-agent's --relay-host/--relay-host-v6 flags.
@@ -99,6 +107,7 @@ func New(cfg Config) (*Daemon, error) {
 		resolveFn:           defaultResolver(resolver.New()),
 		connectURL:          cfg.ConnectURL,
 		connectTok:          cfg.ConnectToken,
+		serverLocal:         cfg.ServerLocal,
 		portRange:           cfg.PortRange,
 		declaredRelayHost:   cfg.DeclaredRelayHost,
 		declaredRelayHostV6: cfg.DeclaredRelayHostV6,
@@ -146,11 +155,15 @@ func (d *Daemon) Bootstrap() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Downgrade: when the daemon starts without a --connect config but has
-	// rules in the "panel" segment (left from a previous connected session),
-	// copy them to "tui" with server metadata cleared, then drop "panel".
-	// This keeps the rules functional in standalone mode.
-	if d.connectURL == "" && len(owners["panel"]) > 0 {
+	// Downgrade: when a standalone daemon starts without a --connect config but
+	// has rules in the "panel" segment (left from a previous connected session),
+	// copy them to "tui" with server metadata cleared, then drop "panel". This
+	// keeps the rules functional in standalone mode. Skipped for the panel host's
+	// own node (serverLocal): its connectURL is also empty, but the co-located
+	// panel re-pushes the "panel" segment over the unix socket — downgrading it
+	// would leave the downgraded "tui" copies fighting the re-pushed "panel"
+	// rules over the same port.
+	if !d.serverLocal && d.connectURL == "" && len(owners["panel"]) > 0 {
 		downgraded := make([]nft.Rule, len(owners["panel"]))
 		for i, r := range owners["panel"] {
 			downgraded[i] = downgradePanelRule(r)

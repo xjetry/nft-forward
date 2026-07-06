@@ -472,6 +472,14 @@ do_update() {
   # Record the freshly-installed nft-agent identity on this upgrade path too.
   write_agent_identity "$tag" "$agent_sha"
 
+  # A server host's daemon unit must carry --server-local so its "panel" segment
+  # survives restarts (the co-located panel re-pushes it over the unix socket).
+  # do_update leaves units untouched otherwise — it lacks the agent's --connect
+  # config — but the server daemon unit has no such install-time args to lose.
+  if [[ "$want_server" -eq 1 ]]; then
+    write_daemon_unit " --server-local"
+  fi
+
   # ---- 重启 unit ----
   note "[4/5] 重启 daemon (+ server, if present) ..."
   systemctl daemon-reload
@@ -800,7 +808,7 @@ EOF
 
   server)
     switch_role_cleanup server
-    write_daemon_unit ""
+    write_daemon_unit " --server-local"
     write_server_unit "$addr"
     systemctl daemon-reload
     systemctl enable --now nft-forward-daemon.service

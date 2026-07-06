@@ -41,8 +41,15 @@ type Daemon struct {
 	// dialer is atomic so unix-socket handlers running on their own
 	// goroutines can safely read it (e.g. to push tui_segment_changed)
 	// without coordinating with Run's lifecycle code.
-	connectURL          string
-	connectTok          string
+	connectURL string
+	connectTok string
+	// serverLocal marks the panel host's own node daemon: connectURL is empty
+	// (the co-located panel pushes rules over the unix socket, not via --connect)
+	// yet its "panel" segment must survive restarts instead of being downgraded
+	// to "tui" like a standalone daemon's — the panel re-pushes those rules and
+	// the two segments would otherwise fight over the same port. Gates the
+	// downgrade in Bootstrap.
+	serverLocal         bool
 	portRange           string
 	declaredRelayHost   string
 	declaredRelayHostV6 string

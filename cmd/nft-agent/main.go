@@ -64,6 +64,7 @@ func runDaemon(args []string) int {
 		relayHost      string
 		relayHostV6    string
 		allowInsecure  bool
+		serverLocal    bool
 	)
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
@@ -76,6 +77,7 @@ func runDaemon(args []string) int {
 	fs.StringVar(&relayHost, "relay-host", "", "显式声明数据面 IPv4 地址/域名，覆盖面板的自动识别（用于双出口等场景）")
 	fs.StringVar(&relayHostV6, "relay-host-v6", "", "显式声明数据面 IPv6 地址，覆盖面板的自动识别")
 	fs.BoolVar(&allowInsecure, "insecure-connect", false, "允许明文 ws:// 控制信道（仅本地测试；生产必须用 wss://）")
+	fs.BoolVar(&serverLocal, "server-local", false, "标记本机为面板宿主自身节点：面板经本地 socket 推送规则，重启时保留 panel 段不降级为 tui")
 	if err := fs.Parse(args); err != nil {
 		// Tolerate unknown flags so a binary upgrade that predates a
 		// newly-added install.sh flag doesn't crash the daemon.
@@ -122,6 +124,7 @@ func runDaemon(args []string) int {
 		PortRange:           portRange,
 		DeclaredRelayHost:   relayHost,
 		DeclaredRelayHostV6: relayHostV6,
+		ServerLocal:         serverLocal,
 	}
 	if connectURL != "" {
 		tok, err := os.ReadFile(panelTokenFile)
