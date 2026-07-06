@@ -80,6 +80,7 @@ export default function NodeDetail() {
   const ruleHops = data.rule_hops || []
   const nodeHops = data.node_hops || []
   const grantedUsers = data.granted_users || []
+  const referencedByComposites = data.referenced_by_composites || []
   const isComposite = node.node_type === 'composite'
   const agentOutdated = node.agent_version && semverLT(node.agent_version, latest_agent_version)
   const up = data.upgrade || { status: 'none' }
@@ -416,6 +417,27 @@ export default function NodeDetail() {
           <div className="hidden md:block">
             <CompositeHopsCard nodeId={id} hops={nodeHops} singleNodes={data.single_nodes || []} onDone={load} />
           </div>
+        )}
+
+        {referencedByComposites.length > 0 && (
+          <section className={`${card} px-[26px] pt-[22px] pb-2`}>
+            <div className="flex items-baseline gap-2.5 mb-1.5">
+              <h2 className="m-0 text-[15px] font-bold">被以下组合引用</h2>
+              <span className="text-[12.5px] text-ink-mut">{referencedByComposites.length} 个</span>
+            </div>
+            <div className="pb-3 flex flex-wrap gap-2">
+              {referencedByComposites.map((comp) => (
+                <Link
+                  key={comp.id}
+                  to={`/nodes/${comp.id}`}
+                  className="inline-flex items-center gap-1.5 text-blue-600 hover:underline"
+                >
+                  <span>{comp.name}</span>
+                  <NodeTypeBadge type={comp.node_type} />
+                </Link>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* ===== 经过该节点的规则 ===== */}

@@ -541,12 +541,27 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grantedUsers, _ := db.ListUsersForNode(s.DB, n.ID)
+	// Composite nodes that directly list this node as a member hop, so the detail
+	// page can show where this node is referenced. Only direct referrers: nesting
+	// is resolved on the composite's own page, not transitively here. A query
+	// failure degrades to an empty list rather than blocking the node detail.
+	referrers, _ := db.CompositeReferrers(s.DB, n.ID)
+	type compositeRefView struct {
+		ID       int64  `json:"id"`
+		Name     string `json:"name"`
+		NodeType string `json:"node_type"`
+	}
+	referencedBy := make([]compositeRefView, 0, len(referrers))
+	for _, c := range referrers {
+		referencedBy = append(referencedBy, compositeRefView{ID: c.ID, Name: c.Name, NodeType: c.NodeType})
+	}
 	resp := map[string]any{
 		"node": nodeWithSecret{Node: n, Secret: n.Secret}, "rule_hops": views, "panel_url": panelURL,
-		"panel_url_configured": panelURL != "",
-		"latest_agent_version": serverVersion(),
-		"upgrade":              deriveUpgradeStatus(n, serverVersion(), time.Now()),
-		"granted_users":        grantedUsers,
+		"panel_url_configured":     panelURL != "",
+		"latest_agent_version":     serverVersion(),
+		"upgrade":                  deriveUpgradeStatus(n, serverVersion(), time.Now()),
+		"granted_users":            grantedUsers,
+		"referenced_by_composites": referencedBy,
 	}
 
 	// Include node_hops if composite, enriched with each child's name.
