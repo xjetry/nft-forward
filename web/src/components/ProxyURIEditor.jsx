@@ -40,14 +40,22 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
   const [localRoles, setLocalRoles] = useState(() => loadLocalRoles(username))
   const [fetching, setFetching] = useState(false)
   const [manualParsed, setManualParsed] = useState(() => parseURIs(loadLocalURIs(username)))
-  const [showManual, setShowManual] = useState(() => loadLocalURIs(username).trim() !== '')
+  // 订阅/手动两个折叠区互斥展开，保证卡片同时只有一个长列表；
+  // 初始优先展开有内容的订阅区，其次手动区。
+  const [expanded, setExpanded] = useState(() => {
+    if (loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0) return 'sub'
+    if (loadLocalURIs(username).trim() !== '') return 'manual'
+    return null
+  })
+  const showSub = expanded === 'sub'
+  const showManual = expanded === 'manual'
+  const toggleExpanded = (key) => setExpanded(e => (e === key ? null : key))
   const [selSub, setSelSub] = useState(new Set())
   const [selManual, setSelManual] = useState(new Set())
 
   useEffect(() => { fetchNodeRoles().then(setServerRoles) }, [])
   useEffect(() => { setSelSub(new Set()) }, [subNodes])
   useEffect(() => { setSelManual(new Set()) }, [manualParsed])
-  const [showSub, setShowSub] = useState(() => loadSubURLs(username).trim() !== '' || loadSubCache(username).length > 0)
   const toast = useToast()
   const [subRef, subH] = usePersistedHeight(`nf-sub-textarea-h:${username}`)
   const [manualRef, manualH] = usePersistedHeight(`nf-manual-textarea-h:${username}`)
@@ -139,7 +147,7 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
         </p>
 
         {/* Subscription URL input */}
-        <button type="button" onClick={() => setShowSub(v => !v)}
+        <button type="button" onClick={() => toggleExpanded('sub')}
           className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
           <svg className={`w-3 h-3 transition-transform ${showSub ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
           订阅地址{subNodes.length > 0 && <span className="text-ink-mut">（{subNodes.length} 个节点）</span>}
@@ -198,7 +206,7 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
 
         {/* Manual URIs — same collapsible pattern as the subscription block,
             with the role-config table folded inside. */}
-        <button type="button" onClick={() => setShowManual(v => !v)}
+        <button type="button" onClick={() => toggleExpanded('manual')}
           className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
           <svg className={`w-3 h-3 transition-transform ${showManual ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
           手动填写{manualParsed.length > 0 && <span className="text-ink-mut">（{manualParsed.length} 个节点）</span>}
