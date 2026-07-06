@@ -242,7 +242,8 @@ export default function NodeList() {
                     <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
                       <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.18)]' : 'bg-gray-400 shadow-[0_0_0_3px_rgba(154,163,176,0.16)]'}`} />
                       {n.name}
-                      {(n.roles & 2) !== 0 && <Badge color="blue">中间层</Badge>}
+                      {((n.roles ?? 1) & 1) !== 0 && <Badge color="green">入口</Badge>}
+                      {((n.roles ?? 1) & 2) !== 0 && <Badge color="blue">中转</Badge>}
                     </span>
                   </td>
                   <td>
@@ -304,7 +305,8 @@ export default function NodeList() {
                   <span className="inline-flex items-center gap-2 font-semibold text-blue-600">
                     <span className={`w-1.5 h-1.5 rounded-full flex-none ${!n.disabled && n.online === 1 ? 'bg-green-500' : 'bg-gray-400'}`} />
                     {n.name}
-                    {(n.roles & 2) !== 0 && <Badge color="blue">中间层</Badge>}
+                    {((n.roles ?? 1) & 1) !== 0 && <Badge color="green">入口</Badge>}
+                    {((n.roles ?? 1) & 2) !== 0 && <Badge color="blue">中转</Badge>}
                   </span>
                   <NodeStatus node={n} />
                 </div>
