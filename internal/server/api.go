@@ -1592,6 +1592,13 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
+			// ViaNodeID tags the logical segment this physical hop belongs to.
+			// Billing groups rule_hops by via_node_id and charges each segment
+			// once at its via, so a composite's flattened children must all carry
+			// via = the composite's id to bill to the composite's grant. Absent
+			// (0) falls back to node_id — each hop its own segment, correct for a
+			// plain arbitrary physical chain that isn't a composite.
+			ViaNodeID int64 `json:"via_node_id"`
 		} `json:"hops"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
 		// sent" (edits keep the stored path — old clients must not silently
@@ -1635,7 +1642,11 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		// even on this path.
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
+			via := h.ViaNodeID
+			if via == 0 {
+				via = h.NodeID
+			}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: via}
 		}
 		if name, bad := s.exitHopForbidsDirect(hops); bad {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("节点 %s 禁止直接转发，必须在其后选择线路层", name))
@@ -2021,6 +2032,13 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		Hops     []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
+			// ViaNodeID tags the logical segment this physical hop belongs to.
+			// Billing groups rule_hops by via_node_id and charges each segment
+			// once at its via, so a composite's flattened children must all carry
+			// via = the composite's id to bill to the composite's grant. Absent
+			// (0) falls back to node_id — each hop its own segment, correct for a
+			// plain arbitrary physical chain that isn't a composite.
+			ViaNodeID int64 `json:"via_node_id"`
 		} `json:"hops"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
 		// sent" (keep the stored path — old clients must not silently strip
@@ -2119,7 +2137,11 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	default:
 		hops = make([]db.HopInput, len(body.Hops))
 		for i, h := range body.Hops {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.NodeID}
+			via := h.ViaNodeID
+			if via == 0 {
+				via = h.NodeID
+			}
+			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: via}
 		}
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
