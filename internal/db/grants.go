@@ -67,6 +67,18 @@ func DeleteNodeHops(d DBTX, nodeID int64) error {
 	return err
 }
 
+// CompositeReferrers returns the composite nodes that directly list nodeID as a
+// member hop, so a delete can warn which composite definitions it would alter.
+// Nesting makes "composite references composite" common, and a silent FK cascade
+// would quietly drop the member from an upper composite's chain.
+func CompositeReferrers(d *sql.DB, nodeID int64) ([]*Node, error) {
+	return queryAll(d,
+		`SELECT `+nodeColsQualified+` FROM nodes n
+		 WHERE n.node_type='composite'
+		   AND EXISTS (SELECT 1 FROM node_hops h WHERE h.node_id=n.id AND h.hop_node_id=?)
+		 ORDER BY n.sort_order, n.id`, scanNode, nodeID)
+}
+
 // GrantNode grants a user access to a node with a max_forwards limit. If the
 // grant already exists, only max_forwards is updated (idempotent).
 func GrantNode(d *sql.DB, userID, nodeID int64, maxForwards int, trafficQuotaBytes int64) error {

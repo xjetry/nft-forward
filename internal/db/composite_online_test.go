@@ -48,6 +48,24 @@ func TestResolveCompositeOnline(t *testing.T) {
 			hops: []*NodeHop{hop(3, 1), hop(4, 1), hop(4, 2)},
 			want: map[int64]int{3: 1, 4: 0},
 		},
+		{
+			name: "nested composite online when every deep leaf online",
+			nodes: []*Node{
+				mk(1, "remote", 1, false), mk(2, "remote", 1, false), mk(3, "remote", 1, false),
+				mk(8, "composite", 0, false), mk(9, "composite", 0, false),
+			},
+			hops: []*NodeHop{hop(9, 8), hop(9, 3), hop(8, 1), hop(8, 2)},
+			want: map[int64]int{8: 1, 9: 1},
+		},
+		{
+			name: "nested composite offline when a deep leaf offline",
+			nodes: []*Node{
+				mk(1, "remote", 1, false), mk(2, "remote", 0, false), mk(3, "remote", 1, false),
+				mk(8, "composite", 0, false), mk(9, "composite", 0, false),
+			},
+			hops: []*NodeHop{hop(9, 8), hop(9, 3), hop(8, 1), hop(8, 2)},
+			want: map[int64]int{8: 0, 9: 0},
+		},
 	}
 
 	for _, tt := range tests {

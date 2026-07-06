@@ -57,7 +57,15 @@ export default function NodeList() {
 
   const deleteNode = async (node) => {
     if (!(await confirm({ title: '删除节点', message: `确认删除节点 ${node.name}？此操作会清空节点上的转发。`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/nodes/${node.id}`); toast('已删除'); load() } catch (err) { toast(err.message, 'error') }
+    try {
+      const res = await api.del(`/nodes/${node.id}`)
+      if (res?.needs_confirm) {
+        const names = (res.affected_composites || []).map(c => c.name).join('、')
+        if (!(await confirm({ title: '该节点被组合引用', message: `节点「${node.name}」是组合 ${names} 的成员，删除会将它从这些组合中移除、改变其定义。是否继续？`, confirmText: '仍然删除', danger: true }))) return
+        await api.del(`/nodes/${node.id}?confirm=1`)
+      }
+      toast('已删除'); load()
+    } catch (err) { toast(err.message, 'error') }
   }
 
   const resyncNode = async (id) => {
@@ -321,7 +329,7 @@ export default function NodeList() {
       </div>
 
       <AddNodeModal open={showAdd} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />
-      <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes.filter(n => n.node_type !== 'composite')} onDone={() => { setShowComposite(false); load() }} />
+      <CompositeNodeModal open={showComposite} onClose={() => setShowComposite(false)} nodes={nodes} onDone={() => { setShowComposite(false); load() }} />
     </Layout>
   )
 }
@@ -521,26 +529,35 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
             <span className="text-[13px] font-semibold text-ink-soft">跳序（从入口到出口）</span>
           </div>
           <div className="space-y-2">
-            {hops.map((hop, i) => (
+            {hops.map((hop, i) => {
+              // A composite member is a black box: its own hops decide how it
+              // forwards, so no per-row mode applies to it here.
+              const memberIsComposite = nodes.find(n => n.id === Number(hop.node_id))?.node_type === 'composite'
+              return (
               <div key={i} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
                 <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
                 <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={hop.node_id} onChange={v => setHop(i, 'node_id', v)}
                   options={nodes.filter(n => n.id === Number(hop.node_id) || !hops.some((h, j) => j !== i && Number(h.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
-                {/* 每一跳都可配模式，包含末跳：末跳模式在该组合被用作中间层时生效；
-                    被用作规则出口时由规则的出口模式覆盖 */}
-                <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
-                  title={i === hops.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
-                  options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-                {i === hops.length - 1 && (
-                  <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
-                )}
+                {memberIsComposite ? (
+                  <span className="text-[11px] text-ink-mut shrink-0 text-center cursor-help" style={{ width: 110 }} title="组合成员：转发模式由其内部各跳决定，不在此处配置">组合</span>
+                ) : (<>
+                  {/* 每一跳都可配模式，包含末跳：末跳模式在该组合被用作中间层时生效；
+                      被用作规则出口时由规则的出口模式覆盖 */}
+                  <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
+                    title={i === hops.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
+                    options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+                  {i === hops.length - 1 && (
+                    <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
+                  )}
+                </>)}
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>
                 <button type="button" onClick={() => moveHop(i, 1)} disabled={i === hops.length - 1} className="btn-secondary text-xs px-1.5">↓</button>
                 {hops.length > 1 && (
                   <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
           <button type="button" onClick={addHop} className="btn-secondary text-xs mt-2">+ 添加一跳</button>
         </div>

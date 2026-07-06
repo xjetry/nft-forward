@@ -149,9 +149,10 @@ func TestExplicitHopsRejectsNoDirectExitTail(t *testing.T) {
 	}
 }
 
-// 5: 组合是单点的扁平组合，不能嵌套组合——嵌套会把组合 id 落进 rule_hops.node_id
-// 而那里没有 agent。建组合与改跳序两条路径都要拒绝。
-func TestCompositeCannotNestComposite(t *testing.T) {
+// 5: 组合成员可以是另一个组合(嵌套),保存时递归展平到物理单点;只有环引用与
+// 展平后跳数超限会被拒(否则展平无法终止)。建组合与改跳序两条写入路径都放开嵌套、
+// 都挡环。
+func TestCompositeNestingAllowedCyclesRejected(t *testing.T) {
 	d := openDB(t)
 	a, _ := db.CreateNode(d, "a", "", "")
 	b, _ := db.CreateNode(d, "b", "", "")
@@ -163,32 +164,66 @@ func TestCompositeCannotNestComposite(t *testing.T) {
 	admin := loginAsAdmin(t, d)
 	s, _ := New(d)
 
-	// 建组合时以组合为子节点 → 400
-	body, _ := json.Marshal(map[string]any{
+	// 建组合时以组合为子节点 → 现在允许(200)
+	rec := apiNodeAction(t, s, admin, "POST", "/api/nodes", mustJSON(map[string]any{
 		"name": "outer", "node_type": "composite",
 		"hops": []map[string]any{{"node_id": inner.ID, "mode": "kernel"}, {"node_id": c.ID, "mode": "kernel"}},
-	})
-	req := httptest.NewRequest("POST", "/api/nodes", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(admin)
-	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("creating a composite with a composite child: want 400, got %d %s", rec.Code, rec.Body.String())
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nesting a composite on create should be allowed: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// 改跳序时把子节点换成组合 → 400
-	outer := makeComposite(t, d, "outer2", a.ID, c.ID)
-	body2, _ := json.Marshal(map[string]any{
+	// 改跳序把子节点换成组合 → 允许
+	outer2 := makeComposite(t, d, "outer2", a.ID, c.ID)
+	rec = apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/hops", outer2.ID), mustJSON(map[string]any{
 		"hops": []map[string]any{{"node_id": inner.ID, "mode": "kernel"}, {"node_id": c.ID, "mode": "kernel"}},
-	})
-	req2 := httptest.NewRequest("POST", fmt.Sprintf("/api/nodes/%d/hops", outer.ID), bytes.NewReader(body2))
-	req2.Header.Set("Content-Type", "application/json")
-	req2.AddCookie(admin)
-	rec2 := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusBadRequest {
-		t.Fatalf("update-hops with a composite child: want 400, got %d %s", rec2.Code, rec2.Body.String())
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nesting a composite on reorder should be allowed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 直接自引用 → 400
+	selfRef := makeComposite(t, d, "selfref", a.ID, b.ID)
+	rec = apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/hops", selfRef.ID), mustJSON(map[string]any{
+		"hops": []map[string]any{{"node_id": selfRef.ID, "mode": "kernel"}, {"node_id": a.ID, "mode": "kernel"}},
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("self-referential composite: want 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 双向环 A→B→A:闭合边写入时被拒
+	ca := makeComposite(t, d, "cyc-a", a.ID, b.ID)
+	cb := makeComposite(t, d, "cyc-b", a.ID, b.ID)
+	rec = apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/hops", ca.ID), mustJSON(map[string]any{
+		"hops": []map[string]any{{"node_id": cb.ID, "mode": "kernel"}, {"node_id": a.ID, "mode": "kernel"}},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ca->cb (no cycle yet) should be allowed: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/hops", cb.ID), mustJSON(map[string]any{
+		"hops": []map[string]any{{"node_id": ca.ID, "mode": "kernel"}, {"node_id": a.ID, "mode": "kernel"}},
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cycle cb->ca->cb: want 400, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 三节点环 x→y→z→x:闭合边写入时经多层 DFS 被拒(覆盖环检测的递归深入)
+	tx := makeComposite(t, d, "tri-x", a.ID, b.ID)
+	ty := makeComposite(t, d, "tri-y", a.ID, b.ID)
+	tz := makeComposite(t, d, "tri-z", a.ID, b.ID)
+	setEdge := func(from, to int64) *httptest.ResponseRecorder {
+		return apiNodeAction(t, s, admin, "POST", fmt.Sprintf("/api/nodes/%d/hops", from), mustJSON(map[string]any{
+			"hops": []map[string]any{{"node_id": to, "mode": "kernel"}, {"node_id": a.ID, "mode": "kernel"}},
+		}))
+	}
+	if rec := setEdge(tx.ID, ty.ID); rec.Code != http.StatusOK {
+		t.Fatalf("tri x->y should be allowed: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setEdge(ty.ID, tz.ID); rec.Code != http.StatusOK {
+		t.Fatalf("tri y->z should be allowed: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setEdge(tz.ID, tx.ID); rec.Code != http.StatusBadRequest {
+		t.Fatalf("three-node cycle z->x->y->z: want 400, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

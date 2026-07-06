@@ -49,6 +49,20 @@ func TestResolveCompositeRelayStack(t *testing.T) {
 			compID:    1,
 			wantEntry: "", wantEntryV6: "", wantExitV6: "",
 		},
+		{
+			name: "nested composite: entry from deep first leaf, exit v6 from deep last leaf",
+			nodes: []*Node{
+				mk(1, "remote", "10.0.0.1", ""),
+				mk(2, "remote", "10.0.0.2", "2001:db8::2"),
+				mk(3, "remote", "10.0.0.3", "2001:db8::3"),
+				mk(8, "composite", "", ""),
+				mk(9, "composite", "", ""),
+			},
+			// outer(9) = [inner(8), x(3)]; inner(8) = [a(1), b(2)] => flattens to [a, b, x]
+			hops:      []*NodeHop{hop(9, 8), hop(9, 3), hop(8, 1), hop(8, 2)},
+			compID:    9,
+			wantEntry: "10.0.0.1", wantEntryV6: "", wantExitV6: "2001:db8::3",
+		},
 	}
 
 	for _, tt := range tests {
