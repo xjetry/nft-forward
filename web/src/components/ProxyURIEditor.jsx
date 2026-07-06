@@ -32,7 +32,7 @@ function usePersistedHeight(key) {
   return [ref, initial]
 }
 
-export function ProxyURIEditor({ username, blurred }) {
+export function ProxyURIEditor({ username, blurred, className = '' }) {
   const [text, setText] = useState(() => loadLocalURIs(username))
   const [subURLs, setSubURLs] = useState(() => loadSubURLs(username))
   const [subNodes, setSubNodes] = useState(() => loadSubCache(username))
@@ -120,8 +120,10 @@ export function ProxyURIEditor({ username, blurred }) {
   const hasNodes = showSub && subNodes.length > 0
 
   return (
-    <div className="card flex flex-col">
-      <div className="px-6 py-[22px] flex-1 flex flex-col">
+    <div className={`card flex flex-col ${className}`}>
+      {/* min-h-0 + overflow lets the body scroll when a parent caps the
+          card's height (side-by-side dashboard grid); harmless otherwise. */}
+      <div className="px-6 py-[22px] flex-1 min-h-0 overflow-y-auto flex flex-col">
         <div className="flex items-baseline gap-2.5 mb-3.5">
           <h3 className="text-[16px] font-bold">我的代理 URI</h3>
           <span className="text-[13px] text-ink-mut">

@@ -50,11 +50,13 @@ export default function Dashboard() {
           icon={<><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/></>} />
       </div>
 
+      {/* Both cards share the same lg:max-h cap; under it, grid stretch keeps
+          them aligned to the taller card, and past it each scrolls inside. */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-[18px] mb-[22px]">
         {/* Node status — flex column so the table stretches to the card's
             grid-given height (the taller sibling card) instead of stopping
             at TableBox's default max-height. */}
-        <div className="card flex flex-col">
+        <div className="card flex flex-col lg:max-h-[640px]">
           <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
           {nodes.length ? (<>
             {/* Desktop table */}
@@ -98,8 +100,8 @@ export default function Dashboard() {
         </div>
 
         {/* My proxy URIs (browser-local) — desktop only */}
-        <div className="hidden md:block">
-          <ProxyURIEditor username={user?.username} blurred={blurred} />
+        <div className="hidden md:flex flex-col lg:max-h-[640px]">
+          <ProxyURIEditor username={user?.username} blurred={blurred} className="flex-1 min-h-0" />
         </div>
       </div>
     </Layout>
