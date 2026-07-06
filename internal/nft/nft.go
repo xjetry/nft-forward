@@ -251,10 +251,10 @@ func RenderRuleset(rules []Rule) string {
 		if r.DestIP == "" || IsLoopback(r.DestIP) {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct direction original counter\n",
-			l4protoMatch(r.Proto), r.SrcPort))
-		b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct direction reply counter\n",
-			l4protoMatch(r.Proto), r.SrcPort))
+		for _, p := range accountProtos(r.Proto) {
+			b.WriteString(fmt.Sprintf("\t\tmeta l4proto %s ct original proto-dst %d ct direction original counter\n", p, r.SrcPort))
+			b.WriteString(fmt.Sprintf("\t\tmeta l4proto %s ct original proto-dst %d ct direction reply counter\n", p, r.SrcPort))
+		}
 	}
 	b.WriteString("\t}\n")
 	if hasLoopback {
@@ -264,8 +264,9 @@ func RenderRuleset(rules []Rule) string {
 			if r.DestIP == "" || !IsLoopback(r.DestIP) {
 				continue
 			}
-			b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct status dnat ct direction original counter\n",
-				l4protoMatch(r.Proto), r.SrcPort))
+			for _, p := range accountProtos(r.Proto) {
+				b.WriteString(fmt.Sprintf("\t\tmeta l4proto %s ct original proto-dst %d ct status dnat ct direction original counter\n", p, r.SrcPort))
+			}
 		}
 		b.WriteString("\t}\n")
 		b.WriteString("\tchain account_local_reply {\n")
@@ -274,8 +275,9 @@ func RenderRuleset(rules []Rule) string {
 			if r.DestIP == "" || !IsLoopback(r.DestIP) {
 				continue
 			}
-			b.WriteString(fmt.Sprintf("\t\t%s ct original proto-dst %d ct status dnat ct direction reply counter\n",
-				l4protoMatch(r.Proto), r.SrcPort))
+			for _, p := range accountProtos(r.Proto) {
+				b.WriteString(fmt.Sprintf("\t\tmeta l4proto %s ct original proto-dst %d ct status dnat ct direction reply counter\n", p, r.SrcPort))
+			}
 		}
 		b.WriteString("\t}\n")
 	}
@@ -283,13 +285,16 @@ func RenderRuleset(rules []Rule) string {
 	return b.String()
 }
 
-// l4protoMatch is the nft transport-protocol match for a rule's proto, used by
-// the accounting chain where the post-DNAT dport no longer identifies the rule.
-func l4protoMatch(proto string) string {
+// accountProtos lists the concrete l4protos a rule's accounting counter is
+// emitted under. A tcp+udp rule gets one counter per protocol so ct original
+// proto-dst keeps its inet_service type: nftables cannot type a proto-dst under
+// an l4proto set, and v1.0.6 then serialises the port as an untyped hex
+// "[invalid type]" that the counter parser cannot read.
+func accountProtos(proto string) []string {
 	if proto == "tcp+udp" {
-		return "meta l4proto { tcp, udp }"
+		return []string{"tcp", "udp"}
 	}
-	return "meta l4proto " + proto
+	return []string{proto}
 }
 
 func Apply(rules []Rule) error {

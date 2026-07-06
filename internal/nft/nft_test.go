@@ -475,3 +475,25 @@ func TestRenderRuleset_OversizeGroupFallsBackToLegacy(t *testing.T) {
 		t.Fatalf("no valid group → no restore chain:\n%s", out)
 	}
 }
+
+func TestRenderRulesetAccountSplitsTCPUDP(t *testing.T) {
+	rules := []Rule{{Proto: "tcp+udp", DestIP: "1.2.3.4", DestPort: 80, SrcPort: 8080}}
+	out := RenderRuleset(rules)
+	// The account chain must count tcp and udp separately: nftables cannot type
+	// ct proto-dst under an l4proto set, so a combined { tcp, udp } counter loses
+	// the port ("[invalid type]") on v1.0.6 and the agent drops the sample.
+	want := []string{
+		"meta l4proto tcp ct original proto-dst 8080 ct direction original counter",
+		"meta l4proto tcp ct original proto-dst 8080 ct direction reply counter",
+		"meta l4proto udp ct original proto-dst 8080 ct direction original counter",
+		"meta l4proto udp ct original proto-dst 8080 ct direction reply counter",
+	}
+	for _, w := range want {
+		if !contains(out, w) {
+			t.Fatalf("expected split counter %q, got:\n%s", w, out)
+		}
+	}
+	if contains(out, "l4proto { tcp, udp } ct original proto-dst") {
+		t.Fatalf("account chain must not use l4proto set for ct proto-dst, got:\n%s", out)
+	}
+}
