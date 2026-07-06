@@ -45,7 +45,7 @@ func TestAPIResetPerNodeTraffic(t *testing.T) {
 	uid, _ := loginAsUser(t, d, 10)
 	n, _ := db.CreateNode(d, "rnode", "", "")
 	db.GrantNode(d, uid, n.ID, 10, 0)
-	db.AddUserNodeTraffic(d, uid, n.ID, 5000)
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 5000, uid, n.ID)
 	s, _ := New(d)
 	adminCookie := loginAsAdmin(t, d)
 
@@ -68,8 +68,8 @@ func TestAPIResetTrafficClearsPerNode(t *testing.T) {
 	uid, _ := loginAsUser(t, d, 10)
 	n, _ := db.CreateNode(d, "rtnode", "", "")
 	db.GrantNode(d, uid, n.ID, 10, 0)
-	db.AddUserTraffic(d, uid, 3000)
-	db.AddUserNodeTraffic(d, uid, n.ID, 2000)
+	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 3000, uid)
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 2000, uid, n.ID)
 	s, _ := New(d)
 	adminCookie := loginAsAdmin(t, d)
 

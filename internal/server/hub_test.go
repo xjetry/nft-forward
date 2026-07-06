@@ -311,7 +311,7 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddUserTraffic(d, uid, 1500); err != nil {
+	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 1500, uid); err != nil {
 		t.Fatal(err)
 	}
 	createStandaloneRuleHop(t, d, self.ID, "tcp", 0, "10.0.0.30", 9200, sql.NullInt64{Int64: uid, Valid: true})
@@ -344,7 +344,7 @@ func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
 	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddUserTraffic(d, uid, 200); err != nil {
+	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 200, uid); err != nil {
 		t.Fatal(err)
 	}
 	s.enforceUserQuota(uid)

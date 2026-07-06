@@ -5,33 +5,6 @@ import (
 	"testing"
 )
 
-func TestAddUserNodeTraffic(t *testing.T) {
-	d := openTestDB(t)
-	uid := createTestUser(t, d)
-	nid := createTestNode(t, d, "n1")
-	grantNode(t, d, uid, nid)
-
-	if err := AddUserNodeTraffic(d, uid, nid, 1000); err != nil {
-		t.Fatal(err)
-	}
-	g, err := GetNodeGrant(d, uid, nid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g.TrafficUsedBytes != 1000 {
-		t.Fatalf("want 1000, got %d", g.TrafficUsedBytes)
-	}
-
-	// accumulate
-	if err := AddUserNodeTraffic(d, uid, nid, 500); err != nil {
-		t.Fatal(err)
-	}
-	g, _ = GetNodeGrant(d, uid, nid)
-	if g.TrafficUsedBytes != 1500 {
-		t.Fatalf("want 1500, got %d", g.TrafficUsedBytes)
-	}
-}
-
 func TestResetAllUserTraffic(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)
@@ -40,9 +13,9 @@ func TestResetAllUserTraffic(t *testing.T) {
 	grantNode(t, d, uid, n1)
 	grantNode(t, d, uid, n2)
 
-	_ = AddUserTraffic(d, uid, 5000)
-	_ = AddUserNodeTraffic(d, uid, n1, 2000)
-	_ = AddUserNodeTraffic(d, uid, n2, 3000)
+	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 5000, uid)
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 2000, uid, n1)
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 3000, uid, n2)
 
 	if err := ResetAllUserTraffic(d, uid); err != nil {
 		t.Fatal(err)
@@ -159,8 +132,8 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	// set reset_days=30, created_at=31 days ago, add traffic
 	past := now() - 31*86400
 	d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=? WHERE id=?`, past, uid)
-	_ = AddUserTraffic(d, uid, 9999)
-	_ = AddUserNodeTraffic(d, uid, nid, 8888)
+	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 9999, uid)
+	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 8888, uid, nid)
 
 	u, _ = GetUserByID(d, uid)
 	reset, _ = CheckAndResetTrafficCycle(d, u)
@@ -177,7 +150,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	}
 
 	// calling again in the same cycle should not reset
-	_ = AddUserTraffic(d, uid, 100)
+	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 100, uid)
 	u, _ = GetUserByID(d, uid)
 	reset, _ = CheckAndResetTrafficCycle(d, u)
 	if reset {

@@ -110,14 +110,6 @@ func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 	return g, nil
 }
 
-func scanUserNode(r rowScanner) (*UserNode, error) {
-	g := &UserNode{}
-	if err := r.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt); err != nil {
-		return nil, err
-	}
-	return g, nil
-}
-
 // ListNodesForUser returns the nodes a user has been granted access to, along
 // with the grant metadata. Both slices are aligned by index.
 func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
@@ -136,7 +128,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		n := &Node{}
 		g := &UserNode{UserID: userID}
 		var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
-		var localMigratedAt, lastSeen sql.NullInt64
+		var lastSeen sql.NullInt64
 		var agentVersion sql.NullString
 		var ownerID sql.NullInt64
 		var luVersion, luStatus, luError sql.NullString
@@ -144,7 +136,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 			&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 			&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
 			&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
-			&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
+			&disabled, &n.PortRange, &n.CreatedAt,
 			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 			&n.SortOrder, &n.RateMultiplier, &unidirectional,
 			&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
@@ -163,10 +155,6 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 		if ownerID.Valid {
 			v := ownerID.Int64
 			n.OwnerID = &v
-		}
-		if localMigratedAt.Valid {
-			v := localMigratedAt.Int64
-			n.LocalMigratedAt = &v
 		}
 		if lastSeen.Valid {
 			v := lastSeen.Int64
@@ -232,10 +220,6 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-func ListAllGrants(d *sql.DB) ([]*UserNode, error) {
-	return queryAll(d, `SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, roles, granted_at FROM user_nodes`, scanUserNode)
 }
 
 // CheckNodeAccess validates that a user has access to a node. Node owners

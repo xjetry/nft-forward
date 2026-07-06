@@ -428,11 +428,6 @@ func ListRuleHops(d DBTX, ruleID int64) ([]*RuleHop, error) {
 	return queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE rule_id=? ORDER BY position`, scanRuleHop, ruleID)
 }
 
-// ListRuleHopsByChain is an alias for ListRuleHops (used by hub dispatch).
-func ListRuleHopsByChain(d DBTX, ruleID int64) ([]*RuleHop, error) {
-	return ListRuleHops(d, ruleID)
-}
-
 // DeleteRule removes a rule and returns the node IDs whose kernel state must be
 // re-dispatched (i.e. the nodes its hops lived on). The ON DELETE CASCADE on
 // rule_hops clears the hop rows; we collect nodes first so the caller can

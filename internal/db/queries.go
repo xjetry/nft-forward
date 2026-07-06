@@ -75,7 +75,6 @@ type Node struct {
 	LastError           sql.NullString `json:"last_error"`
 	LastWarning         string         `json:"last_warning"`
 	Disabled            bool           `json:"disabled"`
-	LocalMigratedAt     *int64         `json:"local_migrated_at,omitempty"`
 	PortRange           string         `json:"port_range"`
 	SortOrder           int64          `json:"sort_order"`
 	CreatedAt           int64          `json:"created_at"`
@@ -345,7 +344,7 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
 // columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,local_migrated_at,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
 
 // nodeColsQualified is nodeCols with every column prefixed by the "n." alias.
 // user_nodes has its own roles column (the grant-level override), so a query
@@ -363,7 +362,7 @@ type rowScanner interface{ Scan(...any) error }
 func scanNode(r rowScanner) (*Node, error) {
 	n := &Node{}
 	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
-	var localMigratedAt, lastSeen sql.NullInt64
+	var lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
 	var luVersion, luStatus, luError sql.NullString
@@ -371,7 +370,7 @@ func scanNode(r rowScanner) (*Node, error) {
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
 		&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
-		&disabled, &localMigratedAt, &n.PortRange, &n.CreatedAt,
+		&disabled, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&n.SortOrder, &n.RateMultiplier, &unidirectional,
 		&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
@@ -386,10 +385,6 @@ func scanNode(r rowScanner) (*Node, error) {
 	if ownerID.Valid {
 		v := ownerID.Int64
 		n.OwnerID = &v
-	}
-	if localMigratedAt.Valid {
-		v := localMigratedAt.Int64
-		n.LocalMigratedAt = &v
 	}
 	if lastSeen.Valid {
 		v := lastSeen.Int64
@@ -735,11 +730,6 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-// exit_uri exists as a column (migration 0010) but is no longer read or
-// written: user proxy URIs are kept client-side only, so the column is left
-// out of the projection rather than dropped (dropping needs a table rebuild).
-// bandwidth_mbps is likewise dead (shaping moved to the per-grant rate limit
-// on user_nodes) and stays out of the projection.
 const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family,via_node_ids`
 
 func scanRule(r rowScanner) (*Rule, error) {
@@ -883,20 +873,6 @@ func ListRuleHopsByCompositeNode(d *sql.DB, compositeNodeID int64) ([]*RuleHop, 
 	return queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE rule_id IN (SELECT id FROM rules WHERE node_id=?) ORDER BY rule_id, position`, scanRuleHop, compositeNodeID)
 }
 
-// AddUserTraffic increments a user's traffic_used_bytes by delta.
-func AddUserTraffic(d *sql.DB, id int64, delta int64) error {
-	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, id)
-	return err
-}
-
-// ResetUserTraffic zeroes a user's traffic counter only. Enabling a user is a
-// separate action (toggle) so an admin can clear usage without lifting a
-// disable, and vice versa.
-func ResetUserTraffic(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, id)
-	return err
-}
-
 // Audit
 
 func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
@@ -981,23 +957,6 @@ func MarkNodeApplied(d *sql.DB, id int64, warning string) error {
 func MarkNodeDispatchError(d *sql.DB, id int64, msg string) error {
 	_, err := d.Exec(`UPDATE nodes SET last_error=?, last_warning='' WHERE id=?`, msg, id)
 	return err
-}
-
-// MarkLocalMigrated stamps nodes.local_migrated_at on the first call; later
-// calls are no-ops by design (idempotency anchor for register_local retries).
-// Returns (true, nil) when this call did the stamping, (false, nil) when the
-// node was already marked. The boolean lets callers distinguish first
-// registration from a retried one without an extra SELECT.
-func MarkLocalMigrated(d *sql.DB, id int64) (bool, error) {
-	res, err := d.Exec(`UPDATE nodes SET local_migrated_at=? WHERE id=? AND local_migrated_at IS NULL`, now(), id)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n == 1, nil
 }
 
 func ToggleNode(d *sql.DB, id int64) error {

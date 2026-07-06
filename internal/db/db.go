@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"nft-forward/internal/landing"
-
 	_ "modernc.org/sqlite"
 )
 
@@ -38,94 +36,7 @@ func Open(path string) (*sql.DB, error) {
 		d.Close()
 		return nil, err
 	}
-	if err := hashLegacyAPITokens(d); err != nil {
-		d.Close()
-		return nil, err
-	}
-	if err := stripLegacyExitNameSuffixes(d); err != nil {
-		d.Close()
-		return nil, err
-	}
 	return d, nil
-}
-
-// stripLegacyExitNameSuffixes removes the "^~2~^"-style panel dedup counters
-// from landing-exit names materialized before parsing started stripping them.
-// The counter regex can't run inside modernc SQLite, so the rewrite happens in
-// Go; stripped names no longer match the prefilter, so re-opens are no-ops.
-func stripLegacyExitNameSuffixes(d *sql.DB) error {
-	rows, err := d.Query(`SELECT user_id, host, port, name FROM user_landing_exits WHERE name LIKE '%~^'`)
-	if err != nil {
-		return err
-	}
-	type exitRow struct {
-		userID int64
-		host   string
-		port   int
-		name   string
-	}
-	var pending []exitRow
-	for rows.Next() {
-		var e exitRow
-		if err := rows.Scan(&e.userID, &e.host, &e.port, &e.name); err != nil {
-			rows.Close()
-			return err
-		}
-		pending = append(pending, e)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, e := range pending {
-		clean := landing.StripDedupSuffix(e.name)
-		if clean == e.name {
-			continue
-		}
-		if _, err := d.Exec(`UPDATE user_landing_exits SET name=? WHERE user_id=? AND host=? AND port=?`,
-			clean, e.userID, e.host, e.port); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// hashLegacyAPITokens converts pre-0025 plaintext api_tokens rows to the
-// hash-at-rest form in place, preserving each token so existing integrations
-// keep working. token_prefix='' marks a not-yet-migrated row; after conversion
-// the prefix is set, so this is idempotent and a no-op on already-hashed DBs.
-// SHA-256 can't be computed in modernc SQLite, so the backfill runs in Go.
-func hashLegacyAPITokens(d *sql.DB) error {
-	rows, err := d.Query(`SELECT id, token FROM api_tokens WHERE token_prefix = ''`)
-	if err != nil {
-		return err
-	}
-	type legacy struct {
-		id    int64
-		token string
-	}
-	var pending []legacy
-	for rows.Next() {
-		var l legacy
-		if err := rows.Scan(&l.id, &l.token); err != nil {
-			rows.Close()
-			return err
-		}
-		pending = append(pending, l)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, l := range pending {
-		if _, err := d.Exec(`UPDATE api_tokens SET token=?, token_prefix=? WHERE id=?`,
-			HashToken(l.token), tokenPrefix(l.token), l.id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func migrate(d *sql.DB) error {

@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-// AddUserNodeTraffic increments the per-grant traffic counter for a user/node pair.
-func AddUserNodeTraffic(d *sql.DB, userID, nodeID, delta int64) error {
-	_, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes = traffic_used_bytes + ? WHERE user_id=? AND node_id=?`,
-		delta, userID, nodeID)
-	return err
-}
-
 // ResetUserNodeTraffic zeroes the traffic counter for a single user/node grant.
 func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 	_, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=? AND node_id=?`, userID, nodeID)

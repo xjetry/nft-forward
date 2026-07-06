@@ -45,14 +45,6 @@ func TestGrantRolesReadAlignment(t *testing.T) {
 		t.Fatalf("ListNodesForUser roles = %v, want [1]", grants)
 	}
 
-	all, err := ListAllGrants(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all) != 1 || all[0].Roles != 1 {
-		t.Fatalf("ListAllGrants roles = %v, want 1", all)
-	}
-
 	users, err := ListUsersForNode(d, nid)
 	if err != nil {
 		t.Fatal(err)
