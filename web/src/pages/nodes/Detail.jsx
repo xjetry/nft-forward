@@ -820,7 +820,22 @@ function RolesCard({ node, onDone }) {
     const added = next.filter(v => !have.has(v)).map(v => ({ upstream_node_id: Number(v), mode: 'userspace' }))
     return [...keep, ...added]
   })
-  const setUpMode = (i, v) => setUpRows(rs => rs.map((r, j) => j === i ? { ...r, mode: v } : r))
+  // Flipping a row's mode auto-saves that side, but only when the side has no
+  // pending add/remove (same node ids in the same order as the saved baseline) —
+  // then the whole-list POST can commit nothing but the mode. A pending
+  // structural edit makes this a no-op, leaving 保存 as the path to commit it.
+  const autoSaveMode = async (idKey, next, saved, setSaved, url) => {
+    if (saved === null || next.length !== saved.length ||
+        next.some((r, i) => Number(r[idKey]) !== Number(saved[i][idKey]))) return
+    const bs = next.map(r => ({ [idKey]: Number(r[idKey]), mode: r.mode }))
+    try { await api.post(url, { bindings: bs }); setSaved(bs); toast('已保存') }
+    catch (err) { toast(err.message, 'error') }
+  }
+  const setUpMode = (i, v) => {
+    const next = upRows.map((r, j) => j === i ? { ...r, mode: v } : r)
+    setUpRows(next)
+    autoSaveMode('upstream_node_id', next, savedUpRows, setSavedUpRows, `/nodes/${node.id}/bindings`)
+  }
   const removeUp = (i) => setUpRows(rs => rs.filter((_, j) => j !== i))
   const addAllUp = () => setUpRows(rs => upCandidates.map(n =>
     rs.find(r => Number(r.upstream_node_id) === n.id) || { upstream_node_id: n.id, mode: 'userspace' }))
@@ -831,7 +846,11 @@ function RolesCard({ node, onDone }) {
     const added = next.filter(v => !have.has(v)).map(v => ({ downstream_node_id: Number(v), mode: 'userspace' }))
     return [...keep, ...added]
   })
-  const setDownMode = (i, v) => setDownRows(rs => rs.map((r, j) => j === i ? { ...r, mode: v } : r))
+  const setDownMode = (i, v) => {
+    const next = downRows.map((r, j) => j === i ? { ...r, mode: v } : r)
+    setDownRows(next)
+    autoSaveMode('downstream_node_id', next, savedDownRows, setSavedDownRows, `/nodes/${node.id}/downstream-bindings`)
+  }
   const removeDown = (i) => setDownRows(rs => rs.filter((_, j) => j !== i))
   const addAllDown = () => setDownRows(rs => downCandidates.map(n =>
     rs.find(r => Number(r.downstream_node_id) === n.id) || { downstream_node_id: n.id, mode: 'userspace' }))
