@@ -22,7 +22,7 @@ export default function Dashboard() {
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="无法加载数据" /></Layout>
 
-  const { nodes = [], node_traffic = {}, rule_count = 0, rule_count_by_node = {}, total_bytes = 0, user_count = 0 } = data
+  const { nodes = [], node_raw_traffic = {}, rule_count = 0, rule_count_by_node = {}, total_bytes = 0, user_count = 0 } = data
   const onlineCount = nodes.filter(n => !n.disabled && n.online === 1).length
   const offline = nodes.filter(n => n.disabled || n.online !== 1).map(n => n.name)
   const totalBytes = total_bytes
@@ -66,7 +66,7 @@ export default function Dashboard() {
                     <td className="font-mono text-xs text-ink-soft"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
                     <td className="font-mono text-ink-soft">{ruleCount[n.id] || 0}</td>
-                    <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</td>
+                    <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_raw_traffic[n.id] || 0)}</td>
                     <td><NodeStatus node={n} /></td>
                     <td className="font-mono text-ink-mut text-xs">{fmtTime(n.last_seen)}</td>
                   </tr>
@@ -87,7 +87,7 @@ export default function Dashboard() {
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono">{ruleCount[n.id] || 0} 条规则</span>
                     <span className="text-ink-mut">·</span>
-                    <span className="font-mono text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</span>
+                    <span className="font-mono text-ink-mut">{fmtBytes(node_raw_traffic[n.id] || 0)}</span>
                   </div>
                 </Link>
               ))}

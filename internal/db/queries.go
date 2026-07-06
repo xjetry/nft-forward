@@ -525,6 +525,47 @@ func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 	}
 }
 
+// FillCompositeRawTraffic sets each composite node's entry in raw to its entry
+// physical child's raw bytes, so a caller can read raw[compositeID] directly
+// without knowing how to flatten a composite. A composite is a logical
+// orchestration unit with no physical forwarding of its own; the raw of its
+// first flattened physical hop stands in as the chain's representative
+// throughput. See the design note (admin panel raw-traffic) for why this
+// approximation — the entry node's raw includes its other rules/composites too —
+// is acceptable at the display layer.
+func FillCompositeRawTraffic(d *sql.DB, nodes []*Node, raw map[int64]int64) {
+	hops, err := ListAllNodeHops(d)
+	if err != nil {
+		return
+	}
+	fillCompositeRawTraffic(nodes, hops, raw)
+}
+
+// fillCompositeRawTraffic is the pure aggregation, split out so tests don't need
+// a DB. It mirrors resolveCompositeRelayStack: flatten each composite to its
+// physical leaf chain and take the first (entry) hop. An entry that never
+// forwarded has no row and resolves to 0, matching how physical nodes read.
+func fillCompositeRawTraffic(nodes []*Node, hops []*NodeHop, raw map[int64]int64) {
+	byID := make(map[int64]*Node, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	chains := make(map[int64][]*NodeHop)
+	for _, h := range hops {
+		chains[h.NodeID] = append(chains[h.NodeID], h)
+	}
+	for _, n := range nodes {
+		if n.NodeType != "composite" {
+			continue
+		}
+		chain := flattenCompositePhysical(n.ID, byID, chains, map[int64]bool{}, 0)
+		if len(chain) == 0 {
+			continue
+		}
+		raw[n.ID] = raw[chain[0].NodeID]
+	}
+}
+
 // ResolveCompositeHops fills each composite node's Hops with its ordered member
 // child nodes (resolved to name/type), so the UI can flatten a composite into
 // its physical chain. See the Node struct's doc comment for why Hops isn't a

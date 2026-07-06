@@ -75,7 +75,7 @@ export default function NodeList() {
   if (loading && !data) return <Layout><Loading /></Layout>
   if (!data && error) return <Layout><Empty title="加载失败" desc={error}><button onClick={load} className="btn-secondary text-xs mt-3">重试</button></Empty></Layout>
 
-  const { nodes = [], latest_agent_version, node_traffic = {}, node_raw_traffic = {} } = data || {}
+  const { nodes = [], latest_agent_version, node_raw_traffic = {} } = data || {}
   const singleNodes = nodes.filter(n => n.node_type !== 'composite')
   const compositeNodes = nodes.filter(n => n.node_type === 'composite')
   const tabNodes = tab === 'composite' ? compositeNodes : singleNodes
@@ -83,12 +83,7 @@ export default function NodeList() {
   const roleFiltered = !roleMask ? tabNodes : tabNodes.filter(n => ((n.roles ?? 1) & roleMask) === roleMask)
   const filtered0 = !q ? roleFiltered : roleFiltered.filter(n => (n.name || '').toLowerCase().includes(q))
 
-  // 「原始流量」列只在单点 tab 渲染：带着它的排序切去组合 tab，排序仍生效却
-  // 无处显示、无法取消，还会静默禁用拖拽调序——切走时清掉这个不可见排序。
-  const switchTab = (key) => {
-    setTab(key)
-    if (key === 'composite') setSort(s => s.col === 'rawtraffic' ? { col: null, dir: null } : s)
-  }
+  const switchTab = (key) => setTab(key)
   const cycleSort = (col) => {
     setSort(s => {
       if (col === 'speed') setSpeedSnap({ ...speeds })
@@ -99,9 +94,7 @@ export default function NodeList() {
   }
   const filtered = !sort.col ? filtered0 : [...filtered0].sort((a, b) => {
     let d = 0
-    if (sort.col === 'traffic') {
-      d = (node_traffic[a.id] || 0) - (node_traffic[b.id] || 0)
-    } else if (sort.col === 'rawtraffic') {
+    if (sort.col === 'rawtraffic') {
       d = (node_raw_traffic[a.id] || 0) - (node_raw_traffic[b.id] || 0)
     } else if (sort.col === 'speed') {
       const sa = speedSnap || speeds
@@ -211,14 +204,10 @@ export default function NodeList() {
           <table className="tbl">
             <thead><tr>
               <th className="w-14">ID</th><th>名称</th><th>IP 栈</th><th>版本</th><th>最近同步</th><th>状态</th>
-              <th className="cursor-pointer select-none" onClick={() => cycleSort('traffic')}
-                title="按授权记账的当期用量：单向计费节点只计上行，随用户流量周期重置清零">
-                <span className="inline-flex items-center">流量<SortArrow col="traffic" sort={sort} /></span>
-              </th>
-              {tab !== 'composite' && <th className="cursor-pointer select-none" onClick={() => cycleSort('rawtraffic')}
-                title="节点实际转发的累计字节（上行+下行），不乘倍率、不随重置清零">
+              <th className="cursor-pointer select-none" onClick={() => cycleSort('rawtraffic')}
+                title="节点实际转发的累计字节（上行+下行），不乘倍率、不随重置清零；组合节点取其入口物理子节点的原始流量">
                 <span className="inline-flex items-center">原始流量<SortArrow col="rawtraffic" sort={sort} /></span>
-              </th>}
+              </th>
               <th className="cursor-pointer select-none min-w-[170px]" onClick={() => cycleSort('speed')}>
                 <span className="inline-flex items-center">速度<SortArrow col="speed" sort={sort} /></span>
               </th>
@@ -260,8 +249,7 @@ export default function NodeList() {
                     {fmtTime(n.last_apply_at?.Valid ? n.last_apply_at.Int64 : null)}
                   </td>
                   <td><NodeStatus node={n} /></td>
-                  <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</td>
-                  {tab !== 'composite' && <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_raw_traffic[n.id] || 0)}</td>}
+                  <td className="font-mono text-xs text-ink-mut">{fmtBytes(node_raw_traffic[n.id] || 0)}</td>
                   <td className="font-mono text-xs whitespace-nowrap min-w-[170px]">
                     {speeds[n.id] ? (
                       <>
@@ -311,11 +299,7 @@ export default function NodeList() {
                   <NodeStatus node={n} />
                 </div>
                 <div className="flex items-center gap-2 text-xs text-ink-soft flex-wrap">
-                  <span className="font-mono text-ink-mut">{fmtBytes(node_traffic[n.id] || 0)}</span>
-                  {n.node_type !== 'composite' && <>
-                    <span className="text-ink-mut">·</span>
-                    <span className="font-mono text-ink-mut">原始 {fmtBytes(node_raw_traffic[n.id] || 0)}</span>
-                  </>}
+                  <span className="font-mono text-ink-mut">原始 {fmtBytes(node_raw_traffic[n.id] || 0)}</span>
                   {speeds[n.id] && <>
                     <span className="text-ink-mut">·</span>
                     <span className="font-mono text-emerald-600">↑{fmtSpeed(speeds[n.id].up)}</span>
