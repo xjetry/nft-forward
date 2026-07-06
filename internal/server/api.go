@@ -290,7 +290,6 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeOnline(s.DB, nodes)
-	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
 	// The dashboard only shows aggregates over rules/users, so compute them
 	// server-side instead of shipping the full rules and users arrays (plus a
 	// node_by_id map the UI never read) on every load.
@@ -300,12 +299,27 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	userCount, _ := db.CountUsers(s.DB)
 	jsonOK(w, map[string]any{
 		"nodes":              nodes,
-		"node_traffic":       nodeTraffic,
+		"node_raw_traffic":   s.nodeRawTrafficWithComposites(nodes),
 		"rule_count":         ruleCount,
 		"rule_count_by_node": ruleCountByNode,
 		"total_bytes":        totalBytes,
 		"user_count":         userCount,
 	})
+}
+
+// nodeRawTrafficWithComposites returns raw forwarded bytes (uplink+downlink, no
+// multiplier, never reset) keyed by node id, with every composite node populated
+// from its entry physical child's raw so callers read node_raw_traffic[id]
+// uniformly for single and composite nodes alike. A nil map (load error) is
+// normalized to empty so it JSON-encodes as {} rather than null, which would
+// bypass the frontend's destructuring defaults.
+func (s *Server) nodeRawTrafficWithComposites(nodes []*db.Node) map[int64]int64 {
+	raw, _ := db.NodeRawTraffic(s.DB)
+	if raw == nil {
+		raw = map[int64]int64{}
+	}
+	db.FillCompositeRawTraffic(s.DB, nodes, raw)
+	return raw
 }
 
 // --- Nodes ---
@@ -321,21 +335,9 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
-	nodeTraffic, _ := db.NodeTrafficSums(s.DB)
-	nodeRawTraffic, _ := db.NodeRawTraffic(s.DB)
-	// A load error leaves these maps nil, which JSON-encodes as null and would
-	// bypass the frontend's destructuring defaults (they only cover undefined);
-	// an empty map degrades the column to zeros instead of crashing the page.
-	if nodeTraffic == nil {
-		nodeTraffic = map[int64]int64{}
-	}
-	if nodeRawTraffic == nil {
-		nodeRawTraffic = map[int64]int64{}
-	}
 	jsonOK(w, map[string]any{
 		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
-		"node_traffic":         nodeTraffic,
-		"node_raw_traffic":     nodeRawTraffic,
+		"node_raw_traffic":     s.nodeRawTrafficWithComposites(nodes),
 		"latest_agent_version": serverVersion(),
 		"show_rate_to_user":    showRate == "1",
 	})

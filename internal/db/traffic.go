@@ -46,24 +46,6 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	return tx.Commit()
 }
 
-// NodeTrafficSums returns total traffic_used_bytes per node across all users.
-func NodeTrafficSums(d *sql.DB) (map[int64]int64, error) {
-	rows, err := d.Query(`SELECT node_id, SUM(traffic_used_bytes) FROM user_nodes GROUP BY node_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	m := make(map[int64]int64)
-	for rows.Next() {
-		var nodeID, total int64
-		if err := rows.Scan(&nodeID, &total); err != nil {
-			return nil, err
-		}
-		m[nodeID] = total
-	}
-	return m, rows.Err()
-}
-
 // AddNodeRawTraffic folds delta raw bytes into the node's cumulative ledger.
 // Raw bytes are the node's real forwarded volume (uplink + downlink), kept
 // apart from billing counters so multipliers, unidirectional billing and user
