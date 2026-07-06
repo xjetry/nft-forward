@@ -459,10 +459,45 @@ func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) {
 	resolveCompositeRelayStack(nodes, hops)
 }
 
-// resolveCompositeRelayStack is the pure aggregation, split out so tests
-// don't need a DB. hops must already be ordered by (node_id, position) —
-// ListAllNodeHops guarantees this — so chain[0]/chain[len-1] are the first
-// and last hop of each composite.
+// maxCompositeResolveDepth caps recursion when flattening composite membership
+// for display. Edits reject cycles, so well-formed data never nears this — it is
+// a backstop so stale or cyclic rows can't loop forever in the pure aggregators.
+const maxCompositeResolveDepth = 64
+
+// flattenCompositePhysical recursively expands composite nodeID's members into
+// its ordered physical leaf hops. A member that is itself a composite recurses; a
+// physical member yields one NodeChildHop carrying the mode configured in the
+// innermost composite that directly owns it — matching the data plane, where a
+// nested composite is transparent and only physical leaves ever forward. visited
+// (the current DFS path) and depth guard against cyclic or stale data. chains
+// maps composite id -> its ordered hops; byID resolves member name/type.
+func flattenCompositePhysical(nodeID int64, byID map[int64]*Node, chains map[int64][]*NodeHop, visited map[int64]bool, depth int) []NodeChildHop {
+	if depth > maxCompositeResolveDepth || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	defer delete(visited, nodeID)
+	var out []NodeChildHop
+	for _, h := range chains[nodeID] {
+		child := byID[h.HopNodeID]
+		if child != nil && child.NodeType == "composite" {
+			out = append(out, flattenCompositePhysical(h.HopNodeID, byID, chains, visited, depth+1)...)
+			continue
+		}
+		m := NodeChildHop{NodeID: h.HopNodeID, Mode: h.Mode}
+		if child != nil {
+			m.Name = child.Name
+			m.NodeType = child.NodeType
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// resolveCompositeRelayStack is the pure aggregation, split out so tests don't
+// need a DB. It recursively flattens each composite to its physical leaf chain,
+// so the entry relay is the first physical hop and the exit relay the last —
+// correct even across nested composites.
 func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 	byID := make(map[int64]*Node, len(nodes))
 	for _, n := range nodes {
@@ -476,15 +511,15 @@ func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 		if n.NodeType != "composite" {
 			continue
 		}
-		chain := chains[n.ID]
+		chain := flattenCompositePhysical(n.ID, byID, chains, map[int64]bool{}, 0)
 		if len(chain) == 0 {
 			continue
 		}
-		if first := byID[chain[0].HopNodeID]; first != nil {
+		if first := byID[chain[0].NodeID]; first != nil {
 			n.EntryRelayHost = first.RelayHost
 			n.EntryRelayHostV6 = first.RelayHostV6
 		}
-		if last := byID[chain[len(chain)-1].HopNodeID]; last != nil {
+		if last := byID[chain[len(chain)-1].NodeID]; last != nil {
 			n.ExitRelayHostV6 = last.RelayHostV6
 		}
 	}
@@ -513,8 +548,9 @@ func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
 }
 
 // resolveCompositeHops is the pure aggregation, split out so tests don't need a
-// DB. hops must be ordered by (node_id, position) — ListAllNodeHops guarantees
-// this — so each composite's member list comes out in chain order.
+// DB. It fills each composite's Hops with the recursively flattened physical leaf
+// chain (nested composites expanded away), so the UI shows a composite as the
+// concrete physical chain it forwards through, in order.
 func resolveCompositeHops(nodes []*Node, hops []*NodeHop) {
 	byID := make(map[int64]*Node, len(nodes))
 	for _, n := range nodes {
@@ -528,39 +564,33 @@ func resolveCompositeHops(nodes []*Node, hops []*NodeHop) {
 		if n.NodeType != "composite" {
 			continue
 		}
-		chain := chains[n.ID]
-		members := make([]NodeChildHop, 0, len(chain))
-		for _, h := range chain {
-			m := NodeChildHop{NodeID: h.HopNodeID, Mode: h.Mode}
-			if child := byID[h.HopNodeID]; child != nil {
-				m.Name = child.Name
-				m.NodeType = child.NodeType
-			}
-			members = append(members, m)
-		}
-		n.Hops = members
+		n.Hops = flattenCompositePhysical(n.ID, byID, chains, map[int64]bool{}, 0)
 	}
 }
 
-// resolveCompositeOnline is the pure aggregation: a composite is online only
-// when it has children and every child is reachable (online and not disabled).
+// resolveCompositeOnline is the pure aggregation: a composite is online only when
+// it has members and every recursively flattened physical leaf is reachable
+// (online and not disabled). A deep leaf going offline takes the whole nested
+// composite offline.
 func resolveCompositeOnline(nodes []*Node, hops []*NodeHop) {
+	byID := make(map[int64]*Node, len(nodes))
 	effective := make(map[int64]bool, len(nodes))
 	for _, n := range nodes {
+		byID[n.ID] = n
 		effective[n.ID] = n.Online == 1 && !n.Disabled
 	}
-	children := make(map[int64][]int64)
+	chains := make(map[int64][]*NodeHop)
 	for _, h := range hops {
-		children[h.NodeID] = append(children[h.NodeID], h.HopNodeID)
+		chains[h.NodeID] = append(chains[h.NodeID], h)
 	}
 	for _, n := range nodes {
 		if n.NodeType != "composite" {
 			continue
 		}
-		kids := children[n.ID]
-		online := len(kids) > 0
-		for _, id := range kids {
-			if !effective[id] {
+		leaves := flattenCompositePhysical(n.ID, byID, chains, map[int64]bool{}, 0)
+		online := len(leaves) > 0
+		for _, leaf := range leaves {
+			if !effective[leaf.NodeID] {
 				online = false
 				break
 			}

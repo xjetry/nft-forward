@@ -141,7 +141,15 @@ export default function NodeDetail() {
 
   const remove = async () => {
     if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/nodes/${id}`); toast('节点已删除'); navigate('/nodes') } catch (err) { toast(err.message, 'error') }
+    try {
+      const res = await api.del(`/nodes/${id}`)
+      if (res?.needs_confirm) {
+        const names = (res.affected_composites || []).map(c => c.name).join('、')
+        if (!(await confirm({ title: '该节点被组合引用', message: `节点「${node.name}」是组合 ${names} 的成员，删除会将它从这些组合中移除、改变其定义。是否继续？`, confirmText: '仍然删除', danger: true }))) return
+        await api.del(`/nodes/${id}?confirm=1`)
+      }
+      toast('节点已删除'); navigate('/nodes')
+    } catch (err) { toast(err.message, 'error') }
   }
 
   // gh-proxy is a URL prefix: enabling it routes both the install.sh fetch and
@@ -650,14 +658,18 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
               <Link to={`/nodes/${r.node_id}`} title="打开该子节点详情"
                 className="shrink-0 text-ink-mut hover:text-blue-600 text-sm leading-none px-0.5">↗</Link>
             )}
-            {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中间层时生效，
-                被用作规则出口时由规则的出口模式覆盖 */}
-            <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
-              title={i === rows.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
-              options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-            {i === rows.length - 1 && (
-              <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
-            )}
+            {nodeById[r.node_id]?.node_type === 'composite' ? (
+              <span className="text-[11px] text-ink-mut shrink-0 text-center cursor-help" style={{ width: 120 }} title="组合成员：转发模式由其内部各跳决定，不在此处配置">组合</span>
+            ) : (<>
+              {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中间层时生效，
+                  被用作规则出口时由规则的出口模式覆盖 */}
+              <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
+                title={i === rows.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
+                options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
+              {i === rows.length - 1 && (
+                <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
+              )}
+            </>)}
             {rows.length > 2 && (
               <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
             )}

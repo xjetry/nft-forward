@@ -172,7 +172,11 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     const n = nodeById[Number(id)]
     if (!n) return []
     if (n.node_type === 'composite' && n.hops?.length) {
-      return n.hops.map(h => h.name || `#${h.node_id}`)
+      // hops are already flattened to physical leaves server-side; recurse
+      // defensively in case a member still resolves to a composite.
+      return n.hops.flatMap(h =>
+        h.node_type === 'composite' ? flattenNode(h.node_id) : [h.name || `#${h.node_id}`]
+      )
     }
     return [n.name]
   }

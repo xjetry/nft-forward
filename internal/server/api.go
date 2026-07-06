@@ -401,7 +401,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		for i, h := range body.Hops {
 			childIDs[i] = h.NodeID
 		}
-		if err := s.validateCompositeChildren(childIDs); err != nil {
+		if err := s.validateCompositeChildren(0, childIDs); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -563,11 +563,16 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 			views[i] = nodeHopView{NodeHop: h, NodeName: nm}
 		}
 		resp["node_hops"] = views
+		// Candidate members for the composite editor: any node except this
+		// composite itself (a self-reference is refused). Nesting is allowed, so
+		// other composites are eligible members too — validateCompositeChildren on
+		// the server is the authoritative cycle guard.
 		singleNodes := make([]*db.Node, 0)
 		for _, nd := range all {
-			if nd.NodeType != "composite" {
-				singleNodes = append(singleNodes, nd)
+			if nd.ID == n.ID {
+				continue
 			}
+			singleNodes = append(singleNodes, nd)
 		}
 		resp["single_nodes"] = singleNodes
 		// Online is aggregated from children; reuse the same node list.
@@ -652,7 +657,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		}
 		childIDs[i] = hu.NodeID
 	}
-	if err := s.validateCompositeChildren(childIDs); err != nil {
+	if err := s.validateCompositeChildren(id, childIDs); err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1198,6 +1203,19 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
+	// Deleting a node FK-cascades its member rows out of every composite that
+	// references it, silently altering those composites' definitions. Warn first:
+	// unless the client confirms, return the affected composites instead of
+	// deleting. Applies to both physical and composite nodes — a composite can be
+	// nested inside another composite.
+	if referrers, _ := db.CompositeReferrers(s.DB, id); len(referrers) > 0 && r.URL.Query().Get("confirm") != "1" {
+		affected := make([]map[string]any, len(referrers))
+		for i, ref := range referrers {
+			affected[i] = map[string]any{"id": ref.ID, "name": ref.Name}
+		}
+		jsonOK(w, map[string]any{"needs_confirm": true, "affected_composites": affected})
+		return
+	}
 	if node.NodeType == "composite" {
 		// A composite is logical: it never appears as a physical hop, so it can't
 		// be spliced out of a chain the way a physical mid-hop can. A rule running
@@ -1741,23 +1759,75 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 // of the segment's tail hop is left as stored (dormant for composites) — the
 // chain assembler overwrites it with the junction edge mode or the rule's
 // exit mode.
+// maxFlattenedHops bounds one logical segment's physical fan-out. Recursive
+// nesting can multiply hops (C2=[C1,C1], C3=[C2,C2]… flatten to 2^n physical
+// leaves), and a forwarding leg with dozens of relays is meaningless anyway. A
+// cycle is refused at write time so flattening always terminates; this cap keeps
+// the flattened size bounded even for an acyclic exponential nest. Recursion
+// depth is implied (every level adds ≥1 hop), so no separate depth cap is needed.
+const maxFlattenedHops = 32
+
+// expandSegment flattens one logical node into its physical hop sequence. A
+// physical node yields a single hop. A composite recurses through its members
+// down to physical leaves — nested composites are transparent sugar, so every
+// leaf's ViaNodeID stays the top-level logical node the rule references
+// (authorization, quota and billing all attribute there, never to an inner
+// composite). The returned bool reports whether the top-level node is a
+// composite, which the caller uses for segment-boundary mode handling.
 func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 	node, err := db.GetNode(s.DB, nodeID)
 	if err != nil {
 		return nil, false, fmt.Errorf("节点不存在")
 	}
 	if node.NodeType == "composite" {
-		nh, _ := db.ListNodeHops(s.DB, nodeID)
-		if len(nh) == 0 {
-			return nil, true, fmt.Errorf("组合节点无子节点")
-		}
-		hops := make([]db.HopInput, len(nh))
-		for i, h := range nh {
-			hops[i] = db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode, ViaNodeID: nodeID}
+		count := 0
+		hops, err := s.flattenComposite(nodeID, nodeID, map[int64]bool{}, &count)
+		if err != nil {
+			return nil, true, err
 		}
 		return hops, true, nil
 	}
 	return []db.HopInput{{NodeID: nodeID, Mode: "", ViaNodeID: nodeID}}, false, nil
+}
+
+// flattenComposite recursively expands composite compositeID into physical hops,
+// tagging each with viaNodeID (the rule's top-level logical node, kept constant
+// through the recursion). Each physical leaf takes the mode configured in the
+// innermost composite that directly owns it. visited is the current DFS path,
+// guarding against a cyclic definition — writes reject cycles, but a defensive
+// guard keeps flattening total even against stale data. count accumulates
+// physical hops across the whole recursion and caps at maxFlattenedHops.
+func (s *Server) flattenComposite(compositeID, viaNodeID int64, visited map[int64]bool, count *int) ([]db.HopInput, error) {
+	if visited[compositeID] {
+		return nil, fmt.Errorf("组合节点存在环引用")
+	}
+	visited[compositeID] = true
+	defer delete(visited, compositeID)
+	nh, _ := db.ListNodeHops(s.DB, compositeID)
+	if len(nh) == 0 {
+		return nil, fmt.Errorf("组合节点无子节点")
+	}
+	var hops []db.HopInput
+	for _, h := range nh {
+		child, err := db.GetNode(s.DB, h.HopNodeID)
+		if err != nil {
+			return nil, fmt.Errorf("子节点不存在")
+		}
+		if child.NodeType == "composite" {
+			sub, err := s.flattenComposite(h.HopNodeID, viaNodeID, visited, count)
+			if err != nil {
+				return nil, err
+			}
+			hops = append(hops, sub...)
+			continue
+		}
+		*count++
+		if *count > maxFlattenedHops {
+			return nil, fmt.Errorf("组合展平后物理跳数超过上限 %d", maxFlattenedHops)
+		}
+		hops = append(hops, db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode, ViaNodeID: viaNodeID})
+	}
+	return hops, nil
 }
 
 // hopsForChain assembles a rule's physical chain: the entry segment followed
@@ -1774,22 +1844,58 @@ func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
 // caller's policy. The composite flag tells edit handlers which fields count
 // as an explicit exit-mode request: any chain beyond a bare single node never
 // honors the legacy mode alias.
-// validateCompositeChildren rejects a composite whose member is missing or is
-// itself a composite. Composites are flat combos of single nodes; a nested
-// composite would put a composite id into rule_hops.node_id at expansion time,
-// where no agent exists to serve it. The composite editors already offer only
-// single nodes — this is the authoritative server-side guard for direct API use.
-func (s *Server) validateCompositeChildren(childIDs []int64) error {
+// validateCompositeChildren checks a composite's proposed member list: every
+// child must exist, and the members must not close a reference cycle. rootID is
+// the composite being written (0 when creating a brand-new composite, which no
+// node can yet reference, so it can never be cycled back to). Nesting a composite
+// inside a composite is allowed — it is pure sugar that flattens to physical
+// leaves; only cycles are refused, since a cycle would make flattening
+// non-terminating. This is the authoritative server-side guard: the editors only
+// filter the picker as a convenience.
+func (s *Server) validateCompositeChildren(rootID int64, childIDs []int64) error {
 	for _, cid := range childIDs {
+		if cid == rootID {
+			return fmt.Errorf("组合节点不能引用自己")
+		}
 		n, err := db.GetNode(s.DB, cid)
 		if err != nil {
 			return fmt.Errorf("子节点 %d 不存在", cid)
 		}
-		if n.NodeType == "composite" {
-			return fmt.Errorf("组合节点不能嵌套组合节点（%s）", n.Name)
+		if n.NodeType != "composite" {
+			continue
+		}
+		// A composite member: if rootID is reachable from it through composite
+		// member edges, saving these members would close a cycle.
+		if path, cyclic := s.compositePathTo(cid, rootID, map[int64]bool{}); cyclic {
+			return fmt.Errorf("组合节点存在环引用：%s", path)
 		}
 	}
 	return nil
+}
+
+// compositePathTo reports whether targetID is reachable from nodeID by following
+// composite member edges, returning a "→"-joined node-name path for the error
+// message when it is. visited guards against a pre-existing cycle in stored data
+// so the walk always terminates.
+func (s *Server) compositePathTo(nodeID, targetID int64, visited map[int64]bool) (string, bool) {
+	node, err := db.GetNode(s.DB, nodeID)
+	if err != nil {
+		return "", false
+	}
+	if nodeID == targetID {
+		return node.Name, true
+	}
+	if node.NodeType != "composite" || visited[nodeID] {
+		return "", false
+	}
+	visited[nodeID] = true
+	nh, _ := db.ListNodeHops(s.DB, nodeID)
+	for _, h := range nh {
+		if path, ok := s.compositePathTo(h.HopNodeID, targetID, visited); ok {
+			return node.Name + " → " + path, true
+		}
+	}
+	return "", false
 }
 
 // exitHopForbidsDirect reports whether the chain's final physical hop is a
