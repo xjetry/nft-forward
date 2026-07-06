@@ -470,6 +470,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/nodes/{id}/downstream-bindings", s.apiListNodeDownstreamBindings)
 			r.Post("/nodes/{id}/downstream-bindings", s.apiUpdateNodeDownstreamBindings)
 			r.Get("/node-bindings", s.apiListAllNodeBindings)
+			r.Post("/nodes/{id}/grants/batch", s.apiBatchUpdateNodeGrants)
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)

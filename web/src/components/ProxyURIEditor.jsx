@@ -7,7 +7,7 @@ import {
   loadSubURLs, saveSubURLs, loadSubCache, saveSubCache,
   nodeRoleKey, fetchNodeRoles,
   loadLocalRoles, saveLocalRoles, applyNodeRole, applyNodeRoleBatch,
-  ROLE_LANDING, ROLE_DIRECT,
+  ROLE_LANDING, ROLE_DIRECT, rolesFirstOrder,
 } from '../lib/landing'
 
 const MAX_H = 420
@@ -40,7 +40,7 @@ export function ProxyURIEditor({ username, blurred }) {
   const [localRoles, setLocalRoles] = useState(() => loadLocalRoles(username))
   const [fetching, setFetching] = useState(false)
   const [manualParsed, setManualParsed] = useState(() => parseURIs(loadLocalURIs(username)))
-  const [showManualConfig, setShowManualConfig] = useState(() => parseURIs(loadLocalURIs(username)).length > 0)
+  const [showManual, setShowManual] = useState(() => loadLocalURIs(username).trim() !== '')
   const [selSub, setSelSub] = useState(new Set())
   const [selManual, setSelManual] = useState(new Set())
 
@@ -61,6 +61,10 @@ export function ProxyURIEditor({ username, blurred }) {
   const landingCount = subNodes.filter(n => roleOf(n) & ROLE_LANDING).length
   const directCount = subNodes.filter(n => roleOf(n) & ROLE_DIRECT).length
   const unconfiguredCount = subNodes.filter(n => !roleOf(n)).length
+  // Unconfigured nodes sink below configured ones; selection stays keyed to
+  // the original index so re-sorting never re-targets a checked row.
+  const subOrder = useMemo(() => rolesFirstOrder(subNodes, roleOf), [subNodes, roles])
+  const manualOrder = useMemo(() => rolesFirstOrder(manualParsed, roleOf), [manualParsed, roles])
 
   const saveManual = () => {
     saveLocalURIs(username, text)
@@ -70,7 +74,6 @@ export function ProxyURIEditor({ username, blurred }) {
     const failed = lines.length - parsed.length
     if (failed > 0) toast(`已保存 · ${failed} 行无法解析，已跳过`)
     else toast('已保存到本浏览器')
-    if (parsed.length > 0) setShowManualConfig(true)
   }
 
   const refreshSubs = async () => {
@@ -171,7 +174,7 @@ export function ProxyURIEditor({ username, blurred }) {
             <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
               <table className="w-full text-[13px]">
                 <tbody>
-                  {subNodes.map((n, i) => (
+                  {subOrder.map((i) => { const n = subNodes[i]; return (
                     <tr key={i} className="border-t border-line-soft">
                       <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
                         checked={selSub.has(i)} onChange={() => toggleSel(setSelSub)(i)} /></td>
@@ -184,30 +187,29 @@ export function ProxyURIEditor({ username, blurred }) {
                         <RoleToggle state={roleOf(n)} onChange={(bit) => handleSetRole(n, bit)} />
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
-        {/* Manual URIs */}
-        <label className="text-[13px] font-semibold text-ink-soft mb-1.5">手动填写</label>
-        <textarea ref={manualRef} className="input-field font-mono w-full min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]"
-          style={{ maxHeight: MAX_H, ...(manualH ? { height: manualH } : {}) }}
-          value={text} onChange={e => setText(e.target.value)}
-          placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
-        <button onClick={saveManual} className="btn-primary mt-3 self-start">保存</button>
-
-        {manualParsed.length > 0 && (
-          <>
-            <button type="button" onClick={() => setShowManualConfig(v => !v)}
-              className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mt-3 self-start transition-colors">
-              <svg className={`w-3 h-3 transition-transform ${showManualConfig ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-              配置表<span className="text-ink-mut">（{manualParsed.length} 个节点）</span>
-            </button>
-            {showManualConfig && (
-              <div className="mt-2 border border-line rounded-[10px] overflow-hidden">
+        {/* Manual URIs — same collapsible pattern as the subscription block,
+            with the role-config table folded inside. */}
+        <button type="button" onClick={() => setShowManual(v => !v)}
+          className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
+          <svg className={`w-3 h-3 transition-transform ${showManual ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          手动填写{manualParsed.length > 0 && <span className="text-ink-mut">（{manualParsed.length} 个节点）</span>}
+        </button>
+        {showManual && (
+          <div className="pl-0.5">
+            <textarea ref={manualRef} className="input-field font-mono w-full min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]"
+              style={{ maxHeight: MAX_H, ...(manualH ? { height: manualH } : {}) }}
+              value={text} onChange={e => setText(e.target.value)}
+              placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
+            <div className="mt-2"><button onClick={saveManual} className="btn-primary">保存</button></div>
+            {manualParsed.length > 0 && (
+              <div className="mt-3 border border-line rounded-[10px] overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
                   <span className="text-ink-soft font-semibold flex items-center gap-2">
                     <input type="checkbox" className="accent-blue-600"
@@ -222,7 +224,7 @@ export function ProxyURIEditor({ username, blurred }) {
                 <div className="overflow-y-auto" style={{ maxHeight: MAX_H }}>
                   <table className="w-full text-[13px]">
                     <tbody>
-                      {manualParsed.map((n, i) => (
+                      {manualOrder.map((i) => { const n = manualParsed[i]; return (
                         <tr key={i} className="border-t border-line-soft">
                           <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
                             checked={selManual.has(i)} onChange={() => toggleSel(setSelManual)(i)} /></td>
@@ -233,13 +235,13 @@ export function ProxyURIEditor({ username, blurred }) {
                             <RoleToggle state={roleOf(n)} onChange={(bit) => handleSetRole(n, bit)} />
                           </td>
                         </tr>
-                      ))}
+                      )})}
                     </tbody>
                   </table>
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

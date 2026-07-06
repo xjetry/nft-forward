@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
+import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge, ProbeChainButton } from '../../components/ui'
 import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
 import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
@@ -124,6 +124,7 @@ export default function RulesDetail() {
         <div className="card-header">
           <h3 className="text-sm font-bold">各跳状态</h3>
           <span className="text-xs text-ink-mut">{hops.length} 跳</span>
+          <span className="ml-auto"><ProbeChainButton ruleId={rule.id} /></span>
         </div>
         {hops.length ? (
           <TableBox>
@@ -143,7 +144,7 @@ export default function RulesDetail() {
                     <td><ModeBadge mode={h.mode} /></td>
                     <td className="font-mono text-xs text-ink-mut">{fmtBytes(h.total_bytes)}</td>
                     <td className="text-right">
-                      <ReallocateForm ruleId={rule.id} position={h.position} onDone={load} />
+                      <ReallocateForm ruleId={rule.id} position={h.position} current={h.listen_port} onDone={load} />
                     </td>
                   </tr>
                 )
@@ -171,10 +172,14 @@ export default function RulesDetail() {
   )
 }
 
-function ReallocateForm({ ruleId, position, onDone }) {
-  const [port, setPort] = useState('')
+function ReallocateForm({ ruleId, position, current, onDone }) {
+  // Prefill with the currently allocated port so admins can tweak it in place;
+  // clearing the input falls back to random allocation (placeholder "随机").
+  const [port, setPort] = useState(current ? String(current) : '')
   const [loading, setLoading] = useState(false)
   const toast = useToast()
+  // Resync after a reallocation refreshes the hop list with the new port.
+  useEffect(() => { setPort(current ? String(current) : '') }, [current])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -182,7 +187,6 @@ function ReallocateForm({ ruleId, position, onDone }) {
     try {
       await api.post(`/rules/${ruleId}/hops/${position}/reallocate`, { port: port ? Number(port) : undefined })
       toast('端口已重分配')
-      setPort('')
       onDone()
     } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
   }

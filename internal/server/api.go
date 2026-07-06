@@ -889,7 +889,7 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 			return
 		}
 		if down.Roles&db.NodeRoleVia == 0 {
-			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中间层角色")
+			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中转角色")
 			return
 		}
 		// Match the downstream-side default: an omitted mode is userspace, not
@@ -1977,14 +1977,14 @@ func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode 
 	for _, viaID := range vias {
 		viaNode, err := db.GetNode(s.DB, viaID)
 		if err != nil {
-			return nil, true, fmt.Errorf("中间层节点不存在")
+			return nil, true, fmt.Errorf("中转节点不存在")
 		}
 		if db.EffectiveNodeRoles(viaNode.Roles, effRoles[viaID])&db.NodeRoleVia == 0 {
-			return nil, true, fmt.Errorf("节点 %s 不是中间层", viaNode.Name)
+			return nil, true, fmt.Errorf("节点 %s 不是中转", viaNode.Name)
 		}
 		edge, err := db.GetNodeBinding(s.DB, prev, viaID)
 		if err != nil {
-			return nil, true, fmt.Errorf("中间层 %s 未绑定到所选上游", viaNode.Name)
+			return nil, true, fmt.Errorf("中转 %s 未绑定到所选上游", viaNode.Name)
 		}
 		seg, viaComposite, err := s.expandSegment(viaID)
 		if err != nil {
@@ -2475,6 +2475,69 @@ func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	s.apiDispatchFanout(affected)
 	jsonOK(w, map[string]any{"ok": true})
+}
+
+// apiBatchUpdateNodeGrants applies one node's grant-roster diff in a single
+// request: grants every user in add_user_ids (default per-node quota) and
+// revokes every user in remove_user_ids. Revoking also deletes the removed
+// users' rules on this node — same contract as apiRevokeNode — and the fanout
+// is dispatched once at the end. This replaces the node detail page's roster
+// editor issuing N sequential requests that could partially fail with no
+// indication of which users were actually applied.
+func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r.Context())
+	nodeID, err := urlParamInt64(r, "id")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		AddUserIDs    []int64 `json:"add_user_ids"`
+		RemoveUserIDs []int64 `json:"remove_user_ids"`
+		MaxForwards   int     `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if len(body.AddUserIDs) == 0 && len(body.RemoveUserIDs) == 0 {
+		jsonErr(w, http.StatusBadRequest, "没有需要变更的授权")
+		return
+	}
+	if body.MaxForwards <= 0 {
+		body.MaxForwards = defaultGrantMaxForwards
+	}
+	// Additions first: a user appearing in both lists ends up revoked, which
+	// matches the roster editor's semantics (the final list is authoritative).
+	granted := 0
+	for _, uid := range body.AddUserIDs {
+		if err := db.GrantNode(s.DB, uid, nodeID, body.MaxForwards, 0); err != nil {
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("已新增 %d/%d 个授权后失败: %s", granted, len(body.AddUserIDs), err.Error()))
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
+		granted++
+	}
+	var affected []int64
+	revoked := 0
+	for _, uid := range body.RemoveUserIDs {
+		if err := db.RevokeNode(s.DB, uid, nodeID); err != nil {
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("已移除 %d/%d 个授权后失败: %s", revoked, len(body.RemoveUserIDs), err.Error()))
+			return
+		}
+		nodes, err := db.DeleteRulesForUserNode(s.DB, uid, nodeID)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected = append(affected, nodes...)
+		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
+		revoked++
+	}
+	s.apiDispatchFanout(affected)
+	jsonOK(w, map[string]any{"ok": true, "granted": granted, "revoked": revoked})
 }
 
 func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
@@ -2991,7 +3054,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	vias := viasOf(body.ViaNodeIDs)
 	for _, viaID := range vias {
 		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			jsonErr(w, http.StatusForbidden, "无权使用中转节点")
 			return
 		}
 	}
@@ -3153,7 +3216,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	// falling through to the role/binding checks.
 	for _, viaID := range vias {
 		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用中间层节点")
+			jsonErr(w, http.StatusForbidden, "无权使用中转节点")
 			return
 		}
 	}

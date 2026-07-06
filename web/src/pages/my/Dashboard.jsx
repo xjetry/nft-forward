@@ -219,7 +219,7 @@ export default function MyDashboard() {
                       <span className="text-ink-mut mr-1.5 select-none cursor-move" title="拖拽排序（仅保存在本浏览器）"
                         draggable onDragStart={() => setDragIdx(i)}>⠿</span>
                       {n.name}
-                      {(n.roles & 2) !== 0 && <Badge color="blue" className="ml-1.5">中间层</Badge>}
+                      {(n.roles & 2) !== 0 && <Badge color="blue" className="ml-1.5">中转</Badge>}
                     </td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
                     {show_rate && <td><Badge color="blue">×{n.rate_multiplier ?? 1}</Badge>{n.unidirectional && <Badge color="amber" className="ml-1">单向</Badge>}</td>}
@@ -253,7 +253,7 @@ export default function MyDashboard() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-semibold">
                       {n.name}
-                      {(n.roles & 2) !== 0 && <Badge color="blue" className="ml-1.5">中间层</Badge>}
+                      {(n.roles & 2) !== 0 && <Badge color="blue" className="ml-1.5">中转</Badge>}
                     </span>
                     <NodeOnline node={n} />
                   </div>

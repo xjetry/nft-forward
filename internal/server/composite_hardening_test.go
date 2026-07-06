@@ -40,7 +40,7 @@ func TestNoDirectExitCompositeLastChild(t *testing.T) {
 	}
 }
 
-// 2: 撤销「中间层」节点的授权，即便该节点不是规则入口，也必须清掉以它为 via 的
+// 2: 撤销「中转」节点的授权，即便该节点不是规则入口，也必须清掉以它为 via 的
 // 既有链，否则规则继续跑（继续计费）却已无授权。
 func TestRevokeViaNodeStopsChain(t *testing.T) {
 	d := openDB(t)

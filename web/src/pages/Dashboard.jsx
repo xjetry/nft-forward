@@ -51,12 +51,14 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-[18px] mb-[22px]">
-        {/* Node status */}
-        <div className="card">
+        {/* Node status — flex column so the table stretches to the card's
+            grid-given height (the taller sibling card) instead of stopping
+            at TableBox's default max-height. */}
+        <div className="card flex flex-col">
           <div className="card-header justify-between"><h3 className="text-[15px] font-bold">节点状态</h3><span className="text-[12.5px] text-ink-mut">{nodes.length} 个节点</span></div>
           {nodes.length ? (<>
             {/* Desktop table */}
-            {!isMobile && <TableBox>
+            {!isMobile && <TableBox className="flex-1 min-h-0 !max-h-none">
             <table className="tbl">
               <thead><tr><th>节点名</th><th>地址</th><th>类型</th><th>规则</th><th>流量</th><th>状态</th><th>心跳</th></tr></thead>
               <tbody>

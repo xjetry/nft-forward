@@ -169,6 +169,18 @@ export function applyNodeRoleBatch(roles, nodes, bit, on) {
   return next
 }
 
+/* Display order for node tables: nodes with any role (落地/直连) keep their
+   original relative order up top, unconfigured ones sink to the bottom.
+   Returns original indices instead of a reordered array so callers'
+   index-keyed state (row selection, React keys) stays stable across
+   re-sorts. */
+export function rolesFirstOrder(nodes, roleOf) {
+  const configured = []
+  const unconfigured = []
+  nodes.forEach((n, i) => (roleOf(n) ? configured : unconfigured).push(i))
+  return configured.concat(unconfigured)
+}
+
 export function nodeKey(n) {
   return n.host && n.port ? joinHostPort(n.host, n.port) : null
 }

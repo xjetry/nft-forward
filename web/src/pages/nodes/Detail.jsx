@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
@@ -6,6 +6,7 @@ import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, NodeTypeIcon, NodeStackBadge, useConfirm, Select } from '../../components/ui'
 import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
+import { PerNodeRolesForm } from '../users/Detail'
 
 const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
@@ -73,6 +74,24 @@ export default function NodeDetail() {
     return () => clearInterval(t)
   }, [offline, id])
 
+  // 所有配置小表单/开关共用一个提交锁：慢网络下按钮置灰、重复点击不会重复提交。
+  const [busy, setBusy] = useState(false)
+  const run = async (fn) => {
+    if (busy) return
+    setBusy(true)
+    try { await fn() } catch (err) { toast(err.message, 'error') } finally { setBusy(false) }
+  }
+  // 升级轮询计时器挂在 ref 上并随组件卸载清理：离开页面后不再于后台轮询
+  // 两分钟、也不会在别的页面弹出升级 toast。
+  const upgradeTimers = useRef(null)
+  const stopUpgradePoll = () => {
+    if (!upgradeTimers.current) return
+    clearInterval(upgradeTimers.current.poll)
+    clearTimeout(upgradeTimers.current.timeout)
+    upgradeTimers.current = null
+  }
+  useEffect(() => stopUpgradePoll, [])
+
   if (loading) return <Layout><Loading /></Layout>
   if (!data) return <Layout><Empty title="节点不存在" /></Layout>
 
@@ -86,59 +105,86 @@ export default function NodeDetail() {
   const up = data.upgrade || { status: 'none' }
   const showUpgrade = up.status !== 'none'
 
-  const saveName = async (e) => {
+  // 保存成功后统一走 reloadSilent 而非 load()：load() 会整页换成 Loading、
+  // 卸载所有卡片，闪烁之余还会冲掉其他卡片里编辑中的内容。
+  const saveName = (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/rename`, { name }); toast('名称已保存'); load() } catch (err) { toast(err.message, 'error') }
+    run(async () => { await api.post(`/nodes/${id}/rename`, { name }); toast('名称已保存'); await reloadSilent() })
   }
-  const saveRelay = async (e) => {
+  const saveRelay = (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); load() } catch (err) { toast(err.message, 'error') }
+    run(async () => { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); await reloadSilent() })
   }
-  const saveRelayV6 = async (e) => {
+  const saveRelayV6 = (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); load() } catch (err) { toast(err.message, 'error') }
+    run(async () => { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); await reloadSilent() })
   }
-  const savePortRange = async (e) => {
+  // 端口范围在前端先校验格式，输错立即报错，不必等服务器打回。
+  const portRangeError = (s) => {
+    const t = s.trim()
+    if (!t) return null // 留空交由服务端处理
+    for (const part of t.split(',')) {
+      const p = part.trim()
+      const m = p.match(/^(\d{1,5})(?:-(\d{1,5}))?$/)
+      if (!m) return `「${p}」格式错误：应为端口或端口区间，如 23333 或 10001-19999`
+      const a = Number(m[1]); const b = m[2] ? Number(m[2]) : a
+      if (a < 1 || a > 65535 || b < 1 || b > 65535) return `「${p}」端口需在 1-65535 之间`
+      if (a > b) return `「${p}」区间起始端口不能大于结束端口`
+    }
+    return null
+  }
+  const savePortRange = (e) => {
     e.preventDefault()
-    try { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); load() } catch (err) { toast(err.message, 'error') }
+    const msg = portRangeError(portRange)
+    if (msg) { toast(msg, 'error'); return }
+    run(async () => { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); await reloadSilent() })
   }
-  const saveRateMult = async (e) => {
+  const saveRateMult = (e) => {
     e.preventDefault()
-    const rm = parseFloat(rateMult)
-    try { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm >= 0 ? rm : 1 }); toast('倍率已保存'); load() } catch (err) { toast(err.message, 'error') }
+    // 显式校验而不是把非法值静默替换成 1：用户必须知道输入没有被按原样保存。
+    const rm = Number(rateMult)
+    if (rateMult.trim() === '' || !Number.isFinite(rm) || rm < 0) { toast('倍率必须是大于等于 0 的数字', 'error'); return }
+    run(async () => { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm }); toast('倍率已保存'); await reloadSilent() })
   }
-  const toggleBillingDir = async () => {
+  const toggleBillingDir = () => run(async () => {
     const next = !unidirectional
-    try { await api.post(`/nodes/${id}/unidirectional`, { unidirectional: next }); setUnidirectional(next); toast(next ? '已切换为单向计费' : '已切换为双向计费') } catch (err) { toast(err.message, 'error') }
-  }
-  const toggleNoDirectExit = async () => {
+    await api.post(`/nodes/${id}/unidirectional`, { unidirectional: next })
+    setUnidirectional(next); toast(next ? '已切换为单向计费' : '已切换为双向计费')
+  })
+  const toggleNoDirectExit = () => run(async () => {
     const next = !noDirectExit
-    try { await api.post(`/nodes/${id}/no-direct-exit`, { no_direct_exit: next }); setNoDirectExit(next); toast(next ? '已禁止直接转发' : '已允许直接转发') } catch (err) { toast(err.message, 'error') }
-  }
-  const resync = async () => {
-    try { await api.post(`/nodes/${id}/resync`); toast('已发起同步') } catch (err) { toast(err.message, 'error') }
-  }
+    await api.post(`/nodes/${id}/no-direct-exit`, { no_direct_exit: next })
+    setNoDirectExit(next); toast(next ? '已禁止直接转发' : '已允许直接转发')
+  })
+  const resync = () => run(async () => { await api.post(`/nodes/${id}/resync`); toast('已发起同步') })
   const upgrade = async () => {
     if (!(await confirm({ title: '升级节点', message: '推送 agent 二进制到此节点并重启？', confirmText: '升级' }))) return
     try {
       await api.post(`/nodes/${id}/upgrade`); toast('已发起升级')
+      stopUpgradePoll()
       const poll = setInterval(async () => {
         try {
           const d = await api.get(`/nodes/${id}`)
           const st = d?.upgrade?.status
           if (st === 'ok' || st === 'error') {
-            clearInterval(poll)
+            stopUpgradePoll()
             toast(st === 'ok' ? '升级成功' : '升级失败: ' + (d.upgrade.error || ''), st === 'ok' ? undefined : 'error')
-            load()
+            reloadSilent()
           }
-        } catch { clearInterval(poll) }
+        } catch { stopUpgradePoll() }
       }, 2000)
-      setTimeout(() => clearInterval(poll), 120000)
+      // 超时不再静默停止：明确告知状态未知，避免界面永远停在「升级中」。
+      const timeout = setTimeout(() => {
+        stopUpgradePoll()
+        toast('等待升级结果超时（2 分钟），请稍后刷新查看实际状态', 'error')
+        reloadSilent()
+      }, 120000)
+      upgradeTimers.current = { poll, timeout }
     } catch (err) { toast(err.message, 'error') }
   }
-  const toggle = async () => {
-    try { await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); load() } catch (err) { toast(err.message, 'error') }
-  }
+  const toggle = () => run(async () => {
+    await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); await reloadSilent()
+  })
 
   const remove = async () => {
     if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
@@ -232,13 +278,13 @@ export default function NodeDetail() {
             <ConfigField label="节点名称">
               <form onSubmit={saveName} className="flex gap-2 max-w-md">
                 <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
             <ConfigField label="倍率" hint="组合节点自身的计费倍率，作用于整条链路承担的流量">
               <form onSubmit={saveRateMult} className="flex gap-2 max-w-md">
                 <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
             <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
@@ -350,7 +396,7 @@ export default function NodeDetail() {
             <ConfigField label="节点名称">
               <form onSubmit={saveName} className="flex gap-2">
                 <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
 
@@ -360,7 +406,7 @@ export default function NodeDetail() {
             >
               <form onSubmit={saveRelay} className="flex gap-2">
                 <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IP 或域名" disabled={node.relay_host_declared} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={node.relay_host_declared}>保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy || node.relay_host_declared}>保存</button>
               </form>
             </ConfigField>
 
@@ -370,21 +416,21 @@ export default function NodeDetail() {
             >
               <form onSubmit={saveRelayV6} className="flex gap-2">
                 <input className="input-field font-mono flex-1" value={relayHostV6} onChange={e => setRelayHostV6(e.target.value)} placeholder="数据面公网 IPv6 地址" disabled={node.relay_host_v6_declared} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={node.relay_host_v6_declared}>保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy || node.relay_host_v6_declared}>保存</button>
               </form>
             </ConfigField>
 
             <ConfigField label="端口范围" hint="规则自动分配监听端口时从该范围中选取">
               <form onSubmit={savePortRange} className="flex gap-2">
                 <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
 
             <ConfigField label="倍率" hint="影响该节点承担流量的计费">
               <form onSubmit={saveRateMult} className="flex gap-2">
                 <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
-                <button type="submit" className="btn-primary flex-none px-5">保存</button>
+                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
 
@@ -409,7 +455,7 @@ export default function NodeDetail() {
         </div>
         )}
 
-        {/* ===== 节点角色（含中间层的上游绑定） ===== */}
+        {/* ===== 节点角色（含中转的上游绑定） ===== */}
         <RolesCard node={node} onDone={reloadSilent} />
 
         {/* ===== 组合节点跳序 — desktop only ===== */}
@@ -483,7 +529,7 @@ export default function NodeDetail() {
             <h2 className="m-0 text-[15px] font-bold">已授权用户</h2>
             <span className="text-[12.5px] text-ink-mut">{grantedUsers.length} 人</span>
           </div>
-          <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} onChanged={load} />
+          <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} onChanged={reloadSilent} />
           {grantedUsers.length ? (
             <TableBox>
             <table className="tbl">
@@ -495,12 +541,12 @@ export default function NodeDetail() {
                       <Link to={`/users/${g.user_id}`} className="text-blue-600 hover:underline">{g.username}</Link>
                     </td>
                     <td className="font-mono">{g.max_forwards}</td>
-                    <td className="text-xs">{g.roles === 1 ? '仅入口' : g.roles === 2 ? '仅中间层' : g.roles === 3 ? '入口+中间层' : '跟随节点'}</td>
+                    <td><PerNodeRolesForm userId={g.user_id} nodeId={node.id} roles={g.roles} onDone={reloadSilent} /></td>
                     <td className="text-xs text-ink-mut">{fmtTime(g.granted_at)}</td>
                     <td className="text-right">
                       <button onClick={async () => {
                         if (!await confirm({ title: '取消授权', message: `确定取消 ${g.username} 对该节点的授权？`, confirmText: '取消授权', danger: true })) return
-                        try { await api.del(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); load() }
+                        try { await api.del(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); reloadSilent() }
                         catch (e) { toast(e.message, 'error') }
                       }} className="text-red-500 text-xs font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0">取消授权</button>
                     </td>
@@ -560,9 +606,10 @@ function HeaderStatus({ node }) {
   )
 }
 
-/* 多选下拉直接编辑该节点的授权集合：默认选中已授权用户，保存时按 diff
-   新增走 grant（默认转发上限同用户页）、移除走 revoke。移除会让该用户在此
-   节点的规则失去授权依据，所以先确认。 */
+/* 多选下拉直接编辑该节点的授权集合：默认选中已授权用户，保存时把 diff
+   （新增 + 移除）一次性提交到批量接口，由后端顺序应用并统一下发，避免
+   前端逐个请求时中途失败造成"部分成功但不知道成功了哪些"。移除会让该
+   用户在此节点的规则失去授权依据，所以先确认。 */
 function GrantEditor({ nodeId, grantedUsers, onChanged }) {
   const [allUsers, setAllUsers] = useState(null)
   const [sel, setSel] = useState(grantedUsers.map(g => String(g.user_id)))
@@ -595,9 +642,11 @@ function GrantEditor({ nodeId, grantedUsers, onChanged }) {
     }))) return
     setSaving(true)
     try {
-      for (const uid of added) await api.post(`/users/${uid}/grants`, { node_id: Number(nodeId) })
-      for (const uid of removed) await api.del(`/users/${uid}/grants/${nodeId}`)
-      toast('授权已更新')
+      const res = await api.post(`/nodes/${nodeId}/grants/batch`, {
+        add_user_ids: added.map(Number),
+        remove_user_ids: removed.map(Number),
+      })
+      toast(`授权已更新（新增 ${res?.granted ?? added.length}、移除 ${res?.revoked ?? removed.length}）`)
     } catch (err) { toast(err.message, 'error') } finally { setSaving(false); onChanged() }
   }
 
@@ -660,7 +709,7 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
       </div>
       <p className="text-[12.5px] text-ink-mut mb-2.5">
         拖拽 ⠿ 调整顺序。模式作用于该跳到下一跳之间的段：线路稳定、低丢包用内核态（性能更好，支持 TCP/UDP/TCP+UDP）；
-        跨境或网络不稳定、丢包高用用户态（更抗抖动，仅 TCP）。末跳模式在该组合被用作中间层时生效，被用作规则出口时由规则的出口模式覆盖。修改对此后新建的规则生效。
+        跨境或网络不稳定、丢包高用用户态（更抗抖动，仅 TCP）。末跳模式在该组合被用作中转时生效，被用作规则出口时由规则的出口模式覆盖。修改对此后新建的规则生效。
       </p>
       <div className="space-y-2">
         {rows.map((r, i) => (
@@ -683,13 +732,13 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
             {nodeById[r.node_id]?.node_type === 'composite' ? (
               <span className="text-[11px] text-ink-mut shrink-0 text-center cursor-help" style={{ width: 120 }} title="组合成员：转发模式由其内部各跳决定，不在此处配置">组合</span>
             ) : (<>
-              {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中间层时生效，
+              {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中转时生效，
                   被用作规则出口时由规则的出口模式覆盖 */}
               <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
-                title={i === rows.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
+                title={i === rows.length - 1 ? '末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
                 options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
               {i === rows.length - 1 && (
-                <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
+                <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖">末</span>
               )}
             </>)}
             {rows.length > 2 && (
@@ -719,7 +768,18 @@ function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
 // (nothing to save) with a retry, so one transient blip can never overwrite a
 // stored edge set with an empty one on the next save.
 function EdgeEditor({ title, hint, rows, err, onRetry, candidates, idKey, nodeById,
-                      onPick, onMode, onRemove, onAddAll, placeholder }) {
+                      onPick, onMode, onRemove, placeholder, isEligible, unfitLabel }) {
+  const toOption = (n) => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> })
+  // 全量展示候选节点；不符合的（isEligible 为假）沉底但仍可选，选中后由保存
+  // 流程自动补齐所缺用途（见 save），用一条不可选
+  // 的分隔文本与可选区隔开，让用户能发现"节点在，但缺角色"而不是凭空消失。
+  const buildOptions = (list) => {
+    if (!isEligible) return list.map(toOption)
+    const ok = list.filter(isEligible), unfit = list.filter(n => !isEligible(n))
+    return unfit.length
+      ? [...ok.map(toOption), { heading: unfitLabel }, ...unfit.map(toOption)]
+      : ok.map(toOption)
+  }
   return (
     <div>
       <div className="flex items-baseline gap-2.5 mb-1.5">
@@ -735,12 +795,12 @@ function EdgeEditor({ title, hint, rows, err, onRetry, candidates, idKey, nodeBy
       )}
       {rows && (
         <>
-          <div className="flex items-center gap-2 mb-2">
-            <Select multiple searchable className="flex-1" placeholder={placeholder}
-              value={rows.map(r => String(r[idKey]))} onChange={onPick}
-              options={candidates.map(n => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> }))} />
-            <button type="button" onClick={onAddAll} className="btn-secondary flex-none text-xs">全选</button>
-          </div>
+          <Select multiple searchable tabs selectAll className="mb-2" placeholder={placeholder}
+            value={rows.map(r => String(r[idKey]))} onChange={onPick}
+            groups={[
+              { label: '单点', options: buildOptions(candidates.filter(n => n.node_type !== 'composite')) },
+              { label: '组合', options: buildOptions(candidates.filter(n => n.node_type === 'composite')) },
+            ]} />
           {rows.length > 0 && (
             <div className="space-y-2">
               {rows.map((r, i) => {
@@ -798,7 +858,7 @@ function RolesCard({ node, onDone }) {
     return () => { stale = true }
   }, [needNodes, node.id])
 
-  // Lazy-load upstream edges when 中间层 is checked. stale drops superseded
+  // Lazy-load upstream edges when 中转 is checked. stale drops superseded
   // responses; an error keeps rows null so a save never overwrites stored edges.
   useEffect(() => {
     if (!viaChecked || upRows !== null || upErr) return
@@ -834,7 +894,9 @@ function RolesCard({ node, onDone }) {
   const upCandidates = allNodes.filter(n => n.id !== node.id)
   // Downstream candidates: other nodes carrying the via role, since a downstream
   // must be able to sit behind this one as a middle layer.
-  const downCandidates = allNodes.filter(n => n.id !== node.id && (n.roles & 2) !== 0)
+  // 下游候选不再预过滤角色：全量展示，仅入口（无中转位）的在下拉里沉底置灰，
+  // 由 EdgeEditor 的 isEligible 判定。上游天然支持所有节点，无需判定。
+  const downCandidates = allNodes.filter(n => n.id !== node.id)
 
   const pickUp = (next) => setUpRows(rs => {
     const keep = rs.filter(r => next.includes(String(r.upstream_node_id)))
@@ -859,8 +921,6 @@ function RolesCard({ node, onDone }) {
     autoSaveMode('upstream_node_id', next, savedUpRows, setSavedUpRows, `/nodes/${node.id}/bindings`)
   }
   const removeUp = (i) => setUpRows(rs => rs.filter((_, j) => j !== i))
-  const addAllUp = () => setUpRows(rs => upCandidates.map(n =>
-    rs.find(r => Number(r.upstream_node_id) === n.id) || { upstream_node_id: n.id, mode: 'userspace' }))
 
   const pickDown = (next) => setDownRows(rs => {
     const keep = rs.filter(r => next.includes(String(r.downstream_node_id)))
@@ -874,8 +934,6 @@ function RolesCard({ node, onDone }) {
     autoSaveMode('downstream_node_id', next, savedDownRows, setSavedDownRows, `/nodes/${node.id}/downstream-bindings`)
   }
   const removeDown = (i) => setDownRows(rs => rs.filter((_, j) => j !== i))
-  const addAllDown = () => setDownRows(rs => downCandidates.map(n =>
-    rs.find(r => Number(r.downstream_node_id) === n.id) || { downstream_node_id: n.id, mode: 'userspace' }))
 
   const rolesDirty = roles !== (node.roles ?? 1)
   const edgesDirty = (rows, saved) => rows !== null && saved !== null && (
@@ -904,6 +962,11 @@ function RolesCard({ node, onDone }) {
         setSavedUpRows(bs)
       }
       if (downDirty) {
+        // 仅入口用途的下游先自动补上中转用途，否则绑定会被服务端拒绝。
+        for (const r of downRows) {
+          const n = nodeById[Number(r.downstream_node_id)]
+          if (n && ((n.roles ?? 1) & 2) === 0) await api.post(`/nodes/${n.id}/roles`, { roles: (n.roles ?? 1) | 2 })
+        }
         const bs = downRows.map(r => ({ downstream_node_id: Number(r.downstream_node_id), mode: r.mode }))
         await api.post(`/nodes/${node.id}/downstream-bindings`, { bindings: bs })
         setSavedDownRows(bs)
@@ -928,27 +991,28 @@ function RolesCard({ node, onDone }) {
         <button onClick={save} disabled={saving || !dirty} className="btn-primary ml-auto">保存</button>
       </div>
       <p className="text-[12.5px] text-ink-mut mb-3">
-        入口：可被规则选为入口，并绑定下游。中间层：可绑定到上游之后供规则级联。至少保留一个。
+        入口：可被规则选为入口，并绑定下游。中转：可绑定到上游之后供规则级联。至少保留一个。
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
         <div className="md:pr-6 md:border-r border-line-soft">
           <div className="flex items-center gap-1.5 mb-3">{roleBtn(1, '入口', entryCls)}</div>
           {entryChecked && (
             <EdgeEditor title="已绑定的下游" placeholder="选择下游节点…"
-              hint="选中的下游（须为中间层）可在选中本节点的规则里级联接入本节点之后。模式作用于衔接段；修改对此后新建的规则生效。"
+              hint="选中的下游可在选中本节点的规则里级联接入本节点之后；仅入口用途的下游会在保存时自动补上中转用途。模式作用于衔接段；修改对此后新建的规则生效。"
               rows={downRows} err={downErr} onRetry={() => setDownErr(false)}
               candidates={downCandidates} idKey="downstream_node_id" nodeById={nodeById}
-              onPick={pickDown} onMode={setDownMode} onRemove={removeDown} onAddAll={addAllDown} />
+              isEligible={n => (n.roles & 2) !== 0} unfitLabel="以下节点仅有入口用途，选中后保存时会自动为其增加中转用途"
+              onPick={pickDown} onMode={setDownMode} onRemove={removeDown} />
           )}
         </div>
         <div>
-          <div className="flex items-center gap-1.5 mb-3">{roleBtn(2, '中间层', viaCls)}</div>
+          <div className="flex items-center gap-1.5 mb-3">{roleBtn(2, '中转', viaCls)}</div>
           {viaChecked && (
             <EdgeEditor title="已绑定的上游" placeholder="选择上游节点…"
-              hint="绑定后，选中这些上游（入口或中间层）的规则可以级联接入本节点。模式作用于衔接段；修改对此后新建的规则生效。"
+              hint="绑定后，选中这些上游（入口或中转）的规则可以级联接入本节点。模式作用于衔接段；修改对此后新建的规则生效。"
               rows={upRows} err={upErr} onRetry={() => setUpErr(false)}
               candidates={upCandidates} idKey="upstream_node_id" nodeById={nodeById}
-              onPick={pickUp} onMode={setUpMode} onRemove={removeUp} onAddAll={addAllUp} />
+              onPick={pickUp} onMode={setUpMode} onRemove={removeUp} />
           )}
         </div>
       </div>

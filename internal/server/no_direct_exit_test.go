@@ -8,7 +8,7 @@ import (
 )
 
 // 服务端权威校验：开启「禁止直接转发」的节点不能作为链尾（出口段的发起者）。
-// 入口开启则必须选择线路层；链尾中间层开启则其后必须再接一层。UI 隐藏
+// 入口开启则必须选择线路层；链尾中转开启则其后必须再接一层。UI 隐藏
 // 「直接转发」选项只是便利，绕过前端直接请求同样必须被拒绝。
 func TestNoDirectExitEnforced(t *testing.T) {
 	d := openDB(t)
@@ -36,7 +36,7 @@ func TestNoDirectExitEnforced(t *testing.T) {
 		t.Fatalf("via chain: want 200, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	// 链尾中间层也开启开关 → 400（开关是"不能当链尾"，对任意层级生效）
+	// 链尾中转也开启开关 → 400（开关是"不能当链尾"，对任意层级生效）
 	if err := db.UpdateNodeNoDirectExit(d, mid.ID, true); err != nil {
 		t.Fatal(err)
 	}

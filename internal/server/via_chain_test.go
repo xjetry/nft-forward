@@ -39,7 +39,7 @@ func createMyRuleVia(t *testing.T, s *Server, cookie *http.Cookie, nodeID int64,
 	return rec
 }
 
-// 入口(单点) + 组合中间层：链 = entry ++ mid 的两个子节点；
+// 入口(单点) + 组合中转：链 = entry ++ mid 的两个子节点；
 // 衔接段模式取绑定边；末跳模式取规则 exit_mode。
 func TestViaChainAssembly(t *testing.T) {
 	d := openDB(t)
@@ -78,8 +78,8 @@ func TestViaChainAssembly(t *testing.T) {
 	}
 }
 
-// 组合作为中间层（非末段）：组合的末跳保留组合自身配置的模式，而不是绑定边的
-// 模式——组合被用作中间层时，自己决定其出口段如何转发。作为末段时才由规则的
+// 组合作为中转（非末段）：组合的末跳保留组合自身配置的模式，而不是绑定边的
+// 模式——组合被用作中转时，自己决定其出口段如何转发。作为末段时才由规则的
 // exit_mode 覆盖（见 composite_exit_mode_test.go）。
 func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	d := openDB(t)
@@ -116,7 +116,7 @@ func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	}
 	rules, _ := db.ListRulesByUser(d, uid)
 	// hop0 entry：绑定边 userspace；hop1 c1：组合配置 kernel；
-	// hop2 c2（组合末跳，此处组合是中间层）：组合配置 kernel，不取绑定边 userspace；
+	// hop2 c2（组合末跳，此处组合是中转）：组合配置 kernel，不取绑定边 userspace；
 	// hop3 tailVia（规则末跳）：exit_mode kernel。
 	wantModes(t, chainModes(t, s, rules[0].ID), "userspace", "kernel", "kernel", "kernel")
 	hops, _ := db.ListRuleHops(d, rules[0].ID)

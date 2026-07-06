@@ -17,7 +17,7 @@ export default function NodeList() {
   // 搜索词与角色过滤存 sessionStorage：进详情返回后过滤还在，但不像 tab 那样
   // 跨会话记住——隔天打开还带着旧搜索词会让列表看起来莫名缺节点。
   const [search, setSearch] = useState(() => sessionStorage.getItem('nodes.search') || '')
-  // 角色过滤位掩码，与 nodes.roles 同构（bit0 入口 / bit1 中间层）；0 表示不过滤，
+  // 角色过滤位掩码，与 nodes.roles 同构（bit0 入口 / bit1 中转）；0 表示不过滤，
   // 选中多个时要求同时具备（用于收窄，而非并集）。
   const [roleMask, setRoleMask] = useState(() => Number(sessionStorage.getItem('nodes.roleMask')) || 0)
   const [tab, setTab] = useState(() => localStorage.getItem('nodes.tab') || 'single')
@@ -27,7 +27,11 @@ export default function NodeList() {
   const toast = useToast()
   const confirm = useConfirm()
   const navigate = useNavigate()
-  const [sort, setSort] = useState({ col: null, dir: null })
+  // 排序与搜索/角色过滤同样按会话持久化：进详情返回后仍然生效，但不跨会话。
+  const [sort, setSort] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('nodes.sort')) || { col: null, dir: null } }
+    catch { return { col: null, dir: null } }
+  })
   const [speedSnap, setSpeedSnap] = useState(null)
   const [pinMode, setPinMode] = useState(null)
   const pinRef = useRef(null)
@@ -37,6 +41,7 @@ export default function NodeList() {
   useEffect(() => { localStorage.setItem('nodes.tab', tab) }, [tab])
   useEffect(() => { sessionStorage.setItem('nodes.search', search) }, [search])
   useEffect(() => { sessionStorage.setItem('nodes.roleMask', String(roleMask)) }, [roleMask])
+  useEffect(() => { sessionStorage.setItem('nodes.sort', JSON.stringify(sort)) }, [sort])
 
   const load = () => {
     setLoading(true)
@@ -183,7 +188,7 @@ export default function NodeList() {
               }`}>{label} {n}</button>
           ))}
           <span className="ml-3 text-xs text-ink-mut select-none">角色</span>
-          {[[1, '入口'], [2, '中间层']].map(([bit, label]) => (
+          {[[1, '入口'], [2, '中转']].map(([bit, label]) => (
             <button key={bit} onClick={() => setRoleMask(m => m ^ bit)}
               title="按节点角色筛选，可叠加（同时选中表示需兼具两种角色）；不选则显示全部"
               className={`px-3 py-0.5 rounded text-xs border transition-colors ${
@@ -365,12 +370,14 @@ function AddNodeModal({ open, onClose, onDone }) {
 
   const submit = async (e) => {
     e.preventDefault()
+    // 显式校验而不是把非法值静默替换成 1：用户必须知道输入没有被按原样保存。
+    const rm = Number(rateMult)
+    if (rateMult.trim() === '' || !Number.isFinite(rm) || rm < 0) { toast('倍率必须是大于等于 0 的数字', 'error'); return }
     setLoading(true)
     try {
       const portRange = `${portStart || '10001'}-${portEnd || '20000'}`
-      const rm = parseFloat(rateMult)
       const res = await api.post('/nodes', {
-        name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm >= 0 ? rm : 1, unidirectional,
+        name, secret: secret || undefined, port_range: portRange, rate_multiplier: rm, unidirectional,
         user_ids: userIds.length ? userIds.map(Number) : undefined,
       })
       toast('节点已添加')
@@ -470,7 +477,7 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
   const submit = async (e) => {
     e.preventDefault()
     // 空行必须显式处理而不是静默过滤：过滤会让末跳与界面按行数标出的末跳
-    // 错位，末跳模式（中间层生效、出口被覆盖）会落到错误的行上
+    // 错位，末跳模式（中转生效、出口被覆盖）会落到错误的行上
     if (hops.some(h => !h.node_id)) {
       toast('请为每一跳选择节点，或删除空行', 'error')
       return
@@ -479,13 +486,14 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
       toast('组合节点至少需要 2 个子节点', 'error')
       return
     }
+    const rm = Number(rateMult)
+    if (rateMult.trim() === '' || !Number.isFinite(rm) || rm < 0) { toast('倍率必须是大于等于 0 的数字', 'error'); return }
     setLoading(true)
     try {
-      const rm = parseFloat(rateMult)
       const res = await api.post('/nodes', {
         name,
         node_type: 'composite',
-        rate_multiplier: rm >= 0 ? rm : 1,
+        rate_multiplier: rm,
         hops: hops.map(h => ({ node_id: Number(h.node_id), mode: h.mode })),
         user_ids: userIds.length ? userIds.map(Number) : undefined,
       })
@@ -527,13 +535,13 @@ function CompositeNodeModal({ open, onClose, nodes, onDone }) {
                 {memberIsComposite ? (
                   <span className="text-[11px] text-ink-mut shrink-0 text-center cursor-help" style={{ width: 110 }} title="组合成员：转发模式由其内部各跳决定，不在此处配置">组合</span>
                 ) : (<>
-                  {/* 每一跳都可配模式，包含末跳：末跳模式在该组合被用作中间层时生效；
+                  {/* 每一跳都可配模式，包含末跳：末跳模式在该组合被用作中转时生效；
                       被用作规则出口时由规则的出口模式覆盖 */}
                   <Select value={hop.mode} onChange={v => setHop(i, 'mode', v)} style={{ width: 110 }}
-                    title={i === hops.length - 1 ? '末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
+                    title={i === hops.length - 1 ? '末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
                     options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
                   {i === hops.length - 1 && (
-                    <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中间层时生效；作为规则出口时由规则的出口模式覆盖">末</span>
+                    <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖">末</span>
                   )}
                 </>)}
                 <button type="button" onClick={() => moveHop(i, -1)} disabled={i === 0} className="btn-secondary text-xs px-1.5">↑</button>

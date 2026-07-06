@@ -326,7 +326,7 @@ export function ConfirmProvider({ children }) {
 // chosen value as a string and the menu closes. Multi-select (multiple=true):
 // value is an array, onChange receives the next array of string values and the
 // menu stays open so several can be picked.
-export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false, tabs = false }) {
+export function Select({ value, onChange, options = [], groups, placeholder = '请选择', disabled, className = '', style, searchable = false, multiple = false, tabs = false, selectAll = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState(0)
@@ -346,7 +346,7 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
   const allOptions = sections.flatMap(s => s.options)
   const selectedValues = multiple ? (Array.isArray(value) ? value.map(String) : []) : []
   const isSelected = (o) => multiple ? selectedValues.includes(String(o.value)) : String(o.value) === String(value)
-  const selected = !multiple && allOptions.find(o => String(o.value) === String(value))
+  const selected = !multiple && allOptions.find(o => !o.heading && String(o.value) === String(value))
   const triggerLabel = multiple
     ? (selectedValues.length ? `已选 ${selectedValues.length} 项` : placeholder)
     : (selected ? selected.label : placeholder)
@@ -357,10 +357,27 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
   // section is dropped (the tab already labels it).
   const useTabs = tabs && sections.length > 1
   const baseSections = useTabs ? [{ label: null, options: (sections[activeTab] || sections[0]).options }] : sections
+  // Option entries may be `{ heading: '文本' }` dividers — non-selectable text
+  // rows splitting a section (e.g. eligible nodes above, ineligible sunk below).
+  // Search keeps a heading only while at least one real option survives right
+  // after it; a heading never matches the query itself.
+  const filterOpts = (opts) => {
+    const kept = searchable && q ? opts.filter(o => o.heading || String(o.label).toLowerCase().includes(q)) : opts
+    return kept.filter((o, i) => !o.heading || (kept[i + 1] && !kept[i + 1].heading))
+  }
   const shownSections = baseSections
-    .map(s => ({ label: s.label, options: searchable && q ? s.options.filter(o => String(o.label).toLowerCase().includes(q)) : s.options }))
-    .filter(s => s.options.length > 0)
+    .map(s => ({ label: s.label, options: filterOpts(s.options) }))
+    .filter(s => s.options.some(o => !o.heading))
   const empty = shownSections.length === 0
+  // In-dropdown select-all (multiple only): acts on what's currently visible —
+  // the active tab after search filtering — so "全选" under a search means "all
+  // matches", and under a tab means "this whole tab", never the hidden rest.
+  const shownValues = shownSections.flatMap(s => s.options).filter(o => !o.heading && !o.disabled).map(o => String(o.value))
+  const allShownSelected = shownValues.length > 0 && shownValues.every(v => selectedValues.includes(v))
+  const toggleAll = () => {
+    if (allShownSelected) onChange(selectedValues.filter(v => !shownValues.includes(v)))
+    else onChange([...new Set([...selectedValues, ...shownValues])])
+  }
   const choose = (o) => {
     const sv = String(o.value)
     if (multiple) {
@@ -369,7 +386,21 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
       onChange(sv); setOpen(false)
     }
   }
-  const renderOption = (o) => {
+  const renderOption = (o, idx) => {
+    // Divider text: non-selectable, marks the sunk/ineligible block below it.
+    if (o.heading) return (
+      <div key={`h-${idx}`} className="px-3 pt-2.5 pb-1 mt-1 border-t border-line-soft text-[11px] text-ink-mut select-none">
+        {o.heading}
+      </div>
+    )
+    // Ineligible option: shown for discoverability but dimmed and inert.
+    if (o.disabled) return (
+      <div key={String(o.value)} className="w-full px-3 py-1.5 text-[13.5px] flex items-center gap-2 opacity-40 cursor-not-allowed select-none text-ink">
+        {multiple && <span className="w-3.5 h-3.5 flex-none rounded border border-line" />}
+        {o.icon}
+        <span className="truncate">{o.label}</span>
+      </div>
+    )
     const sel = isSelected(o)
     return (
       <button key={String(o.value)} type="button"
@@ -402,7 +433,7 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
               {sections.map((s, i) => (
                 <button key={i} type="button" onClick={() => setActiveTab(i)}
                   className={`flex-1 px-3 py-[13px] text-[14px] font-semibold transition-colors ${i === activeTab ? 'text-blue-500 border-b-2 border-blue-600 -mb-px' : 'text-ink-soft hover:text-ink'}`}>
-                  {s.label} <span className="text-ink-mut font-normal">{s.options.length}</span>
+                  {s.label} <span className="text-ink-mut font-normal">{s.options.filter(o => !o.heading).length}</span>
                 </button>
               ))}
             </div>
@@ -413,6 +444,15 @@ export function Select({ value, onChange, options = [], groups, placeholder = '�
                 onKeyDown={e => { if (e.key === 'Enter') e.preventDefault() }}
                 className="input-field w-full text-[13px]" style={{ height: 34 }} />
             </div>
+          )}
+          {multiple && selectAll && !empty && (
+            <button type="button" onClick={toggleAll}
+              className="w-full text-left px-3 py-2 text-[13px] font-semibold border-b border-line-soft flex items-center gap-2 transition-colors hover:bg-raised text-ink-soft">
+              <span className={`w-3.5 h-3.5 flex-none rounded border flex items-center justify-center ${allShownSelected ? 'bg-blue-600 border-blue-600' : 'border-line'}`}>
+                {allShownSelected && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>}
+              </span>
+              全选 <span className="text-ink-mut font-normal">({shownValues.length})</span>
+            </button>
           )}
           <div className="max-h-[260px] overflow-auto py-1.5 px-1.5">
             {empty ? (

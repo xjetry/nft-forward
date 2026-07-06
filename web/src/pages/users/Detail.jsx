@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTrafficGB, pct, fmtDate, fmtDateInput, isExpired, nullInt, nullStr } from '../../lib/fmt'
@@ -6,7 +6,7 @@ import { Layout, useToast, useBlur } from '../../components/Layout'
 import { Loading, Empty, Badge, ProtoBadge, NodeTypeBadge, useConfirm, Select, Modal, SensText } from '../../components/ui'
 import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
-import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles, ROLE_LANDING, ROLE_DIRECT } from '../../lib/landing'
+import { fetchNodeRoles, nodeRoleKey, applyNodeRole, applyNodeRoleBatch, saveNodeRoles, ROLE_LANDING, ROLE_DIRECT, rolesFirstOrder } from '../../lib/landing'
 import PasteGrantsModal from './PasteGrantsModal'
 
 export default function UserDetail() {
@@ -345,8 +345,10 @@ function PerNodeRateForm({ userId, nodeId, rateMBytes, onDone }) {
   )
 }
 
-function PerNodeRolesForm({ userId, nodeId, roles, onDone }) {
-  // 0 = 继承节点掩码；其余是覆盖值（入口=1 / 中间层=2 的组合）。
+// Shared with the node detail page (nodes/Detail.jsx) so per-grant role
+// editing behaves identically from both directions.
+export function PerNodeRolesForm({ userId, nodeId, roles, onDone }) {
+  // 0 = 继承节点掩码；其余是覆盖值（入口=1 / 中转=2 的组合）。
   const [val, setVal] = useState(String(roles ?? 0))
   const toast = useToast()
   const submit = async (e) => {
@@ -362,8 +364,8 @@ function PerNodeRolesForm({ userId, nodeId, roles, onDone }) {
       <select className="input-field" value={val} onChange={e => setVal(e.target.value)} style={{ width: 108 }}>
         <option value="0">跟随节点</option>
         <option value="1">仅入口</option>
-        <option value="2">仅中间层</option>
-        <option value="3">入口+中间层</option>
+        <option value="2">仅中转</option>
+        <option value="3">入口+中转</option>
       </select>
       <button type="submit" className="btn-secondary text-xs">设用途</button>
     </form>
@@ -430,6 +432,9 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
   const landingCount = preview.filter(n => roleOf(n) & ROLE_LANDING).length
   const directCount = preview.filter(n => roleOf(n) & ROLE_DIRECT).length
   const unconfiguredCount = preview.filter(n => !roleOf(n)).length
+  // Unconfigured nodes sink below configured ones; selection stays keyed to
+  // the original index so re-sorting never re-targets a checked row.
+  const previewOrder = useMemo(() => rolesFirstOrder(preview, roleOf), [preview, roles])
   const exitByAddr = Object.fromEntries(exits.map(e => [`${e.host}:${e.port}`, e]))
   const residualExits = exits.filter(e => !e.present)
 
@@ -480,7 +485,8 @@ function LandingSourceForm({ userId, subURL, uris, nodes, blurred }) {
                   checked={preview.length > 0 && sel.size === preview.length} onChange={toggleSelAll} /></th>
                 <th>名称</th><th>协议</th><th>地址</th><th>限额</th><th>已用</th><th className="text-right">用途</th></tr></thead>
               <tbody>
-                {preview.map((n, i) => {
+                {previewOrder.map((i) => {
+                  const n = preview[i]
                   const st = roleOf(n)
                   const ex = showQuotaFor(n, st)
                   const exceeded = ex && ex.quota_bytes > 0 && ex.used_bytes >= ex.quota_bytes
