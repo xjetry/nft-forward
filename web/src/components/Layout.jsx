@@ -13,7 +13,9 @@ export function useToast() { return useContext(ToastCtx) }
 
 export function UserProvider({ children }) {
   const [user, setUser] = useState(undefined) // undefined = loading, null = not logged in
-  const [panelName, setPanelName] = useState('')
+  // Seed from the server-stamped shell so the sidebar and tab title never
+  // flash the default name while /me is in flight.
+  const [panelName, setPanelName] = useState(window.__BRANDING__?.panel_name || '')
   const [version, setVersion] = useState('')
   const [toasts, setToasts] = useState([])
   const idRef = useRef(0)

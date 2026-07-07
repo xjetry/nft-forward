@@ -544,7 +544,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/info", s.apiTokenInfo)
 	})
 
-	r.NotFound(spaHandler().ServeHTTP)
+	r.NotFound(s.spaHandler().ServeHTTP)
 
 	return r
 }

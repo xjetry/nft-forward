@@ -7,12 +7,20 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [panelName, setPanelName] = useState('')
+  // The server stamps window.__BRANDING__ into index.html, so the name is
+  // known before any request completes and the default never flashes; the
+  // /branding fetch only covers dev serving where nothing is injected.
+  const [panelName, setPanelName] = useState(window.__BRANDING__?.panel_name || '')
   const navigate = useNavigate()
 
   useEffect(() => {
+    if (window.__BRANDING__) return
     api.get('/branding').then(d => setPanelName(d?.panel_name || '')).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (panelName) document.title = panelName
+  }, [panelName])
 
   const submit = async (e) => {
     e.preventDefault()
