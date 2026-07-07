@@ -255,30 +255,63 @@ export function ProbeButton({ target, nodeId, proto }) {
   )
 }
 
+/* ---------- ChainProbeResult: per-hop + total latency, overall 通/不通 ---------- */
+// Renders a probe-chain response: an overall status badge (color + text), each
+// hop's latency colored green/red individually, and the total when the whole
+// chain succeeded. Single-hop responses collapse to just the badge + latency.
+export function ChainProbeResult({ data }) {
+  if (!data) return null
+  const badge = (
+    <span className={`px-1 rounded font-sans font-semibold ${data.ok ? 'text-green-700 bg-green-500/10' : 'text-red-600 bg-red-500/10'}`}>
+      {data.ok ? '通' : '不通'}
+    </span>
+  )
+  if (!data.hops?.length) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-mono">
+        {badge}
+        {data.ok
+          ? <span className="text-green-700 font-semibold">{data.latency_ms}ms</span>
+          : <span className="text-red-600">{data.error || ''}</span>}
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-mono">
+      {badge}
+      {data.hops.map((h, i) => (
+        <span key={i} className="inline-flex items-center gap-1">
+          {i > 0 && <span className="text-ink-mut">→</span>}
+          <span className={h.error ? 'text-red-600 font-semibold' : 'text-green-700'} title={h.error || undefined}>
+            {h.error ? '×' : h.latency_ms + 'ms'}
+          </span>
+        </span>
+      ))}
+      {data.ok && data.hops.length > 1 && <span className="text-ink-soft">= {data.latency_ms}ms</span>}
+    </span>
+  )
+}
+
+// Plain-text form of the same result, for tooltips / title attributes.
+export function chainProbeText(d) {
+  if (!d) return ''
+  const status = d.ok ? '通' : '不通'
+  if (!d.hops?.length) return d.ok ? `${status} ${d.latency_ms}ms` : `${status} ${d.error || ''}`.trim()
+  const joined = d.hops.map(h => h.error ? `×(${h.error})` : h.latency_ms + 'ms').join(' → ')
+  return `${status} ${joined}${d.ok && d.hops.length > 1 ? ` = ${d.latency_ms}ms` : ''}`
+}
+
 /* ---------- ProbeChainButton ---------- */
 export function ProbeChainButton({ chainId, ruleId }) {
   const [state, setState] = useState('idle')
-  const [result, setResult] = useState('')
+  const [result, setResult] = useState(null)
   const probe = () => {
     setState('loading')
     const param = ruleId ? `rule_id=${ruleId}` : `chain=${chainId}`
     fetch(`/api/probe-chain?${param}`).then(r => r.json()).then(d => {
-      if (d.hops && d.hops.length) {
-        const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
-        const joined = parts.join(' + ')
-        if (d.ok) {
-          setState('ok')
-          setResult(d.hops.length > 1 ? joined + ' = ' + d.latency_ms + 'ms' : d.latency_ms + 'ms')
-        } else {
-          setState('fail')
-          setResult(joined)
-        }
-      } else if (d.ok) {
-        setState('ok'); setResult(d.latency_ms + 'ms')
-      } else {
-        setState('fail'); setResult(d.error || '不通')
-      }
-    }).catch(() => { setState('fail'); setResult('请求失败') })
+      setState(d.ok ? 'ok' : 'fail')
+      setResult(d)
+    }).catch(() => { setState('fail'); setResult({ ok: false, error: '请求失败' }) })
   }
   return (
     <span className="inline-flex items-center gap-2">
@@ -286,8 +319,7 @@ export function ProbeChainButton({ chainId, ruleId }) {
         className="text-[11px] px-2 py-0.5 rounded border border-line bg-surface text-ink-soft hover:border-blue-500 hover:text-blue-600 disabled:opacity-50">
         {state === 'loading' ? <Spinner className="w-3 h-3" /> : '测试'}
       </button>
-      {state === 'ok' && <span className="text-[11px] text-green-700 font-semibold">{result}</span>}
-      {state === 'fail' && <span className="text-[11px] text-red-600">{result}</span>}
+      {(state === 'ok' || state === 'fail') && <ChainProbeResult data={result} />}
       {state === 'loading' && <span className="text-[11px] text-ink-mut">测试中...</span>}
     </span>
   )

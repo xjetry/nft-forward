@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner, NodeTypeIcon } from './ui'
+import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner, NodeTypeIcon, ChainProbeResult, chainProbeText } from './ui'
 import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -215,38 +215,24 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
 
 function ProbeIconButton({ ruleId, probeAllTrigger }) {
   const [state, setState] = useState('idle')
-  const [label, setLabel] = useState('')
-  const [tip, setTip] = useState('')
+  const [result, setResult] = useState(null)
   useEffect(() => {
     if (probeAllTrigger) probe()
   }, [probeAllTrigger])
   const probe = () => {
     setState('loading')
     probeLimit(() => fetch(`/api/probe-chain?rule_id=${ruleId}`).then(r => r.json())).then(d => {
-      if (d.hops?.length) {
-        const parts = d.hops.map(h => h.error ? 'x' : h.latency_ms + 'ms')
-        const joined = parts.join(' → ')
-        if (d.ok) {
-          setState('ok')
-          setLabel(d.hops.length > 1 ? joined + ' = ' + d.latency_ms + 'ms' : d.latency_ms + 'ms')
-          setTip(joined + ' = ' + d.latency_ms + 'ms')
-        } else {
-          setState('fail')
-          setLabel(joined)
-          setTip(joined)
-        }
-      } else if (d.ok) { setState('ok'); setLabel(d.latency_ms + 'ms'); setTip('') }
-      else { setState('fail'); setLabel(d.error || '不通'); setTip('') }
-    }).catch(() => { setState('fail'); setLabel('失败'); setTip('') })
+      setState(d.ok ? 'ok' : 'fail')
+      setResult(d)
+    }).catch(() => { setState('fail'); setResult({ ok: false, error: '请求失败' }) })
   }
   return (
     <span className="inline-flex items-center gap-1">
-      <button onClick={probe} disabled={state === 'loading'} title={tip || label || '测试连通性'}
+      <button onClick={probe} disabled={state === 'loading'} title={chainProbeText(result) || '测试连通性'}
         className={`icon-btn ${state === 'ok' ? '!text-green-500 !border-green-500/30' : state === 'fail' ? '!text-red-400 !border-red-500/30' : ''}`}>
         {state === 'loading' ? <Spinner className="w-4 h-4" /> : <IconPulse />}
       </button>
-      {state === 'ok' && <span className="text-[11px] text-green-600 font-mono font-semibold">{label}</span>}
-      {state === 'fail' && <span className="text-[11px] text-red-500 font-mono">{label}</span>}
+      {(state === 'ok' || state === 'fail') && <ChainProbeResult data={result} />}
     </span>
   )
 }
