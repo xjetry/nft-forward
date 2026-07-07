@@ -191,6 +191,9 @@ type UpgradeAck struct {
 
 type Probe struct {
 	Target string `json:"target"`
+	// Proto is "tcp" (default when empty, so pre-upgrade agents and servers
+	// stay compatible) or "udp".
+	Proto string `json:"proto,omitempty"`
 }
 
 type ProbeAck struct {

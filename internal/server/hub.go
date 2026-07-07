@@ -365,7 +365,7 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (stri
 	}
 }
 
-func (h *Hub) SendProbe(nodeID int64, target string) (wsproto.ProbeAck, error) {
+func (h *Hub) SendProbe(nodeID int64, target, proto string) (wsproto.ProbeAck, error) {
 	h.mu.RLock()
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
@@ -383,7 +383,10 @@ func (h *Hub) SendProbe(nodeID int64, target string) (wsproto.ProbeAck, error) {
 		ac.pendMu.Unlock()
 	}()
 
-	payload, _ := json.Marshal(wsproto.Probe{Target: target})
+	if proto != "udp" {
+		proto = "" // tcp is the wire default; omit for pre-upgrade agents
+	}
+	payload, _ := json.Marshal(wsproto.Probe{Target: target, Proto: proto})
 	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeProbe, ID: id, Payload: payload})
 
 	select {

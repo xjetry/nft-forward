@@ -458,7 +458,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 					continue
 				}
 				go func(id string) {
-					ack := doProbe(p.Target)
+					ack := doProbe(p.Target, p.Proto)
 					raw, _ := json.Marshal(ack)
 					select {
 					case d.cmdCh <- wsproto.Envelope{Type: wsproto.TypeProbeAck, ID: id, Payload: raw}:
@@ -563,7 +563,10 @@ func jitter(d time.Duration) time.Duration {
 	return d + time.Duration((rand.Float64()*2-1)*delta)
 }
 
-func doProbe(target string) wsproto.ProbeAck {
+func doProbe(target, proto string) wsproto.ProbeAck {
+	if proto == "udp" {
+		return doProbeUDP(target)
+	}
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", target, 5*time.Second)
 	elapsed := time.Since(start)
@@ -572,6 +575,52 @@ func doProbe(target string) wsproto.ProbeAck {
 	}
 	conn.Close()
 	return wsproto.ProbeAck{OK: true, Latency: int(elapsed.Milliseconds())}
+}
+
+// doProbeUDP sends a datagram on a connected UDP socket and watches for either
+// a reply (reachable, with real latency) or an ICMP port-unreachable, which the
+// kernel surfaces as ECONNREFUSED on a connected socket (unreachable). UDP is
+// connectionless, so silence proves nothing: many healthy services ignore
+// unsolicited payloads and many hosts rate-limit or drop ICMP. Silence is
+// therefore reported as OK with latency 0 ("no negative signal"), not as a
+// failure — a hard 不通 here would mark working UDP rules dead.
+func doProbeUDP(target string) wsproto.ProbeAck {
+	conn, err := net.DialTimeout("udp", target, 5*time.Second)
+	if err != nil {
+		return wsproto.ProbeAck{Error: err.Error()}
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	buf := make([]byte, 2048)
+	// Send/wait cycles: a pending ECONNREFUSED from an earlier packet's ICMP
+	// error is delivered on the *next* socket op — on some platforms (macOS)
+	// only on the next Write, never by waking a blocked Read — so probing must
+	// resend periodically instead of one write + one long read.
+	for time.Now().Before(deadline) {
+		sendAt := time.Now()
+		if _, err := conn.Write([]byte("nft-forward-probe")); err != nil {
+			return wsproto.ProbeAck{Error: err.Error()}
+		}
+		rd := sendAt.Add(300 * time.Millisecond)
+		if rd.After(deadline) {
+			rd = deadline
+		}
+		_ = conn.SetReadDeadline(rd)
+		_, err := conn.Read(buf)
+		if err == nil {
+			return wsproto.ProbeAck{OK: true, Latency: int(time.Since(sendAt).Milliseconds())}
+		}
+		var nerr net.Error
+		if errors.As(err, &nerr) && nerr.Timeout() {
+			continue // resend; a pending ICMP error surfaces on the next Write
+		}
+		// ECONNREFUSED (ICMP port unreachable) or another hard error.
+		return wsproto.ProbeAck{Error: err.Error()}
+	}
+	// No reply and no ICMP error within the window: indeterminate, treat as
+	// reachable (see function comment).
+	return wsproto.ProbeAck{OK: true, Latency: 0}
 }
 
 // probeOutboundIP dials target over the given UDP network ("udp4" or "udp6")

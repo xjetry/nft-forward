@@ -37,6 +37,10 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
+	// probeProto: "tcp+udp" rules confirm via TCP (a real handshake beats
+	// UDP's indeterminate silence); anything but explicit udp probes tcp.
+	proto := probeProto(r.URL.Query().Get("proto"))
+
 	actor := userFromCtx(r.Context())
 
 	nodeStr := r.URL.Query().Get("node")
@@ -61,10 +65,10 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if n.NodeType == "composite" {
-			s.probeCompositeToTarget(w, nodeID, target)
+			s.probeCompositeToTarget(w, nodeID, target, proto)
 			return
 		}
-		ack, err := s.Hub.SendProbe(nodeID, target)
+		ack, err := s.Hub.SendProbe(nodeID, target, proto)
 		if err != nil {
 			json.NewEncoder(w).Encode(probeResult{Error: err.Error()})
 			return
@@ -82,6 +86,13 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if proto == "udp" {
+		// The panel host can't do the agent's connected-socket ICMP dance
+		// meaningfully for remote targets behind it; keep the admin-only
+		// node-less branch TCP-equivalent by refusing rather than lying.
+		json.NewEncoder(w).Encode(probeResult{Error: "udp probe requires a node"})
+		return
+	}
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", target, probeTimeout)
 	elapsed := time.Since(start)
@@ -93,7 +104,17 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(probeResult{OK: true, Latency: int(elapsed.Milliseconds())})
 }
 
-func (s *Server) probeCompositeToTarget(w http.ResponseWriter, compositeID int64, target string) {
+// probeProto maps a rule/query proto value onto what the probe path actually
+// dials: only explicit "udp" selects the UDP probe; "tcp+udp" and everything
+// else (including empty) use TCP, whose handshake gives a definite answer.
+func probeProto(p string) string {
+	if p == "udp" {
+		return "udp"
+	}
+	return "tcp"
+}
+
+func (s *Server) probeCompositeToTarget(w http.ResponseWriter, compositeID int64, target, proto string) {
 	hops, err := db.ListNodeHops(s.DB, compositeID)
 	if err != nil || len(hops) == 0 {
 		json.NewEncoder(w).Encode(probeResult{Error: "no hops"})
@@ -118,7 +139,7 @@ func (s *Server) probeCompositeToTarget(w http.ResponseWriter, compositeID int64
 		hp := hopProbe{Node: name}
 		if i == len(hops)-1 {
 			hp.Target = target
-			ack, perr := s.Hub.SendProbe(h.HopNodeID, target)
+			ack, perr := s.Hub.SendProbe(h.HopNodeID, target, proto)
 			switch {
 			case perr != nil:
 				hp.Error = perr.Error()
@@ -183,6 +204,7 @@ func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 		nodeID int64
 		name   string
 		target string
+		proto  string
 	}
 	var tasks []probeTask
 	for i, h := range hops {
@@ -191,7 +213,7 @@ func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 		if n, err := db.GetNode(s.DB, h.NodeID); err == nil {
 			nodeName = n.Name
 		}
-		tasks = append(tasks, probeTask{idx: i, nodeID: h.NodeID, name: nodeName, target: target})
+		tasks = append(tasks, probeTask{idx: i, nodeID: h.NodeID, name: nodeName, target: target, proto: probeProto(h.Proto)})
 	}
 
 	results := make([]hopProbe, len(tasks))
@@ -201,7 +223,7 @@ func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
 		go func(i int, t probeTask) {
 			defer wg.Done()
 			hp := hopProbe{Node: t.name, Target: t.target}
-			ack, err := s.Hub.SendProbe(t.nodeID, t.target)
+			ack, err := s.Hub.SendProbe(t.nodeID, t.target, t.proto)
 			if err != nil {
 				hp.Error = err.Error()
 			} else if !ack.OK {

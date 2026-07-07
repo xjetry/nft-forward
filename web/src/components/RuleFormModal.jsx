@@ -273,7 +273,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                     ) : (
                       <div className="text-xs text-ink-mut">尚无可用出口节点，请在概览页添加代理 URI 或联系管理员。</div>
                     )}
-                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} proto={form.proto} />}
                   </div>
                 </>
               ) : (
@@ -281,7 +281,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                   <label className="fl">出口地址</label>
                   <div className="flex items-center gap-3">
                     <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} onBlur={handleExitBlur} required placeholder="host:port 或代理 URI" />
-                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
+                    {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} proto={form.proto} />}
                   </div>
                 </>
               )}
@@ -291,7 +291,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
               <label className="fl">出口</label>
               <div className="flex items-center gap-3">
                 <input className="input-field font-mono flex-1" value={form.exit} onChange={e => set('exit', e.target.value)} required placeholder="host:port" />
-                {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} />}
+                {form.node_id && form.exit && <ProbeButton target={form.exit} nodeId={tailNode?.id ?? form.node_id} proto={form.proto} />}
               </div>
             </>
           )}

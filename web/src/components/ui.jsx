@@ -229,13 +229,14 @@ export function SensText({ children, blurred }) {
 }
 
 /* ---------- ProbeButton ---------- */
-export function ProbeButton({ target, nodeId }) {
+export function ProbeButton({ target, nodeId, proto }) {
   const [state, setState] = useState('idle') // idle | loading | ok | fail
   const [result, setResult] = useState('')
   const probe = () => {
     setState('loading')
     let url = `/api/probe?target=${encodeURIComponent(target)}`
     if (nodeId) url += `&node=${nodeId}`
+    if (proto) url += `&proto=${encodeURIComponent(proto)}`
     fetch(url).then(r => r.json()).then(d => {
       if (d.ok) { setState('ok'); setResult(d.latency_ms + 'ms') }
       else { setState('fail'); setResult('不通') }
