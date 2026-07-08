@@ -279,3 +279,35 @@ func TestV1ResyncScopeGate(t *testing.T) {
 		t.Fatalf("read-scope admin resync: want 403 scope_required, got %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestV1Usage(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeRead) // read scope suffices
+	uid, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	grantedNode(t, d, "usage-node", uid, 5)
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "GET", "/api/v1/usage", adminTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	data := v1Data(t, rec)
+	totals, ok := data["totals"].(map[string]any)
+	if !ok {
+		t.Fatalf("usage missing totals: %s", rec.Body.String())
+	}
+	if _, ok := totals["traffic_bytes"]; !ok {
+		t.Fatalf("totals missing traffic_bytes: %v", totals)
+	}
+	if _, ok := data["users"].([]any); !ok {
+		t.Fatalf("usage missing users array: %s", rec.Body.String())
+	}
+	if _, ok := data["nodes"].([]any); !ok {
+		t.Fatalf("usage missing nodes array: %s", rec.Body.String())
+	}
+	// a plain user token must not reach it
+	_, userTok := v1UserToken(t, d, 10, db.TokenScopeReadWrite)
+	if rec := v1Do(t, s, "GET", "/api/v1/usage", userTok, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("user token usage: want 403, got %d", rec.Code)
+	}
+}

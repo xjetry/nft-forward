@@ -132,6 +132,7 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Get("/users", s.v1ListUsers)
 		r.Get("/dashboard", s.v1Dashboard)
 		r.Get("/users/{id}/token", s.v1AdminGetUserToken)
+		r.Get("/usage", s.v1Usage)
 	})
 
 	// Admin writes: readwrite scope on top of the admin role. All mutations are

@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"nft-forward/internal/db"
 )
@@ -388,4 +389,53 @@ func (s *Server) v1AdminResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v1OK(w, map[string]any{"synced": synced, "failed": failed})
+}
+
+// v1Usage returns a one-shot billing snapshot: per-user rollup, per-node raw
+// traffic + rule counts, and cluster totals. Read scope suffices — it's pure
+// observability. Node traffic uses the raw per-node counter (the same figure
+// the admin aggregate view shows), not per-rule attribution.
+func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
+	users, _ := db.ListUsers(s.DB)
+	db.FillUserRuleCounts(s.DB, users)
+	userViews := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		var exp *int64
+		if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
+			e := u.ExpiresAt.Int64
+			exp = &e
+		}
+		userViews = append(userViews, map[string]any{
+			"user_id": u.ID, "username": u.Username, "role": u.Role, "disabled": u.Disabled,
+			"traffic_used_bytes": u.TrafficUsedBytes, "traffic_quota_bytes": u.TrafficQuotaBytes,
+			"rule_count": u.RuleCount, "expires_at": exp,
+		})
+	}
+	nodes, _ := db.ListNodes(s.DB)
+	db.ResolveCompositeOnline(s.DB, nodes)
+	rawByNode, _ := db.NodeRawTraffic(s.DB)
+	rcByNode, _ := db.RuleCountByNode(s.DB)
+	online := 0
+	nodeViews := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Online == 1 {
+			online++
+		}
+		nodeViews = append(nodeViews, map[string]any{
+			"node_id": n.ID, "name": n.Name, "node_type": n.NodeType,
+			"rate_multiplier": n.RateMultiplier, "traffic_bytes": rawByNode[n.ID], "rule_count": rcByNode[n.ID],
+		})
+	}
+	userCount, _ := db.CountUsers(s.DB)
+	ruleCount, _ := db.CountAllRules(s.DB)
+	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
+	v1OK(w, map[string]any{
+		"generated_at": time.Now().Unix(),
+		"totals": map[string]any{
+			"users": userCount, "nodes_total": len(nodes), "nodes_online": online,
+			"rules": ruleCount, "traffic_bytes": totalBytes,
+		},
+		"users": userViews,
+		"nodes": nodeViews,
+	})
 }
