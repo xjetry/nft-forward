@@ -105,24 +105,32 @@ func (s *Server) requireTokenAuth(next http.Handler) http.Handler {
 			token = r.URL.Query().Get("token")
 		}
 		if token == "" {
-			jsonErr(w, http.StatusUnauthorized, "缺少 API Token")
+			v1Err(w, http.StatusUnauthorized, codeUnauthorized, "缺少 API Token")
 			return
 		}
 		u, t, err := db.GetUserByAPIToken(s.DB, token)
 		if err != nil {
-			jsonErr(w, http.StatusUnauthorized, "无效的 API Token")
+			v1Err(w, http.StatusUnauthorized, codeUnauthorized, "无效的 API Token")
 			return
 		}
 		if t.Disabled {
-			jsonErr(w, http.StatusForbidden, "Token 已停用")
+			v1Err(w, http.StatusForbidden, codeForbidden, "Token 已停用")
 			return
 		}
 		if u.Disabled {
-			jsonErr(w, http.StatusForbidden, "账号已被禁用")
+			v1Err(w, http.StatusForbidden, codeForbidden, "账号已被禁用")
 			return
 		}
-		db.TouchAPITokenUsage(s.DB, t.ID)
-		ctx := withUser(r.Context(), u)
+		if s.tokenLimiter != nil && !s.tokenLimiter.allow(t.ID) {
+			v1Err(w, http.StatusTooManyRequests, codeRateLimited, "请求过于频繁，请稍后再试")
+			return
+		}
+		// last_used_at is only worth a write when it has gone stale; a polling
+		// agent would otherwise issue one UPDATE per request.
+		if s.tokenLimiter == nil || s.tokenLimiter.shouldTouch(t.ID) {
+			db.TouchAPITokenUsage(s.DB, t.ID)
+		}
+		ctx := withToken(withUser(r.Context(), u), t)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -2984,14 +2992,6 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	if u.Disabled {
-		jsonErr(w, http.StatusForbidden, "用户已被禁用")
-		return
-	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
-		jsonErr(w, http.StatusForbidden, "用户已过期")
-		return
-	}
 	var body struct {
 		NodeID    int64  `json:"node_id"`
 		Name      string `json:"name"`
@@ -3017,108 +3017,167 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	name := strings.TrimSpace(body.Name)
-	proto := strings.ToLower(strings.TrimSpace(body.Proto))
+	out, merr := s.createUserRule(u, userRuleParams{
+		NodeID: body.NodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
+		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
+		ExitMode: body.ExitMode, ViaNodeIDs: body.ViaNodeIDs, EntryFamily: body.EntryFamily,
+	}, false)
+	if merr != nil {
+		if merr.regenerate {
+			jsonRegenerateErr(w, merr.cause)
+			return
+		}
+		jsonErr(w, merr.status, merr.msg)
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true, "rule_id": out.RuleID, "entry": out.Entry, "entry_v6": out.EntryV6})
+}
+
+// userRuleParams is the decoded, id-based input to createUserRule. Callers that
+// take node names (the /api/v1 surface) resolve them to ids before building it.
+type userRuleParams struct {
+	NodeID      int64
+	Name        string
+	Proto       string
+	Exit        string
+	EntryPort   int
+	Comment     string
+	Mode        string
+	ExitMode    string
+	ViaNodeIDs  *[]int64
+	EntryFamily string
+}
+
+// ruleCreateOutcome carries a successful (or dry-run previewed) rule creation.
+// On a dry run RuleID is 0 — nothing was persisted — while Entry/EntryV6/Hops
+// still reflect the ports and physical chain the rule would have taken.
+type ruleCreateOutcome struct {
+	RuleID   int64
+	Entry    string
+	EntryV6  string
+	Affected []int64
+	Hops     []db.HopInput
+}
+
+// ruleMutationError maps a create/edit failure to an HTTP status without the
+// core touching http.ResponseWriter. regenerate marks RegenerateRule failures so
+// callers can apply the duplicate-hop → 409 mapping (jsonRegenerateErr / cause).
+type ruleMutationError struct {
+	status     int
+	msg        string
+	regenerate bool
+	cause      error
+}
+
+func (e *ruleMutationError) Error() string { return e.msg }
+
+// createUserRule holds the shared create path for a user's own rule: identical
+// authorization, chain derivation, cap/quota checks and port allocation for both
+// the session UI and the token API. dryRun runs everything through RegenerateRule
+// (so the allocated entry ports and flattened chain are real) but rolls the
+// transaction back and skips audit + dispatch, leaving no rule behind.
+func (s *Server) createUserRule(u *db.User, p userRuleParams, dryRun bool) (ruleCreateOutcome, *ruleMutationError) {
+	if u.Disabled {
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "用户已被禁用"}
+	}
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "用户已过期"}
+	}
+	name := strings.TrimSpace(p.Name)
+	proto := strings.ToLower(strings.TrimSpace(p.Proto))
 	if name == "" || !validRuleProto(proto) {
-		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: "名称必填，协议须为 tcp、udp 或 tcp+udp"}
 	}
-	exitHost, exitPort, err := parseExit(body.Exit)
+	exitHost, exitPort, err := parseExit(p.Exit)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: err.Error()}
 	}
-	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
+	entryFamily, err := normalizeEntryFamily(p.EntryFamily)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: err.Error()}
 	}
-	if body.NodeID == 0 {
-		jsonErr(w, http.StatusBadRequest, "node_id 不能为空")
-		return
+	if p.NodeID == 0 {
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: "node_id 不能为空"}
 	}
 
 	// The grant on the selected node both authorizes the request and carries
 	// the per-node forward cap. A composite node is the unit of authorization:
 	// granting it authorizes the whole chain, so the check is on the composite
 	// itself, not its sub-nodes.
-	grant, gerr := db.GetNodeGrant(s.DB, u.ID, body.NodeID)
+	grant, gerr := db.GetNodeGrant(s.DB, u.ID, p.NodeID)
 	if gerr != nil {
-		jsonErr(w, http.StatusForbidden, "无权使用该节点")
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "无权使用该节点"}
 	}
 
 	// Each middle-layer node is authorized on its own grant before the chain
 	// is validated, so a revoked via is rejected as forbidden rather than
 	// falling through to the role/binding checks.
-	vias := viasOf(body.ViaNodeIDs)
+	vias := viasOf(p.ViaNodeIDs)
 	for _, viaID := range vias {
 		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用中转节点")
-			return
+			return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "无权使用中转节点"}
 		}
 	}
 
-	hops, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode, s.grantRoleOverrides(u.ID))
+	hops, _, derr := s.hopsForChain(p.NodeID, vias, p.Mode, p.ExitMode, s.grantRoleOverrides(u.ID))
 	if derr != nil {
-		jsonErr(w, http.StatusBadRequest, derr.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: derr.Error()}
 	}
 
-	if body.EntryPort > 0 {
-		hops[0].DesiredPort = body.EntryPort
+	if p.EntryPort > 0 {
+		hops[0].DesiredPort = p.EntryPort
 	}
 
 	// Per-node cap: counted by rule, so a composite rule counts once against
 	// the composite node's grant.
-	if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, body.NodeID); cnt+1 > grant.MaxForwards {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
-		return
+	if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, p.NodeID); cnt+1 > grant.MaxForwards {
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusConflict, msg: fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards)}
 	}
 
 	// Global per-user quota.
 	if err := s.checkUserRuleQuota(u, len(hops), 0); err != nil {
-		jsonErr(w, http.StatusConflict, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusConflict, msg: err.Error()}
 	}
 
 	tx, err := s.DB.Begin()
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	defer tx.Rollback()
 
 	rl := &db.Rule{
-		NodeID:      body.NodeID,
+		NodeID:      p.NodeID,
 		OwnerID:     nullInt64(u.ID),
 		Name:        name,
 		Proto:       proto,
 		ExitHost:    exitHost,
 		ExitPort:    exitPort,
-		Comment:     strings.TrimSpace(body.Comment),
+		Comment:     strings.TrimSpace(p.Comment),
 		EntryFamily: entryFamily,
 		ViaNodeIDs:  vias,
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	rl.ID = id
 
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonRegenerateErr(w, err)
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: err.Error(), regenerate: true, cause: err}
+	}
+	if dryRun {
+		// Deliberately leave tx uncommitted (defer rolls it back): the port
+		// allocation and chain were exercised for real to make the preview
+		// accurate, but no rule, audit entry or dispatch outlives this call.
+		return ruleCreateOutcome{Entry: entry, EntryV6: entryV6, Affected: affected, Hops: hops}, nil
 	}
 	if err := tx.Commit(); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "rule_id": id, "entry": entry, "entry_v6": entryV6})
+	return ruleCreateOutcome{RuleID: id, Entry: entry, EntryV6: entryV6, Affected: affected, Hops: hops}, nil
 }
 
 // apiMyUpdateRule lets a user edit their own rule: name / proto / exit / comment
@@ -3128,26 +3187,9 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 // the entry endpoint doesn't churn on a header-only edit.
 func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	if u.Disabled {
-		jsonErr(w, http.StatusForbidden, "用户已被禁用")
-		return
-	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
-		jsonErr(w, http.StatusForbidden, "用户已过期")
-		return
-	}
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
-		return
-	}
-	rl, err := db.GetRule(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "规则不存在")
-		return
-	}
-	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
-		jsonErr(w, http.StatusForbidden, "无权操作该规则")
 		return
 	}
 	var body struct {
@@ -3176,88 +3218,129 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	name := strings.TrimSpace(body.Name)
-	proto := strings.ToLower(strings.TrimSpace(body.Proto))
+	entry, entryV6, merr := s.updateUserRule(u, id, updateUserRuleParams{
+		NodeID: body.NodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
+		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
+		ExitMode: body.ExitMode, ViaNodeIDs: body.ViaNodeIDs, EntryFamily: body.EntryFamily,
+	})
+	if merr != nil {
+		if merr.regenerate {
+			jsonRegenerateErr(w, merr.cause)
+			return
+		}
+		jsonErr(w, merr.status, merr.msg)
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": entryV6})
+}
+
+// updateUserRuleParams is the id-based input to updateUserRule. Absent fields
+// preserve stored values: NodeID 0 keeps the entry node, a nil ViaNodeIDs keeps
+// the stored middle-layer path (an explicit empty list clears it), and an empty
+// ExitMode/Mode/EntryFamily keeps the current setting.
+type updateUserRuleParams struct {
+	NodeID      int64
+	Name        string
+	Proto       string
+	Exit        string
+	EntryPort   int
+	Comment     string
+	Mode        string
+	ExitMode    string
+	ViaNodeIDs  *[]int64
+	EntryFamily string
+}
+
+// updateUserRule holds the shared edit path for a user's own rule, so the session
+// UI and the token API enforce the same ownership, keep-stored semantics, chain
+// derivation and cap/quota checks.
+func (s *Server) updateUserRule(u *db.User, id int64, p updateUserRuleParams) (string, string, *ruleMutationError) {
+	if u.Disabled {
+		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "用户已被禁用"}
+	}
+	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "用户已过期"}
+	}
+	rl, err := db.GetRule(s.DB, id)
+	if err != nil {
+		return "", "", &ruleMutationError{status: http.StatusNotFound, msg: "规则不存在"}
+	}
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "无权操作该规则"}
+	}
+	name := strings.TrimSpace(p.Name)
+	proto := strings.ToLower(strings.TrimSpace(p.Proto))
 	if name == "" || !validRuleProto(proto) {
-		jsonErr(w, http.StatusBadRequest, "名称必填，协议须为 tcp、udp 或 tcp+udp")
-		return
+		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: "名称必填，协议须为 tcp、udp 或 tcp+udp"}
 	}
-	exitHost, exitPort, err := parseExit(body.Exit)
+	exitHost, exitPort, err := parseExit(p.Exit)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: err.Error()}
 	}
-	entryFamily, err := normalizeEntryFamily(body.EntryFamily)
+	entryFamily, err := normalizeEntryFamily(p.EntryFamily)
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: err.Error()}
 	}
 	entryID := rl.NodeID
-	if body.NodeID > 0 {
-		entryID = body.NodeID
+	if p.NodeID > 0 {
+		entryID = p.NodeID
 	}
 	// Absent via_node_ids keeps the stored path so a header-only edit can't
 	// silently strip the middle layers; an explicit list (empty included)
 	// replaces it.
 	vias := rl.ViaNodeIDs
-	if body.ViaNodeIDs != nil {
-		vias = *body.ViaNodeIDs
+	if p.ViaNodeIDs != nil {
+		vias = *p.ViaNodeIDs
 	}
 	// The grant on the target node authorizes the rule and carries the per-node
 	// cap; a composite is the unit of authorization (granting it covers the
 	// whole chain), so the check is on the selected node itself.
 	grant, gerr := db.GetNodeGrant(s.DB, u.ID, entryID)
 	if gerr != nil {
-		jsonErr(w, http.StatusForbidden, "无权使用该节点")
-		return
+		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "无权使用该节点"}
 	}
 	// Each middle-layer node is authorized on its own grant before the chain
 	// is validated, so a revoked via is rejected as forbidden rather than
 	// falling through to the role/binding checks.
 	for _, viaID := range vias {
 		if _, gerr := db.GetNodeGrant(s.DB, u.ID, viaID); gerr != nil {
-			jsonErr(w, http.StatusForbidden, "无权使用中转节点")
-			return
+			return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "无权使用中转节点"}
 		}
 	}
-	hops, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode, s.grantRoleOverrides(u.ID))
+	hops, composite, derr := s.hopsForChain(entryID, vias, p.Mode, p.ExitMode, s.grantRoleOverrides(u.ID))
 	if derr != nil {
-		jsonErr(w, http.StatusBadRequest, derr.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: derr.Error()}
 	}
 	// Same-entry edits without an explicit exit-segment mode keep the exit
 	// hop's current mode (see the admin update handler for the rationale).
-	explicit := body.ExitMode != "" || (!composite && body.Mode != "")
+	explicit := p.ExitMode != "" || (!composite && p.Mode != "")
 	if !explicit && entryID == rl.NodeID {
 		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
 			hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
 		}
 	}
-	if body.EntryPort > 0 && len(hops) > 0 {
-		hops[0].DesiredPort = body.EntryPort
+	if p.EntryPort > 0 && len(hops) > 0 {
+		hops[0].DesiredPort = p.EntryPort
 	}
 	oldHops, err := db.ListRuleHops(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	// Per-node cap only when moving to a different node — the rule already
 	// counts against its current node, so a same-node edit can't exceed it.
 	if entryID != rl.NodeID {
 		if cnt, _ := db.CountRulesForUserNode(s.DB, u.ID, entryID); cnt+1 > grant.MaxForwards {
-			jsonErr(w, http.StatusConflict, fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards))
-			return
+			return "", "", &ruleMutationError{status: http.StatusConflict, msg: fmt.Sprintf("超出该节点的转发上限（%d）", grant.MaxForwards)}
 		}
 	}
 	// Global per-user quota, adjusted for this rule's existing hop count.
 	if err := s.checkUserRuleQuota(u, len(hops), len(oldHops)); err != nil {
-		jsonErr(w, http.StatusConflict, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusConflict, msg: err.Error()}
 	}
 	rl.NodeID = entryID
 	rl.ViaNodeIDs = vias
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort = name, proto, exitHost, exitPort
-	rl.Comment = strings.TrimSpace(body.Comment)
+	rl.Comment = strings.TrimSpace(p.Comment)
 	// Absent entry_family keeps the stored family — only an explicit value
 	// changes it, mirroring how an empty mode keeps the exit segment.
 	if entryFamily != "" {
@@ -3265,26 +3348,22 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	defer tx.Rollback()
 	if err := db.UpdateRuleHeader(tx, rl); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	entry, entryV6, affected, err := db.RegenerateRule(tx, rl, hops, nil)
 	if err != nil {
-		jsonRegenerateErr(w, err)
-		return
+		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: err.Error(), regenerate: true, cause: err}
 	}
 	if err := tx.Commit(); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return "", "", &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_save", strconv.FormatInt(id, 10), name)
 	s.apiDispatchFanout(affected)
-	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": entryV6})
+	return entry, entryV6, nil
 }
 
 func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {
@@ -3294,23 +3373,31 @@ func (s *Server) apiMyDeleteRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	rl, err := db.GetRule(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "规则不存在")
+	if merr := s.deleteUserRule(u, id); merr != nil {
+		jsonErr(w, merr.status, merr.msg)
 		return
 	}
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+// deleteUserRule holds the shared delete path: ownership check, delete, and
+// dispatch of the affected nodes. Deleting an already-absent rule this user never
+// owned reports not-found; a genuine delete is idempotent from the caller's view.
+func (s *Server) deleteUserRule(u *db.User, id int64) *ruleMutationError {
+	rl, err := db.GetRule(s.DB, id)
+	if err != nil {
+		return &ruleMutationError{status: http.StatusNotFound, msg: "规则不存在"}
+	}
 	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
-		jsonErr(w, http.StatusForbidden, "无权操作该规则")
-		return
+		return &ruleMutationError{status: http.StatusForbidden, msg: "无权操作该规则"}
 	}
 	nodes, err := db.DeleteRule(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_delete", strconv.FormatInt(id, 10), "")
 	s.apiDispatchFanout(nodes)
-	jsonOK(w, map[string]any{"ok": true})
+	return nil
 }
 
 func (s *Server) apiSetAdminNote(w http.ResponseWriter, r *http.Request) {
@@ -3626,44 +3713,6 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiTokenInfo(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
-
-	nodeViews := make([]map[string]any, 0, len(grantedNodes))
-	for i, n := range grantedNodes {
-		g := grants[i]
-		nRules, _ := db.CountRulesForUserNode(s.DB, u.ID, n.ID)
-		nodeViews = append(nodeViews, map[string]any{
-			"name":            n.Name,
-			"rule_count":      nRules,
-			"rate_multiplier": n.RateMultiplier,
-			"unidirectional":  n.Unidirectional,
-			"traffic_used":    g.TrafficUsedBytes,
-			"traffic_quota":   g.TrafficQuotaBytes,
-		})
-	}
-
-	var expiresAt any
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
-		expiresAt = u.ExpiresAt.Int64
-	}
-
-	jsonOK(w, map[string]any{
-		"username":              u.Username,
-		"traffic_used":          u.TrafficUsedBytes,
-		"traffic_quota":         u.TrafficQuotaBytes,
-		"traffic_reset_days":    u.TrafficResetDays,
-		"last_traffic_reset_at": u.LastTrafficResetAt,
-		"expires_at":            expiresAt,
-		"rule_count":            ruleCount,
-		"max_forwards":          u.MaxForwards,
-		"billing_rate":          u.BillingRate,
-		"nodes":                 nodeViews,
-	})
-}
-
 func (s *Server) apiMyGetToken(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	t, err := db.GetAPITokenByUser(s.DB, u.ID)
@@ -3678,6 +3727,7 @@ func (s *Server) apiMyGetToken(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"has_token":    true,
 		"token_prefix": t.TokenPrefix,
+		"scope":        t.Scope,
 		"disabled":     t.Disabled,
 		"created_at":   t.CreatedAt,
 		"last_used_at": lastUsed,
@@ -3686,12 +3736,20 @@ func (s *Server) apiMyGetToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyCreateToken(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	token, err := db.CreateAPIToken(s.DB, u.ID)
+	// Scope is optional and defaults to the least-privileged read; a caller opts
+	// into write power explicitly. An unrecognized value normalizes to read
+	// rather than failing, so an old client that omits it stays read-only.
+	var body struct {
+		Scope string `json:"scope"`
+	}
+	_ = decodeJSON(r, &body)
+	scope := db.NormalizeTokenScope(body.Scope)
+	token, err := db.CreateAPIToken(s.DB, u.ID, scope)
 	if err != nil {
 		jsonErr(w, http.StatusConflict, "已存在 Token，请先删除后重新创建")
 		return
 	}
-	jsonOK(w, map[string]any{"token": token})
+	jsonOK(w, map[string]any{"token": token, "scope": scope})
 }
 
 func (s *Server) apiMyDeleteToken(w http.ResponseWriter, r *http.Request) {

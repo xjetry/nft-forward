@@ -114,7 +114,7 @@ func TestBearerTokensHashedAtRest(t *testing.T) {
 		t.Errorf("GetSessionUser by plaintext failed: %v", err)
 	}
 
-	apiTok, err := db.CreateAPIToken(d, uid)
+	apiTok, err := db.CreateAPIToken(d, uid, db.TokenScopeRead)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,9 +41,9 @@ export default function MyDashboard() {
     api.get('/my/token').then(setToken).catch(console.error).finally(() => setTokenLoading(false))
   }, [])
 
-  const createToken = async () => {
+  const createToken = async (scope) => {
     try {
-      const res = await api.post('/my/token')
+      const res = await api.post('/my/token', { scope })
       setNewToken(res.token)
       setShowTokenModal(true)
       const t = await api.get('/my/token')
@@ -294,6 +294,9 @@ function NodeOnline({ node }) {
 
 function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken, toggleToken }) {
   const [showHelp, setShowHelp] = useState(false)
+  // Default to the least-privileged read scope; a user opts into write power
+  // (creating/editing their own forward rules over the API) explicitly.
+  const [scope, setScope] = useState('read')
 
   if (tokenLoading) return <div className="card"><div className="px-6 py-[22px]"><h3 className="text-[16px] font-bold mb-4">API Token</h3><Loading /></div></div>
 
@@ -307,21 +310,28 @@ function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken
             {showHelp && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowHelp(false)} />
-                <div className="absolute left-0 top-full mt-2 z-50 bg-surface border border-line rounded-xl shadow-xl p-4 w-[340px] text-sm">
-                  <p className="font-semibold mb-2">通过 Token 查询账户信息</p>
-                  <p className="text-ink-soft mb-2">请求方式（二选一）：</p>
+                <div className="absolute left-0 top-full mt-2 z-50 bg-surface border border-line rounded-xl shadow-xl p-4 w-[380px] text-sm">
+                  <p className="font-semibold mb-2">程序化 / AI agent 调用 API</p>
+                  <p className="text-ink-soft mb-2">鉴权（二选一）：</p>
                   <code className="block bg-surface-sunken rounded p-2 text-xs font-mono mb-1.5 break-all">GET /api/v1/info?token=YOUR_TOKEN</code>
                   <code className="block bg-surface-sunken rounded p-2 text-xs font-mono mb-3 break-all">curl -H "Authorization: Bearer YOUR_TOKEN" /api/v1/info</code>
-                  <p className="text-ink-soft text-xs">返回：用户名、流量用量/配额、到期时间、规则数、已授权节点列表（含倍率和流量）。</p>
+                  <p className="text-ink-soft text-xs mb-1"><b>只读</b>：<code className="font-mono">GET /api/v1/info</code>、<code className="font-mono">/my/rules</code>、<code className="font-mono">/my/nodes</code>、<code className="font-mono">/probe</code>、<code className="font-mono">/probe-chain</code>。</p>
+                  <p className="text-ink-soft text-xs"><b>读写</b>（需读写 Token）：<code className="font-mono">POST/PUT/DELETE /my/rules</code> 自助建改删转发规则；建规支持 <code className="font-mono">node_name</code> 按名寻址、<code className="font-mono">?dry_run=1</code> 预览端口、<code className="font-mono">Idempotency-Key</code> 幂等重试。</p>
                 </div>
               </>
             )}
           </div>
         </div>
         {!token?.has_token ? (
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-ink-soft">尚未创建 Token</span>
-            <button onClick={createToken} className="btn-primary text-sm">创建 API Token</button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-ink-soft">权限</span>
+              <select value={scope} onChange={e => setScope(e.target.value)} className="input-field text-sm !py-1 !w-auto">
+                <option value="read">只读（查询）</option>
+                <option value="readwrite">读写（自助管理转发规则）</option>
+              </select>
+            </div>
+            <button onClick={() => createToken(scope)} className="btn-primary text-sm">创建 API Token</button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -329,6 +339,7 @@ function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken
               <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">Token</div>
               <div className="text-[14.5px] font-mono">{token.token_prefix}...</div>
               <Badge color={token.disabled ? 'gray' : 'green'}>{token.disabled ? '已停用' : '启用中'}</Badge>
+              <Badge color={token.scope === 'readwrite' ? 'blue' : 'gray'}>{token.scope === 'readwrite' ? '读写' : '只读'}</Badge>
             </div>
             <div className="flex items-center gap-4 py-2 border-b border-line-soft">
               <div className="w-[130px] flex-shrink-0 text-[14px] text-ink-soft">创建时间</div>

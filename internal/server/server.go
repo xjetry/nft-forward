@@ -27,6 +27,7 @@ type Server struct {
 	Dispatcher      *Dispatcher
 	Landing         *landing.Fetcher
 	loginLimiter    *loginLimiter
+	tokenLimiter    *tokenLimiter
 	stopExpiry      chan struct{}
 	stopCycle       chan struct{}
 	stopLandingSync chan struct{}
@@ -38,7 +39,7 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
@@ -538,11 +539,8 @@ func (s *Server) Router() http.Handler {
 		})
 	})
 
-	// Public API (token auth)
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(s.requireTokenAuth)
-		r.Get("/info", s.apiTokenInfo)
-	})
+	// Public API (token auth) — the stable programmatic / AI-agent surface.
+	r.Route("/api/v1", s.registerV1Routes)
 
 	r.NotFound(s.spaHandler().ServeHTTP)
 
