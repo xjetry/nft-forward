@@ -8,7 +8,7 @@ import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
 import { PerNodeRolesForm } from '../users/Detail'
 
-const card = 'bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
+const card = 'admin-detail-card bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
 
 function semverLT(a, b) {
   const pa = (a || '').replace(/^v/, '').split('.').map(Number)
@@ -214,7 +214,7 @@ export default function NodeDetail() {
 
   return (
     <Layout>
-      <div className="mx-auto max-w-[1160px] flex flex-col gap-[18px]">
+      <div className="admin-detail-page admin-node-detail-page mx-auto max-w-[1160px] flex flex-col gap-[18px]">
 
         {/* back link */}
         <Link to="/nodes" className="inline-flex items-center gap-1.5 w-fit text-[13.5px] text-ink-mut hover:text-ink transition-colors">
@@ -225,8 +225,7 @@ export default function NodeDetail() {
         {/* ===== HEADER ===== */}
         <header className={`${card} px-[26px] py-[22px]`}>
           <div className="flex items-start gap-5">
-            <div className="w-[52px] h-[52px] flex-none rounded-[14px] grid place-items-center text-blue-600 text-[22px] font-bold hidden md:grid"
-              style={{ background: 'linear-gradient(135deg,#eef3ff,#dbe6ff)' }}>⬡</div>
+            <div className="admin-node-avatar w-[52px] h-[52px] flex-none rounded-[14px] grid place-items-center text-blue-600 text-[22px] font-bold hidden md:grid">⬡</div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1 className="m-0 text-[22px] font-bold tracking-[-0.01em]">{node.name}</h1>

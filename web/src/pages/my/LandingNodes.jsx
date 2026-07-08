@@ -62,15 +62,15 @@ export default function MyLandingNodes() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="user-page h-full flex flex-col">
       <PageHeader title="落地节点" count={nodes.length} unit="个" />
-      <Panel fill>
+      <Panel fill className="user-panel">
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
           {stale && <span className="text-xs text-amber-600 ml-2">订阅刷新失败，显示上次结果</span>}
           {hasDynamic && (
             <button onClick={refresh} disabled={refreshing}
-              className="ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-ink-soft bg-surface border border-line hover:border-blue-500 hover:text-blue-600 px-[18px] py-[9px] rounded-[10px] transition-colors disabled:opacity-50">
+              className="btn-secondary ml-auto text-xs disabled:opacity-50">
               {refreshing ? '刷新中…' : '刷新订阅'}
             </button>
           )}
@@ -87,7 +87,7 @@ export default function MyLandingNodes() {
             <tbody>
               {filtered.map((n, i) => (
                 <tr key={i}>
-                  <td className="font-semibold">{n.name || '(未命名)'}</td>
+                  <td className="font-semibold"><span className="route-name">{n.name || '(未命名)'}</span></td>
                   <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                   <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
                   <td className="font-mono text-xs">

@@ -68,7 +68,7 @@ export default function UserList() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col admin-list-page admin-user-list-page">
       <PageHeader title="用户列表" count={users.length} unit="个用户" />
 
       <Panel fill>

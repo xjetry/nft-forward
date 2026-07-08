@@ -187,7 +187,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   return (
     <Modal open={open} onClose={onClose} title={title}>
       <form onSubmit={submit} className="space-y-[22px]">
-        <div className="grid grid-cols-[120px_1fr] gap-6 items-center">
+        <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-3 sm:gap-6 items-center">
           <label className="fl">入口节点</label>
           <Select value={form.node_id} onChange={pickEntry} placeholder="-- 选择节点 --" searchable tabs groups={groups} />
           {viaLevels.map(({ level, cands, chosen, mustVia }) => (

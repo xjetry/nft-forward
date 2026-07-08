@@ -138,7 +138,7 @@ export default function RulesList() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col admin-list-page admin-rule-list-page">
       <PageHeader title="转发规则" count={rules.length} />
 
       <Panel fill>
@@ -148,7 +148,7 @@ export default function RulesList() {
         </PanelToolbar>
 
         {(users.length > 0 || nodes.length > 0) && (
-          <div className="relative flex items-center gap-2.5 px-[22px] py-2.5 border-b border-line-soft flex-wrap z-10">
+          <div className="panel-filterbar relative flex items-center gap-2.5 px-[22px] py-2.5 border-b border-line-soft flex-wrap z-10">
             <span className="text-xs text-ink-mut">筛选</span>
             <FilterDropdown
               label="用户"

@@ -165,7 +165,7 @@ export default function NodeList() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col admin-list-page admin-node-list-page">
       <PageHeader title="节点" count={nodes.length} unit="个节点" />
 
       {/* Node list */}
@@ -180,7 +180,7 @@ export default function NodeList() {
             <button onClick={upgradeAll} className="btn-secondary text-xs">一键升级全部</button>
           </div>
         </PanelToolbar>
-        <div className="flex items-center flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+        <div className="panel-filterbar flex items-center flex-wrap gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
           {[['single', '单点', singleNodes.length], ['composite', '组合', compositeNodes.length]].map(([key, label, n]) => (
             <button key={key} onClick={() => switchTab(key)}
               className={`px-3 py-0.5 rounded text-xs border transition-colors ${

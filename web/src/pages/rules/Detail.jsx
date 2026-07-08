@@ -48,6 +48,7 @@ export default function RulesDetail() {
 
   return (
     <Layout>
+      <div className="admin-detail-page admin-rule-detail-page">
       {/* Entry info */}
       <div className="card mb-5">
         <div className="card-header"><h3 className="text-sm font-bold">入口</h3><span className="text-xs text-ink-mut">复制给客户端</span></div>
@@ -164,6 +165,7 @@ export default function RulesDetail() {
           返回规则列表
         </Link>
       </div>
+      </div>
 
       <RuleFormModal
         open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
@@ -198,4 +200,3 @@ function ReallocateForm({ ruleId, position, current, onDone }) {
     </form>
   )
 }
-

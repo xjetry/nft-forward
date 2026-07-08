@@ -60,6 +60,7 @@ export default function UserDetail() {
 
   return (
     <Layout>
+      <div className="admin-detail-page admin-user-detail-page">
       {/* Info */}
       <div className="card mb-5">
         <div className="card-header"><h3 className="text-[15px] font-bold">基本信息</h3></div>
@@ -164,6 +165,7 @@ export default function UserDetail() {
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         返回用户列表
       </Link>
+      </div>
 
       <Modal open={!!newPassword} onClose={() => setNewPassword(null)} title="新密码">
         <p className="text-sm text-ink-soft mb-3">新密码只显示这一次，请复制并妥善保存。关闭后将无法再次查看。</p>
