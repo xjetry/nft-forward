@@ -206,6 +206,56 @@ func (s *Server) v1AdminSetExpiry(w http.ResponseWriter, r *http.Request) {
 	v1OK(w, map[string]any{"updated": true})
 }
 
+func (s *Server) v1AdminGrantNode(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeId")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad node id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		MaxForwards       int   `json:"max_forwards"`
+		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
+	}
+	_ = decodeJSON(r, &body)
+	if aerr := s.grantUserNode(admin.ID, id, nodeID, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"granted": true})
+}
+
+func (s *Server) v1AdminRevokeNode(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeId")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad node id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	removed, aerr := s.revokeUserNode(admin.ID, id, nodeID)
+	if aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"removed": true, "removed_rule_nodes": removed})
+}
+
 func (s *Server) v1AdminSetEnabled(w http.ResponseWriter, r *http.Request) {
 	admin := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

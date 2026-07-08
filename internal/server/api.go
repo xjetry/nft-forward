@@ -2372,9 +2372,6 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.MaxForwards <= 0 {
-		body.MaxForwards = defaultGrantMaxForwards
-	}
 	ids := body.NodeIDs
 	if len(ids) == 0 && body.NodeID != 0 {
 		ids = []int64{body.NodeID}
@@ -2384,11 +2381,10 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, nid := range ids {
-		if err := db.GrantNode(s.DB, userID, nid, body.MaxForwards, body.TrafficQuotaBytes); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
+		if aerr := s.grantUserNode(u.ID, userID, nid, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+			jsonErr(w, aerr.status, aerr.msg)
 			return
 		}
-		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -2405,21 +2401,12 @@ func (s *Server) apiRevokeNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad node id")
 		return
 	}
-	if err := db.RevokeNode(s.DB, userID, nodeID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	removed, aerr := s.revokeUserNode(u.ID, userID, nodeID)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	// Revoking access must also stop the user's existing forwarding on that node;
-	// otherwise the rules keep running (and keep billing) with no grant behind
-	// them. Delete them and re-push the affected nodes so the kernel converges.
-	affected, err := db.DeleteRulesForUserNode(s.DB, userID, nodeID)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.apiDispatchFanout(affected)
-	db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
-	jsonOK(w, map[string]any{"ok": true, "removed_rule_nodes": len(affected)})
+	jsonOK(w, map[string]any{"ok": true, "removed_rule_nodes": removed})
 }
 
 func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {

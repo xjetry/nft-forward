@@ -132,6 +132,35 @@ func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError
 	return nil
 }
 
+// grantUserNode ensures the user is granted the node with the given caps
+// (create-or-update via db.GrantNode). maxForwards<=0 falls back to the default.
+func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, quotaBytes int64) *adminError {
+	if maxForwards <= 0 {
+		maxForwards = defaultGrantMaxForwards
+	}
+	if err := db.GrantNode(s.DB, userID, nodeID, maxForwards, quotaBytes); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	return nil
+}
+
+// revokeUserNode removes the grant AND tears down the rules that ran behind it,
+// re-dispatching the affected nodes so forwarding (and billing) stops. Returns
+// the number of physical nodes re-pushed.
+func (s *Server) revokeUserNode(adminID, userID, nodeID int64) (int, *adminError) {
+	if err := db.RevokeNode(s.DB, userID, nodeID); err != nil {
+		return 0, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	affected, err := db.DeleteRulesForUserNode(s.DB, userID, nodeID)
+	if err != nil {
+		return 0, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	s.apiDispatchFanout(affected)
+	db.WriteAudit(s.DB, adminID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	return len(affected), nil
+}
+
 // setUserEnabled sets the user's enabled state (declarative replacement for the
 // SPA toggle). Disabling drops the user's rules from their nodes; enabling
 // restores them — either way we re-dispatch. An admin may not disable itself.

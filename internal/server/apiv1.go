@@ -146,6 +146,8 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxForwards)
 		r.Put("/users/{id}/expiry", s.v1AdminSetExpiry)
 		r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
+		r.Put("/users/{id}/grants/{nodeId}", s.v1AdminGrantNode)
+		r.Delete("/users/{id}/grants/{nodeId}", s.v1AdminRevokeNode)
 	})
 }
 

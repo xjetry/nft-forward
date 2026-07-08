@@ -172,3 +172,35 @@ func TestV1AdminUserScalarSets(t *testing.T) {
 		t.Fatalf("missing user: want 404, got %d", rec.Code)
 	}
 }
+
+func TestV1AdminGrantRevoke(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	target, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	n, _ := db.CreateNode(d, "grantable", "https://p", "t-grantable")
+	s, _ := New(d)
+
+	// grant (ensure-granted)
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/grants/%d", target, n.ID), adminTok, map[string]any{"max_forwards": 3, "traffic_quota_bytes": 100}); rec.Code != http.StatusOK {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body.String())
+	}
+	nodes, _, _ := db.ListNodesForUser(d, target)
+	if len(nodes) != 1 || nodes[0].ID != n.ID {
+		t.Fatalf("grant not applied: %+v", nodes)
+	}
+	// grant again is idempotent (still exactly one grant)
+	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/grants/%d", target, n.ID), adminTok, map[string]any{"max_forwards": 3})
+	if nodes, _, _ = db.ListNodesForUser(d, target); len(nodes) != 1 {
+		t.Fatalf("re-grant must stay one grant, got %d", len(nodes))
+	}
+	// revoke, then revoke again (no-op success)
+	if rec := v1Do(t, s, "DELETE", fmt.Sprintf("/api/v1/users/%d/grants/%d", target, n.ID), adminTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	if nodes, _, _ = db.ListNodesForUser(d, target); len(nodes) != 0 {
+		t.Fatalf("revoke should clear grant, got %d", len(nodes))
+	}
+	if rec := v1Do(t, s, "DELETE", fmt.Sprintf("/api/v1/users/%d/grants/%d", target, n.ID), adminTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("second revoke must be a no-op success, got %d", rec.Code)
+	}
+}
