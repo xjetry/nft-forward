@@ -526,6 +526,13 @@ func (s *Server) Router() http.Handler {
 			r.Post("/my/rules", s.apiMyCreateRule)
 			r.Put("/my/rules/{id}", s.apiMyUpdateRule)
 			r.Delete("/my/rules/{id}", s.apiMyDeleteRule)
+		})
+
+		// API token self-management is role-agnostic: an admin needs its own
+		// token to reach the /api/v1 admin surface, so this can't sit under the
+		// user-only group. Each handler keys on the session user's own id.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAPIAuth)
 			r.Get("/my/token", s.apiMyGetToken)
 			r.Post("/my/token", s.apiMyCreateToken)
 			r.Delete("/my/token", s.apiMyDeleteToken)
