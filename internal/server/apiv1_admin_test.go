@@ -229,3 +229,53 @@ func TestV1AdminGrantRevoke(t *testing.T) {
 		t.Fatalf("second revoke must be a no-op success, got %d", rec.Code)
 	}
 }
+
+func TestV1AdminBatchApplyAndResync(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	u1, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	u2, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	real, _ := db.CreateNode(d, "batch-real", "https://p", "t-batch")
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "POST", "/api/v1/grants/batch-apply", adminTok, map[string]any{
+		"user_ids": []int64{u1, u2},
+		"grants": []map[string]any{
+			{"node_name": "batch-real", "max_forwards": 4, "traffic_quota_bytes": 0, "rate_limit_mbytes": 0},
+			{"node_name": "ghost-node"},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("batch-apply: %d %s", rec.Code, rec.Body.String())
+	}
+	data := v1Data(t, rec)
+	// two users x one real node granted
+	if g, _ := data["granted"].(float64); int(g) != 2 {
+		t.Fatalf("want granted=2, got %v", data["granted"])
+	}
+	skipped, _ := data["skipped_nodes"].([]any)
+	if len(skipped) != 1 || skipped[0] != "ghost-node" {
+		t.Fatalf("want skipped=[ghost-node], got %v", data["skipped_nodes"])
+	}
+	for _, uid := range []int64{u1, u2} {
+		if nodes, _, _ := db.ListNodesForUser(d, uid); len(nodes) != 1 || nodes[0].ID != real.ID {
+			t.Fatalf("user %d grant not applied: %+v", uid, nodes)
+		}
+	}
+
+	// resync-all tolerates disconnected nodes and returns 200
+	if rec := v1Do(t, s, "POST", "/api/v1/nodes/resync-all", adminTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("resync-all: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestV1ResyncScopeGate(t *testing.T) {
+	d := openDB(t)
+	_, readTok := v1AdminToken(t, d, db.TokenScopeRead)
+	n, _ := db.CreateNode(d, "r", "https://p", "t-r")
+	s, _ := New(d)
+	rec := v1Do(t, s, "POST", fmt.Sprintf("/api/v1/nodes/%d/resync", n.ID), readTok, nil)
+	if rec.Code != http.StatusForbidden || v1ErrCode(t, rec) != codeScopeRequired {
+		t.Fatalf("read-scope admin resync: want 403 scope_required, got %d %s", rec.Code, rec.Body.String())
+	}
+}

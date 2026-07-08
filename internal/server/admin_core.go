@@ -194,6 +194,106 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 	return nil
 }
 
+// batchGrantSpec is one node grant applied across a set of users by batchApplyGrants.
+type batchGrantSpec struct {
+	NodeName          string
+	MaxForwards       int
+	TrafficQuotaBytes int64
+	RateLimitMBytes   int64
+}
+
+// batchApplyGrants grants each named node to every listed user (with per-grant
+// caps + rate limit) and re-dispatches nodes whose active rules are affected.
+// Node names that don't resolve are skipped and reported — for the admin caller
+// this is a convenience, not an enumeration oracle (admin may see all nodes).
+func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batchGrantSpec) (int, []string, *adminError) {
+	if len(userIDs) == 0 {
+		return 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请选择目标用户"}
+	}
+	if len(grants) == 0 {
+		return 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请提供授权节点"}
+	}
+	names := make([]string, len(grants))
+	for i, g := range grants {
+		names[i] = g.NodeName
+	}
+	nameToID, err := db.NodeIDsByNames(s.DB, names)
+	if err != nil {
+		return 0, nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	var skipped []string
+	var granted int
+	for _, g := range grants {
+		nid, ok := nameToID[g.NodeName]
+		if !ok {
+			skipped = append(skipped, g.NodeName)
+			continue
+		}
+		mf := g.MaxForwards
+		if mf <= 0 {
+			mf = 10
+		}
+		for _, uid := range userIDs {
+			if err := db.GrantNode(s.DB, uid, nid, mf, g.TrafficQuotaBytes); err != nil {
+				return granted, skipped, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+			}
+			mb := g.RateLimitMBytes
+			if mb < 0 {
+				mb = 0
+			}
+			if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`, mb, uid, nid); err != nil {
+				return granted, skipped, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+			}
+			db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nid, 10))
+			granted++
+		}
+	}
+	affected := map[int64]bool{}
+	for _, g := range grants {
+		nid, ok := nameToID[g.NodeName]
+		if !ok {
+			continue
+		}
+		for _, uid := range userIDs {
+			ns, err := db.RulesAffectedByNode(s.DB, uid, nid)
+			if err != nil {
+				continue
+			}
+			for _, n := range ns {
+				affected[n] = true
+			}
+		}
+	}
+	nodeIDs := make([]int64, 0, len(affected))
+	for n := range affected {
+		nodeIDs = append(nodeIDs, n)
+	}
+	s.apiDispatchFanout(nodeIDs)
+	return granted, skipped, nil
+}
+
+// resyncAllNodes re-pushes kernel state to every non-composite node, tolerating
+// per-node dispatch failures (a disconnected node counts as failed, not fatal).
+// Composite nodes have no agent of their own and are skipped.
+func (s *Server) resyncAllNodes() (int, int, error) {
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		return 0, 0, err
+	}
+	var synced, failed int
+	for _, n := range nodes {
+		if n.NodeType == "composite" {
+			continue
+		}
+		if e := s.dispatchToNode(n.ID); e != nil {
+			failed++
+		} else {
+			synced++
+		}
+	}
+	return synced, failed, nil
+}
+
 // setUserEnabled sets the user's enabled state (declarative replacement for the
 // SPA toggle). Disabling drops the user's rules from their nodes; enabling
 // restores them — either way we re-dispatch. An admin may not disable itself.

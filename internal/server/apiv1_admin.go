@@ -337,3 +337,55 @@ func (s *Server) v1AdminSetEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	v1OK(w, map[string]any{"updated": true})
 }
+
+func (s *Server) v1AdminBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	var body struct {
+		UserIDs []int64 `json:"user_ids"`
+		Grants  []struct {
+			NodeName          string `json:"node_name"`
+			MaxForwards       int    `json:"max_forwards"`
+			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
+			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
+		} `json:"grants"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	specs := make([]batchGrantSpec, len(body.Grants))
+	for i, g := range body.Grants {
+		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
+	}
+	granted, skipped, aerr := s.batchApplyGrants(admin.ID, body.UserIDs, specs)
+	if aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	if skipped == nil {
+		skipped = []string{}
+	}
+	v1OK(w, map[string]any{"granted": granted, "skipped_nodes": skipped})
+}
+
+func (s *Server) v1AdminResyncNode(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if err := s.dispatchToNode(id); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	v1OK(w, map[string]any{"resynced": true})
+}
+
+func (s *Server) v1AdminResyncAllNodes(w http.ResponseWriter, r *http.Request) {
+	synced, failed, err := s.resyncAllNodes()
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	v1OK(w, map[string]any{"synced": synced, "failed": failed})
+}

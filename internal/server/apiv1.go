@@ -150,6 +150,9 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Delete("/users/{id}/grants/{nodeId}", s.v1AdminRevokeNode)
 		r.Put("/users/{id}/nodes/{nodeId}/quota", s.v1AdminSetPerNodeQuota)
 		r.Put("/users/{id}/nodes/{nodeId}/rate-limit", s.v1AdminSetPerNodeRate)
+		r.Post("/grants/batch-apply", s.v1AdminBatchApplyGrants)
+		r.Post("/nodes/{id}/resync", s.v1AdminResyncNode)
+		r.Post("/nodes/resync-all", s.v1AdminResyncAllNodes)
 	})
 }
 

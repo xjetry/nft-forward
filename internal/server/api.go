@@ -1350,26 +1350,12 @@ func (s *Server) apiReorderNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiResyncAllNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, err := db.ListNodes(s.DB)
+	synced, failed, err := s.resyncAllNodes()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var ok, fail int
-	for _, n := range nodes {
-		// Composite nodes have no agent of their own to dispatch to; skipping
-		// them mirrors apiUpgradeAllNodes below and avoids stamping a spurious
-		// dispatch-failure into their last_error.
-		if n.NodeType == "composite" {
-			continue
-		}
-		if err := s.dispatchToNode(n.ID); err != nil {
-			fail++
-		} else {
-			ok++
-		}
-	}
-	jsonOK(w, map[string]any{"ok": true, "synced": ok, "failed": fail})
+	jsonOK(w, map[string]any{"ok": true, "synced": synced, "failed": failed})
 }
 
 func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
@@ -3705,77 +3691,14 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if len(body.UserIDs) == 0 {
-		jsonErr(w, http.StatusBadRequest, "请选择目标用户")
-		return
-	}
-	if len(body.Grants) == 0 {
-		jsonErr(w, http.StatusBadRequest, "请提供授权节点")
-		return
-	}
-	names := make([]string, len(body.Grants))
+	specs := make([]batchGrantSpec, len(body.Grants))
 	for i, g := range body.Grants {
-		names[i] = g.NodeName
+		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
-	nameToID, err := db.NodeIDsByNames(s.DB, names)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	granted, skipped, aerr := s.batchApplyGrants(u.ID, body.UserIDs, specs)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-
-	var skipped []string
-	var granted int
-	for _, g := range body.Grants {
-		nid, ok := nameToID[g.NodeName]
-		if !ok {
-			skipped = append(skipped, g.NodeName)
-			continue
-		}
-		mf := g.MaxForwards
-		if mf <= 0 {
-			mf = 10
-		}
-		for _, uid := range body.UserIDs {
-			if err := db.GrantNode(s.DB, uid, nid, mf, g.TrafficQuotaBytes); err != nil {
-				jsonErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			mb := g.RateLimitMBytes
-			if mb < 0 {
-				mb = 0
-			}
-			if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`, mb, uid, nid); err != nil {
-				jsonErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nid, 10))
-			granted++
-		}
-	}
-
-	// batch grants usually precede rule creation (no-op fanout), but changing
-	// an existing grant's rate limit must take effect on already-active rules.
-	affected := map[int64]bool{}
-	for _, g := range body.Grants {
-		nid, ok := nameToID[g.NodeName]
-		if !ok {
-			continue
-		}
-		for _, uid := range body.UserIDs {
-			ns, err := db.RulesAffectedByNode(s.DB, uid, nid)
-			if err != nil {
-				continue
-			}
-			for _, n := range ns {
-				affected[n] = true
-			}
-		}
-	}
-	nodeIDs := make([]int64, 0, len(affected))
-	for n := range affected {
-		nodeIDs = append(nodeIDs, n)
-	}
-	s.apiDispatchFanout(nodeIDs)
-
 	jsonOK(w, map[string]any{"ok": true, "granted": granted, "skipped_nodes": skipped})
 }
