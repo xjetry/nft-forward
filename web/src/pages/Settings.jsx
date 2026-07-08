@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
 import { Layout, useToast } from '../components/Layout'
 import { Loading } from '../components/ui'
+import { PageHeader, Panel } from '../components/page'
 
 export default function Settings() {
   const [form, setForm] = useState({ panel_url: '', panel_name: '', show_rate_to_user: false, pool_size: 4 })
@@ -47,46 +48,74 @@ export default function Settings() {
 
   return (
     <Layout>
-      <h1 className="m-0 text-2xl font-bold text-ink mb-[22px]">系统设置</h1>
-      <div className="card" style={{ maxWidth: 980 }}>
-        <div className="card-header"><h3 className="text-[16px] font-bold">面板信息</h3></div>
-        <div className="px-6 py-[26px]">
-          {error && <div className="mb-4 px-3 py-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{error}</div>}
-          <form onSubmit={submit}>
-            <div className="flex items-center gap-6 mb-[22px]">
-              <label className="w-[110px] flex-shrink-0 text-[14px] text-ink-soft">面板地址</label>
-              <input className="input-field max-w-[560px]" type="text" placeholder="https://panel.example.com" value={form.panel_url} onChange={e => set('panel_url', e.target.value)} />
+      <div className="admin-settings-page">
+        <PageHeader title="系统设置" />
+        <Panel className="admin-settings-panel">
+          <div className="settings-panel-head">
+            <div className="settings-panel-title-wrap">
+              <span className="settings-panel-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </span>
+              <div>
+                <h3>面板配置</h3>
+                <p>基础展示与转发运行参数</p>
+              </div>
             </div>
-            <div className="flex items-center gap-6 pb-[22px] border-b border-line-soft">
-              <label className="w-[110px] flex-shrink-0 text-[14px] text-ink-soft">面板名称</label>
-              <input className="input-field max-w-[560px]" type="text" placeholder="nft-forward" value={form.panel_name} onChange={e => set('panel_name', e.target.value)} />
-            </div>
+          </div>
 
-            <div className="pt-[22px]">
-              <h3 className="text-[16px] font-bold text-ink mb-[22px]">转发设置</h3>
-            </div>
+          <form onSubmit={submit} className="settings-form">
+            {error && <div className="settings-error">{error}</div>}
 
-            <div className="flex items-center gap-6 mb-[22px]">
-              <label className="w-[110px] flex-shrink-0 text-[14px] text-ink-soft">显示倍率</label>
-              <button type="button" role="switch" aria-checked={form.show_rate_to_user}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${form.show_rate_to_user ? 'bg-blue-600' : 'bg-gray-600'}`}
-                onClick={() => set('show_rate_to_user', !form.show_rate_to_user)}>
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${form.show_rate_to_user ? 'translate-x-6' : 'translate-x-1'}`} />
-              </button>
-              <span className="text-[13px] text-ink-mut">向普通用户展示节点/链路倍率</span>
-            </div>
+            <section className="settings-section">
+              <div className="settings-section-copy">
+                <span>面板信息</span>
+                <p>登录页、侧栏和用户通知里展示的基础信息</p>
+              </div>
+              <div className="settings-fields">
+                <div className="settings-row">
+                  <label>面板地址</label>
+                  <input className="input-field settings-input" type="text" placeholder="https://panel.example.com" value={form.panel_url} onChange={e => set('panel_url', e.target.value)} />
+                </div>
+                <div className="settings-row">
+                  <label>面板名称</label>
+                  <input className="input-field settings-input" type="text" placeholder="nft-forward" value={form.panel_name} onChange={e => set('panel_name', e.target.value)} />
+                </div>
+              </div>
+            </section>
 
-            <div className="flex items-center gap-6 pb-[22px] border-b border-line-soft">
-              <label className="w-[110px] flex-shrink-0 text-[14px] text-ink-soft">TCP 连接池</label>
-              <input className="input-field w-[100px]" type="number" min="0" max="64" value={form.pool_size} onChange={e => set('pool_size', e.target.value)} />
-              <span className="text-[13px] text-ink-mut">每端口预建立连接数（0 = 禁用，默认 4）</span>
-            </div>
+            <section className="settings-section">
+              <div className="settings-section-copy">
+                <span>转发设置</span>
+                <p>影响普通用户可见信息和连接池行为</p>
+              </div>
+              <div className="settings-fields">
+                <div className="settings-row settings-row-inline">
+                  <label>显示倍率</label>
+                  <div className="settings-control-line">
+                    <button type="button" role="switch" aria-checked={form.show_rate_to_user}
+                      className={`settings-switch ${form.show_rate_to_user ? 'is-on' : ''}`}
+                      onClick={() => set('show_rate_to_user', !form.show_rate_to_user)}>
+                      <span />
+                    </button>
+                    <span className="settings-help">向普通用户展示节点/链路倍率</span>
+                  </div>
+                </div>
 
-            <div className="flex items-center gap-4 mt-[22px]">
+                <div className="settings-row settings-row-inline">
+                  <label>TCP 连接池</label>
+                  <div className="settings-control-line">
+                    <input className="input-field settings-number-input" type="number" min="0" max="64" value={form.pool_size} onChange={e => set('pool_size', e.target.value)} />
+                    <span className="settings-help">每端口预建立连接数（0 = 禁用，默认 4）</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div className="settings-actions">
               <button type="submit" disabled={saving} className="btn-primary">{saving ? '保存中…' : '保存设置'}</button>
             </div>
           </form>
-        </div>
+        </Panel>
       </div>
     </Layout>
   )

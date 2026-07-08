@@ -5,7 +5,7 @@
 /* Page title + item count, sits above the panel. */
 export function PageHeader({ title, count, unit = '条' }) {
   return (
-    <div className="flex items-baseline gap-3.5 mb-[22px]">
+    <div className="page-header flex items-baseline gap-3.5 mb-[22px]">
       <h1 className="m-0 text-2xl font-bold text-ink">{title}</h1>
       {count != null && <span className="text-[14px] text-ink-mut">共 {count} {unit}</span>}
     </div>
@@ -17,7 +17,7 @@ export function PageHeader({ title, count, unit = '条' }) {
    TableScroll child can scroll while the toolbar stays put. */
 export function Panel({ children, className = '', fill = false }) {
   return (
-    <section className={`bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${fill ? 'flex-1 min-h-0 flex flex-col' : ''} ${className}`}>
+    <section className={`app-panel bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)] overflow-hidden ${fill ? 'flex-1 min-h-0 flex flex-col' : ''} ${className}`}>
       {children}
     </section>
   )
@@ -28,7 +28,7 @@ export function Panel({ children, className = '', fill = false }) {
    fixed. tbl-scroll adds horizontal scrolling with a sticky first column on
    mobile, for pages that render a real table there instead of cards. */
 export function TableScroll({ children }) {
-  return <div className="table-scroll tbl-scroll flex-1 min-h-0 overflow-auto">{children}</div>
+  return <div className="table-scroll app-table-scroll tbl-scroll flex-1 min-h-0 overflow-auto">{children}</div>
 }
 
 /* Bounded scroll box for tables outside a `fill` Panel (dashboard cards,
@@ -36,13 +36,13 @@ export function TableScroll({ children }) {
    the rows scroll locally under the sticky header instead of stretching the
    whole page. */
 export function TableBox({ className = '', children }) {
-  return <div className={`table-scroll tbl-scroll overflow-auto max-h-[460px] ${className}`}>{children}</div>
+  return <div className={`table-scroll app-table-scroll tbl-scroll overflow-auto max-h-[460px] ${className}`}>{children}</div>
 }
 
 /* Toolbar row inside a Panel — typically a SearchInput plus a primary action. */
 export function PanelToolbar({ children }) {
   return (
-    <div className="flex items-center gap-4 px-[22px] py-[18px] border-b border-line-soft flex-wrap">
+    <div className="panel-toolbar flex items-center gap-4 px-[22px] py-[18px] border-b border-line-soft flex-wrap">
       {children}
     </div>
   )
@@ -51,10 +51,10 @@ export function PanelToolbar({ children }) {
 /* Search box with a leading magnifier; controlled via value/onChange. */
 export function SearchInput({ value, onChange, placeholder }) {
   return (
-    <div className="relative flex-1 min-w-0 md:min-w-[240px] md:max-w-[340px]">
+    <div className="search-input relative flex-1 min-w-0 md:min-w-[240px] md:max-w-[340px]">
       <svg className="w-4 h-4 absolute left-[13px] top-1/2 -translate-y-1/2 text-ink-mut pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        className="w-full text-[13.5px] pl-[38px] pr-3.5 py-[10px] bg-surface border border-line rounded-[9px] outline-none text-ink focus:border-blue-600 focus:ring-3 focus:ring-blue-600/10 transition-colors" />
+        className="search-input-field w-full text-[13.5px] pl-[38px] pr-3.5 py-[10px] bg-surface border border-line rounded-[9px] outline-none text-ink focus:border-blue-600 focus:ring-3 focus:ring-blue-600/10 transition-colors" />
     </div>
   )
 }
@@ -66,7 +66,7 @@ export function ToolbarButton({ onClick, children, className = '', secondary }) 
     : 'text-white bg-blue-600 hover:bg-blue-700 border-0'
   return (
     <button onClick={onClick}
-      className={`ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold px-4 py-[10px] rounded-[9px] cursor-pointer transition-colors ${base} ${className}`}>
+      className={`toolbar-button ${secondary ? 'toolbar-button-secondary' : 'toolbar-button-primary'} ml-auto inline-flex items-center gap-1.5 text-[13.5px] font-semibold px-4 py-[10px] rounded-[9px] cursor-pointer transition-colors ${base} ${className}`}>
       {children}
     </button>
   )

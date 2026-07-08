@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { resolvedDark, getStoredTheme, setStoredTheme } from '../lib/theme'
 import { hasLocalURIs, hasLocalProxies } from '../lib/landing'
@@ -66,6 +66,7 @@ const IconGitHub = () => (
 export function Layout({ children }) {
   const { user, panelName, version } = useUser()
   const navigate = useNavigate()
+  const location = useLocation()
   const [sideOpen, setSideOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('nf-sidebar') === '1')
   const { blurred, toggleBlur } = useContext(BlurCtx)
@@ -106,26 +107,25 @@ export function Layout({ children }) {
   if (!user) return null
 
   const isAdmin = user.role === 'admin'
+  const isUserSurface = !isAdmin || location.pathname.startsWith('/my') || location.pathname === '/proxies'
 
   return (
-    <div className="flex h-screen overflow-hidden bg-app">
+    <div className={`flex h-screen overflow-hidden bg-app ${isUserSurface ? 'user-layout' : 'admin-layout'}`}>
         {/* Mobile overlay */}
         {sideOpen && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={() => setSideOpen(false)} />}
 
         {/* Sidebar */}
-        <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col transition-all lg:translate-x-0 lg:static lg:z-auto ${sideOpen ? 'translate-x-0 w-[248px]' : '-translate-x-full w-[248px]'} ${collapsed ? 'lg:w-[68px]' : 'lg:w-[248px]'}`}
-          style={{ background: '#0c0e13', borderRight: '1px solid #181b22' }}>
+        <aside className={`app-sidebar fixed inset-y-0 left-0 z-40 flex flex-col transition-all lg:translate-x-0 lg:static lg:z-auto ${sideOpen ? 'translate-x-0 w-[248px]' : '-translate-x-full w-[248px]'} ${collapsed ? 'is-collapsed lg:w-[68px]' : 'lg:w-[248px]'}`}>
 
           {/* Brand */}
-          <div className={`flex items-center gap-3 pt-5 pb-5 ${collapsed ? 'px-3 justify-center' : 'px-5'}`}>
-            <div className="w-[42px] h-[42px] rounded-[11px] flex-none grid place-items-center text-white shadow-[0_6px_18px_-6px_rgba(74,108,247,0.7)]"
-              title={collapsed && version ? version : undefined}
-              style={{ background: 'linear-gradient(150deg, #5b7cfa, #3a5bef)' }}>
+          <div className={`sidebar-brand flex items-center gap-3 pt-5 pb-5 ${collapsed ? 'px-3 justify-center' : 'px-5'}`}>
+            <div className="sidebar-brand-mark w-[42px] h-[42px] rounded-[11px] flex-none grid place-items-center text-white"
+              title={collapsed && version ? version : undefined}>
               <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 7 21 11 17 15"/><path d="M21 11H7"/><path d="M7 17 3 13 7 9"/><path d="M3 13H17"/></svg>
             </div>
-            {!collapsed && <div>
-              <div className="text-[16px] font-bold tracking-wide text-[#f5f7fa]">{panelName || 'nft-forward'}</div>
-              <div className="text-[12px] text-[#6b7280] mt-0.5">
+            {!collapsed && <div className="sidebar-brand-copy">
+              <div className="sidebar-brand-title text-[16px] font-bold tracking-wide">{panelName || 'nft-forward'}</div>
+              <div className="sidebar-brand-sub text-[12px] mt-0.5">
                 {isAdmin ? '管理面板' : '用户面板'}
                 {version && <span className="font-mono"> · {version}</span>}
               </div>
@@ -134,7 +134,7 @@ export function Layout({ children }) {
 
           {/* Nav */}
           <SidebarCtx.Provider value={collapsed}>
-          <nav className={`flex-1 overflow-y-auto py-2 ${collapsed ? 'px-2' : 'px-4'}`}>
+          <nav className={`sidebar-nav flex-1 overflow-y-auto py-2 ${collapsed ? 'px-2' : 'px-4'}`}>
             {isAdmin ? (
               <>
                 <NavGroup label="监控">
@@ -166,51 +166,51 @@ export function Layout({ children }) {
           </SidebarCtx.Provider>
 
           {/* Footer */}
-          <div className={`border-t border-[#181b22] pt-3.5 ${collapsed ? 'p-2' : 'p-4'}`}>
+          <div className={`sidebar-footer pt-3.5 ${collapsed ? 'p-2' : 'p-4'}`}>
             {collapsed ? (
               <div className="flex flex-col items-center gap-2">
-                <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd]" title={user.username}>
+                <div className="sidebar-user-avatar w-[34px] h-[34px] rounded-[9px] grid place-items-center font-bold text-[14px]" title={user.username}>
                   {user.username?.charAt(0).toUpperCase()}
                 </div>
-                <button onClick={handleLogout} title="退出登录" className="w-[34px] h-[34px] rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors grid place-items-center">
+                <button onClick={handleLogout} title="退出登录" className="sidebar-icon-action w-[34px] h-[34px] rounded-lg transition-colors grid place-items-center">
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                 </button>
                 <a href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
-                  className="w-[34px] h-[34px] rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors grid place-items-center">
+                  className="sidebar-icon-action w-[34px] h-[34px] rounded-lg transition-colors grid place-items-center">
                   <IconGitHub />
                 </a>
               </div>
             ) : (<>
-              <div className="flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
-                <div className="w-[34px] h-[34px] rounded-[9px] bg-[#1b1f27] border border-[#262b34] grid place-items-center font-bold text-[14px] text-[#cbd2dd] flex-none">
+              <div className="sidebar-user-card flex items-center gap-[11px] px-2 py-1.5 mb-3.5">
+                <div className="sidebar-user-avatar w-[34px] h-[34px] rounded-[9px] grid place-items-center font-bold text-[14px] flex-none">
                   {user.username?.charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[13.5px] text-[#e7eaf0] font-semibold leading-tight truncate">{user.username}</div>
-                  <div className="text-[12px] text-[#6b7280] mt-px">{user.role}</div>
+                  <div className="sidebar-user-name text-[13.5px] font-semibold leading-tight truncate">{user.username}</div>
+                  <div className="sidebar-user-role text-[12px] mt-px">{user.role}</div>
                 </div>
               </div>
               <div className="flex gap-2">
-                <NavLink to="/change-password" className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">修改密码</NavLink>
-                <button onClick={handleLogout} className="flex-1 text-center text-[12.5px] text-[#aeb6c2] py-2 rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] hover:text-[#cdd6e2] transition-colors">退出登录</button>
+                <NavLink to="/change-password" className="sidebar-action flex-1 text-center text-[12.5px] py-2 rounded-lg transition-colors">修改密码</NavLink>
+                <button onClick={handleLogout} className="sidebar-action flex-1 text-center text-[12.5px] py-2 rounded-lg transition-colors">退出登录</button>
                 <a href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub 项目主页"
-                  className="flex-none w-[34px] grid place-items-center rounded-lg bg-[#15181f] border border-[#232730] hover:bg-[#161d27] text-[#aeb6c2] hover:text-[#cdd6e2] transition-colors">
+                  className="sidebar-icon-action flex-none w-[34px] grid place-items-center rounded-lg transition-colors">
                   <IconGitHub />
                 </a>
               </div>
             </>)}
             {/* Collapse toggle — desktop only */}
             <button onClick={toggleCollapse} title={collapsed ? '展开侧栏' : '收起侧栏'}
-              className={`hidden lg:flex items-center justify-center w-full mt-2.5 py-1.5 rounded-lg text-[#6b7280] hover:text-[#cdd6e2] hover:bg-[#161d27] transition-colors`}>
+              className={`sidebar-collapse hidden lg:flex items-center justify-center w-full mt-2.5 py-1.5 rounded-lg transition-colors`}>
               <svg className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>
             </button>
           </div>
         </aside>
 
         {/* Content */}
-        <main className="flex-1 min-w-0 flex flex-col">
+        <main className="app-main flex-1 min-w-0 flex flex-col">
           {/* Topbar */}
-          <div className="sticky top-0 z-20 h-[60px] flex-shrink-0 bg-app/85 backdrop-blur-sm border-b border-line px-4 sm:px-7 flex items-center gap-2">
+          <div className="app-topbar sticky top-0 z-20 h-[60px] flex-shrink-0 bg-app/85 backdrop-blur-sm border-b border-line px-4 sm:px-7 flex items-center gap-2">
             <button onClick={() => setSideOpen(true)} className="lg:hidden p-1 text-ink-soft hover:text-ink">
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
             </button>
@@ -237,7 +237,7 @@ export function Layout({ children }) {
           </div>
 
           {/* Page content */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-7 py-7 pb-12">
+          <div className="app-content flex-1 min-h-0 overflow-y-auto px-4 sm:px-7 py-7 pb-12">
             <div className="max-w-[1680px] mx-auto h-full">
               {children}
             </div>
@@ -289,9 +289,9 @@ const SidebarCtx = createContext(false)
 function NavGroup({ label, children }) {
   const collapsed = useContext(SidebarCtx)
   return (
-    <div className="mt-4">
-      {!collapsed && <div className="px-[10px] pb-2 text-[11px] font-semibold tracking-[1px] uppercase text-[#5a616d]">{label}</div>}
-      <div className="flex flex-col gap-1">{children}</div>
+    <div className="sidebar-nav-group mt-4">
+      {!collapsed && <div className="sidebar-nav-label px-[10px] pb-2 text-[11px] font-semibold tracking-[1px] uppercase">{label}</div>}
+      <div className="sidebar-nav-list flex flex-col gap-1">{children}</div>
     </div>
   )
 }
@@ -301,11 +301,9 @@ function SideLink({ to, icon, end, children }) {
   return (
     <NavLink to={to} end={end} title={collapsed ? children : undefined}
       className={({ isActive }) =>
-        `flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-[9px] text-[14px] font-medium transition-colors relative ${isActive
-          ? 'bg-[#181c24] text-[#f3f5f8] border border-[#262b35] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]'
-          : 'text-[#8b93a0] border border-transparent hover:bg-[#161d27] hover:text-[#cdd6e2]'}`
+        `sidebar-link ${isActive ? 'is-active' : ''} flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-[9px] text-[14px] font-medium transition-colors relative`
       }>
-      <span className="w-5 h-5 flex-none opacity-85">{icon}</span>
+      <span className="sidebar-link-icon w-5 h-5 flex-none">{icon}</span>
       {!collapsed && <span>{children}</span>}
     </NavLink>
   )

@@ -90,24 +90,22 @@ export default function Proxies() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="user-page h-full flex flex-col">
       <PageHeader title="我的代理" count={allProxies.length} unit="个" />
-      <Panel fill>
+      <Panel fill className="user-panel">
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
         </PanelToolbar>
-        <div className="flex items-center gap-1.5 px-[22px] py-2.5 border-b border-line-soft">
+        <div className="user-tabs px-[22px] py-3 border-b border-line-soft">
           {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length]].map(([key, label, n]) => (
             <button key={key} onClick={() => setTab(key)}
-              className={`px-3 py-0.5 rounded text-xs border transition-colors ${
-                tab === key ? 'bg-blue-500 text-white border-blue-500' : 'bg-surface text-ink-soft border-line hover:border-ink-mut'
-              }`}>{label} {n}</button>
+              className={`user-tab ${tab === key ? 'user-tab-active' : ''}`}>{label} {n}</button>
           ))}
           {filtered.length > 0 && (
             <button onClick={() => {
               const all = filtered.map(n => copyText(n)).filter(Boolean).join('\n')
               copyToClipboard(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败', 'error'))
-            }} className="ml-auto px-3 py-0.5 rounded text-xs border border-line bg-surface text-ink-soft hover:border-ink-mut transition-colors">
+            }} className="user-tab ml-auto">
               复制全部
             </button>
           )}
@@ -127,8 +125,8 @@ export default function Proxies() {
                 return (
                   <tr key={i}>
                     <td className="font-semibold">
-                      {n.name || '(未命名)'}
-                      {n.kind === 'relay' && <span className="ml-1.5 text-[11px] text-ink-mut font-normal">← {n.ruleName}</span>}
+                      <span className="route-name">{n.name || '(未命名)'}</span>
+                      {n.kind === 'relay' && <span className="proxy-name-sub">← {n.ruleName}</span>}
                     </td>
                     <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
                     <td className="font-mono text-xs">

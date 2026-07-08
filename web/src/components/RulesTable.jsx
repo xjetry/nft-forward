@@ -57,7 +57,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
   if (isMobile) return renderCards()
 
   return (
-    <table className="tbl">
+    <table className={`tbl ${!isAdmin ? 'user-rules-table' : ''}`}>
       <thead>
         <tr>
           {isAdmin && <th className="w-12">ID</th>}
@@ -87,15 +87,17 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               className={onRowClick ? 'cursor-pointer' : ''}
               onClick={onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
-              <td className="font-semibold">{r.name}</td>
+              <td className="font-semibold">
+                <span className={!isAdmin ? 'route-name' : ''}>{r.name}</span>
+              </td>
               <td>
-                <span className="inline-flex items-center gap-1.5 font-mono text-ink-soft">
+                <span className={!isAdmin ? 'route-node font-mono' : 'inline-flex items-center gap-1.5 font-mono text-ink-soft'}>
                   <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}
                   {!isAdmin && r.via_node_ids?.length > 0 && <span className="text-ink-mut text-[11px] font-sans">+{r.via_node_ids.length}层</span>}
                 </span>
               </td>
               <td className="font-mono text-xs !whitespace-normal">
-                <div className="inline-block" onClick={e => e.stopPropagation()}>
+                <div className={!isAdmin ? 'route-stack' : 'inline-block'} onClick={e => e.stopPropagation()}>
                   {(() => {
                     // Entry shows the node's name:port (never the raw ip/host);
                     // the copy still carries the real host:port so a client can
@@ -105,12 +107,12 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                     const shown = r.entry_listen_port ? `${nodeLabel}:${r.entry_listen_port}` : nodeLabel
                     return (
                       <>
-                        <div className="flex items-center gap-1.5 mb-1">
+                        <div className={!isAdmin ? 'route-line' : 'flex items-center gap-1.5 mb-1'}>
                           <Badge color="gray">{r.entry_v6 ? '入口v4' : '入口'}</Badge>
                           {r.entry ? <CopyText text={r.entry}><span className="font-sans">{shown}</span></CopyText> : '--'}
                         </div>
                         {r.entry_v6 && (
-                          <div className="flex items-center gap-1.5 mb-1">
+                          <div className={!isAdmin ? 'route-line' : 'flex items-center gap-1.5 mb-1'}>
                             <Badge color="gray">入口v6</Badge>
                             <CopyText text={r.entry_v6}><span className="font-sans">{shown}</span></CopyText>
                           </div>
@@ -125,7 +127,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                     const proxyRow = (uri, tag) => {
                       const yaml = copyFmt === 'yaml' ? uriToClashYaml(uri) : null
                       return (
-                        <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                        <div className={!isAdmin ? 'route-line text-ink-soft' : 'flex items-center gap-1.5 flex-wrap text-ink-soft'}>
                           <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
                           {tag && <span className="text-[10px] font-semibold text-ink-mut">{tag}</span>}
                           <CopyText text={yaml || uri}>{exitLabel}</CopyText>
@@ -137,7 +139,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                     }
                     if (r.relay_uri) return proxyRow(r.relay_uri, null)
                     return (
-                      <div className="flex items-center gap-1.5 flex-wrap text-ink-soft">
+                      <div className={!isAdmin ? 'route-line text-ink-soft' : 'flex items-center gap-1.5 flex-wrap text-ink-soft'}>
                         <ExitKindBadge kind={r.exit_kind} protocol={r.landing_protocol} />
                         {exitLabel}
                       </div>
@@ -178,7 +180,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
       {sorted.map(r => {
         const node = nodeMap[r.node_id]
         return (
-          <div key={r.id} className={`mobile-card ${onRowClick ? 'cursor-pointer' : ''}`}
+          <div key={r.id} className={`${!isAdmin ? 'user-rule-card' : 'mobile-card'} ${onRowClick ? 'cursor-pointer' : ''}`}
             onClick={onRowClick ? () => onRowClick(r) : undefined}>
             <div className="flex items-center justify-between mb-1">
               <span className="font-semibold text-[14px]">{r.name}</span>

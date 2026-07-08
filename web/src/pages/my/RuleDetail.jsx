@@ -114,36 +114,41 @@ export default function MyRuleDetail() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
-      <div className="flex items-baseline gap-3.5 mb-[22px]">
-        <Link to="/my/rules" className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
+      <div className="user-page h-full flex flex-col">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
+        <Link to="/my/rules" className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1 self-start">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           我的规则
         </Link>
-        <h1 className="m-0 text-2xl font-bold text-ink">{rule.name}</h1>
+        <h1 className="m-0 text-2xl font-bold text-ink min-w-0 break-words">{rule.name}</h1>
       </div>
 
-      <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">入口</h3><span className="text-xs text-ink-mut">复制给客户端</span></div>
+      <section className="user-section">
+        <div className="user-section-head">
+          <div>
+            <h3 className="user-section-title">入口</h3>
+            <div className="user-section-sub">复制给客户端</div>
+          </div>
+        </div>
         <div className="p-5">
           {rule.entry ? (
             <div className="space-y-2">
-              <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY</span>
-                {rule.entry_node_id && node_by_id[rule.entry_node_id] && <span className="bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold px-2 py-0.5 rounded">{node_by_id[rule.entry_node_id].name}</span>}
-                <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry}</SensText></span>
+              <div className="copy-panel">
+                <span className="copy-panel-label">ENTRY</span>
+                {rule.entry_node_id && node_by_id[rule.entry_node_id] && <span className="copy-panel-chip">{node_by_id[rule.entry_node_id].name}</span>}
+                <span className="copy-panel-value"><SensText blurred={blurred}>{rule.entry}</SensText></span>
                 <button onClick={() => copyToClipboard(rule.entry).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
-                  className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
+                  className="copy-panel-button">
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
                   复制
                 </button>
               </div>
               {rule.entry_v6 && (
-                <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY (v6)</span>
-                  <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry_v6}</SensText></span>
+                <div className="copy-panel">
+                  <span className="copy-panel-label">ENTRY (v6)</span>
+                  <span className="copy-panel-value"><SensText blurred={blurred}>{rule.entry_v6}</SensText></span>
                   <button onClick={() => copyToClipboard(rule.entry_v6).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
-                    className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
+                    className="copy-panel-button">
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
                     复制
                   </button>
@@ -155,14 +160,14 @@ export default function MyRuleDetail() {
                 rule.relay_uri && { uri: rule.relay_uri, label: rule.relay_uri_v6 ? 'PROXY (v4)' : 'PROXY' },
                 rule.relay_uri_v6 && { uri: rule.relay_uri_v6, label: 'PROXY (v6)' },
               ].filter(Boolean).map(({ uri, label }) => (
-                <div key={label} className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{label}</span>
-                  <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1 truncate"><SensText blurred={blurred}>{uri}</SensText></span>
+                <div key={label} className="copy-panel">
+                  <span className="copy-panel-label">{label}</span>
+                  <span className="copy-panel-value"><SensText blurred={blurred}>{uri}</SensText></span>
                   <button onClick={() => {
                     const yaml = copyFmt === 'yaml' ? uriToClashYaml(uri) : null
                     copyToClipboard(yaml || uri).then(() => toast('代理 URI 已复制')).catch(() => toast('复制失败', 'error'))
                   }}
-                    className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
+                    className="copy-panel-button">
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
                     复制
                   </button>
@@ -171,38 +176,52 @@ export default function MyRuleDetail() {
             </div>
           ) : <span className="text-ink-mut text-sm">尚未分配入口</span>}
         </div>
-      </div>
+      </section>
 
-      <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">规则信息</h3></div>
+      <section className="user-section">
+        <div className="user-section-head"><h3 className="user-section-title">规则信息</h3></div>
         <div className="p-5">
-          <div className="grid grid-cols-[90px_1fr] gap-4 items-center text-sm">
-            <span className="text-ink-soft font-semibold">名称</span>
-            <span className="font-semibold">{rule.name}</span>
-            <span className="text-ink-soft font-semibold">节点</span>
-            <span className="font-mono">{nodeChain}</span>
-            <span className="text-ink-soft font-semibold">协议</span>
-            <span><ProtoBadge proto={rule.proto} /></span>
-            <span className="text-ink-soft font-semibold">出口</span>
-            <span className="font-mono inline-flex items-center gap-2">
-              <ExitKindBadge kind={rule.exit_kind} protocol={rule.landing_protocol} />
-              {rule.exit_kind === 'landing' && rule.landing_name
-                ? <span className="font-sans">{rule.landing_name}</span>
-                : <SensText blurred={blurred}>{exitOf(rule) || '--'}</SensText>}
-            </span>
-            {show_rate && <>
-              <span className="text-ink-soft font-semibold">倍率</span>
-              <span><Badge color="blue">×{rule.rate_multiplier ?? 1}</Badge></span>
-            </>}
-            <span className="text-ink-soft font-semibold">流量</span>
-            <span className="font-mono text-ink-mut">{fmtBytes(rule.total_bytes || 0)}</span>
-            {rule.comment && <>
-              <span className="text-ink-soft font-semibold">备注</span>
-              <span className="text-ink-soft">{rule.comment}</span>
-            </>}
+          <div className="detail-grid">
+            <div className="detail-item">
+              <span className="detail-label">名称</span>
+              <span className="detail-value">{rule.name}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">节点</span>
+              <span className="detail-value font-mono break-words">{nodeChain}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">协议</span>
+              <span className="detail-value"><ProtoBadge proto={rule.proto} /></span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">出口</span>
+              <span className="detail-value font-mono inline-flex items-center gap-2 flex-wrap">
+                <ExitKindBadge kind={rule.exit_kind} protocol={rule.landing_protocol} />
+                {rule.exit_kind === 'landing' && rule.landing_name
+                  ? <span className="font-sans">{rule.landing_name}</span>
+                  : <SensText blurred={blurred}>{exitOf(rule) || '--'}</SensText>}
+              </span>
+            </div>
+            {show_rate && (
+              <div className="detail-item">
+                <span className="detail-label">倍率</span>
+                <span className="detail-value"><Badge color="blue">×{rule.rate_multiplier ?? 1}</Badge></span>
+              </div>
+            )}
+            <div className="detail-item">
+              <span className="detail-label">流量</span>
+              <span className="detail-value font-mono text-ink-mut">{fmtBytes(rule.total_bytes || 0)}</span>
+            </div>
+            {rule.comment && (
+              <div className="detail-item md:col-span-2">
+                <span className="detail-label">备注</span>
+                <span className="detail-value text-ink-soft font-normal">{rule.comment}</span>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      </section>
 
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>

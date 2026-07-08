@@ -104,10 +104,10 @@ export default function MyRules() {
 
   return (
     <Layout>
-      <div className="h-full flex flex-col">
+      <div className="user-page h-full flex flex-col">
       <PageHeader title="我的规则" count={rules.length} />
 
-      <Panel fill>
+      <Panel fill className="user-panel">
         <PanelToolbar>
           <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
           <div className="ml-auto flex items-center gap-2">

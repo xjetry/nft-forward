@@ -126,40 +126,50 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
     s.size === count ? new Set() : new Set(Array.from({ length: count }, (_, i) => i)))
 
   const hasNodes = showSub && subNodes.length > 0
+  const totalProxyNodes = manualParsed.length + subNodes.length
 
   return (
-    <div className={`card flex flex-col ${className}`}>
+    <div className={`card proxy-editor-card proxy-editor-shell flex flex-col ${className}`}>
       {/* min-h-0 + overflow lets the body scroll when a parent caps the
           card's height (side-by-side dashboard grid); harmless otherwise. */}
-      <div className="px-6 py-[22px] flex-1 min-h-0 overflow-y-auto flex flex-col">
-        <div className="flex items-baseline gap-2.5 mb-3.5">
-          <h3 className="text-[16px] font-bold">我的代理 URI</h3>
-          <span className="text-[13px] text-ink-mut">
-            {(manualParsed.length + subNodes.length > 0) && `${mLanding + landingCount} 落地 · ${mDirect + directCount} 直连 · ${mUnconfigured + unconfiguredCount} 未配置`}
-          </span>
+      <div className="proxy-editor-scroll px-5 sm:px-6 py-5 flex-1 min-h-0 overflow-y-auto flex flex-col">
+        <div className="proxy-editor-top flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div className="proxy-editor-title-wrap">
+            <span className="proxy-editor-title-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h10"/><path d="m11 5 7 7-7 7"/><path d="M20 5v14"/></svg>
+            </span>
+            <div>
+              <h3 className="proxy-editor-title text-[16px] font-bold">我的代理 URI</h3>
+              <div className="proxy-editor-subtitle">{totalProxyNodes ? `${totalProxyNodes} 个本地代理节点` : '本地代理配置'}</div>
+            </div>
+          </div>
         </div>
-        <p className="text-[13px] leading-[1.7] text-ink-soft mb-3.5">
-          手动填写的 URI 保存在本浏览器，本地与服务器相同地址的节点以本地为准。
-          节点用途可在下方配置，覆盖管理员默认值，仅在本浏览器生效：
-          <span className="font-semibold text-emerald-600">落地</span>可作为规则出口；
-          <span className="font-semibold text-blue-600">直连</span>出现在「我的代理」；
-          <span className="font-semibold text-ink-mut">未配置</span>不参与任何功能。
+        <p className="proxy-editor-guide text-[13px] leading-[1.7] text-ink-soft mb-4">
+          本地 URI 只保存在当前浏览器；同地址节点以本地配置为准。
+          <span className="font-semibold text-emerald-600"> 落地</span>作为规则出口，
+          <span className="font-semibold text-blue-600"> 直连</span>出现在「我的代理」。
         </p>
 
         {/* Subscription URL input */}
         <button type="button" onClick={() => toggleExpanded('sub')}
-          className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
-          <svg className={`w-3 h-3 transition-transform ${showSub ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-          订阅地址{subNodes.length > 0 && <span className="text-ink-mut">（{subNodes.length} 个节点）</span>}
+          className={`proxy-editor-toggle proxy-editor-toggle-card ${showSub ? 'is-open' : ''} mb-3`}>
+          <span className="proxy-editor-toggle-icon" aria-hidden="true">
+            <svg className={`w-3.5 h-3.5 transition-transform ${showSub ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </span>
+          <span className="proxy-editor-toggle-copy">
+            <span>订阅地址</span>
+            <small>{subNodes.length > 0 ? `${subNodes.length} 个节点` : 'URL 导入'}</small>
+          </span>
+          <span className="proxy-editor-toggle-state">{showSub ? '收起' : '展开'}</span>
         </button>
         {showSub && (
-          <div className="mb-3 pl-0.5">
-            <textarea ref={subRef} className="input-field font-mono w-full min-h-[60px] resize-y !py-2.5 !px-3 text-[13px]"
+          <div className="proxy-editor-block mb-3">
+            <textarea ref={subRef} className="input-field proxy-editor-textarea font-mono w-full min-h-[60px] resize-y !py-2.5 !px-3 text-[13px]"
               style={subH ? { height: subH } : undefined}
               value={subURLs} onChange={e => setSubURLs(e.target.value)}
               placeholder="https://example.com/subscribe?token=..." />
-            <div className="flex items-center gap-2 mt-2">
-              <button onClick={refreshSubs} disabled={fetching} className="btn-primary text-xs">
+            <div className="proxy-editor-actions flex items-center gap-2 mt-3">
+              <button onClick={refreshSubs} disabled={fetching} className="btn-primary proxy-editor-primary text-xs">
                 {fetching ? '获取中…' : '更新订阅'}
               </button>
               <span className="text-[12px] text-ink-mut">通过服务器代理获取。</span>
@@ -169,10 +179,10 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
 
         {/* Node list */}
         {hasNodes && (
-          <div className="mb-4 border border-line rounded-[10px] overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-              <span className="text-ink-soft font-semibold flex items-center gap-2">
-                <input type="checkbox" className="accent-blue-600"
+          <div className="proxy-node-table mb-4">
+            <div className="proxy-node-toolbar flex items-center justify-between px-3 py-2 text-[12px]">
+              <span className="proxy-node-count text-ink-soft font-semibold flex items-center gap-2">
+                <input type="checkbox" className="proxy-check accent-blue-600"
                   checked={subNodes.length > 0 && selSub.size === subNodes.length}
                   onChange={toggleSelAll(setSelSub, subNodes.length)} />
                 {subNodes.length} 个节点
@@ -185,8 +195,8 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
               <table className="w-full text-[13px]">
                 <tbody>
                   {subOrder.map((i) => { const n = subNodes[i]; return (
-                    <tr key={i} className="border-t border-line-soft">
-                      <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
+                    <tr key={i} className="proxy-node-row border-t border-line-soft">
+                      <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="proxy-check accent-blue-600"
                         checked={selSub.has(i)} onChange={() => toggleSel(setSelSub)(i)} /></td>
                       <td className="px-2 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
                       <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
@@ -207,22 +217,28 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
         {/* Manual URIs — same collapsible pattern as the subscription block,
             with the role-config table folded inside. */}
         <button type="button" onClick={() => toggleExpanded('manual')}
-          className="inline-flex items-center gap-1.5 text-[13px] text-blue-600 hover:text-blue-500 mb-2 self-start transition-colors">
-          <svg className={`w-3 h-3 transition-transform ${showManual ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-          手动填写{manualParsed.length > 0 && <span className="text-ink-mut">（{manualParsed.length} 个节点）</span>}
+          className={`proxy-editor-toggle proxy-editor-toggle-card ${showManual ? 'is-open' : ''} mb-3`}>
+          <span className="proxy-editor-toggle-icon" aria-hidden="true">
+            <svg className={`w-3.5 h-3.5 transition-transform ${showManual ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </span>
+          <span className="proxy-editor-toggle-copy">
+            <span>手动填写</span>
+            <small>{manualParsed.length > 0 ? `${manualParsed.length} 个节点` : 'URI 粘贴'}</small>
+          </span>
+          <span className="proxy-editor-toggle-state">{showManual ? '收起' : '展开'}</span>
         </button>
         {showManual && (
-          <div className="pl-0.5">
-            <textarea ref={manualRef} className="input-field font-mono w-full min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]"
+          <div className="proxy-editor-block">
+            <textarea ref={manualRef} className="input-field proxy-editor-textarea font-mono w-full min-h-[80px] resize-y !py-3 !px-3.5 text-[13px]"
               style={{ maxHeight: MAX_H, ...(manualH ? { height: manualH } : {}) }}
               value={text} onChange={e => setText(e.target.value)}
               placeholder={'vless://…\ntrojan://…\n🇭🇰 Name = snell, host, port, psk = xxx, version = 5'} />
-            <div className="mt-2"><button onClick={saveManual} className="btn-primary">保存</button></div>
+            <div className="proxy-editor-actions mt-3"><button onClick={saveManual} className="btn-primary proxy-editor-primary">保存</button></div>
             {manualParsed.length > 0 && (
-              <div className="mt-3 border border-line rounded-[10px] overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-2 bg-raised text-[12px]">
-                  <span className="text-ink-soft font-semibold flex items-center gap-2">
-                    <input type="checkbox" className="accent-blue-600"
+              <div className="proxy-node-table mt-3">
+                <div className="proxy-node-toolbar flex items-center justify-between px-3 py-2 text-[12px]">
+                  <span className="proxy-node-count text-ink-soft font-semibold flex items-center gap-2">
+                    <input type="checkbox" className="proxy-check accent-blue-600"
                       checked={manualParsed.length > 0 && selManual.size === manualParsed.length}
                       onChange={toggleSelAll(setSelManual, manualParsed.length)} />
                     {manualParsed.length} 个节点
@@ -235,8 +251,8 @@ export function ProxyURIEditor({ username, blurred, className = '' }) {
                   <table className="w-full text-[13px]">
                     <tbody>
                       {manualOrder.map((i) => { const n = manualParsed[i]; return (
-                        <tr key={i} className="border-t border-line-soft">
-                          <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="accent-blue-600"
+                        <tr key={i} className="proxy-node-row border-t border-line-soft">
+                          <td className="pl-3 py-1.5 w-6"><input type="checkbox" className="proxy-check accent-blue-600"
                             checked={selManual.has(i)} onChange={() => toggleSel(setSelManual)(i)} /></td>
                           <td className="px-2 py-1.5 truncate max-w-[200px]" title={n.name}>{n.name || '(未命名)'}</td>
                           <td className="px-2 py-1.5 text-ink-mut font-mono text-[11px]">{n.protocol}</td>
