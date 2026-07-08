@@ -113,3 +113,28 @@ func TouchAPITokenUsage(d *sql.DB, tokenID int64) error {
 	_, err := d.Exec(`UPDATE api_tokens SET last_used_at=? WHERE id=?`, now(), tokenID)
 	return err
 }
+
+// IssueUserToken creates the user's API token, or rotates it (new plaintext,
+// new scope, cleared last_used, re-enabled) when one already exists. The single
+// api_tokens.user_id UNIQUE row means "mint for a user who already has a token"
+// is a rotation, not a second credential. Returns the plaintext (shown once)
+// and whether an existing token was rotated.
+func IssueUserToken(d *sql.DB, userID int64, scope string) (string, bool, error) {
+	scope = NormalizeTokenScope(scope)
+	token := RandToken(32)
+	res, err := d.Exec(
+		`UPDATE api_tokens SET token=?, token_prefix=?, scope=?, created_at=?, last_used_at=NULL, disabled=0 WHERE user_id=?`,
+		HashToken(token), tokenPrefix(token), scope, now(), userID)
+	if err != nil {
+		return "", false, err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return token, true, nil
+	}
+	if _, err := d.Exec(
+		`INSERT INTO api_tokens(user_id, token, token_prefix, scope, created_at) VALUES (?,?,?,?,?)`,
+		userID, HashToken(token), tokenPrefix(token), scope, now()); err != nil {
+		return "", false, err
+	}
+	return token, false, nil
+}
