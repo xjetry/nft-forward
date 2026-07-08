@@ -401,7 +401,7 @@ function AddNodeModal({ open, onClose, onDone }) {
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setUnidirectional(u => !u)}
               className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${unidirectional ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-              {unidirectional ? '单向计费（仅出站）' : '双向计费（出站+入站）'}
+              {unidirectional ? '单向计费（取较大方向）' : '双向计费（出站+入站）'}
             </button>
             <span className="text-xs text-ink-mut">当前：{unidirectional ? '单向' : '双向'}</span>
           </div>

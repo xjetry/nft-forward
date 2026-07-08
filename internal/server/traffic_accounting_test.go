@@ -89,6 +89,45 @@ func getHopPort(t *testing.T, d *sql.DB, ruleID, nodeID int64) int {
 	return 0
 }
 
+// A unidirectional node bills max(up,down) per sample: whichever direction
+// dominates is charged and the quieter one is folded away. Both directions are
+// exercised so the max can't degrade into an always-uplink or always-downlink
+// pick. A bidirectional node keeps billing up+down (asserted elsewhere).
+func TestApplyCountersUnidirectionalMax(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		up, down, want int64
+	}{
+		{"uplink heavier", 900, 200, 900},
+		{"downlink heavier", 200, 900, 900},
+		{"equal", 500, 500, 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := openDB(t)
+			uid, _ := loginAsUser(t, d, 10)
+			n, _ := db.CreateNode(d, "u", "", "")
+			_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
+			_ = db.GrantNode(d, uid, n.ID, 5, 0)
+			_ = db.UpdateNodeUnidirectional(d, n.ID, true)
+			ruleID := createTestRuleDirectNode(t, d, uid, n.ID)
+			port := getHopPort(t, d, ruleID, n.ID)
+
+			h := NewHub(d)
+			h.applyCounters(n.ID, []wsproto.CounterSample{
+				{Proto: "tcp", ListenPort: port, BytesUp: tc.up, BytesDown: tc.down},
+			})
+
+			g, err := db.GetNodeGrant(d, uid, n.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g.TrafficUsedBytes != tc.want {
+				t.Fatalf("unidirectional billed want max(%d,%d)=%d, got %d", tc.up, tc.down, tc.want, g.TrafficUsedBytes)
+			}
+		})
+	}
+}
+
 // The same bytes flow through every hop, so the global user quota is billed
 // exactly once — at the entry hop — with the entry node's own rate_multiplier
 // (2.0 here). Per-grant quota charges raw bytes once per logical segment: the

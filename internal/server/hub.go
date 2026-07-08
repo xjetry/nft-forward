@@ -687,7 +687,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		rawAdd += totalDelta
 		billedDelta := totalDelta
 		if node.Unidirectional {
-			billedDelta = s.BytesUp
+			// Unidirectional billing charges the heavier direction only, not
+			// their sum: a flow is dominated by one side (download for most
+			// traffic, upload for backups) and max(up,down) prices that side
+			// without double-counting the light reverse channel.
+			billedDelta = max(s.BytesUp, s.BytesDown)
 		}
 		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
 		rh, ok := hopMap[key]
@@ -699,9 +703,9 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 		// Exit ledger: final hop only, raw and unweighted — it records real
 		// traffic to the destination, independent of billing multipliers and
-		// the node's unidirectional setting. Growth must mark the pair touched
-		// itself: a downlink-only batch on a unidirectional node bills 0 and
-		// would otherwise never reach the quota callback.
+		// the node's unidirectional setting. It marks the pair touched from its
+		// own totalDelta so the quota callback fires on real forwarded volume,
+		// independent of whatever the billing path below charges.
 		if r != nil && r.OwnerID.Valid && totalDelta > 0 && len(exitSet) > 0 && rh.Position == maxPos[rh.RuleID] {
 			key := db.UserExitKey{UserID: r.OwnerID.Int64, Host: r.ExitHost, Port: r.ExitPort}
 			if exitSet[key] {

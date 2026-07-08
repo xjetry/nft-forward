@@ -17,7 +17,7 @@ func TestApplyCountersNodeRawTraffic(t *testing.T) {
 	n, _ := db.CreateNode(d, "e", "", "")
 	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
 	_ = db.GrantNode(d, uid, n.ID, 5, 0)
-	// Unidirectional billing takes uplink only; raw must still take both.
+	// Unidirectional billing takes max(up,down); raw must still take both.
 	_ = db.UpdateNodeUnidirectional(d, n.ID, true)
 	// A non-1.0 multiplier pins "raw is unweighted": with the default 1.0 a
 	// regression that folds the entry multiplier into raw would be invisible.
@@ -45,16 +45,16 @@ func TestApplyCountersNodeRawTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.TrafficUsedBytes != 300 {
-		t.Fatalf("billed grant bytes want uplink-only 300, got %d", g.TrafficUsedBytes)
+	if g.TrafficUsedBytes != 700 {
+		t.Fatalf("billed grant bytes want max(up,down)=700, got %d", g.TrafficUsedBytes)
 	}
 	u, err := db.GetUserByID(d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Global usage takes the multiplier (300 uplink × 3.0); raw above must not.
-	if u.TrafficUsedBytes != 900 {
-		t.Fatalf("global billed bytes want 900, got %d", u.TrafficUsedBytes)
+	// Global usage takes the multiplier (700 max × 3.0); raw above must not.
+	if u.TrafficUsedBytes != 2100 {
+		t.Fatalf("global billed bytes want 2100, got %d", u.TrafficUsedBytes)
 	}
 
 	if err := db.ResetAllUserTraffic(d, uid); err != nil {
