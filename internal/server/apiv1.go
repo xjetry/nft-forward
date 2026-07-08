@@ -148,6 +148,8 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
 		r.Put("/users/{id}/grants/{nodeId}", s.v1AdminGrantNode)
 		r.Delete("/users/{id}/grants/{nodeId}", s.v1AdminRevokeNode)
+		r.Put("/users/{id}/nodes/{nodeId}/quota", s.v1AdminSetPerNodeQuota)
+		r.Put("/users/{id}/nodes/{nodeId}/rate-limit", s.v1AdminSetPerNodeRate)
 	})
 }
 

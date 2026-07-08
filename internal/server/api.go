@@ -3500,17 +3500,10 @@ func (s *Server) apiSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.TrafficQuotaBytes < 0 {
-		jsonErr(w, http.StatusBadRequest, "字节数无效")
+	if aerr := s.setPerNodeQuota(u.ID, userID, nodeID, body.TrafficQuotaBytes); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE user_nodes SET traffic_quota_bytes=? WHERE user_id=? AND node_id=?`,
-		body.TrafficQuotaBytes, userID, nodeID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_node_quota", strconv.FormatInt(userID, 10),
-		fmt.Sprintf("node=%d bytes=%d", nodeID, body.TrafficQuotaBytes))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -3536,21 +3529,10 @@ func (s *Server) apiSetPerNodeRateLimit(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.RateLimitMBytes < 0 {
-		jsonErr(w, http.StatusBadRequest, "限速不能为负")
+	if aerr := s.setPerNodeRateLimit(u.ID, userID, nodeID, body.RateLimitMBytes); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`,
-		body.RateLimitMBytes, userID, nodeID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
-	for _, n := range affected {
-		_ = s.dispatchToNode(n)
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
-		fmt.Sprintf("node=%d mbytes=%d", nodeID, body.RateLimitMBytes))
 	jsonOK(w, map[string]any{"ok": true})
 }
 

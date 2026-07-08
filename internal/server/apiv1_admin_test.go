@@ -173,6 +173,31 @@ func TestV1AdminUserScalarSets(t *testing.T) {
 	}
 }
 
+func TestV1AdminPerNodeSets(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	target, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	n := grantedNode(t, d, "pernode", target, 5)
+	s, _ := New(d)
+
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/nodes/%d/quota", target, n.ID), adminTok, map[string]any{"traffic_quota_bytes": 4096}); rec.Code != http.StatusOK {
+		t.Fatalf("per-node quota: %d %s", rec.Code, rec.Body.String())
+	}
+	var q int64
+	d.QueryRow(`SELECT traffic_quota_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, target, n.ID).Scan(&q)
+	if q != 4096 {
+		t.Fatalf("per-node quota not applied: %d", q)
+	}
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/nodes/%d/rate-limit", target, n.ID), adminTok, map[string]any{"rate_limit_mbytes": 12}); rec.Code != http.StatusOK {
+		t.Fatalf("per-node rate: %d %s", rec.Code, rec.Body.String())
+	}
+	var mb int64
+	d.QueryRow(`SELECT rate_limit_mbytes FROM user_nodes WHERE user_id=? AND node_id=?`, target, n.ID).Scan(&mb)
+	if mb != 12 {
+		t.Fatalf("per-node rate not applied: %d", mb)
+	}
+}
+
 func TestV1AdminGrantRevoke(t *testing.T) {
 	d := openDB(t)
 	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)

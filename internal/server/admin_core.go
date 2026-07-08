@@ -161,6 +161,39 @@ func (s *Server) revokeUserNode(adminID, userID, nodeID int64) (int, *adminError
 	return len(affected), nil
 }
 
+// setPerNodeQuota sets a grant's absolute traffic quota (bytes) on user_nodes.
+func (s *Server) setPerNodeQuota(adminID, userID, nodeID, bytes int64) *adminError {
+	if bytes < 0 {
+		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
+	}
+	if _, err := s.DB.Exec(`UPDATE user_nodes SET traffic_quota_bytes=? WHERE user_id=? AND node_id=?`,
+		bytes, userID, nodeID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	db.WriteAudit(s.DB, adminID, "user.set_node_quota", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d bytes=%d", nodeID, bytes))
+	return nil
+}
+
+// setPerNodeRateLimit sets a grant's shared rate cap (MB/s, 0 = unlimited) and
+// re-dispatches every node carrying the grant's rule hops so shaping updates.
+func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adminError {
+	if mbytes < 0 {
+		return &adminError{http.StatusBadRequest, codeValidation, "限速不能为负"}
+	}
+	if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`,
+		mbytes, userID, nodeID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	for _, n := range affected {
+		_ = s.dispatchToNode(n)
+	}
+	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
+	return nil
+}
+
 // setUserEnabled sets the user's enabled state (declarative replacement for the
 // SPA toggle). Disabling drops the user's rules from their nodes; enabling
 // restores them — either way we re-dispatch. An admin may not disable itself.

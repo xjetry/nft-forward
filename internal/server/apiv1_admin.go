@@ -256,6 +256,64 @@ func (s *Server) v1AdminRevokeNode(w http.ResponseWriter, r *http.Request) {
 	v1OK(w, map[string]any{"removed": true, "removed_rule_nodes": removed})
 }
 
+func (s *Server) v1AdminSetPerNodeQuota(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeId")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad node id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setPerNodeQuota(admin.ID, id, nodeID, body.TrafficQuotaBytes); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
+func (s *Server) v1AdminSetPerNodeRate(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	nodeID, err := urlParamInt64(r, "nodeId")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad node id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		RateLimitMBytes int64 `json:"rate_limit_mbytes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setPerNodeRateLimit(admin.ID, id, nodeID, body.RateLimitMBytes); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
 func (s *Server) v1AdminSetEnabled(w http.ResponseWriter, r *http.Request) {
 	admin := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
