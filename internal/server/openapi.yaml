@@ -1,0 +1,528 @@
+openapi: 3.1.0
+info:
+  title: nft-forward Public API
+  version: "1.0.0"
+  description: |
+    Token 化的稳定契约面。所有请求带 `Authorization: Bearer <token>`（openapi.json 除外）。
+    成功返回 {"data":...}，失败返回 {"error":{"code","message"}}。
+    token 有 read/readwrite 两种 scope；写端点需 readwrite。
+    token 还绑定用户角色：user 角色只能访问 /my/* 自助端点；admin 角色可访问集群观测与用户管理端点。
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [unauthorized, forbidden, scope_required, rate_limited, validation, not_found, conflict, duplicate_chain_node, internal]
+            message:
+              type: string
+    Node:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        node_type: { type: string }
+        online: { type: boolean }
+        disabled: { type: boolean }
+        agent_version: { type: string }
+        roles: { type: integer }
+        rate_multiplier: { type: number }
+        unidirectional: { type: boolean }
+        no_direct_exit: { type: boolean }
+        port_range: { type: string }
+        last_seen: { type: integer, nullable: true }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        role: { type: string }
+        disabled: { type: boolean }
+        max_forwards: { type: integer }
+        rule_count: { type: integer }
+        traffic_used_bytes: { type: integer }
+        traffic_quota_bytes: { type: integer }
+        traffic_reset_days: { type: integer }
+        expires_at: { type: integer, nullable: true }
+        billing_rate: { type: number }
+    RuleChainHop:
+      type: object
+      properties:
+        node_id: { type: integer }
+        name: { type: string }
+        node_type: { type: string }
+    Rule:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        node_id: { type: integer }
+        proto: { type: string }
+        entry: { type: string }
+        entry_v6: { type: string }
+        entry_family: { type: string }
+        exit: { type: string }
+        exit_mode: { type: string }
+        comment: { type: string }
+        via_node_ids:
+          type: array
+          items: { type: integer }
+        chain:
+          type: array
+          items: { $ref: "#/components/schemas/RuleChainHop" }
+        traffic_used_bytes: { type: integer }
+        created_at: { type: integer }
+    RuleWriteRequest:
+      type: object
+      properties:
+        node_id: { type: integer }
+        node_name: { type: string }
+        name: { type: string }
+        proto: { type: string }
+        exit: { type: string }
+        entry_port: { type: integer }
+        comment: { type: string }
+        mode: { type: string }
+        exit_mode: { type: string }
+        via_node_ids:
+          type: array
+          items: { type: integer }
+        via_node_names:
+          type: array
+          items: { type: string }
+        entry_family: { type: string }
+        dry_run: { type: boolean }
+security:
+  - bearerAuth: []
+paths:
+  /openapi.json:
+    get:
+      summary: 本 OpenAPI 文档（免鉴权）
+      security: []
+      responses:
+        "200":
+          description: OpenAPI document
+
+  /info:
+    get:
+      summary: 当前 token 归属用户的自述信息
+      description: 任意角色、read scope 即可。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 用户自述信息 }
+        "401": { description: 未鉴权, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /probe:
+    get:
+      summary: 单跳连通性探测
+      description: 任意角色、read scope 即可。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: target, in: query, schema: { type: string } }
+        - { name: node, in: query, schema: { type: string } }
+        - { name: proto, in: query, schema: { type: string } }
+      responses:
+        "200": { description: 探测结果 }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /probe-chain:
+    get:
+      summary: 按规则整链逐跳探测
+      description: 任意角色、read scope 即可。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: rule, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 逐跳探测结果 }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /my/nodes:
+    get:
+      summary: 我被授权使用的节点
+      description: user 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 节点列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+        "403": { description: 非 user 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /my/rules:
+    get:
+      summary: 我的规则列表
+      description: user 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 规则列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Rule" }
+    post:
+      summary: 新建我的规则
+      description: user 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: 幂等键；相同键的重试回放首次创建的规则，不重复分配端口。
+        - name: dry_run
+          in: query
+          required: false
+          schema: { type: string, enum: ["1"] }
+          description: 与 body.dry_run 等效，只预览不落地。
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RuleWriteRequest" }
+      responses:
+        "200": { description: 新建的规则（或 dry_run 预览） }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: 端口/链路冲突, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /my/rules/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      summary: 我的单条规则详情
+      description: user 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 规则详情 }
+        "404": { description: 不存在或不属于本人, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    put:
+      summary: 更新我的规则
+      description: user 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RuleWriteRequest" }
+      responses:
+        "200": { description: 更新后的规则 }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: 不存在或不属于本人, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      summary: 删除我的规则
+      description: user 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 删除结果 }
+        "404": { description: 不存在或不属于本人, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /nodes:
+    get:
+      summary: 全部节点（含未授权给当前用户的）
+      description: admin 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 节点列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+        "403": { description: 非 admin 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users:
+    get:
+      summary: 全部用户
+      description: admin 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+        "403": { description: 非 admin 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    post:
+      summary: 开户，默认同时铸 token
+      description: admin 角色、readwrite scope。password 留空则随机生成（API-only 用户不需要登录密码）。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [user, admin] }
+                max_forwards: { type: integer }
+                traffic_quota_bytes: { type: integer }
+                expires_at: { type: integer, description: unix 秒 }
+                issue_token: { type: boolean, description: "默认 true；显式 false 时不铸 token" }
+                token_scope: { type: string, enum: [read, readwrite] }
+      responses:
+        "200": { description: "新建用户（issue_token 时附带一次性明文 token）" }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: 用户名已存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /dashboard:
+    get:
+      summary: 集群概览
+      description: admin 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 概览统计 }
+        "403": { description: 非 admin 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /usage:
+    get:
+      summary: 一次性计费快照
+      description: admin 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "按用户/按节点的用量汇总与集群总量" }
+        "403": { description: 非 admin 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/token:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      summary: 查看用户 token 元信息（不含明文）
+      description: admin 角色、read scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: token 元信息 }
+    post:
+      summary: 为用户铸/轮换 token
+      description: admin 角色、readwrite scope。用户已有 token 时视为轮换（rotated=true）。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { type: string, enum: [read, readwrite] }
+      responses:
+        "200": { description: "一次性明文 token" }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      summary: 撤销用户 token
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 撤销结果 }
+
+  /users/{id}/quota:
+    put:
+      summary: 设置用户总流量配额
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                traffic_quota_bytes: { type: integer }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/max-forwards:
+    put:
+      summary: 设置用户可建规则数上限
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_forwards: { type: integer }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/expiry:
+    put:
+      summary: 设置用户到期时间
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expires_at: { type: integer, description: unix 秒，0 表示永不过期 }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/enabled:
+    put:
+      summary: 启用/禁用用户
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/grants/{nodeId}:
+    put:
+      summary: 授权用户使用节点
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: nodeId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_forwards: { type: integer }
+                traffic_quota_bytes: { type: integer }
+      responses:
+        "200": { description: 授权结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      summary: 撤销用户对节点的授权
+      description: admin 角色、readwrite scope。撤销会一并移除该用户在此节点下的规则。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: nodeId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: 撤销结果，含被联动移除的规则数 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/nodes/{nodeId}/quota:
+    put:
+      summary: 设置用户在某节点的配额
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: nodeId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                traffic_quota_bytes: { type: integer }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/nodes/{nodeId}/rate-limit:
+    put:
+      summary: 设置用户在某节点的限速
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: nodeId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rate_limit_mbytes: { type: integer, description: MB/s，0 表示不限速 }
+      responses:
+        "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /grants/batch-apply:
+    post:
+      summary: 批量为多个用户授权多个节点
+      description: admin 角色、readwrite scope。按 node_name 解析节点；未解析到的节点名进 skipped_nodes 而非报错。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_ids:
+                  type: array
+                  items: { type: integer }
+                grants:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      node_name: { type: string }
+                      max_forwards: { type: integer }
+                      traffic_quota_bytes: { type: integer }
+                      rate_limit_mbytes: { type: integer }
+      responses:
+        "200": { description: "已授权数与跳过的节点名列表" }
+        "400": { description: 参数错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /nodes/{id}/resync:
+    post:
+      summary: 重新下发单个节点的规则
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: 下发结果 }
+        "500": { description: 下发失败, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /nodes/resync-all:
+    post:
+      summary: 重新下发全部节点的规则
+      description: admin 角色、readwrite scope。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "成功/失败节点统计" }
+        "500": { description: 下发失败, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

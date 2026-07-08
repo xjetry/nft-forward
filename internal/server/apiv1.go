@@ -102,58 +102,65 @@ func scopeSatisfies(have, want string) bool {
 // behind requireTokenAuth (which also rate-limits and stamps last_used); role and
 // scope gates layer on top per group.
 func (s *Server) registerV1Routes(r chi.Router) {
-	r.Use(s.requireTokenAuth)
+	// The OpenAPI document is the public contract itself — served without a
+	// token. It must be registered before the authenticated group so
+	// requireTokenAuth doesn't gate it.
+	r.Get("/openapi.json", s.serveOpenAPI)
 
-	// Self + shared diagnostics: any authenticated token, read scope.
-	r.Get("/info", s.v1Info)
-	r.Get("/probe", s.v1Probe)
-	r.Get("/probe-chain", s.v1ProbeChain)
-
-	// User self-service reads.
 	r.Group(func(r chi.Router) {
-		r.Use(s.v1RequireRole("user"))
-		r.Get("/my/nodes", s.v1MyListNodes)
-		r.Get("/my/rules", s.v1MyListRules)
-		r.Get("/my/rules/{id}", s.v1MyGetRule)
-	})
+		r.Use(s.requireTokenAuth)
 
-	// User self-service writes: readwrite scope on top of the user role.
-	r.Group(func(r chi.Router) {
-		r.Use(s.v1RequireRole("user"), s.requireScope(db.TokenScopeReadWrite))
-		r.Post("/my/rules", s.v1MyCreateRule)
-		r.Put("/my/rules/{id}", s.v1MyUpdateRule)
-		r.Delete("/my/rules/{id}", s.v1MyDeleteRule)
-	})
+		// Self + shared diagnostics: any authenticated token, read scope.
+		r.Get("/info", s.v1Info)
+		r.Get("/probe", s.v1Probe)
+		r.Get("/probe-chain", s.v1ProbeChain)
 
-	// Admin reads: cluster observability.
-	r.Group(func(r chi.Router) {
-		r.Use(s.v1RequireRole("admin"))
-		r.Get("/nodes", s.v1ListNodes)
-		r.Get("/users", s.v1ListUsers)
-		r.Get("/dashboard", s.v1Dashboard)
-		r.Get("/users/{id}/token", s.v1AdminGetUserToken)
-		r.Get("/usage", s.v1Usage)
-	})
+		// User self-service reads.
+		r.Group(func(r chi.Router) {
+			r.Use(s.v1RequireRole("user"))
+			r.Get("/my/nodes", s.v1MyListNodes)
+			r.Get("/my/rules", s.v1MyListRules)
+			r.Get("/my/rules/{id}", s.v1MyGetRule)
+		})
 
-	// Admin writes: readwrite scope on top of the admin role. All mutations are
-	// declarative (PUT/DELETE absolute values), so retries are naturally
-	// idempotent — no Idempotency-Key needed.
-	r.Group(func(r chi.Router) {
-		r.Use(s.v1RequireRole("admin"), s.requireScope(db.TokenScopeReadWrite))
-		r.Post("/users", s.v1AdminCreateUser)
-		r.Post("/users/{id}/token", s.v1AdminMintUserToken)
-		r.Delete("/users/{id}/token", s.v1AdminDeleteUserToken)
-		r.Put("/users/{id}/quota", s.v1AdminSetUserQuota)
-		r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxForwards)
-		r.Put("/users/{id}/expiry", s.v1AdminSetExpiry)
-		r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
-		r.Put("/users/{id}/grants/{nodeId}", s.v1AdminGrantNode)
-		r.Delete("/users/{id}/grants/{nodeId}", s.v1AdminRevokeNode)
-		r.Put("/users/{id}/nodes/{nodeId}/quota", s.v1AdminSetPerNodeQuota)
-		r.Put("/users/{id}/nodes/{nodeId}/rate-limit", s.v1AdminSetPerNodeRate)
-		r.Post("/grants/batch-apply", s.v1AdminBatchApplyGrants)
-		r.Post("/nodes/{id}/resync", s.v1AdminResyncNode)
-		r.Post("/nodes/resync-all", s.v1AdminResyncAllNodes)
+		// User self-service writes: readwrite scope on top of the user role.
+		r.Group(func(r chi.Router) {
+			r.Use(s.v1RequireRole("user"), s.requireScope(db.TokenScopeReadWrite))
+			r.Post("/my/rules", s.v1MyCreateRule)
+			r.Put("/my/rules/{id}", s.v1MyUpdateRule)
+			r.Delete("/my/rules/{id}", s.v1MyDeleteRule)
+		})
+
+		// Admin reads: cluster observability.
+		r.Group(func(r chi.Router) {
+			r.Use(s.v1RequireRole("admin"))
+			r.Get("/nodes", s.v1ListNodes)
+			r.Get("/users", s.v1ListUsers)
+			r.Get("/dashboard", s.v1Dashboard)
+			r.Get("/users/{id}/token", s.v1AdminGetUserToken)
+			r.Get("/usage", s.v1Usage)
+		})
+
+		// Admin writes: readwrite scope on top of the admin role. All mutations are
+		// declarative (PUT/DELETE absolute values), so retries are naturally
+		// idempotent — no Idempotency-Key needed.
+		r.Group(func(r chi.Router) {
+			r.Use(s.v1RequireRole("admin"), s.requireScope(db.TokenScopeReadWrite))
+			r.Post("/users", s.v1AdminCreateUser)
+			r.Post("/users/{id}/token", s.v1AdminMintUserToken)
+			r.Delete("/users/{id}/token", s.v1AdminDeleteUserToken)
+			r.Put("/users/{id}/quota", s.v1AdminSetUserQuota)
+			r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxForwards)
+			r.Put("/users/{id}/expiry", s.v1AdminSetExpiry)
+			r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
+			r.Put("/users/{id}/grants/{nodeId}", s.v1AdminGrantNode)
+			r.Delete("/users/{id}/grants/{nodeId}", s.v1AdminRevokeNode)
+			r.Put("/users/{id}/nodes/{nodeId}/quota", s.v1AdminSetPerNodeQuota)
+			r.Put("/users/{id}/nodes/{nodeId}/rate-limit", s.v1AdminSetPerNodeRate)
+			r.Post("/grants/batch-apply", s.v1AdminBatchApplyGrants)
+			r.Post("/nodes/{id}/resync", s.v1AdminResyncNode)
+			r.Post("/nodes/resync-all", s.v1AdminResyncAllNodes)
+		})
 	})
 }
 
