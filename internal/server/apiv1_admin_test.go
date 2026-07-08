@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -88,5 +89,40 @@ func TestV1AdminCreateUserClosedLoop(t *testing.T) {
 	rec3 := v1Do(t, s, "POST", "/api/v1/users", adminTok, map[string]any{"username": "svc-bot", "role": "user"})
 	if rec3.Code != http.StatusConflict || v1ErrCode(t, rec3) != codeConflict {
 		t.Fatalf("dup username: want 409 conflict, got %d %s", rec3.Code, rec3.Body.String())
+	}
+}
+
+func TestV1AdminMintRotatesUserToken(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	uid, _ := v1UserToken(t, d, 10, db.TokenScopeRead) // user already holds a read token
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "POST", fmt.Sprintf("/api/v1/users/%d/token", uid), adminTok, map[string]any{"scope": "readwrite"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	data := v1Data(t, rec)
+	if data["rotated"] != true {
+		t.Fatalf("existing token must rotate, got %v", data["rotated"])
+	}
+	newTok, _ := data["token"].(string)
+	if rec2 := v1Do(t, s, "GET", "/api/v1/info", newTok, nil); rec2.Code != http.StatusOK {
+		t.Fatalf("rotated token should authenticate: %d", rec2.Code)
+	}
+
+	// read metadata never leaks plaintext
+	recg := v1Do(t, s, "GET", fmt.Sprintf("/api/v1/users/%d/token", uid), adminTok, nil)
+	gd := v1Data(t, recg)
+	if gd["has_token"] != true || gd["token"] != nil {
+		t.Fatalf("get token meta must not include plaintext: %v", gd)
+	}
+
+	// delete revokes
+	if recd := v1Do(t, s, "DELETE", fmt.Sprintf("/api/v1/users/%d/token", uid), adminTok, nil); recd.Code != http.StatusOK {
+		t.Fatalf("delete token: %d", recd.Code)
+	}
+	if recg2 := v1Do(t, s, "GET", fmt.Sprintf("/api/v1/users/%d/token", uid), adminTok, nil); v1Data(t, recg2)["has_token"] != false {
+		t.Fatal("token should be gone after delete")
 	}
 }

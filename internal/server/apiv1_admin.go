@@ -66,3 +66,70 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	v1OK(w, out)
 }
+
+// v1AdminMintUserToken mints or rotates the target user's single token. Because
+// api_tokens.user_id is UNIQUE, re-minting for a user who already has one
+// rotates it (rotated=true); the plaintext is returned once.
+func (s *Server) v1AdminMintUserToken(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		Scope string `json:"scope"`
+	}
+	_ = decodeJSON(r, &body)
+	scope := db.NormalizeTokenScope(body.Scope)
+	tok, rotated, err := db.IssueUserToken(s.DB, id, scope)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败")
+		return
+	}
+	prefix := ""
+	if t, e := db.GetAPITokenByUser(s.DB, id); e == nil {
+		prefix = t.TokenPrefix
+	}
+	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": prefix, "rotated": rotated})
+}
+
+// v1AdminGetUserToken returns token metadata (never the plaintext) so an admin
+// can inspect a user's API state.
+func (s *Server) v1AdminGetUserToken(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	t, err := db.GetAPITokenByUser(s.DB, id)
+	if err != nil {
+		v1OK(w, map[string]any{"has_token": false})
+		return
+	}
+	var lastUsed *int64
+	if t.LastUsedAt.Valid {
+		lu := t.LastUsedAt.Int64
+		lastUsed = &lu
+	}
+	v1OK(w, map[string]any{
+		"has_token": true, "token_prefix": t.TokenPrefix, "scope": t.Scope,
+		"disabled": t.Disabled, "created_at": t.CreatedAt, "last_used_at": lastUsed,
+	})
+}
+
+// v1AdminDeleteUserToken revokes a user's token.
+func (s *Server) v1AdminDeleteUserToken(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if err := db.DeleteAPIToken(s.DB, id); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "删除失败")
+		return
+	}
+	v1OK(w, map[string]any{"deleted": true})
+}
