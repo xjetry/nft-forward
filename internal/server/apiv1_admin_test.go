@@ -63,3 +63,30 @@ func TestAdminCanMintOwnToken(t *testing.T) {
 		t.Fatalf("want a readwrite token, got %+v", out)
 	}
 }
+
+func TestV1AdminCreateUserClosedLoop(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "POST", "/api/v1/users", adminTok, map[string]any{
+		"username": "svc-bot", "role": "user", "issue_token": true, "token_scope": "readwrite",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create user: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	data := v1Data(t, rec)
+	tok, _ := data["token"].(string)
+	if tok == "" {
+		t.Fatal("closed loop must return a one-time token")
+	}
+	// The issued token authenticates and carries readwrite.
+	if rec2 := v1Do(t, s, "GET", "/api/v1/info", tok, nil); rec2.Code != http.StatusOK {
+		t.Fatalf("issued token should work: %d body=%s", rec2.Code, rec2.Body.String())
+	}
+	// Duplicate username is a conflict, not a 500.
+	rec3 := v1Do(t, s, "POST", "/api/v1/users", adminTok, map[string]any{"username": "svc-bot", "role": "user"})
+	if rec3.Code != http.StatusConflict || v1ErrCode(t, rec3) != codeConflict {
+		t.Fatalf("dup username: want 409 conflict, got %d %s", rec3.Code, rec3.Body.String())
+	}
+}

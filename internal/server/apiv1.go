@@ -132,6 +132,14 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Get("/users", s.v1ListUsers)
 		r.Get("/dashboard", s.v1Dashboard)
 	})
+
+	// Admin writes: readwrite scope on top of the admin role. All mutations are
+	// declarative (PUT/DELETE absolute values), so retries are naturally
+	// idempotent — no Idempotency-Key needed.
+	r.Group(func(r chi.Router) {
+		r.Use(s.v1RequireRole("admin"), s.requireScope(db.TokenScopeReadWrite))
+		r.Post("/users", s.v1AdminCreateUser)
+	})
 }
 
 // --- DTOs ---

@@ -2337,49 +2337,22 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	username := strings.TrimSpace(body.Username)
-	if username == "" || body.Password == "" {
-		jsonErr(w, http.StatusBadRequest, "用户名和密码不能为空")
-		return
-	}
-	role := body.Role
-	if role == "" {
-		role = "user"
-	}
-	if role != "admin" && role != "user" {
-		jsonErr(w, http.StatusBadRequest, "角色须为 admin 或 user")
-		return
-	}
-	hash, err := HashPassword(body.Password)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	id, err := db.CreateUser(s.DB, username, hash, role)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	maxFwd := body.MaxForwards
-	if maxFwd <= 0 {
-		maxFwd = 100
-	}
-	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
-		maxFwd, body.TrafficQuotaBytes, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	var expiresAt int64
 	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
 		if et, err := time.Parse("2006-01-02", raw); err == nil {
-			s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, et.Unix(), id)
+			expiresAt = et.Unix()
 		}
 	}
-	if body.LandingSubURL != "" || body.AdminNote != "" {
-		s.DB.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`, strings.TrimSpace(body.LandingSubURL), strings.TrimSpace(body.AdminNote), id)
+	user, aerr := s.provisionUser(u.ID, provisionParams{
+		Username: body.Username, Password: body.Password, Role: body.Role,
+		MaxForwards: body.MaxForwards, TrafficQuotaBytes: body.TrafficQuotaBytes,
+		ExpiresAtUnix: expiresAt, LandingSubURL: body.LandingSubURL, AdminNote: body.AdminNote,
+	})
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
+		return
 	}
-	db.WriteAudit(s.DB, u.ID, "user.create", strconv.FormatInt(id, 10), username)
-	created, _ := db.GetUserByID(s.DB, id)
-	jsonOK(w, map[string]any{"user": created})
+	jsonOK(w, map[string]any{"user": user})
 }
 
 func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
