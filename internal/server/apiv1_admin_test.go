@@ -126,3 +126,49 @@ func TestV1AdminMintRotatesUserToken(t *testing.T) {
 		t.Fatal("token should be gone after delete")
 	}
 }
+
+func TestV1AdminUserScalarSets(t *testing.T) {
+	d := openDB(t)
+	adminID, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	target, _ := v1UserToken(t, d, 10, db.TokenScopeRead)
+	s, _ := New(d)
+
+	// quota
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/quota", target), adminTok, map[string]any{"traffic_quota_bytes": 5000}); rec.Code != http.StatusOK {
+		t.Fatalf("set quota: %d %s", rec.Code, rec.Body.String())
+	}
+	u, _ := db.GetUserByID(d, target)
+	if u.TrafficQuotaBytes != 5000 {
+		t.Fatalf("quota not applied: %d", u.TrafficQuotaBytes)
+	}
+	// idempotent: same PUT again yields same state
+	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/quota", target), adminTok, map[string]any{"traffic_quota_bytes": 5000})
+	u, _ = db.GetUserByID(d, target)
+	if u.TrafficQuotaBytes != 5000 {
+		t.Fatalf("idempotent quota drifted: %d", u.TrafficQuotaBytes)
+	}
+	// max-forwards
+	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/max-forwards", target), adminTok, map[string]any{"max_forwards": 7})
+	if u, _ = db.GetUserByID(d, target); u.MaxForwards != 7 {
+		t.Fatalf("max_forwards not applied: %d", u.MaxForwards)
+	}
+	// expiry (unix)
+	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/expiry", target), adminTok, map[string]any{"expires_at": 1893456000})
+	if u, _ = db.GetUserByID(d, target); !u.ExpiresAt.Valid || u.ExpiresAt.Int64 != 1893456000 {
+		t.Fatalf("expiry not applied: %+v", u.ExpiresAt)
+	}
+	// enabled=false disables
+	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/enabled", target), adminTok, map[string]any{"enabled": false})
+	if u, _ = db.GetUserByID(d, target); !u.Disabled {
+		t.Fatal("enabled=false must disable")
+	}
+	// admin cannot disable itself
+	rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/enabled", adminID), adminTok, map[string]any{"enabled": false})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("self-disable must be rejected, got %d", rec.Code)
+	}
+	// missing user -> 404
+	if rec := v1Do(t, s, "PUT", "/api/v1/users/99999/quota", adminTok, map[string]any{"traffic_quota_bytes": 1}); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing user: want 404, got %d", rec.Code)
+	}
+}

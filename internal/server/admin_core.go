@@ -1,6 +1,8 @@
 package server
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -86,4 +88,67 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
 	return created, nil
+}
+
+// setUserQuota sets the user's absolute traffic quota (bytes). Shared by SPA and
+// v1; declarative, so a repeated call is a no-op.
+func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
+	if bytes < 0 {
+		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, bytes, userID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	db.WriteAudit(s.DB, adminID, "user.set_quota_bytes", strconv.FormatInt(userID, 10), strconv.FormatInt(bytes, 10))
+	return nil
+}
+
+// setUserMaxForwards sets the user's absolute max forward-rule count.
+func (s *Server) setUserMaxForwards(adminID, userID int64, n int) *adminError {
+	if n < 0 {
+		return &adminError{http.StatusBadRequest, codeValidation, "配额数无效"}
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, n, userID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	db.WriteAudit(s.DB, adminID, "user.set_max_forwards", strconv.FormatInt(userID, 10), strconv.Itoa(n))
+	return nil
+}
+
+// setUserExpiry sets the user's absolute expiry (unix seconds; 0 = no expiry)
+// and re-dispatches their nodes so the change lands in the kernel immediately.
+func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError {
+	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
+		for _, n := range nodes {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, userID, err)
+			}
+		}
+	}
+	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
+	return nil
+}
+
+// setUserEnabled sets the user's enabled state (declarative replacement for the
+// SPA toggle). Disabling drops the user's rules from their nodes; enabling
+// restores them — either way we re-dispatch. An admin may not disable itself.
+func (s *Server) setUserEnabled(adminID, userID int64, enabled bool) *adminError {
+	if !enabled && userID == adminID {
+		return &adminError{http.StatusBadRequest, codeValidation, "不能禁用自己"}
+	}
+	reason := ""
+	if !enabled {
+		reason = "管理员手动禁用"
+	}
+	if err := db.SetUserDisabled(s.DB, userID, !enabled, reason); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
+		s.apiDispatchFanout(nodes)
+	}
+	db.WriteAudit(s.DB, adminID, "user.toggle", strconv.FormatInt(userID, 10), fmt.Sprintf("disabled=%v", !enabled))
+	return nil
 }

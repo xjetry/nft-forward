@@ -2535,15 +2535,10 @@ func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.TrafficQuotaBytes < 0 {
-		jsonErr(w, http.StatusBadRequest, "字节数无效")
+	if aerr := s.setUserQuota(u.ID, id, body.TrafficQuotaBytes); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, body.TrafficQuotaBytes, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_quota_bytes", strconv.FormatInt(id, 10), strconv.FormatInt(body.TrafficQuotaBytes, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2561,15 +2556,10 @@ func (s *Server) apiSetMaxForwards(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.MaxForwards < 0 {
-		jsonErr(w, http.StatusBadRequest, "配额数无效")
+	if aerr := s.setUserMaxForwards(u.ID, id, body.MaxForwards); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, body.MaxForwards, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_max_forwards", strconv.FormatInt(id, 10), strconv.Itoa(body.MaxForwards))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2588,8 +2578,7 @@ func (s *Server) apiSetUserExpiry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var expiresAt int64
-	raw := strings.TrimSpace(body.ExpiresAt)
-	if raw != "" {
+	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
 		t, err := time.Parse("2006-01-02", raw)
 		if err != nil {
 			jsonErr(w, http.StatusBadRequest, "日期格式无效（需 YYYY-MM-DD）")
@@ -2597,18 +2586,9 @@ func (s *Server) apiSetUserExpiry(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = t.Unix()
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAt, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if aerr := s.setUserExpiry(u.ID, id, expiresAt); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_expiry", strconv.FormatInt(id, 10), raw)
-	// Re-dispatch so expiry (or extension) takes effect immediately in the kernel.
-	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
-		for _, n := range nodes {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, id, err)
-			}
-		}
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -2721,26 +2701,13 @@ func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	if target.ID == u.ID {
-		jsonErr(w, http.StatusBadRequest, "不能禁用自己")
+	// Flip: a currently-disabled user becomes enabled and vice versa.
+	enabled := target.Disabled
+	if aerr := s.setUserEnabled(u.ID, id, enabled); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	willDisable := !target.Disabled
-	reason := ""
-	if willDisable {
-		reason = "管理员手动禁用"
-	}
-	if err := db.SetUserDisabled(s.DB, id, willDisable, reason); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// Re-dispatch either way: disabling drops this user's rules from the
-	// affected nodes, enabling restores them.
-	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
-		s.apiDispatchFanout(nodes)
-	}
-	db.WriteAudit(s.DB, u.ID, "user.toggle", strconv.FormatInt(id, 10), fmt.Sprintf("disabled=%v", willDisable))
-	jsonOK(w, map[string]any{"ok": true, "disabled": willDisable})
+	jsonOK(w, map[string]any{"ok": true, "disabled": !enabled})
 }
 
 func (s *Server) apiResetUserPassword(w http.ResponseWriter, r *http.Request) {

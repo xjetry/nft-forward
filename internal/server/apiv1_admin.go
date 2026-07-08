@@ -133,3 +133,99 @@ func (s *Server) v1AdminDeleteUserToken(w http.ResponseWriter, r *http.Request) 
 	}
 	v1OK(w, map[string]any{"deleted": true})
 }
+
+func (s *Server) v1AdminSetUserQuota(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setUserQuota(admin.ID, id, body.TrafficQuotaBytes); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
+func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		MaxForwards int `json:"max_forwards"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setUserMaxForwards(admin.ID, id, body.MaxForwards); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
+func (s *Server) v1AdminSetExpiry(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		ExpiresAt int64 `json:"expires_at"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setUserExpiry(admin.ID, id, body.ExpiresAt); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
+func (s *Server) v1AdminSetEnabled(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setUserEnabled(admin.ID, id, body.Enabled); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}

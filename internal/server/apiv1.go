@@ -142,6 +142,10 @@ func (s *Server) registerV1Routes(r chi.Router) {
 		r.Post("/users", s.v1AdminCreateUser)
 		r.Post("/users/{id}/token", s.v1AdminMintUserToken)
 		r.Delete("/users/{id}/token", s.v1AdminDeleteUserToken)
+		r.Put("/users/{id}/quota", s.v1AdminSetUserQuota)
+		r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxForwards)
+		r.Put("/users/{id}/expiry", s.v1AdminSetExpiry)
+		r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
 	})
 }
 
