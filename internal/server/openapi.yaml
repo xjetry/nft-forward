@@ -313,7 +313,7 @@ paths:
   /landing-usage:
     get:
       summary: 全用户落地出口用量台账快照
-      description: admin 角色、read scope 即可。每行恰含 user_id/host/port/protocol/present/used_bytes/updated_at。
+      description: admin 角色、read scope 即可。每行恰含 user_id/host/port/protocol/present/used_bytes/used_bytes_up/used_bytes_down/updated_at;used_bytes 为权威合计,up/down 自方向拆分上线起累计,旧行 up+down ≤ used_bytes。
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: 台账行数组 }

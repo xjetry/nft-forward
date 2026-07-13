@@ -317,6 +317,9 @@ func TestV1LandingUsage(t *testing.T) {
 	_, adminTok := v1AdminToken(t, d, db.TokenScopeRead) // read scope suffices
 	uid, _ := v1UserToken(t, d, 3, db.TokenScopeRead)
 	seedLandingExit(t, d, uid, "exit-a.example", 443, 0, 12345)
+	if _, err := d.Exec(`UPDATE user_landing_exits SET used_bytes_up=5000, used_bytes_down=7345 WHERE user_id=?`, uid); err != nil {
+		t.Fatal(err)
+	}
 	s, _ := New(d)
 
 	rec := v1Do(t, s, "GET", "/api/v1/landing-usage", adminTok, nil)
@@ -332,7 +335,10 @@ func TestV1LandingUsage(t *testing.T) {
 	if len(body.Data) != 1 || body.Data[0]["host"] != "exit-a.example" || body.Data[0]["used_bytes"] != float64(12345) {
 		t.Fatalf("unexpected rows: %+v", body.Data)
 	}
-	// The frozen contract is exactly 7 keys; private ledger fields must not leak.
+	if body.Data[0]["used_bytes_up"] != float64(5000) || body.Data[0]["used_bytes_down"] != float64(7345) {
+		t.Fatalf("direction keys missing or wrong: %+v", body.Data[0])
+	}
+	// The frozen contract is exactly 9 keys; private ledger fields must not leak.
 	for _, forbidden := range []string{"quota_bytes", "name", "name_override", "uri"} {
 		if _, leak := body.Data[0][forbidden]; leak {
 			t.Fatalf("%q must not serialize on the public surface", forbidden)
