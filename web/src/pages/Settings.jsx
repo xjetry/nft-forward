@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import { Layout, useToast } from '../components/Layout'
 import { Loading } from '../components/ui'
 import { PageHeader, Panel } from '../components/page'
+import { ApiTokenSection } from '../components/ApiTokenSection'
 
 export default function Settings() {
   const [form, setForm] = useState({ panel_url: '', panel_name: '', show_rate_to_user: false, pool_size: 4 })
@@ -116,6 +117,8 @@ export default function Settings() {
             </div>
           </form>
         </Panel>
+
+        <ApiTokenSection />
       </div>
     </Layout>
   )
