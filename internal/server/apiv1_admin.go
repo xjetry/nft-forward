@@ -159,6 +159,30 @@ func (s *Server) v1AdminSetUserQuota(w http.ResponseWriter, r *http.Request) {
 	v1OK(w, map[string]any{"updated": true})
 }
 
+func (s *Server) v1AdminSetLandingSubURL(w http.ResponseWriter, r *http.Request) {
+	admin := userFromCtx(r.Context())
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
+		return
+	}
+	if !s.v1RequireUser(w, id) {
+		return
+	}
+	var body struct {
+		LandingSubURL string `json:"landing_sub_url"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+		return
+	}
+	if aerr := s.setUserLandingSubURL(admin.ID, id, body.LandingSubURL); aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	v1OK(w, map[string]any{"updated": true})
+}
+
 func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
 	admin := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

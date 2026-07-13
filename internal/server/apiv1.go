@@ -161,6 +161,7 @@ func (s *Server) registerV1Routes(r chi.Router) {
 			r.Post("/grants/batch-apply", s.v1AdminBatchApplyGrants)
 			r.Post("/nodes/{id}/resync", s.v1AdminResyncNode)
 			r.Post("/nodes/resync-all", s.v1AdminResyncAllNodes)
+			r.Put("/users/{id}/landing-sub-url", s.v1AdminSetLandingSubURL)
 		})
 	})
 }
