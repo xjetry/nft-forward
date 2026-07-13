@@ -416,16 +416,22 @@ func (s *Server) v1AdminResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // v1LandingExit is the frozen public shape of one landing-exit ledger row:
-// exactly {user_id, host, port, protocol, present, used_bytes, updated_at}. The
-// db row carries more (name/name_override/quota_bytes) which stays internal.
+// exactly {user_id, host, port, protocol, present, used_bytes,
+// used_bytes_up, used_bytes_down, updated_at}. used_bytes stays the
+// authoritative total; the split columns accumulate from the ledger's
+// direction upgrade on, so up+down <= used_bytes and the gap is
+// unattributable history. The db row carries more
+// (name/name_override/quota_bytes) which stays internal.
 type v1LandingExit struct {
-	UserID    int64  `json:"user_id"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
-	Protocol  string `json:"protocol"`
-	Present   bool   `json:"present"`
-	UsedBytes int64  `json:"used_bytes"`
-	UpdatedAt int64  `json:"updated_at"`
+	UserID        int64  `json:"user_id"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Protocol      string `json:"protocol"`
+	Present       bool   `json:"present"`
+	UsedBytes     int64  `json:"used_bytes"`
+	UsedBytesUp   int64  `json:"used_bytes_up"`
+	UsedBytesDown int64  `json:"used_bytes_down"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // v1LandingUsage exposes the cluster-wide landing-exit ledger so a downstream
@@ -441,7 +447,9 @@ func (s *Server) v1LandingUsage(w http.ResponseWriter, r *http.Request) {
 	for _, e := range exits {
 		out = append(out, v1LandingExit{
 			UserID: e.UserID, Host: e.Host, Port: e.Port, Protocol: e.Protocol,
-			Present: e.Present, UsedBytes: e.UsedBytes, UpdatedAt: e.UpdatedAt,
+			Present: e.Present, UsedBytes: e.UsedBytes,
+			UsedBytesUp: e.UsedBytesUp, UsedBytesDown: e.UsedBytesDown,
+			UpdatedAt: e.UpdatedAt,
 		})
 	}
 	v1OK(w, out)

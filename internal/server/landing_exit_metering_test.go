@@ -18,6 +18,14 @@ func exitUsed(t *testing.T, d *sql.DB, uid int64) int64 {
 	return used
 }
 
+func exitDir(t *testing.T, d *sql.DB, uid int64) (up, down int64) {
+	t.Helper()
+	if err := d.QueryRow(`SELECT used_bytes_up, used_bytes_down FROM user_landing_exits WHERE user_id=?`, uid).Scan(&up, &down); err != nil {
+		t.Fatal(err)
+	}
+	return up, down
+}
+
 // Chain rule n1→n2, exit 8.8.8.8:443. Only the final hop's raw bytes reach the
 // exit ledger. The global user quota is billed once, at the entry hop — the
 // same 1000 bytes flow through both hops, so entry-only billing counts them a
@@ -46,6 +54,9 @@ func TestExitLedgerCountsFinalHopOnly(t *testing.T) {
 	u, _ := db.GetUserByID(d, uid)
 	if u.TrafficUsedBytes != 1000 {
 		t.Fatalf("user ledger bills the entry hop once (1000), got %d", u.TrafficUsedBytes)
+	}
+	if up, down := exitDir(t, d, uid); up != 400 || down != 600 {
+		t.Fatalf("exit ledger direction split wants final hop's 400/600, got %d/%d", up, down)
 	}
 }
 
@@ -129,5 +140,30 @@ func TestExitLedgerSkipsAbsentAndForeign(t *testing.T) {
 
 	if used := exitUsed(t, d, uid); used != 0 {
 		t.Fatalf("absent exit must not meter, got %d", used)
+	}
+}
+
+// Two flush batches accumulate per direction, and the split always sums to
+// the authoritative total because both come from the same samples.
+func TestExitLedgerDirectionAccumulates(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 101)
+	n1, _ := db.CreateNode(d, "m7", "", "")
+	db.UpdateNodeRelayHost(d, n1.ID, "1.1.1.1")
+	db.GrantNode(d, uid, n1.ID, 10, 0)
+	ruleID := createTestRuleDirectNode(t, d, uid, n1.ID)
+	seedLandingExit(t, d, uid, "8.8.8.8", 443, 0, 0)
+
+	s, _ := New(d)
+	p := getHopPort(t, d, ruleID, n1.ID)
+	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{{Proto: "tcp", ListenPort: p, BytesUp: 100, BytesDown: 300}})
+	s.Hub.applyCounters(n1.ID, []wsproto.CounterSample{{Proto: "tcp", ListenPort: p, BytesUp: 50, BytesDown: 0}})
+
+	up, down := exitDir(t, d, uid)
+	if up != 150 || down != 300 {
+		t.Fatalf("want 150/300, got %d/%d", up, down)
+	}
+	if used := exitUsed(t, d, uid); used != up+down {
+		t.Fatalf("split must sum to the total: used=%d up+down=%d", used, up+down)
 	}
 }

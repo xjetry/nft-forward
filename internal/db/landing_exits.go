@@ -11,17 +11,19 @@ import (
 // URI is server-internal (relay-URI rewriting); it never serializes into
 // admin-facing JSON.
 type LandingExit struct {
-	UserID       int64  `json:"user_id"`
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	Name         string `json:"name"`
-	NameOverride string `json:"name_override"`
-	Protocol     string `json:"protocol"`
-	URI          string `json:"-"`
-	Present      bool   `json:"present"`
-	QuotaBytes   int64  `json:"quota_bytes"`
-	UsedBytes    int64  `json:"used_bytes"`
-	UpdatedAt    int64  `json:"updated_at"`
+	UserID        int64  `json:"user_id"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Name          string `json:"name"`
+	NameOverride  string `json:"name_override"`
+	Protocol      string `json:"protocol"`
+	URI           string `json:"-"`
+	Present       bool   `json:"present"`
+	QuotaBytes    int64  `json:"quota_bytes"`
+	UsedBytes     int64  `json:"used_bytes"`
+	UsedBytesUp   int64  `json:"used_bytes_up"`
+	UsedBytesDown int64  `json:"used_bytes_down"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // LandingExitInput is a deduplicated landing node destined for the
@@ -150,12 +152,12 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 	return flipped, true, nil
 }
 
-const landingExitCols = `user_id, host, port, name, name_override, protocol, uri, present, quota_bytes, used_bytes, updated_at`
+const landingExitCols = `user_id, host, port, name, name_override, protocol, uri, present, quota_bytes, used_bytes, used_bytes_up, used_bytes_down, updated_at`
 
 func scanLandingExit(r rowScanner) (*LandingExit, error) {
 	e := &LandingExit{}
 	var present int
-	if err := r.Scan(&e.UserID, &e.Host, &e.Port, &e.Name, &e.NameOverride, &e.Protocol, &e.URI, &present, &e.QuotaBytes, &e.UsedBytes, &e.UpdatedAt); err != nil {
+	if err := r.Scan(&e.UserID, &e.Host, &e.Port, &e.Name, &e.NameOverride, &e.Protocol, &e.URI, &present, &e.QuotaBytes, &e.UsedBytes, &e.UsedBytesUp, &e.UsedBytesDown, &e.UpdatedAt); err != nil {
 		return nil, err
 	}
 	e.Present = present == 1
@@ -272,7 +274,7 @@ func ResetUserLandingExitTraffic(d *sql.DB, userID int64, host string, port int)
 	if err != nil || !found {
 		return false, false, err
 	}
-	_, err = d.Exec(`UPDATE user_landing_exits SET used_bytes=0, updated_at=? WHERE user_id=? AND host=? AND port=?`,
+	_, err = d.Exec(`UPDATE user_landing_exits SET used_bytes=0, used_bytes_up=0, used_bytes_down=0, updated_at=? WHERE user_id=? AND host=? AND port=?`,
 		now(), userID, host, port)
 	return err == nil, present, err
 }

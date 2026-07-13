@@ -190,6 +190,29 @@ func TestCycleResetClearsExitLedger(t *testing.T) {
 	}
 }
 
+func TestLandingExitDirectionColumnsResetTogether(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+	if _, err := d.Exec(`INSERT INTO user_landing_exits(user_id, host, port, name, protocol, uri, present, used_bytes, used_bytes_up, used_bytes_down, updated_at)
+		VALUES (?, 'x.example', 443, '', 'vless', '', 1, 1000, 400, 600, 0)`, uid); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := ListUserLandingExits(d, uid)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if rows[0].UsedBytesUp != 400 || rows[0].UsedBytesDown != 600 {
+		t.Fatalf("direction columns not scanned: %+v", rows[0])
+	}
+	if _, _, err := ResetUserLandingExitTraffic(d, uid, "x.example", 443); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = ListUserLandingExits(d, uid)
+	if rows[0].UsedBytes != 0 || rows[0].UsedBytesUp != 0 || rows[0].UsedBytesDown != 0 {
+		t.Fatalf("reset must zero all three columns: %+v", rows[0])
+	}
+}
+
 func TestLandingExitNameOverride(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)

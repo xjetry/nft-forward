@@ -670,7 +670,8 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	hopWrites := map[int64]*hopWrite{}
 	userNodeAdds := map[userNode]int64{}
 	userAdds := map[int64]int64{}
-	exitAdds := map[db.UserExitKey]int64{}
+	type exitAdd struct{ up, down int64 }
+	exitAdds := map[db.UserExitKey]*exitAdd{}
 	// The reporting node's raw ledger: every sampled byte counts, both
 	// directions regardless of unidirectional billing, and before the rule_hop
 	// match below — a sample whose rule was deleted mid-batch is still real
@@ -709,7 +710,13 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		if r != nil && r.OwnerID.Valid && totalDelta > 0 && len(exitSet) > 0 && rh.Position == maxPos[rh.RuleID] {
 			key := db.UserExitKey{UserID: r.OwnerID.Int64, Host: r.ExitHost, Port: r.ExitPort}
 			if exitSet[key] {
-				exitAdds[key] += totalDelta
+				ea := exitAdds[key]
+				if ea == nil {
+					ea = &exitAdd{}
+					exitAdds[key] = ea
+				}
+				ea.up += s.BytesUp
+				ea.down += s.BytesDown
 				touched[userNode{key.UserID, nodeID}] = true
 			}
 		}
@@ -839,15 +846,15 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 					break
 				}
 			}
-			for k, delta := range exitAdds {
+			for k, ea := range exitAdds {
 				if !ok {
 					break
 				}
 				// A zero-row hit means the row was flipped absent and deleted
 				// between load and flush; dropping one batch is the intent of
 				// that deletion.
-				if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = used_bytes + ?, updated_at = ? WHERE user_id=? AND host=? AND port=?`,
-					delta, time.Now().Unix(), k.UserID, k.Host, k.Port); err != nil {
+				if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = used_bytes + ?, used_bytes_up = used_bytes_up + ?, used_bytes_down = used_bytes_down + ?, updated_at = ? WHERE user_id=? AND host=? AND port=?`,
+					ea.up+ea.down, ea.up, ea.down, time.Now().Unix(), k.UserID, k.Host, k.Port); err != nil {
 					log.Printf("hub: user %d exit %s:%d ledger add: %v", k.UserID, k.Host, k.Port, err)
 					ok = false
 					break

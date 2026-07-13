@@ -30,7 +30,7 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0 WHERE user_id=?`, userID); err != nil {
+	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, userID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE rule_hops SET total_bytes = 0 WHERE rule_id IN (SELECT id FROM rules WHERE owner_id = ?)`, userID); err != nil {
@@ -165,7 +165,7 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, u.ID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
