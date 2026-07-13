@@ -391,6 +391,38 @@ func (s *Server) v1AdminResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 	v1OK(w, map[string]any{"synced": synced, "failed": failed})
 }
 
+// v1LandingExit is the frozen public shape of one landing-exit ledger row:
+// exactly {user_id, host, port, protocol, present, used_bytes, updated_at}. The
+// db row carries more (name/name_override/quota_bytes) which stays internal.
+type v1LandingExit struct {
+	UserID    int64  `json:"user_id"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	Protocol  string `json:"protocol"`
+	Present   bool   `json:"present"`
+	UsedBytes int64  `json:"used_bytes"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// v1LandingUsage exposes the cluster-wide landing-exit ledger so a downstream
+// orchestrator (e.g. sing-board) can pull consumption for every user without
+// walking each user's node grants individually.
+func (s *Server) v1LandingUsage(w http.ResponseWriter, r *http.Request) {
+	exits, err := db.ListAllLandingExits(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	out := make([]v1LandingExit, 0, len(exits))
+	for _, e := range exits {
+		out = append(out, v1LandingExit{
+			UserID: e.UserID, Host: e.Host, Port: e.Port, Protocol: e.Protocol,
+			Present: e.Present, UsedBytes: e.UsedBytes, UpdatedAt: e.UpdatedAt,
+		})
+	}
+	v1OK(w, out)
+}
+
 // v1Usage returns a one-shot billing snapshot: per-user rollup, per-node raw
 // traffic + rule counts, and cluster totals. Read scope suffices — it's pure
 // observability. Node traffic uses the raw per-node counter (the same figure

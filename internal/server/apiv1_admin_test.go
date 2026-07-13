@@ -311,3 +311,37 @@ func TestV1Usage(t *testing.T) {
 		t.Fatalf("user token usage: want 403, got %d", rec.Code)
 	}
 }
+
+func TestV1LandingUsage(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeRead) // read scope suffices
+	uid, _ := v1UserToken(t, d, 3, db.TokenScopeRead)
+	seedLandingExit(t, d, uid, "exit-a.example", 443, 0, 12345)
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "GET", "/api/v1/landing-usage", adminTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("landing-usage: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 || body.Data[0]["host"] != "exit-a.example" || body.Data[0]["used_bytes"] != float64(12345) {
+		t.Fatalf("unexpected rows: %+v", body.Data)
+	}
+	// The frozen contract is exactly 7 keys; private ledger fields must not leak.
+	for _, forbidden := range []string{"quota_bytes", "name", "name_override", "uri"} {
+		if _, leak := body.Data[0][forbidden]; leak {
+			t.Fatalf("%q must not serialize on the public surface", forbidden)
+		}
+	}
+	// A user-scoped token is rejected from the admin group.
+	uTokUID, uTok := v1UserToken(t, d, 3, db.TokenScopeRead)
+	_ = uTokUID
+	if rec := v1Do(t, s, "GET", "/api/v1/landing-usage", uTok, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("user token on admin endpoint: want 403, got %d", rec.Code)
+	}
+}

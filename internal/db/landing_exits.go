@@ -169,6 +169,13 @@ func ListUserLandingExits(d *sql.DB, userID int64) ([]*LandingExit, error) {
 		scanLandingExit, userID)
 }
 
+// ListAllLandingExits returns every user's landing-exit ledger row, present or
+// not, so the public API can expose a cluster-wide landing usage snapshot.
+func ListAllLandingExits(d *sql.DB) ([]*LandingExit, error) {
+	return queryAll(d, `SELECT `+landingExitCols+` FROM user_landing_exits ORDER BY user_id, present DESC, name, host, port`,
+		scanLandingExit)
+}
+
 // PresentLandingExitsForUser returns only the rows that drive classification,
 // metering and push exclusion.
 func PresentLandingExitsForUser(d *sql.DB, userID int64) ([]*LandingExit, error) {
