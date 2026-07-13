@@ -311,3 +311,110 @@ func TestV1Usage(t *testing.T) {
 		t.Fatalf("user token usage: want 403, got %d", rec.Code)
 	}
 }
+
+func TestV1LandingUsage(t *testing.T) {
+	d := openDB(t)
+	_, adminTok := v1AdminToken(t, d, db.TokenScopeRead) // read scope suffices
+	uid, _ := v1UserToken(t, d, 3, db.TokenScopeRead)
+	seedLandingExit(t, d, uid, "exit-a.example", 443, 0, 12345)
+	s, _ := New(d)
+
+	rec := v1Do(t, s, "GET", "/api/v1/landing-usage", adminTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("landing-usage: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 || body.Data[0]["host"] != "exit-a.example" || body.Data[0]["used_bytes"] != float64(12345) {
+		t.Fatalf("unexpected rows: %+v", body.Data)
+	}
+	// The frozen contract is exactly 7 keys; private ledger fields must not leak.
+	for _, forbidden := range []string{"quota_bytes", "name", "name_override", "uri"} {
+		if _, leak := body.Data[0][forbidden]; leak {
+			t.Fatalf("%q must not serialize on the public surface", forbidden)
+		}
+	}
+	// A user-scoped token is rejected from the admin group.
+	uTokUID, uTok := v1UserToken(t, d, 3, db.TokenScopeRead)
+	_ = uTokUID
+	if rec := v1Do(t, s, "GET", "/api/v1/landing-usage", uTok, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("user token on admin endpoint: want 403, got %d", rec.Code)
+	}
+}
+
+func TestV1AdminSetLandingSubURL(t *testing.T) {
+	d := openDB(t)
+	adminID, adminTok := v1AdminToken(t, d, db.TokenScopeReadWrite)
+	_ = adminID
+	target, _ := v1UserToken(t, d, 5, db.TokenScopeRead)
+	// Seed a manual URI to prove a sub-url-only write never clobbers it.
+	if _, err := d.Exec(`UPDATE users SET landing_uris='trojan://x@a.com:443' WHERE id=?`, target); err != nil {
+		t.Fatal(err)
+	}
+	// A ledger-bearing exit that must flip to present=0 once the source changes.
+	seedLandingExit(t, d, target, "old-exit.example", 443, 0, 999)
+	s, _ := New(d)
+
+	// set: 200 + persisted, manual URIs preserved
+	rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/landing-sub-url", target), adminTok,
+		map[string]any{"landing_sub_url": "https://sub.example/u/abc"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", rec.Code, rec.Body.String())
+	}
+	u, _ := db.GetUserByID(d, target)
+	if u.LandingSubURL != "https://sub.example/u/abc" {
+		t.Fatalf("sub url not applied: %q", u.LandingSubURL)
+	}
+	if u.LandingURIs != "trojan://x@a.com:443" {
+		t.Fatalf("manual URIs clobbered: %q", u.LandingURIs)
+	}
+
+	// idempotent replay
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/landing-sub-url", target), adminTok,
+		map[string]any{"landing_sub_url": "https://sub.example/u/abc"}); rec.Code != http.StatusOK {
+		t.Fatalf("replay: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// bad scheme -> 400 validation
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/landing-sub-url", target), adminTok,
+		map[string]any{"landing_sub_url": "ftp://nope"}); rec.Code != http.StatusBadRequest || v1ErrCode(t, rec) != codeValidation {
+		t.Fatalf("bad scheme: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// empty clears the subscription source; manual URIs remain so the ledger
+	// rematerializes against them and the stale exit flips present=0.
+	if rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/landing-sub-url", target), adminTok,
+		map[string]any{"landing_sub_url": ""}); rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if u, _ = db.GetUserByID(d, target); u.LandingSubURL != "" {
+		t.Fatalf("clear failed: %q", u.LandingSubURL)
+	}
+	var present int
+	d.QueryRow(`SELECT present FROM user_landing_exits WHERE user_id=? AND host='old-exit.example'`, target).Scan(&present)
+	if present != 0 {
+		t.Fatal("ledger-bearing stale exit must flip to present=0 after source change")
+	}
+
+	// missing user -> 404
+	if rec := v1Do(t, s, "PUT", "/api/v1/users/99999/landing-sub-url", adminTok,
+		map[string]any{"landing_sub_url": ""}); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing user: want 404, got %d", rec.Code)
+	}
+}
+
+func TestV1LandingSubURLScopeGate(t *testing.T) {
+	d := openDB(t)
+	_, roTok := v1AdminToken(t, d, db.TokenScopeRead)
+	target, _ := v1UserToken(t, d, 6, db.TokenScopeRead)
+	s, _ := New(d)
+	rec := v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/landing-sub-url", target), roTok,
+		map[string]any{"landing_sub_url": ""})
+	if rec.Code != http.StatusForbidden || v1ErrCode(t, rec) != codeScopeRequired {
+		t.Fatalf("read-scope write must 403 scope_required, got %d %s", rec.Code, rec.Body.String())
+	}
+}

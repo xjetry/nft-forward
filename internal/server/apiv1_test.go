@@ -365,7 +365,7 @@ func TestV1AdminReads(t *testing.T) {
 	grantedNode(t, d, "seen", uid, 5)
 	s, _ := New(d)
 
-	for _, path := range []string{"/api/v1/nodes", "/api/v1/users", "/api/v1/dashboard"} {
+	for _, path := range []string{"/api/v1/nodes", "/api/v1/users", "/api/v1/dashboard", "/api/v1/landing-usage"} {
 		rec := v1Do(t, s, "GET", path, adminTok, nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: want 200, got %d body=%s", path, rec.Code, rec.Body.String())

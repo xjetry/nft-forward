@@ -30,3 +30,6 @@ coverage.out
 web/node_modules/
 web/dist/
 .claude/worktrees/
+
+# superpowers SDD scratch
+.superpowers/

@@ -310,6 +310,14 @@ paths:
         "200": { description: "按用户/按节点的用量汇总与集群总量" }
         "403": { description: 非 admin 角色, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+  /landing-usage:
+    get:
+      summary: 全用户落地出口用量台账快照
+      description: admin 角色、read scope 即可。每行恰含 user_id/host/port/protocol/present/used_bytes/updated_at。
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: 台账行数组 }
+
   /users/{id}/token:
     parameters:
       - { name: id, in: path, required: true, schema: { type: integer } }
@@ -478,6 +486,25 @@ paths:
                 rate_limit_mbytes: { type: integer, description: MB/s，0 表示不限速 }
       responses:
         "200": { description: 更新结果 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /users/{id}/landing-sub-url:
+    put:
+      summary: 设置或清除用户的落地订阅地址
+      description: admin 角色、readwrite scope。空串清除订阅源;手动 URIs 不受影响;写入后立即重物化落地台账。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                landing_sub_url: { type: string }
+      responses:
+        "200": { description: 更新结果 }
+        "400": { description: 订阅地址格式错误, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /grants/batch-apply:
