@@ -115,7 +115,7 @@ function LandingList({ data }) {
                           <span className="text-ink-mut">—</span>
                         )}
                       </td>
-                      <td className="num"><CopyText text={node.uri}>复制链接</CopyText></td>
+                      <td className="num"><CopyText text={node.uri} label={`复制链接：${node.name}`}>复制链接</CopyText></td>
                     </tr>
                   )
                 })}

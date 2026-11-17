@@ -311,6 +311,13 @@
   /* 数值列右对齐：表头与单元格用同一个类，保证列标题和数据对齐在同一条边上。 */
   .tbl .num { text-align: right; }
 
+  /* 表格的滚动容器（TableScroll / TableBox）同时是它内容的包含块。表格里
+     有绝对定位的元素 —— 复制按钮里只读给读屏软件的状态文字是 sr-only，
+     即 position: absolute。绝对定位元素只受“包含块及其后代”的裁剪：没有
+     定位的祖先时它的包含块是整个页面，这个容器裁不到它，窄屏下表格横向
+     滚出去的那一截就会把整页撑出横向滚动条。 */
+  .table-scroll { position: relative; }
+
   /* 只有在局部滚动容器（TableScroll / TableBox）里表头才吸顶；跟着整页
      滚动的裸表格不需要浮动表头。border-collapse: separate 下单元格自己的
      下边框会跟着吸顶，不需要额外的 box-shadow 画线。 */

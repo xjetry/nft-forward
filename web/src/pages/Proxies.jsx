@@ -176,7 +176,7 @@ export default function Proxies() {
                           </td>
                           <td><Tag mono>{p.protocol}</Tag></td>
                           <td className="font-mono"><SensText blurred={blurred}>{p.address}</SensText></td>
-                          <td className="num"><CopyText text={text}>{label}</CopyText></td>
+                          <td className="num"><CopyText text={text} label={`${label}：${p.exportName}`}>{label}</CopyText></td>
                         </tr>
                       )
                     })}
