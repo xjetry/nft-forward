@@ -119,7 +119,7 @@ type agentPeer struct {
 	node *db.Node
 	// origin 写进 nodes.address，供页面显示这条连接的来源。
 	origin string
-	// observedIP 是面板在这条连接上观察到的对端网络地址，作为回填数据面地址
+	// observedIP 是面板在这条连接上观察到的对端网络地址，作为回填中继地址
 	// （relay_host）的候选。没有网络地址的连接（本机入口）留空，回填就只用 agent
 	// 自己探测到的出口地址。
 	observedIP string

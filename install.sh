@@ -298,9 +298,9 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
 选项 / 环境变量:
   --panel-url URL  (PANEL_URL)    agent 连向的 panel 地址（http(s)://… 或 ws(s)://…）
   --token TOKEN    (AGENT_TOKEN)   agent bearer token（agent 模式必填）
-  --port-range R                   agent 占用的中继端口范围，格式 START-END（默认 10001-20000）
-  --relay-host HOST                agent 数据面 IPv4 地址/域名声明，覆盖面板自动识别（双出口中转机场景）
-  --relay-host-v6 HOST             agent 数据面 IPv6 地址声明，覆盖面板自动识别
+  --port-range R                   agent 给规则分配监听端口的范围，格式 START-END（默认 10001-20000）
+  --relay-host HOST                声明 agent 的中继地址（IPv4 或域名），覆盖面板自动识别（双出口机器用）
+  --relay-host-v6 HOST             声明 agent 的 IPv6 中继地址，覆盖面板自动识别
   --addr ADDR      (PANEL_ADDR)    server 监听地址；默认 :7788
   --release VER    (NFTF_RELEASE)  GitHub release tag，默认 latest
   --gh-proxy PFX   (NFTF_GH_PROXY) GitHub 镜像前缀（如 https://gh-proxy.com/）；

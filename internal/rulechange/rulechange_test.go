@@ -52,7 +52,7 @@ func (f *fixture) reload(id int64) *db.User {
 	return u
 }
 
-// node 建一台有数据面地址的物理节点。
+// node 建一台有中继地址的物理节点。
 func (f *fixture) node(name string) int64 {
 	f.t.Helper()
 	f.n++

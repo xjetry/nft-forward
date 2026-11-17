@@ -5,7 +5,7 @@ import { RulesListPage } from '../../components/RulesTable'
 import { Button, IconX, Select } from '../../components/ui'
 
 /* 绑定关系是全局的一张图（不按规则的所有者划分），随规则列表一起取：创建 /
-   编辑表单的线路层级联要用它。两个请求任一失败，整页按加载失败处理。 */
+   编辑表单的中转层级联要用它。两个请求任一失败，整页按加载失败处理。 */
 async function loadRules() {
   const [list, graph] = await Promise.all([api.get('/rules'), api.get('/node-bindings')])
   return {

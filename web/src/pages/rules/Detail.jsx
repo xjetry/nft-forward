@@ -24,7 +24,7 @@ export default function RulesDetail() {
   // 列表页进入详情时带来它当时的搜索与筛选；返回与删除后都回到那个列表。
   const backTo = `/rules${location.state?.rulesQuery || ''}`
 
-  // 绑定关系是全局的一张图，编辑表单的线路层级联要用它，随规则一起取。
+  // 绑定关系是全局的一张图，编辑表单的中转层级联要用它，随规则一起取。
   const { resource, reload } = useRulesWithCatalog(user, async () => {
     const [detail, graph] = await Promise.all([api.get(`/rules/${id}`), api.get('/node-bindings')])
     return { ...detail, bindings: graph.bindings || [] }

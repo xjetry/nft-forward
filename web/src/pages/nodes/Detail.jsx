@@ -500,7 +500,7 @@ function ConfigCard({ node, reload }) {
             <SettingForm
               label="IPv6 中继地址"
               mono
-              placeholder="数据面的公网 IPv6 地址"
+              placeholder="公网 IPv6 地址"
               saved={node.relay_host_v6 || ''}
               locked={!!node.relay_host_v6_declared}
               hint={node.relay_host_v6_declared
@@ -548,7 +548,7 @@ function ConfigCard({ node, reload }) {
             上报流量的成员节点自己的设置，能否作链尾取最后一个成员节点的设置（服务端
             也拒绝在组合节点上写这两项）。 */}
         {!composite && (
-          <Field label="直接转发" hint="禁止后本节点不能作为链路的最后一跳直连目标，规则必须在它后面再接线路；只影响之后新建或编辑的规则。">
+          <Field label="直接转发" hint="禁止后本节点不能作为链路的最后一跳直连目标，规则必须在它后面再接一层中转；只影响之后新建或编辑的规则。">
             <div className="flex">
               <Segmented
                 value={node.no_direct_exit ? 'deny' : 'allow'}

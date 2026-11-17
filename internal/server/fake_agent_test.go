@@ -179,7 +179,7 @@ func connectFakeAgent(t *testing.T, url string, hello wsproto.Hello, configure f
 		}
 	}()
 
-	// hello_ack 之后面板还要把这次握手带来的状态落库（在线标记、数据面地址、端口范围，
+	// hello_ack 之后面板还要把这次握手带来的状态落库（在线标记、中继地址、端口范围，
 	// 见 Hub.serveAgent），然后才在同一个协程里进读循环。pong 由读循环应答
 	// （Hub.readerLoop），所以收到它就说明那些写入都已完成：调用方拿到返回值后可以
 	// 直接读库断言，不必各自等待。

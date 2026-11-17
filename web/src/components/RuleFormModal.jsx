@@ -25,7 +25,7 @@ export const RULE_SCOPES = {
 /* 表单状态的形状（ruleToForm 产出，ruleFormToPayload 消费）：
      name / proto / mode / comment   字符串
      node_id        入口节点 id（数字），未选时为 null
-     via_node_ids   线路层节点 id（数字）的有序数组
+     via_node_ids   中转层节点 id（数字）的有序数组
      entry_port     输入框里的文本，'' 表示自动分配
      exit           可辨识联合：
                       { kind: 'custom', address }   手填的 host:port
@@ -91,9 +91,9 @@ export function copyInitial(rule, landingByKey) {
    新增字段不会在某一个调用点漏掉。
    - 表单里的 mode 是出口那条腿的模式，以 exit_mode 发出。请求体没有顶层的 mode
      字段，带了它服务端回 400。
-   - via_node_ids 总是发出：表单持有整条链路，空数组表示“清空线路层”，而
+   - via_node_ids 总是发出：表单持有整条链路，空数组表示“清空中转层”，而
      不是“保持不变”。
-   - 不发 entry_family：服务端按入口节点的中转地址推导。 */
+   - 不发 entry_family：服务端按入口节点的中继地址推导。 */
 export function ruleFormToPayload(form) {
   return {
     node_id: form.node_id,
@@ -121,9 +121,9 @@ function nodeLabel(n, showRate) {
 }
 
 /**
- * 由表单里的入口与线路层选择，推导出级联选择器要画的每一级。
+ * 由表单里的入口与中转层选择，推导出级联选择器要画的每一级。
  *
- * 第 i 级线路层的候选 = 绑定图里上一级（第 0 级的上一级是入口）的下游，再
+ * 第 i 级中转层的候选 = 绑定图里上一级（第 0 级的上一级是入口）的下游，再
  * 限定为：在 nodes 里（用户侧的 nodes 已经是授权范围内的节点）、有中转
  * 用途、不是入口本身、也不在已选的链上。没有 roles 字段的节点按“不能做中转”
  * 处理 —— 与入口的缺省相反：一个没有声明用途的节点不应当悄悄变成可选的
@@ -133,7 +133,7 @@ function nodeLabel(n, showRate) {
  *
  * 返回：
  *   entry    入口节点（未选或不在 nodes 里时为 undefined）
- *   ids      界面上画出来的线路层 id —— via_node_ids 里仍在 nodes 中的那些。
+ *   ids      界面上画出来的中转层 id —— via_node_ids 里仍在 nodes 中的那些。
  *            选择与提交都以它为准，画出来的链与提交的链因此是同一条
  *   levels   [{ level, candidates, chosen, mustVia }]；mustVia 表示上一级不
  *            允许直接转发到出口，这一级没有“直接转发”选项
@@ -175,11 +175,11 @@ function deriveChain(form, nodes, bindings) {
   if (tail?.no_direct_exit) {
     const open = levels.length && levels[levels.length - 1].chosen === undefined ? levels[levels.length - 1] : null
     issue = open
-      ? { at: open.level, pending: true, message: `「${tail.name}」不能直接转发到出口，请选择线路层。` }
+      ? { at: open.level, pending: true, message: `「${tail.name}」不能直接转发到出口，请选择中转层。` }
       : {
         at: ids.length ? ids.length - 1 : 'entry',
         pending: false,
-        message: `「${tail.name}」不能直接转发到出口，它后面也没有可选的线路层。请改选其它节点。`,
+        message: `「${tail.name}」不能直接转发到出口，它后面也没有可选的中转层。请改选其它节点。`,
       }
   }
   return { byId, entry, ids, levels, tail, issue }
@@ -209,7 +209,7 @@ function validate(form, chain) {
 
 const PROTO_OPTIONS = [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'tcp+udp', label: 'TCP+UDP' }]
 const MODE_OPTIONS = [{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]
-/* 线路层下拉里“这一级不接线路层、直接转发到出口”那个选项的值。 */
+/* 中转层下拉里“这一级不接中转层、直接转发到出口”那个选项的值。 */
 const DIRECT = 'direct'
 const EXIT_KIND_OPTIONS = [{ value: 'custom', label: '自定义地址' }, { value: 'landing', label: '落地节点' }]
 
@@ -247,8 +247,8 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
   const errors = validate(form, chain)
   const shown = attempted ? errors : {}
 
-  // 换入口会让已选的线路层失效：它们是旧入口在绑定图上的下游。Select 在点击
-  // 已选中的选项时也会触发 onChange，所以先比较 —— 重选同一个入口不清空线路层。
+  // 换入口会让已选的中转层失效：它们是旧入口在绑定图上的下游。Select 在点击
+  // 已选中的选项时也会触发 onChange，所以先比较 —— 重选同一个入口不清空中转层。
   const pickEntry = (id) => setForm(f => (id === f.node_id ? f : { ...f, node_id: id, via_node_ids: [] }))
   // 从 chain.ids（画出来的链）截断再追加，而不是从 via_node_ids 原值：两者在
   // 有节点已不在 nodes 里时下标对不上。
@@ -324,7 +324,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
     ? [...memberNames(chain.byId, chain.entry?.id), ...chain.ids.flatMap(id => memberNames(chain.byId, id)), '出口'].join(' → ')
     : null
   // 模式作用于出口那条腿（最后一跳 → 出口）。链路只有一个单点节点时它就是整条
-  // 规则的模式；有组合节点或线路层时，节点之间各跳的模式由节点配置决定。
+  // 规则的模式；有组合节点或中转层时，节点之间各跳的模式由节点配置决定。
   const multiHop = chain.tail?.node_type === 'composite' || chain.ids.length > 0
 
   const target = exitTarget(form.exit)
@@ -363,14 +363,14 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
         {chain.levels.map(({ level, candidates, chosen, mustVia }) => (
           <Field
             key={level}
-            label={level === 0 ? '线路层' : `线路层 ${level + 1}`}
+            label={level === 0 ? '中转层' : `中转层 ${level + 1}`}
             hint={issueAt(level)?.message}
             error={chainError(level)}
           >
             <Select
               value={chosen ?? (mustVia ? null : DIRECT)}
               onChange={id => pickVia(level, id)}
-              placeholder="选择线路层"
+              placeholder="选择中转层"
               options={[...(mustVia ? [] : [{ value: DIRECT, label: '直接转发' }]), ...candidates.map(option)]}
             />
           </Field>

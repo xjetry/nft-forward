@@ -961,7 +961,7 @@ func (c *Changes) regenerate(rl *db.Rule, inputs []db.HopInput, avoid map[int64]
 }
 
 // regenerateRefused 给 db.RegenerateRule 的错误分类。db.ChainError 说的是这条链按要求
-// 搭不出来（节点缺数据面地址、要的端口用不了……），要改的是请求或节点的配置：同一个
+// 搭不出来（节点缺中继地址、要的端口用不了……），要改的是请求或节点的配置：同一个
 // 物理节点在链上出现两次是发起方选的入口与中转层互相冲突，算 Conflict，其余算
 // Invalid。不是 ChainError 的错误是语句没执行成，与这条链对不对无关，算 Internal——
 // 按 Invalid 回给发起方，是让他去改一条没有问题的规则。

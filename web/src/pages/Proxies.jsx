@@ -15,7 +15,7 @@ import { Button, Card, CopyText, Empty, IconCopy, Segmented, SensText, Tag, Text
 /* 把规则与目录推导成“可以导入客户端的代理”。
    - 直连：目录的 direct（生效标记含“直连”的节点，目录已按地址去重），
      客户端连的就是节点自己的地址。
-   - 中转：出口是落地节点的规则。客户端连的是规则的入口，所以地址取规则
+   - 中继：出口是落地节点的规则。客户端连的是规则的入口，所以地址取规则
      入口，链接取 relayFor 把落地节点链接的端点换成入口之后的结果。双栈
      规则有两个入口，各算一条。
 
@@ -98,14 +98,14 @@ export default function Proxies() {
       return (
         <Empty
           title="还没有可以导入客户端的代理"
-          desc="在概览页“我添加的节点”里添加节点：标记为“直连”的会直接出现在这里；标记为“落地”的，被某条规则选作出口后，这里会多出一条经该规则中转的代理。"
+          desc="在概览页“我添加的节点”里添加节点：标记为“直连”的会直接出现在这里；标记为“落地”的，被某条规则选作出口后，这里会多出一条经该规则入口中继的代理。"
         >
           <Button to={overviewPath}>去概览页添加</Button>
         </Empty>
       )
     }
     if (q) return <Empty title="没有匹配的代理" desc="换一个关键词，或切换连接方式。" />
-    if (kind === 'relay') return <Empty title="还没有中转代理" desc="把一条规则的出口设为落地节点后，这里会出现经该规则入口中转的代理。" />
+    if (kind === 'relay') return <Empty title="还没有中继代理" desc="把一条规则的出口设为落地节点后，这里会出现经该规则入口中继的代理。" />
     return <Empty title="还没有直连代理" desc="在概览页“我添加的节点”里把节点标记为“直连”，它就会出现在这里。" />
   }
 
@@ -115,7 +115,7 @@ export default function Proxies() {
         title="我的代理"
         meta={<>
           {ready && <span>共 {proxies.length} 个</span>}
-          <span>可以直接导入客户端的代理：标记为“直连”的节点，以及出口是落地节点的规则所提供的中转入口。</span>
+          <span>可以直接导入客户端的代理：标记为“直连”的节点，以及出口是落地节点的规则所提供的中继入口。</span>
         </>}
         actions={ready && proxies.length > 0 && (
           <Button
@@ -141,7 +141,7 @@ export default function Proxies() {
                 options={[
                   { value: 'all', label: '全部', count: proxies.length },
                   { value: 'direct', label: '直连', count: countOf('direct') },
-                  { value: 'relay', label: '中转', count: countOf('relay') },
+                  { value: 'relay', label: '中继', count: countOf('relay') },
                 ]}
               />
             </Toolbar>
@@ -165,7 +165,7 @@ export default function Proxies() {
                           <td className="font-medium">{p.name || '未命名'}</td>
                           <td>
                             <span className="inline-flex items-center gap-2">
-                              <Tag>{p.kind === 'relay' ? '中转' : '直连'}</Tag>
+                              <Tag>{p.kind === 'relay' ? '中继' : '直连'}</Tag>
                               {p.rule && (
                                 <span className="text-ink-soft">
                                   经规则{' '}

@@ -32,7 +32,7 @@ import {
  * 规则页面的数据：页面自己的规则数据（fetcher）加上当前用户的落地节点目录，
  * 并成一个资源。
  *
- * 两者到齐才算就绪：出口是否显示成落地节点、有没有中转链接、编辑表单按
+ * 两者到齐才算就绪：出口是否显示成落地节点、有没有中继链接、编辑表单按
  * 哪种出口预填，都要对照目录才能得出。
  *
  * @param {{ id: number, role: string }} user
@@ -61,7 +61,7 @@ export function useRulesWithCatalog(user, fetcher, deps) {
  * 服务端在规则还没有入口时把 entry 填成占位符 “—”（internal/server/shared.go
  * 的 buildRuleView），它不是地址：不能复制给客户端，也不该参与搜索。这里
  * 只认能解析成 host:port 的值，用的是 lib/landing.js 的 relayFor 判断“入口
- * 能否用来改写中转链接”的同一个 splitEndpoint，两处对“有没有入口”的结论
+ * 能否用来改写中继链接”的同一个 splitEndpoint，两处对“有没有入口”的结论
  * 因此一致。
  *
  * @returns {{ primary: string | null, v6: string | null }} v6 只在双栈规则上有值。
@@ -76,14 +76,14 @@ function exitAddress(rule) {
   return rule.exit_host && rule.exit_port ? hostPortKey(rule.exit_host, rule.exit_port) : ''
 }
 
-/* 复制中转链接时写进剪贴板的文本：复制格式选了 YAML、且这条链接能转成
+/* 复制中继链接时写进剪贴板的文本：复制格式选了 YAML、且这条链接能转成
    Clash 配置时是 YAML，否则是链接本身。YAML 里的名称用 relayExportName，
-   与“我的代理”页导出同一条中转时的名称一致。 */
+   与“我的代理”页导出同一条中继链接时的名称一致。 */
 function relayCopyText({ uri, name }, copyFmt) {
   return (copyFmt === 'yaml' && uriToClashYaml(uri, name)) || uri
 }
 
-/** 规则的中转链接（出口是落地节点且规则有入口时才有）；双栈规则有两条。 */
+/** 规则的中继链接（出口是落地节点且规则有入口时才有）；双栈规则有两条。 */
 function relayLinks(rule) {
   const link = (uri, v6, family) => uri && { uri, family, name: relayExportName(rule.landing_name, rule.name, v6) }
   return [
@@ -470,7 +470,7 @@ function EntryLines({ row }) {
   )
 }
 
-/* 出口行。规则有中转链接时，点出口文字复制的是中转链接（双栈规则 v4 / v6
+/* 出口行。规则有中继链接时，点出口文字复制的是中继链接（双栈规则 v4 / v6
    各一行）；没有时只显示出口。 */
 function ExitLines({ rule, scope, blurred, copyFmt }) {
   const tag = <ExitKindTag kind={rule.exit_kind} protocol={rule.landing_protocol} />
@@ -511,7 +511,7 @@ function Endpoint({ label, tag, copyText, note, children }) {
 }
 
 /**
- * 详情页的“入口”卡片：客户端要填的入口地址，以及出口是落地节点时的中转
+ * 详情页的“入口”卡片：客户端要填的入口地址，以及出口是落地节点时的中继
  * 链接。规则还没有入口时显示空状态，不显示任何可复制的东西。
  *
  * @param {{ rule: object, entryNodeName?: string }} props `entryNodeName` 是
@@ -543,7 +543,7 @@ export function RuleEntryCard({ rule, entryNodeName }) {
             return (
               <Endpoint
                 key={family ?? 'single'}
-                label={family ? `中转链接 ${family}` : '中转链接'}
+                label={family ? `中继链接 ${family}` : '中继链接'}
                 copyText={copyText}
                 note={copyText !== uri ? '复制得到的是这条链接对应的 Clash YAML 配置。' : undefined}
               >
@@ -553,7 +553,7 @@ export function RuleEntryCard({ rule, entryNodeName }) {
           })}
         </CardSection>
       ) : (
-        <Empty title="还没有入口地址" desc="入口节点分配了端口并配置好中转地址之后，这里会显示可以填进客户端的地址。" />
+        <Empty title="还没有入口地址" desc="入口节点分配了端口并配置好中继地址之后，这里会显示可以填进客户端的地址。" />
       )}
     </Card>
   )

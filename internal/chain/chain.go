@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-// 转发模式。kernel 是内核 DNAT，userspace 是用户态中继。
+// 转发模式。kernel 是内核 DNAT，userspace 是用户态转发。
 const (
 	ModeKernel    = "kernel"
 	ModeUserspace = "userspace"
@@ -320,7 +320,7 @@ func (t Topology) CheckExit(hops []Hop) error {
 	if !ok || last.Seats&SeatExit != 0 {
 		return nil
 	}
-	return fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择线路层", last.Name)
+	return fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择中转层", last.Name)
 }
 
 // InterNodeLegMode 校验并归一组合成员或绑定边上配置的转发模式，即节点到节点的那
@@ -346,9 +346,9 @@ func InterNodeLegMode(raw string) (string, error) {
 //  1. 没指定的（空，或不是两种模式之一）按 kernel。Derive 推出来的链里，到这里还
 //     空着的只有出口那条腿：节点之间的腿取自组合成员与绑定边，两者入库时都已经
 //     InterNodeLegMode 落值。管理员直接给出的物理跳序列里，任何一跳都可能空着。
-//  2. udp 规则每一跳都是 kernel：用户态中继只转发 TCP。
+//  2. udp 规则每一跳都是 kernel：用户态转发只支持 TCP。
 //  3. entryOffersV6 为真时入口那一跳是 userspace。入口对外提供 IPv6 地址时，客户端
-//     从 v6 进来、往后走 v4，内核 DNAT 不能跨地址族，只有用户态中继接得住。调用方
+//     从 v6 进来、往后走 v4，内核 DNAT 不能跨地址族，只有用户态转发接得住。调用方
 //     只在“入口节点有 IPv6 地址且规则是纯 tcp”时传真，所以它与第 2 条不会同时
 //     生效。
 func EnforceModes(proto string, entryOffersV6 bool, modes []string) []string {

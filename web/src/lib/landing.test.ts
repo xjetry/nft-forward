@@ -85,7 +85,7 @@ test('目录：没有标记的节点既不是落地也不是直连', () => {
   assert.deepEqual([c.landing.length, c.direct.length], [0, 0])
 })
 
-test('中转 URI：IPv6 出口的规则能匹配到落地节点，端点换成规则入口', () => {
+test('中继 URI：IPv6 出口的规则能匹配到落地节点，端点换成规则入口', () => {
   const landing = node('2001:db8::1', 8443)
   const idx = landingIndex([landing])
   const rule = { exit_host: '2001:db8::1', exit_port: 8443, entry: '9.9.9.9:20001', entry_v6: '[2001:db8::9]:20001' }
@@ -98,7 +98,7 @@ test('中转 URI：IPv6 出口的规则能匹配到落地节点，端点换成�
   assert.equal(enriched.relay_uri_v6, 'vless://uuid@[2001:db8::9]:20001?x=1#n')
 })
 
-test('中转 URI：出口不是落地节点、或入口不是可解析的地址时，规则原样返回', () => {
+test('中继 URI：出口不是落地节点、或入口不是可解析的地址时，规则原样返回', () => {
   const idx = landingIndex([node('1.1.1.1', 443)])
   const other = { exit_host: '8.8.8.8', exit_port: 53, entry: '9.9.9.9:1' }
   assert.equal(relayFor(other, idx), null)
@@ -191,7 +191,7 @@ test('迁移可以重复执行：第二次不再改动', () => {
 
 /* ---------- 导出名称 ---------- */
 
-test('中转条目的导出名称由节点、规则、入口决定，与直连节点自己的名称不同', () => {
+test('中继条目的导出名称由节点、规则、入口决定，与直连节点自己的名称不同', () => {
   assert.equal(relayExportName('land-a', 'web'), 'land-a（经 web）')
   assert.equal(relayExportName('land-a', 'web', true), 'land-a（经 web v6）')
   const names = ['land-a', relayExportName('land-a', 'web'), relayExportName('land-a', 'web', true), relayExportName('land-a', 'db')]

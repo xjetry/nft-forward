@@ -207,19 +207,19 @@ func TestProbeReachesSelfNode(t *testing.T) {
 	}
 }
 
-// 本机连接没有网络地址，不能拿“对端地址”去回填数据面地址（回环或 socket 名都不是
+// 本机连接没有网络地址，不能拿“对端地址”去回填中继地址（回环或 socket 名都不是
 // 别的节点能连到的地址）；回填用 agent 自己探测到的出口地址。页面上的连接来源如实
 // 显示为本机。
 func TestLocalAgentRelayHostComesFromProbedAddress(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	if e.self.RelayHost != "" {
-		t.Fatalf("前置条件：self 节点的数据面地址应为空，实际 %q", e.self.RelayHost)
+		t.Fatalf("前置条件：self 节点的中继地址应为空，实际 %q", e.self.RelayHost)
 	}
 	connectFakeAgent(t, wsURL(e.local), wsproto.Hello{OS: "linux", Arch: "amd64", ProbedV4: "203.0.113.7"}, nil)
 
 	n := e.selfNode(t)
 	if n.RelayHost != "203.0.113.7" {
-		t.Errorf("数据面地址应取 agent 自探测的 203.0.113.7，实际 %q", n.RelayHost)
+		t.Errorf("中继地址应取 agent 自探测的 203.0.113.7，实际 %q", n.RelayHost)
 	}
 	if n.Address != localAgentOrigin {
 		t.Errorf("连接来源应显示为 %q，实际 %q", localAgentOrigin, n.Address)

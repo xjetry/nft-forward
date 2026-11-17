@@ -8,7 +8,7 @@ import (
 )
 
 // 服务端权威校验：开启「禁止直接转发」的节点不能作为链尾（出口那条腿的发起者）。
-// 入口开启则必须选择线路层；链尾中转开启则其后必须再接一层。UI 隐藏
+// 入口开启则必须选择中转层；链尾中转开启则其后必须再接一层。UI 隐藏
 // 「直接转发」选项只是便利，绕过前端直接请求同样必须被拒绝。
 func TestNoDirectExitEnforced(t *testing.T) {
 	d := openDB(t)
@@ -31,7 +31,7 @@ func TestNoDirectExitEnforced(t *testing.T) {
 		t.Fatalf("direct exit on guarded entry: want 400, got %d %s", rec.Code, rec.Body.String())
 	}
 
-	// 入口开启开关、经线路层出口（链尾未开启）→ OK
+	// 入口开启开关、经中转层出口（链尾未开启）→ OK
 	if rec := createMyRuleVia(t, s, cookie, entry.ID, []int64{mid.ID}, "r-via"); rec.Code != http.StatusOK {
 		t.Fatalf("via chain: want 200, got %d %s", rec.Code, rec.Body.String())
 	}

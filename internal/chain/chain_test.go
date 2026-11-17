@@ -260,9 +260,9 @@ func TestDeriveRefusals(t *testing.T) {
 		{"中转层没有绑定到上一层", Request{Entry: 1, Vias: []int64{4}}, "中转 v2 未绑定到所选上游"},
 		// 绑定边有方向：3→4 存在，4→3 不存在。
 		{"绑定边不能反着用", Request{Entry: 1, Vias: []int64{3, 4, 3}}, "中转 v1 未绑定到所选上游"},
-		{"链尾的物理节点不许直接转发", Request{Entry: 2}, "节点 e2 禁止直接转发，必须在其后选择线路层"},
+		{"链尾的物理节点不许直接转发", Request{Entry: 2}, "节点 e2 禁止直接转发，必须在其后选择中转层"},
 		// 逻辑节点 CT 自己有链尾资格，但判定看的是它展开后的最后一台 e2。
-		{"组合收尾时看它的最后一个物理成员", Request{Entry: 1, Vias: []int64{12}}, "节点 e2 禁止直接转发，必须在其后选择线路层"},
+		{"组合收尾时看它的最后一个物理成员", Request{Entry: 1, Vias: []int64{12}}, "节点 e2 禁止直接转发，必须在其后选择中转层"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

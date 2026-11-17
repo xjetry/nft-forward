@@ -397,7 +397,7 @@ export function tryParseURI(uri) {
 /* ---------- 代理节点目录 ----------
 
    “有哪些落地节点 / 直连节点”由这一处推导，所有页面（规则表单的出口
-   选择、规则列表的中转 URI、落地节点页、我的代理页）消费同一份结果。
+   选择、规则列表的中继 URI、落地节点页、我的代理页）消费同一份结果。
    口径：
      全部节点 = 手动 URI ∪ 订阅缓存 ∪ 服务端分配；按 hostPortKey 去重，
                先出现的保留，所以用户自己的节点优先于分配的。
@@ -423,7 +423,7 @@ export function buildCatalog({ manual = [], sub = [], server = [], marks = {} })
 }
 
 /* 规则的出口若是目录里的落地节点，返回该节点以及“把节点 URI 的端点换成
-   规则入口”后的中转 URI（双栈规则另有一条 v6 的）；否则返回 null。 */
+   规则入口”后的中继 URI（双栈规则另有一条 v6 的）；否则返回 null。 */
 export function relayFor(rule, landingByKey) {
   if (!rule?.exit_host || !rule?.exit_port) return null
   const node = landingByKey.get(hostPortKey(rule.exit_host, rule.exit_port))
@@ -436,16 +436,16 @@ export function relayFor(rule, landingByKey) {
 }
 
 /* 导出成 Clash 配置时，名称就是代理的标识：mihomo 1.19.33 遇到同名代理会
-   拒绝整份配置（proxy … is the duplicate name）。而中转条目的链接是由落地
+   拒绝整份配置（proxy … is the duplicate name）。而中继条目的链接是由落地
    节点的链接改写端点得到的，链接里带的仍是落地节点的名称 —— 同一个节点
    既是直连节点、又被规则选作出口时，两条就同名。
 
-   所以中转条目导出时不用链接里的名称，用 relayExportName：它只由落地节点、
-   规则、是哪个入口决定，规则页与“我的代理”页复制同一条中转拿到的名称相同，
+   所以中继条目导出时不用链接里的名称，用 relayExportName：它只由落地节点、
+   规则、是哪个入口决定，规则页与“我的代理”页复制同一条中继条目拿到的名称相同，
    也不会与直连节点自己的名称相同。 */
 
 /**
- * 中转条目导出用的名称。
+ * 中继条目导出用的名称。
  * @param {string} nodeName 落地节点的名称
  * @param {string} ruleName 经过的规则
  * @param {boolean} [v6] 是不是规则的 v6 入口那一条
@@ -458,7 +458,7 @@ export function relayExportName(nodeName, ruleName, v6 = false) {
  * 让一组一起导出的名称互不相同：重复出现的名称从第二个起加序号。纯函数，
  * 结果只取决于名称与顺序，所以同一份列表每次导出的名称相同。
  *
- * relayExportName 已经把直连与中转、不同规则分开了，这里兜的是剩下的情形：
+ * relayExportName 已经把直连与中继、不同规则分开了，这里兜的是剩下的情形：
  * 两个节点本来就同名，或两条同名规则指向同一个落地节点。
  *
  * @param {string[]} names
@@ -474,7 +474,7 @@ export function exportNames(names) {
   })
 }
 
-/* 给规则补上落地出口的展示信息与中转 URI。出口不是落地节点、或规则还没有
+/* 给规则补上落地出口的展示信息与中继 URI。出口不是落地节点、或规则还没有
    入口可用于改写时，原样返回。 */
 export function enrichRule(rule, landingByKey) {
   const hit = relayFor(rule, landingByKey)

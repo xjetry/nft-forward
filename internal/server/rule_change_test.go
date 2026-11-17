@@ -27,7 +27,7 @@ func firstAdminID(t *testing.T, d *sql.DB) int64 {
 }
 
 // connectOwnedNode 建一台属主为 ownerID 的远程节点并让它的 agent 接入。v4 是它上报的出口
-// 地址，面板据此回填数据面地址；不同节点要给不同的值。
+// 地址，面板据此回填中继地址；不同节点要给不同的值。
 func connectOwnedNode(t *testing.T, e *localAgentEnv, name string, ownerID int64, v4 string) (*db.Node, *fakeAgent) {
 	t.Helper()
 	n, err := db.CreateNode(e.d, name, "", "tok-"+name)
