@@ -26,7 +26,8 @@ type listener struct {
 	lim  atomic.Pointer[rate.Limiter]
 	// limDown mirrors lim for the upstream→client direction. Group-shaped
 	// rules point both at the same shared limiter (the cap is the combined
-	// two-way total); legacy per-rule caps leave it nil (download unshaped).
+	// two-way total); a rule shaped by its own per-rule cap leaves it nil
+	// (download unshaped).
 	limDown   atomic.Pointer[rate.Limiter]
 	bytesUp   atomic.Int64
 	bytesDown atomic.Int64

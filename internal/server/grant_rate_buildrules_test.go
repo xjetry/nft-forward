@@ -8,9 +8,8 @@ import (
 	"nft-forward/internal/nft"
 )
 
-// The grant's rate limit reaches the data plane: every rule priced by the
-// grant carries the shaping group + MB/s rate, plus the legacy Mbit mirror for
-// pre-group agents. Ownerless rules stay unshaped.
+// 授权上的限速要到数据面：按这份授权限速的每条规则都带着分组与额度（MB/s）。面板
+// 只用这两个字段表达限速，不填规则自己的 BandwidthMbps。没有属主的规则不限速。
 func TestGrantRateLimitPropagatesToRules(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 10)
@@ -36,9 +35,8 @@ func TestGrantRateLimitPropagatesToRules(t *testing.T) {
 			if r.ShapeGroup <= 0 || r.RateMBytes != 10 {
 				t.Errorf("owned rule shape = group %d rate %d, want positive group rate 10", r.ShapeGroup, r.RateMBytes)
 			}
-			// 10 MB/s (2^20 bytes) ≈ 84 Mbit/s for the legacy mirror.
-			if r.BandwidthMbps != 84 {
-				t.Errorf("legacy mirror = %d Mbit, want 84", r.BandwidthMbps)
+			if r.BandwidthMbps != 0 {
+				t.Errorf("面板不应填规则自己的限速，实际 BandwidthMbps = %d", r.BandwidthMbps)
 			}
 		case orphan:
 			foundOrphan = true

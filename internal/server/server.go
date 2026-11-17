@@ -309,9 +309,6 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
 				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, rh.ViaNodeID}]; ok {
 					rule.ShapeGroup = gs.GrantID
 					rule.RateMBytes = int(gs.RateLimitMBytes)
-					// Legacy mirror so pre-group agents still shape
-					// (per rule, approximate): MB/s (2^20 bytes) → Mbit/s.
-					rule.BandwidthMbps = int((gs.RateLimitMBytes*8388608 + 500000) / 1000000)
 				}
 			}
 		}

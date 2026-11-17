@@ -45,7 +45,8 @@ type Rule struct {
 	Comment string `json:"comment,omitempty"`
 	// BandwidthMbps 是这条规则自己的限速（Mbit/s），0 是不限。只有用户态转发读它，
 	// 而且只在规则没有带着分组与额度时（forward 的 setLimits）；内核数据面只按分组
-	// 整形，不读它。
+	// 整形，不读它。面板不填它：面板规则的限速只由 ShapeGroup 与 RateMBytes 表达
+	// （server 的 buildRules）。
 	BandwidthMbps int `json:"bandwidth_mbps,omitempty"`
 	// Mode selects the data plane for this forward: "" / "kernel" = nftables
 	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).

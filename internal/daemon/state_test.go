@@ -199,7 +199,7 @@ func TestSaveLoad_V4RoundTripUserspace(t *testing.T) {
 }
 
 // Standalone downgrade strips panel bindings. Group shaping is panel policy
-// (priced by a grant), so it is dropped too; the legacy per-rule cap survives
+// (priced by a grant), so it is dropped too; the rule's own per-rule cap survives
 // because it is self-contained.
 func TestDowngradePanelRuleStripsPanelState(t *testing.T) {
 	in := nft.Rule{
@@ -218,7 +218,7 @@ func TestDowngradePanelRuleStripsPanelState(t *testing.T) {
 		t.Fatalf("shape group fields must be cleared: %+v", out)
 	}
 	if out.BandwidthMbps != 84 {
-		t.Fatalf("legacy cap must survive downgrade, got %d", out.BandwidthMbps)
+		t.Fatalf("the rule's own cap must survive downgrade, got %d", out.BandwidthMbps)
 	}
 	if out.Proto != "tcp" || out.SrcPort != 443 || out.DestIP != "10.0.0.1" || out.DestPort != 8443 {
 		t.Fatalf("forwarding fields must survive: %+v", out)
