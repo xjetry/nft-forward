@@ -12,28 +12,39 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 	return err
 }
 
-// ResetAllUserTraffic zeroes the global traffic counter, all per-node counters,
-// the landing-exit ledger and the displayed per-rule hop totals for a user —
-// an admin reset promises a clean slate, so every number shown for the user
-// must drop to zero together. rule_hops.last_bytes* are deliberately kept:
-// they snapshot the agent's cumulative counters for delta computation, and
-// zeroing them would re-bill the full counter value on the next sample.
+// zeroUserLedgers 把一个用户名下的全部用量账本归零：全局已用量、各授权的已用量、
+// 落地出口账本、每条规则展示的累计流量。
+//
+// 这四样在页面上是同一个周期的用量，必须一起归零：只清前三样的话，规则上显示的
+// 累计流量会比用户的已用流量大，两个数对不上。“重置”只有这一份定义，管理员手动
+// 重置（ResetAllUserTraffic）与按周期自动重置（CheckAndResetTrafficCycle）都走这里，
+// 新增账本时加在这里，两种重置同时生效。
+//
+// rule_hops.last_bytes* 不在归零范围内：它们不是累计账本，而是最近一个计数样本的
+// 字节数（Hub 入账计数批次时整体覆盖写入），下一个样本到来就被替换。
+func zeroUserLedgers(tx *sql.Tx, userID int64) error {
+	for _, q := range []string{
+		`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`,
+		`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`,
+		`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`,
+		`UPDATE rule_hops SET total_bytes = 0 WHERE rule_id IN (SELECT id FROM rules WHERE owner_id = ?)`,
+	} {
+		if _, err := tx.Exec(q, userID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ResetAllUserTraffic 是管理员手动重置：把该用户的全部用量账本归零（范围见
+// zeroUserLedgers）。不动 last_traffic_reset_at，周期重置的节拍不受手动重置影响。
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE rule_hops SET total_bytes = 0 WHERE rule_id IN (SELECT id FROM rules WHERE owner_id = ?)`, userID); err != nil {
+	if err := zeroUserLedgers(tx, userID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -129,8 +140,8 @@ func SegmentFirstHops(d *sql.DB, ruleIDs []int64) (map[int64]map[int]int64, erro
 }
 
 // CheckAndResetTrafficCycle checks whether the user's traffic reset window has
-// elapsed since the last reset. If so, it zeros the global counter, all
-// per-node counters and the landing-exit ledger together and records the
+// elapsed since the last reset. If so, it zeroes every usage ledger of the user
+// (the same set a manual reset clears, see zeroUserLedgers) and records the
 // reset timestamp. Returns true if a reset occurred.
 //
 // traffic_reset_days == 0 means the user is never auto-reset.
@@ -159,13 +170,10 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0, last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
+	if err := zeroUserLedgers(tx, u.ID); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, u.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE users SET last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

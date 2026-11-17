@@ -70,7 +70,7 @@ func TestResetAllUserTrafficClearsRuleCounters(t *testing.T) {
 		t.Fatalf("user's rule counter should reset with the user ledgers, got %d", total)
 	}
 	if last != 777 {
-		t.Fatalf("last_bytes is the agent counter snapshot for delta computation and must survive a reset, got %d", last)
+		t.Fatalf("last_bytes is the latest counter sample, not a usage ledger, and a reset must leave it alone, got %d", last)
 	}
 	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs).Scan(&total); err != nil {
 		t.Fatal(err)
