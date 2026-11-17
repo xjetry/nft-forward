@@ -22,10 +22,12 @@ func ResetAdminPassword(d *sql.DB, username, newPw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}
-	if _, err := d.Exec(`UPDATE users SET pw_hash=?, disabled=0 WHERE id=?`, hash, u.ID); err != nil {
+	if err := db.SetPassword(d, u.ID, hash, ""); err != nil {
 		return "", fmt.Errorf("update password: %w", err)
 	}
-	_, _ = d.Exec(`DELETE FROM sessions WHERE user_id=?`, u.ID)
+	if _, err := d.Exec(`UPDATE users SET disabled=0 WHERE id=?`, u.ID); err != nil {
+		return "", fmt.Errorf("password reset and sessions invalidated, but clearing the disabled flag failed: %w", err)
+	}
 	db.WriteAudit(d, u.ID, "admin.reset_password_cli", username, "")
 	return fmt.Sprintf("password reset for %s (all sessions invalidated, disabled flag cleared)", username), nil
 }

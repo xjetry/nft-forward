@@ -1,6 +1,8 @@
 package server
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -90,11 +92,7 @@ func (s *Server) v1AdminMintUserToken(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败")
 		return
 	}
-	prefix := ""
-	if t, e := db.GetAPITokenByUser(s.DB, id); e == nil {
-		prefix = t.TokenPrefix
-	}
-	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": prefix, "rotated": rotated})
+	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": db.TokenPrefix(tok), "rotated": rotated})
 }
 
 // v1AdminGetUserToken returns token metadata (never the plaintext) so an admin
@@ -106,8 +104,12 @@ func (s *Server) v1AdminGetUserToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := db.GetAPITokenByUser(s.DB, id)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		v1OK(w, map[string]any{"has_token": false})
+		return
+	}
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
 		return
 	}
 	var lastUsed *int64
@@ -462,8 +464,15 @@ func (s *Server) v1LandingUsage(w http.ResponseWriter, r *http.Request) {
 // observability. Node traffic uses the raw per-node counter (the same figure
 // the admin aggregate view shows), not per-rule attribution.
 func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
-	users, _ := db.ListUsers(s.DB)
-	db.FillUserRuleCounts(s.DB, users)
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.FillUserRuleCounts(s.DB, users); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	userViews := make([]map[string]any, 0, len(users))
 	for _, u := range users {
 		var exp *int64
@@ -477,10 +486,25 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 			"rule_count": u.RuleCount, "expires_at": exp,
 		})
 	}
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
-	rawByNode, _ := db.NodeRawTraffic(s.DB)
-	rcByNode, _ := db.RuleCountByNode(s.DB)
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.ResolveCompositeOnline(s.DB, nodes); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	rawByNode, err := db.NodeRawTraffic(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	rcByNode, err := db.RuleCountByNode(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	online := 0
 	nodeViews := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
@@ -492,9 +516,21 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 			"rate_multiplier": n.RateMultiplier, "traffic_bytes": rawByNode[n.ID], "rule_count": rcByNode[n.ID],
 		})
 	}
-	userCount, _ := db.CountUsers(s.DB)
-	ruleCount, _ := db.CountAllRules(s.DB)
-	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
+	userCount, err := db.CountUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	ruleCount, err := db.CountAllRules(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	totalBytes, err := db.TotalRuleTrafficBytes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	v1OK(w, map[string]any{
 		"generated_at": time.Now().Unix(),
 		"totals": map[string]any{

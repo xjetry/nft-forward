@@ -16,9 +16,9 @@ func TestResolveLandingExitsManualOnly(t *testing.T) {
 	u, _ := db.GetUserByID(d, uid)
 	s, _ := New(d)
 
-	nodes, ok := s.resolveLandingExits(u, false)
-	if !ok || len(nodes) != 1 || nodes[0].Host != "1.2.3.4" {
-		t.Fatalf("manual-only resolution must succeed, ok=%v nodes=%+v", ok, nodes)
+	nodes, err := s.resolveLandingExits(u, false)
+	if err != nil || len(nodes) != 1 || nodes[0].Host != "1.2.3.4" {
+		t.Fatalf("manual-only resolution must succeed, err=%v nodes=%+v", err, nodes)
 	}
 }
 
@@ -32,8 +32,8 @@ func TestResolveLandingExitsSubFailure(t *testing.T) {
 	u, _ := db.GetUserByID(d, uid)
 	s, _ := New(d)
 
-	if _, ok := s.resolveLandingExits(u, true); ok {
-		t.Fatal("subscription fetch failure must report ok=false")
+	if _, err := s.resolveLandingExits(u, true); err == nil {
+		t.Fatal("subscription fetch failure must be reported as an error")
 	}
 }
 
@@ -44,9 +44,9 @@ func TestSyncLandingExitsMaterializes(t *testing.T) {
 	u, _ := db.GetUserByID(d, uid)
 	s, _ := New(d)
 
-	nodes, ok := s.resolveLandingExits(u, false)
-	if !ok {
-		t.Fatal("resolve")
+	nodes, err := s.resolveLandingExits(u, false)
+	if err != nil {
+		t.Fatal("resolve: ", err)
 	}
 	s.syncLandingExits(u, nodes)
 	exits, _ := db.ListUserLandingExits(d, uid)
@@ -141,7 +141,10 @@ func TestLandingIndexFromDB(t *testing.T) {
 	}, "", "")
 	s, _ := New(d)
 
-	idx := s.landingIndexFromDB(uid)
+	idx, err := s.landingIndexFromDB(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := idx["1.2.3.4:443"]; ok {
 		t.Fatal("absent exit must not be in the index")
 	}

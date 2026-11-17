@@ -118,19 +118,16 @@ func (s *Server) cycleResetEnforcer() {
 				if !reset {
 					continue
 				}
-				if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-					if err := db.SetUserDisabled(s.DB, u.ID, false, ""); err != nil {
-						log.Printf("cycle: re-enable user %d: %v", u.ID, err)
-						continue
-					}
-				}
 				// Quota exclusions are evaluated at push time only; a fresh
 				// cycle must re-push or suppressed rules stay dead.
-				if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
-					for _, n := range nodes {
-						if err := s.dispatchToNode(n); err != nil {
-							log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
-						}
+				nodes, err := db.DistinctUserNodes(s.DB, u.ID)
+				if err != nil {
+					log.Printf("cycle: user %d was reset but its nodes could not be listed for re-dispatch: %v", u.ID, err)
+					continue
+				}
+				for _, n := range nodes {
+					if err := s.dispatchToNode(n); err != nil {
+						log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
 					}
 				}
 			}
@@ -173,8 +170,9 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 		if !includeManualOnly && !hasDynamicSource(u) {
 			continue
 		}
-		nodes, ok := s.resolveLandingExits(u, false)
-		if !ok {
+		nodes, err := s.resolveLandingExits(u, false)
+		if err != nil {
+			log.Printf("landing: sync pass resolve user %d: %v", u.ID, err)
 			continue
 		}
 		s.syncLandingExits(u, nodes)
@@ -193,7 +191,7 @@ func (s *Server) enforceUserQuota(userID int64) {
 	if u.Disabled || u.TrafficQuotaBytes <= 0 || u.TrafficUsedBytes < u.TrafficQuotaBytes {
 		return
 	}
-	if err := db.SetUserDisabled(s.DB, userID, true, "流量超额"); err != nil {
+	if err := db.SetUserDisabled(s.DB, userID, true, db.DisableReasonOverQuota); err != nil {
 		log.Printf("quota: disable user %d: %v", userID, err)
 		return
 	}
@@ -255,19 +253,31 @@ func (s *Server) enforceExitQuota(userID int64) {
 // sync status: success stamps last_apply_at and clears last_error;
 // failure stamps last_error while preserving last_apply_at.
 func (s *Server) dispatchToNode(nodeID int64) error {
-	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
-	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
+	// The marks on the nodes row are what the panel shows about a dispatch;
+	// the dispatch's own outcome is what this function returns. A mark that
+	// cannot be stored is logged, so the row is not silently out of step.
+	fail := func(err error) error {
+		if merr := db.MarkNodeDispatchError(s.DB, nodeID, err.Error()); merr != nil {
+			log.Printf("dispatch node %d: record failure (%v): %v", nodeID, err, merr)
+		}
 		return err
 	}
-	rules := buildRules(s.DB, ruleHops)
+	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
+	if err != nil {
+		return fail(err)
+	}
+	rules, err := buildRules(s.DB, ruleHops)
+	if err != nil {
+		return fail(err)
+	}
 	rev := computeRev(rules)
 	warning, err := s.Dispatcher.Dispatch(nodeID, rules, rev)
 	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
-		return err
+		return fail(err)
 	}
-	_ = db.MarkNodeApplied(s.DB, nodeID, warning)
+	if err := db.MarkNodeApplied(s.DB, nodeID, warning); err != nil {
+		log.Printf("dispatch node %d: record success: %v", nodeID, err)
+	}
 	return nil
 }
 
@@ -280,7 +290,12 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 		log.Printf("dispatch node %d (%s): %v", nodeID, action, err)
 		return
 	}
-	if n, err := db.GetNode(s.DB, nodeID); err == nil && n.LastWarning != "" {
+	n, err := db.GetNode(s.DB, nodeID)
+	if err != nil {
+		log.Printf("dispatch node %d (%s): read back its warning: %v", nodeID, action, err)
+		return
+	}
+	if n.LastWarning != "" {
 		setFlash(w, fmt.Sprintf("%s 已保存，但 %s", action, n.LastWarning))
 	}
 }
@@ -334,14 +349,21 @@ func (s *Server) redispatchNodes(nodeIDs []int64) {
 // buildRules converts panel-side RuleHop rows into kernel-side nft.Rule
 // values. Lookup tables are preloaded in bulk so the conversion is
 // O(ruleHops) with no per-row queries.
-func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
-	ruleMap, _ := db.RulesByID(d)
-	if ruleMap == nil {
-		ruleMap = map[int64]*db.Rule{}
+//
+// A lookup table that fails to load fails the build. The result is what a
+// node is told to install, and each table supplies part of it: the rules give
+// a hop its rule id and name and lead to its owner, the users the owner's
+// name, the hop counts HopCount, the grant shapes the shaping group and rate.
+// Built with one of them empty, the ruleset would still list every hop, just
+// without that part.
+func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
+	ruleMap, err := db.RulesByID(d)
+	if err != nil {
+		return nil, err
 	}
-	users, _ := db.UsersByID(d)
-	if users == nil {
-		users = map[int64]*db.User{}
+	users, err := db.UsersByID(d)
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect distinct rule IDs for a single bulk hop-count query
@@ -353,11 +375,14 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	for id := range ruleIDSet {
 		ruleIDs = append(ruleIDs, id)
 	}
-	hopCounts, _ := db.RuleHopCounts(d, ruleIDs)
-	if hopCounts == nil {
-		hopCounts = map[int64]int{}
+	hopCounts, err := db.RuleHopCounts(d, ruleIDs)
+	if err != nil {
+		return nil, err
 	}
-	shapes, _ := db.GrantShapes(d)
+	shapes, err := db.GrantShapes(d)
+	if err != nil {
+		return nil, err
+	}
 
 	rules := make([]nft.Rule, 0, len(ruleHops))
 	for _, rh := range ruleHops {
@@ -395,7 +420,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 		}
 		rules = append(rules, rule)
 	}
-	return rules
+	return rules, nil
 }
 
 // computeRev returns a stable hash of the ruleset so a reconnecting

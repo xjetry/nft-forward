@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -217,8 +218,12 @@ func (s *Server) runProbeChain(ctx context.Context, ruleIDStr string) (probeResu
 	var tasks []probeTask
 	for i, h := range hops {
 		target := net.JoinHostPort(h.TargetHost, strconv.Itoa(h.TargetPort))
+		// The name only labels this hop in the result; a hop whose node
+		// cannot be read is still probed, under its id.
 		nodeName := fmt.Sprintf("#%d", h.NodeID)
-		if n, err := db.GetNode(s.DB, h.NodeID); err == nil {
+		if n, err := db.GetNode(s.DB, h.NodeID); err != nil {
+			log.Printf("probe chain: rule %d hop node %d: read name: %v", ruleID, h.NodeID, err)
+		} else {
 			nodeName = n.Name
 		}
 		tasks = append(tasks, probeTask{idx: i, nodeID: h.NodeID, name: nodeName, target: target, proto: probeProto(h.Proto)})

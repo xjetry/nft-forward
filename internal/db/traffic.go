@@ -12,12 +12,31 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 	return err
 }
 
+// DisableReasonOverQuota is the users.disable_reason recorded when a user is
+// disabled for reaching the traffic quota. It tells that ban apart from one an
+// admin set by hand, which a traffic reset must leave alone.
+const DisableReasonOverQuota = "流量超额"
+
+// liftOverQuotaBan re-enables a user who is disabled for reaching the quota.
+// It runs inside the transaction that zeroes the user's counters: the counters
+// are what the ban was about. A cycle reset in particular is detected once per
+// cycle (CheckAndResetTrafficCycle compares last_traffic_reset_at with the
+// cycle's start), so a ban left in place by a separate write that failed
+// would not be reconsidered until the next cycle begins.
+func liftOverQuotaBan(tx *sql.Tx, userID int64) error {
+	_, err := tx.Exec(`UPDATE users SET disabled=0, disable_reason='' WHERE id=? AND disabled=1 AND disable_reason=?`,
+		userID, DisableReasonOverQuota)
+	return err
+}
+
 // ResetAllUserTraffic zeroes the global traffic counter, all per-node counters,
 // the landing-exit ledger and the displayed per-rule hop totals for a user —
 // an admin reset promises a clean slate, so every number shown for the user
 // must drop to zero together. rule_hops.last_bytes* are deliberately kept:
 // they snapshot the agent's cumulative counters for delta computation, and
 // zeroing them would re-bill the full counter value on the next sample.
+//
+// The over-quota ban is lifted in the same transaction (liftOverQuotaBan).
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -25,6 +44,9 @@ func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
+		return err
+	}
+	if err := liftOverQuotaBan(tx, userID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, userID); err != nil {
@@ -133,6 +155,8 @@ func SegmentFirstHops(d *sql.DB, ruleIDs []int64) (map[int64]map[int]int64, erro
 // per-node counters and the landing-exit ledger together and records the
 // reset timestamp. Returns true if a reset occurred.
 //
+// The over-quota ban is lifted in the same transaction (liftOverQuotaBan).
+//
 // traffic_reset_days == 0 means the user is never auto-reset.
 // The window is anchored to the account creation date so the cycle boundary is
 // predictable (e.g. "every 30 days from account open date").
@@ -160,6 +184,9 @@ func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0, last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
+		return false, err
+	}
+	if err := liftOverQuotaBan(tx, u.ID); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {

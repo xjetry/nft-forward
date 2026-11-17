@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -184,10 +186,12 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// tokenPrefix returns the first 8 chars of a token for display, or the whole
+// TokenPrefix returns the first 8 chars of a plaintext API token, or the whole
 // token if shorter. It lets the UI show a recognizable prefix without keeping
-// the full plaintext at rest.
-func tokenPrefix(token string) string {
+// the full plaintext at rest. Every write of api_tokens.token_prefix goes
+// through it, so a caller holding the plaintext can derive the stored prefix
+// without reading it back.
+func TokenPrefix(token string) string {
 	if len(token) < 8 {
 		return token
 	}
@@ -198,7 +202,7 @@ func now() int64 { return time.Now().Unix() }
 
 // Users
 
-func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
+func CreateUser(d DBTX, username, pwHash, role string) (int64, error) {
 	res, err := d.Exec(`INSERT INTO users(username, pw_hash, role, created_at) VALUES (?,?,?,?)`,
 		username, pwHash, role, now())
 	if err != nil {
@@ -296,6 +300,36 @@ func GetSessionUser(d *sql.DB, token string) (*User, error) {
 		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, HashToken(token)))
 }
 
+// SetPassword stores a new password hash and ends the user's sessions in one
+// transaction, keeping only the session whose plaintext token is keepSession
+// (the session making the change; "" keeps none). The two belong together: a
+// password is changed to lock out whoever holds the old one, and if the hash
+// were written but the sessions survived, the caller would be told the
+// password changed while the old sessions kept working.
+//
+// sessions.token holds HashToken of the plaintext (CreateSession), so the
+// session to keep is matched in that form; compared as plaintext it would
+// match no row and the caller's own session would be ended with the rest.
+func SetPassword(d *sql.DB, userID int64, pwHash, keepSession string) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET pw_hash=? WHERE id=?`, pwHash, userID); err != nil {
+		return err
+	}
+	if keepSession == "" {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
+	} else {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=? AND token<>?`, userID, HashToken(keepSession))
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func DeleteSession(d *sql.DB, token string) error {
 	_, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, HashToken(token))
 	return err
@@ -338,7 +372,10 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
 	return GetNode(d, id)
 }
 
@@ -425,7 +462,11 @@ func ReorderNodes(d *sql.DB, ids []int64) error {
 // and not disabled), and offline if any child is offline or it has no children.
 // Composite nodes have no agent of their own, so their stored online column is
 // always 0 — this aggregation is the only source of truth for their status.
-func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
+//
+// A failed membership query is returned, not swallowed: left as they are, the
+// composites would read as offline, which is a statement about the nodes that
+// nothing has established.
+func ResolveCompositeOnline(d *sql.DB, nodes []*Node) error {
 	hasComposite := false
 	for _, n := range nodes {
 		if n.NodeType == "composite" {
@@ -434,24 +475,26 @@ func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
 		}
 	}
 	if !hasComposite {
-		return
+		return nil
 	}
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeOnline(nodes, hops)
+	return nil
 }
 
 // ResolveCompositeRelayStack fills each composite node's EntryRelayHost/
 // EntryRelayHostV6/ExitRelayHostV6 from its hop chain's first and last node —
 // see the Node struct's doc comment for why these aren't real columns.
-func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) {
+func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) error {
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeRelayStack(nodes, hops)
+	return nil
 }
 
 // maxCompositeResolveDepth caps recursion when flattening composite membership
@@ -528,12 +571,13 @@ func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 // throughput. See the design note (admin panel raw-traffic) for why this
 // approximation — the entry node's raw includes its other rules/composites too —
 // is acceptable at the display layer.
-func FillCompositeRawTraffic(d *sql.DB, nodes []*Node, raw map[int64]int64) {
+func FillCompositeRawTraffic(d *sql.DB, nodes []*Node, raw map[int64]int64) error {
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	fillCompositeRawTraffic(nodes, hops, raw)
+	return nil
 }
 
 // fillCompositeRawTraffic is the pure aggregation, split out so tests don't need
@@ -565,7 +609,7 @@ func fillCompositeRawTraffic(nodes []*Node, hops []*NodeHop, raw map[int64]int64
 // child nodes (resolved to name/type), so the UI can flatten a composite into
 // its physical chain. See the Node struct's doc comment for why Hops isn't a
 // real column.
-func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
+func ResolveCompositeHops(d *sql.DB, nodes []*Node) error {
 	hasComposite := false
 	for _, n := range nodes {
 		if n.NodeType == "composite" {
@@ -574,13 +618,14 @@ func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
 		}
 	}
 	if !hasComposite {
-		return
+		return nil
 	}
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeHops(nodes, hops)
+	return nil
 }
 
 // resolveCompositeHops is the pure aggregation, split out so tests don't need a
@@ -875,9 +920,16 @@ func ListRuleHopsByCompositeNode(d *sql.DB, compositeNodeID int64) ([]*RuleHop, 
 
 // Audit
 
+// WriteAudit records an action in the audit log. It returns nothing on
+// purpose: every caller writes the row after the action it describes has
+// already taken effect, so there is nothing left to undo and no reason to fail
+// the request. A row that could not be written is reported in the server log
+// instead, so that a gap in the audit trail is not silent.
 func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
-	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
-		userID, action, target, payload, now())
+	if _, err := d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
+		userID, action, target, payload, now()); err != nil {
+		log.Printf("audit: record %s (user %d, target %q): %v", action, userID, target, err)
+	}
 }
 
 // NodeIDsByNames resolves a slice of node names to their database IDs. Names
@@ -891,8 +943,11 @@ func NodeIDsByNames(d *sql.DB, names []string) (map[string]int64, error) {
 	for _, name := range names {
 		var id int64
 		err := d.QueryRow(`SELECT id FROM nodes WHERE name = ?`, name).Scan(&id)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		out[name] = id
 	}
@@ -915,9 +970,11 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 		return nil, err
 	}
 	// Set owner_id to first admin if not yet assigned.
-	_, _ = d.Exec(`UPDATE nodes SET owner_id = (
+	if _, err := d.Exec(`UPDATE nodes SET owner_id = (
 		SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1
-	) WHERE node_type = 'self' AND owner_id IS NULL`)
+	) WHERE node_type = 'self' AND owner_id IS NULL`); err != nil {
+		return nil, err
+	}
 	row := d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_type='self'`)
 	return scanNode(row)
 }

@@ -2,8 +2,10 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -24,8 +26,11 @@ type ruleView struct {
 	OwnerName   string
 }
 
-func (s *Server) buildRuleView(r *db.Rule) ruleView {
-	hops, _ := db.ListRuleHops(s.DB, r.ID)
+func (s *Server) buildRuleView(r *db.Rule) (ruleView, error) {
+	hops, err := db.ListRuleHops(s.DB, r.ID)
+	if err != nil {
+		return ruleView{}, err
+	}
 	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
 	entry, entryV6 := "—", ""
 	var entryNodeID int64
@@ -36,7 +41,14 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 	}
 	if len(hops) > 0 && r.EntryListenPort > 0 {
 		entryNodeID = hops[0].NodeID
-		if n, err := db.GetNode(s.DB, hops[0].NodeID); err == nil && n.RelayHost != "" {
+		n, err := db.GetNode(s.DB, hops[0].NodeID)
+		// A node deleted since the hops were listed has no address to show and
+		// keeps the "—" placeholder; any other failure is not an answer about
+		// the node and is returned.
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return ruleView{}, err
+		}
+		if err == nil && n.RelayHost != "" {
 			// EntryAddresses returns "" for a family whose relay address the
 			// node no longer carries; keep the "—" placeholder instead of
 			// rendering an empty host.
@@ -45,7 +57,7 @@ func (s *Server) buildRuleView(r *db.Rule) ruleView {
 			}
 		}
 	}
-	return ruleView{Rule: r, Entry: entry, EntryV6: entryV6, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode, ExitMode: exitMode}
+	return ruleView{Rule: r, Entry: entry, EntryV6: entryV6, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode, ExitMode: exitMode}, nil
 }
 
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
@@ -105,9 +117,12 @@ type nodeHopView struct {
 	NodeName string `json:"node_name"`
 }
 
-func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
-	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, EntryV6: v.EntryV6, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode, ExitMode: v.ExitMode}
+func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) (ruleListItem, error) {
+	v, err := s.buildRuleView(r)
+	if err != nil {
+		return ruleListItem{}, err
+	}
+	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, EntryV6: v.EntryV6, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode, ExitMode: v.ExitMode}, nil
 }
 
 // fillRuleChains attaches the flattened physical chain to each item, resolving
@@ -115,9 +130,9 @@ func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
 // can't be resolved is dropped rather than shown as a bare id. nodesByID should
 // span all nodes (composite children included), not just the caller's granted
 // subset, so a composite's members still resolve.
-func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.Node) {
+func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.Node) error {
 	if len(items) == 0 {
-		return
+		return nil
 	}
 	ids := make([]int64, len(items))
 	for i := range items {
@@ -125,7 +140,7 @@ func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.No
 	}
 	chains, err := db.RuleChainNodeIDs(s.DB, ids)
 	if err != nil {
-		return
+		return err
 	}
 	for i := range items {
 		hopIDs := chains[items[i].ID]
@@ -137,6 +152,7 @@ func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.No
 		}
 		items[i].Chain = chain
 	}
+	return nil
 }
 
 // classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to
@@ -287,11 +303,15 @@ func viasOf(p *[]int64) []int64 {
 }
 
 // checkUserRuleQuota verifies a user hasn't exceeded their global max_forwards
-// limit or per-node grant limits.
-func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops int) error {
-	total, _ := db.CountRulesForUser(s.DB, u.ID)
+// limit. Over the limit is a conflict; a count that could not be read is an
+// internal error, never a pass — read as 0 it would admit any number of rules.
+func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops int) *ruleMutationError {
+	total, err := db.CountRulesForUser(s.DB, u.ID)
+	if err != nil {
+		return &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
+	}
 	if (total-existingRuleHops)+hopCount > u.MaxForwards {
-		return fmt.Errorf("超出用户最大转发数（%d）", u.MaxForwards)
+		return &ruleMutationError{status: http.StatusConflict, msg: fmt.Sprintf("超出用户最大转发数（%d）", u.MaxForwards)}
 	}
 	return nil
 }

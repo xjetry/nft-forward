@@ -60,12 +60,10 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	}
 	if _, err := db.GetUserByUsername(s.DB, username); err == nil {
 		return nil, &adminError{http.StatusConflict, codeConflict, "用户名已存在"}
-	}
-	hash, err := HashPassword(p.Password)
-	if err != nil {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	id, err := db.CreateUser(s.DB, username, hash, role)
+	hash, err := HashPassword(p.Password)
 	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
@@ -73,16 +71,38 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	if maxFwd <= 0 {
 		maxFwd = 100
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
-		maxFwd, p.TrafficQuotaBytes, id); err != nil {
+	// The row and its settings are written in one transaction: a user that
+	// exists without the expiry or quota it was created with could not be
+	// repaired by retrying, because the retry would hit the username conflict.
+	id, err := func() (int64, error) {
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback()
+		id, err := db.CreateUser(tx, username, hash, role)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
+			maxFwd, p.TrafficQuotaBytes, id); err != nil {
+			return 0, err
+		}
+		if p.ExpiresAtUnix != 0 {
+			if _, err := tx.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id); err != nil {
+				return 0, err
+			}
+		}
+		if p.LandingSubURL != "" || p.AdminNote != "" {
+			if _, err := tx.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`,
+				strings.TrimSpace(p.LandingSubURL), strings.TrimSpace(p.AdminNote), id); err != nil {
+				return 0, err
+			}
+		}
+		return id, tx.Commit()
+	}()
+	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-	}
-	if p.ExpiresAtUnix != 0 {
-		s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id)
-	}
-	if p.LandingSubURL != "" || p.AdminNote != "" {
-		s.DB.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`,
-			strings.TrimSpace(p.LandingSubURL), strings.TrimSpace(p.AdminNote), id)
 	}
 	db.WriteAudit(s.DB, adminID, "user.create", strconv.FormatInt(id, 10), username)
 	created, err := db.GetUserByID(s.DB, id)
@@ -123,14 +143,18 @@ func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError
 	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
-		for _, n := range nodes {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, userID, err)
-			}
+	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
+	// The expiry is stored; it reaches the nodes only through this
+	// re-dispatch. The call is declarative, so repeating it retries.
+	nodes, err := db.DistinctUserNodes(s.DB, userID)
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "到期时间已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, userID, err)
 		}
 	}
-	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
 	return nil
 }
 
@@ -187,12 +211,18 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 		mbytes, userID, nodeID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
+		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
+	// The cap is stored; what is left is telling the nodes. Not knowing which
+	// nodes to tell is reported as a failure — the call is declarative, so
+	// repeating it is safe and re-pushes.
+	affected, err := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "限速已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	for _, n := range affected {
 		_ = s.dispatchToNode(n)
 	}
-	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
-		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
 	return nil
 }
 
@@ -354,8 +384,13 @@ func (s *Server) setUserLandingSubURL(adminID, userID int64, subURL string) *adm
 	// source snapshot no longer matches the users row, so the freshly written
 	// values must flow into the sync. A failed resolve keeps the old snapshot on
 	// purpose.
-	target, _ := db.GetUserByID(s.DB, userID)
-	if nodes, ok := s.resolveLandingExits(target, true); ok {
+	target, err := db.GetUserByID(s.DB, userID)
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "订阅地址已保存，但没能读回用户以刷新落地节点: " + err.Error()}
+	}
+	if nodes, err := s.resolveLandingExits(target, true); err != nil {
+		log.Printf("landing: resolve exits for user %d after setting its subscription: %v", userID, err)
+	} else {
 		s.syncLandingExits(target, nodes)
 	}
 	return nil
@@ -375,9 +410,14 @@ func (s *Server) setUserEnabled(adminID, userID int64, enabled bool) *adminError
 	if err := db.SetUserDisabled(s.DB, userID, !enabled, reason); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
-		s.apiDispatchFanout(nodes)
-	}
 	db.WriteAudit(s.DB, adminID, "user.toggle", strconv.FormatInt(userID, 10), fmt.Sprintf("disabled=%v", !enabled))
+	// The state is stored; the user's rules leave or return to the nodes only
+	// through this re-dispatch. The call is declarative, so repeating it
+	// retries.
+	nodes, err := db.DistinctUserNodes(s.DB, userID)
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "状态已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
+	s.apiDispatchFanout(nodes)
 	return nil
 }

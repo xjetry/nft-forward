@@ -37,7 +37,7 @@ func (s *Server) landingNodesFor(u *db.User, force bool) []landing.Node {
 // degrading to manual URIs when the subscription fetch fails — it reports
 // failure, because syncing a partial set would flip the subscription's exits
 // to present=0 and shift billing classification on a network blip.
-func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, bool) {
+func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, error) {
 	var nodes []landing.Node
 	if uris := strings.TrimSpace(u.LandingURIs); uris != "" {
 		nodes = append(nodes, landing.ParseURIs(strings.Split(uris, "\n"))...)
@@ -45,11 +45,11 @@ func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, bo
 	if url := strings.TrimSpace(u.LandingSubURL); url != "" {
 		subNodes, err := s.Landing.Subscription(url, force)
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		nodes = append(nodes, subNodes...)
 	}
-	return nodes, true
+	return nodes, nil
 }
 
 // dedupLandingNodes keeps the first node per host:port — manual URIs precede
@@ -112,10 +112,10 @@ func (s *Server) redispatchUserExit(userID int64, host string, port int) {
 // materialized landing set — the same table that drives metering and push
 // exclusion, so the badge can never disagree with billing. No subscription
 // fetch happens on this path.
-func (s *Server) landingIndexFromDB(userID int64) map[string]landing.Node {
+func (s *Server) landingIndexFromDB(userID int64) (map[string]landing.Node, error) {
 	exits, err := db.PresentLandingExitsForUser(s.DB, userID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	m := make(map[string]landing.Node, len(exits))
 	for _, e := range exits {
@@ -124,7 +124,7 @@ func (s *Server) landingIndexFromDB(userID int64) map[string]landing.Node {
 			m[key] = landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI}
 		}
 	}
-	return m
+	return m, nil
 }
 
 // hasDynamicSource reports whether the user has a subscription URL (a refresh
@@ -168,12 +168,23 @@ func (s *Server) apiSetUserLanding(w http.ResponseWriter, r *http.Request) {
 	db.WriteAudit(s.DB, u.ID, "user.set_landing", strconv.FormatInt(id, 10), subURL)
 	// Return a fresh preview so the admin sees what the source resolved to,
 	// and materialize it while the resolution is known-good.
-	target, _ := db.GetUserByID(s.DB, id)
-	if nodes, ok := s.resolveLandingExits(target, true); ok {
-		s.syncLandingExits(target, nodes)
+	target, err := db.GetUserByID(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "来源已保存，但没能读回用户以刷新落地节点: "+err.Error())
+		return
+	}
+	// The source is saved either way — a subscription can be unreachable now
+	// and fine an hour later — but the admin has to be told when it could not
+	// be fetched: the materialized exits then stay on the previous snapshot,
+	// and the preview below holds the manual URIs only.
+	subError := ""
+	if exits, err := s.resolveLandingExits(target, true); err != nil {
+		subError = err.Error()
+	} else {
+		s.syncLandingExits(target, exits)
 	}
 	nodes := s.landingNodesFor(target, false)
-	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes})
+	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes, "sub_error": subError})
 }
 
 // apiSubFetch proxies a subscription URL fetch so the browser avoids CORS.
@@ -215,24 +226,30 @@ type myLandingNodeView struct {
 func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	force := r.URL.Query().Get("refresh") == "1"
-	nodes, ok := s.resolveLandingExits(u, force)
+	nodes, err := s.resolveLandingExits(u, force)
 	stale := false
-	if ok {
+	if err == nil {
 		s.syncLandingExits(u, nodes)
 	} else {
 		stale = true
-		if exits, err := db.PresentLandingExitsForUser(s.DB, u.ID); err == nil {
-			nodes = make([]landing.Node, 0, len(exits))
-			for _, e := range exits {
-				nodes = append(nodes, landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI})
-			}
+		present, err := db.PresentLandingExitsForUser(s.DB, u.ID)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		nodes = make([]landing.Node, 0, len(present))
+		for _, e := range present {
+			nodes = append(nodes, landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI})
 		}
 	}
+	exits, err := db.ListUserLandingExits(s.DB, u.ID)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	ledger := map[string]*db.LandingExit{}
-	if exits, err := db.ListUserLandingExits(s.DB, u.ID); err == nil {
-		for _, e := range exits {
-			ledger[net.JoinHostPort(e.Host, strconv.Itoa(e.Port))] = e
-		}
+	for _, e := range exits {
+		ledger[net.JoinHostPort(e.Host, strconv.Itoa(e.Port))] = e
 	}
 	views := make([]myLandingNodeView, 0, len(nodes))
 	for _, n := range nodes {
@@ -277,7 +294,11 @@ func (s *Server) apiListUserLandingExits(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.URL.Query().Get("refresh") == "1" {
-		if nodes, ok := s.resolveLandingExits(target, true); ok {
+		// A refresh that cannot reach the subscription leaves the ledger on
+		// its last snapshot; the ledger below is still the truth to show.
+		if nodes, err := s.resolveLandingExits(target, true); err != nil {
+			log.Printf("landing: refresh exits for user %d: %v", target.ID, err)
+		} else {
 			s.syncLandingExits(target, nodes)
 		}
 	}

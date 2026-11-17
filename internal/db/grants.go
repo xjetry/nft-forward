@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"errors"
+)
 
 type NodeHop struct {
 	NodeID            int64   `json:"node_id"`
@@ -275,10 +278,14 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 }
 
 // CheckNodeAccess validates that a user has access to a node. Node owners
-// automatically bypass the grant check.
+// automatically bypass the grant check. A node that does not exist has no
+// owner and falls through to the grant lookup, which finds nothing; a failed
+// owner lookup is returned rather than read as "not the owner".
 func CheckNodeAccess(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 	var ownerID sql.NullInt64
-	_ = d.QueryRow(`SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID)
+	if err := d.QueryRow(`SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	if ownerID.Valid && ownerID.Int64 == userID {
 		return &UserNode{UserID: userID, NodeID: nodeID, MaxForwards: 9999, TrafficQuotaBytes: 0, TrafficUsedBytes: 0}, nil
 	}
