@@ -11,7 +11,7 @@
       "Valid": false
     },
     "last_error": {
-      "String": "node 2 not connected",
+      "String": "节点未连接",
       "Valid": true
     },
     "last_upgrade_at": {

@@ -27,7 +27,14 @@ import (
 const (
 	hubWriteTimeout = 10 * time.Second
 	hubReadTimeout  = 30 * time.Second
-	applyAckTimeout = 30 * time.Second
+)
+
+// applyAckTimeout and upgradeAckTimeout are how long a push waits for the
+// node's ack before it is given up as unanswered. They are variables so that
+// a test of that branch can shorten them instead of waiting them out.
+var (
+	applyAckTimeout   = 30 * time.Second
+	upgradeAckTimeout = 60 * time.Second
 )
 
 type Hub struct {
@@ -430,7 +437,7 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (stri
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("node %d not connected", nodeID)
+		return "", errNodeNotConnected
 	}
 	id := ac.nextID()
 	ch := make(chan json.RawMessage, 1)
@@ -450,16 +457,16 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (stri
 	case raw := <-ch:
 		var ack wsproto.ApplyAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return "", fmt.Errorf("malformed apply_ack: %w", err)
+			return "", pushUpstream(fmt.Errorf("malformed apply_ack: %w", err))
 		}
 		if !ack.OK {
-			return "", fmt.Errorf("apply rejected: %s", ack.Error)
+			return "", pushUpstream(fmt.Errorf("apply rejected: %s", ack.Error))
 		}
 		return ack.Warning, nil
 	case <-time.After(applyAckTimeout):
-		return "", errors.New("apply_ack timeout")
+		return "", pushUpstream(errors.New("apply_ack timeout"))
 	case <-ac.closed:
-		return "", errors.New("connection closed before ack")
+		return "", pushUpstream(errors.New("connection closed before ack"))
 	}
 }
 
@@ -468,7 +475,7 @@ func (h *Hub) SendProbe(nodeID int64, target, proto string) (wsproto.ProbeAck, e
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return wsproto.ProbeAck{}, fmt.Errorf("node %d not connected", nodeID)
+		return wsproto.ProbeAck{}, errNodeNotConnected
 	}
 	id := ac.nextID()
 	ch := make(chan json.RawMessage, 1)
@@ -491,13 +498,13 @@ func (h *Hub) SendProbe(nodeID int64, target, proto string) (wsproto.ProbeAck, e
 	case raw := <-ch:
 		var ack wsproto.ProbeAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return wsproto.ProbeAck{}, fmt.Errorf("malformed probe_ack: %w", err)
+			return wsproto.ProbeAck{}, pushUpstream(fmt.Errorf("malformed probe_ack: %w", err))
 		}
 		return ack, nil
 	case <-time.After(10 * time.Second):
-		return wsproto.ProbeAck{}, errors.New("probe timeout")
+		return wsproto.ProbeAck{}, pushUpstream(errors.New("probe timeout"))
 	case <-ac.closed:
-		return wsproto.ProbeAck{}, errors.New("connection closed")
+		return wsproto.ProbeAck{}, pushUpstream(errors.New("connection closed"))
 	}
 }
 

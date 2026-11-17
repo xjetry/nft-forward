@@ -72,6 +72,10 @@ func TestComputeRevIdentifiesTheWholePayload(t *testing.T) {
 	if computeRev([]nft.Rule{base}) != computeRev([]nft.Rule{base}) {
 		t.Fatal("同一份载荷两次算出的 rev 不同")
 	}
+	// 没有规则的载荷也是一份载荷：nil 与空切片说的是同一件事。
+	if computeRev(nil) != computeRev([]nft.Rule{}) {
+		t.Fatal("空规则集的 rev 随它是 nil 还是空切片而不同")
+	}
 	variants := nfttest.FieldVariants(base)
 	if len(variants) == 0 {
 		t.Fatal("前置条件：FieldVariants 没有给出任何字段")

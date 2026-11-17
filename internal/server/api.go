@@ -1398,7 +1398,8 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		status, _ := pushErrAnswer(err)
+		jsonErr(w, status, err.Error())
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), version)
@@ -1583,9 +1584,9 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, n)
 	}
 	// 先把本批在线节点用得到的产物取齐，任何一个取不到就整批失败、一个都不推。
-	// 产物取不到（dev 构建、GitHub 不可达、release 缺资产）是面板侧的故障，不是
-	// 某个节点的故障；前端对本接口只在请求失败时报错，若把它摊成逐节点失败，
-	// 界面上会是一句“已发起升级”而实际一台都没升。
+	// 产物取不到（dev 构建、GitHub 不可达、release 缺资产）是面板拿不出可推的东西，
+	// 不是某个节点的故障，按 pushErrAnswer 的归类回答整个请求；前端对本接口只在请求
+	// 失败时报错，若把它摊成逐节点失败，界面上会是一句“已发起升级”而实际一台都没升。
 	// 离线、或架构不在 agentAssets 里的节点不参与这一步——那是节点级结果，由下面
 	// 的逐节点推送各自记账，不该拦住其他节点。
 	for _, n := range nodes {
@@ -1597,7 +1598,8 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if _, err := s.loadAgentArtifact(arch); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
+			status, _ := pushErrAnswer(err)
+			jsonErr(w, status, err.Error())
 			return
 		}
 	}

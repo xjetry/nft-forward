@@ -261,8 +261,8 @@ func TestUpgradeNodeRejectsArchWithoutArtifact(t *testing.T) {
 	rv, rvCh := e.connectAgent(t, "rv", "riscv64", "stale")
 
 	code, body := e.post(t, "/api/nodes/"+strconv.FormatInt(rv.ID, 10)+"/upgrade")
-	if code != http.StatusInternalServerError || !strings.Contains(body, "riscv64") {
-		t.Fatalf("want 500 naming the arch, got http=%d body=%s", code, body)
+	if code != http.StatusConflict || !strings.Contains(body, "riscv64") {
+		t.Fatalf("want 409 naming the arch, got http=%d body=%s", code, body)
 	}
 	assertNoUpgrade(t, rvCh, "riscv64 node")
 	got, _ := db.GetNode(e.d, rv.ID)
@@ -323,17 +323,19 @@ func TestUpgradeAllPushesPerArch(t *testing.T) {
 }
 
 // 批量升级：在线节点用得到的产物只要有一个取不到，整批失败且一个都不推、不记账。
-// 这里只预置了 amd64，arm64 节点所需的产物在 dev 构建下取不到。
+// 这里只预置了 amd64；arm64 节点所需的产物要向 release 托管处去取，而那边（本
+// 测试起的本机服务）答 404。取不回来是托管处那一侧的失败，整批答 502。
 func TestUpgradeAllFailsWholeBatchWhenAnArtifactIsUnavailable(t *testing.T) {
 	panelAt(t, testPanelVersion)
+	releaseHostAt(t, http.NotFound)
 	e := newUpgradeTestEnv(t)
 	seedAgentArtifacts(t, "amd64")
 	x86, x86Ch := e.connectAgent(t, "x86", "amd64", "stale")
 	arm, armCh := e.connectAgent(t, "arm", "arm64", "stale")
 
 	code, body := e.post(t, "/api/nodes/upgrade-all")
-	if code != http.StatusInternalServerError {
-		t.Fatalf("want 500 when the arm64 artifact is unavailable, got http=%d body=%s", code, body)
+	if code != http.StatusBadGateway || !strings.Contains(body, "status 404") {
+		t.Fatalf("want 502 naming the release host's 404 when the arm64 artifact is unavailable, got http=%d body=%s", code, body)
 	}
 	assertNoUpgrade(t, x86Ch, "amd64 node")
 	assertNoUpgrade(t, armCh, "arm64 node")

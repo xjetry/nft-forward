@@ -324,7 +324,13 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
 //
 // 同一组规则两次算出的 rev 相同，要求 buildRules 两次给出的顺序相同；顺序来自
 // db.ActiveRuleHopsForPush，它按（监听端口，协议）排成全序。
+//
+// 没有规则的规则集只有一个 rev，不论传进来的是 nil 还是空切片：json 把前者写成
+// null、后者写成 []，不归一的话同一份（空的）载荷会算出两个 rev。
 func computeRev(rules []nft.Rule) string {
+	if rules == nil {
+		rules = []nft.Rule{}
+	}
 	h := sha256.New()
 	b, _ := json.Marshal(rules)
 	h.Write(b)

@@ -388,20 +388,19 @@ func requireMachine(n *db.Node) error {
 	return nil
 }
 
-// resyncNode 把一台机器此刻应有的规则集重新下发给它，SPA 与 /api/v1 共用。
+// resyncNode 把一台机器此刻应有的规则集重新下发给它，SPA 与 /api/v1 共用。下发失败
+// 就是这次请求的错误，按“是谁的失败”回答（pushErrAnswer）。
 func (s *Server) resyncNode(id int64) *adminError {
 	n, err := db.GetNode(s.DB, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return &adminError{http.StatusNotFound, codeNotFound, "节点不存在"}
-	}
 	if err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "节点不存在")
 	}
 	if err := requireMachine(n); err != nil {
 		return &adminError{http.StatusBadRequest, codeValidation, err.Error()}
 	}
 	if err := s.dispatchToNode(id); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		status, code := pushErrAnswer(err)
+		return &adminError{status, code, err.Error()}
 	}
 	return nil
 }
