@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -37,25 +38,16 @@ type Daemon struct {
 	countersMu   sync.Mutex
 	lastCounters map[string][2]int64
 
-	// 这个 daemon 归哪个面板管，由下面三项决定（New 保证 connectURL 与 serverLocal
-	// 不同时出现）：
-	//   - connectURL 非空：远程面板，拨它的 WebSocket 地址，握手带 connectTok；
-	//   - serverLocal：本机面板，拨它的本机入口 socket panelSocket，握手不带 token；
-	//   - 都没有：单机，不拨任何面板，没有拨号器。
-	// managedByPanel 是“前两种之一”的判定，Bootstrap 的降级与 Run 里是否起拨号器
-	// 都只问它。
-	//
-	// dialer is atomic so unix-socket handlers running on their own
-	// goroutines can safely read it (e.g. to push tui_segment_changed)
-	// without coordinating with Run's lifecycle code.
-	connectURL          string
-	connectTok          string
-	serverLocal         bool
-	panelSocket         string
+	// mode 是这个 daemon 归谁管（见 RunMode），New 写入后不再改。“归不归面板管”
+	// 的每一处判断都读它：Bootstrap 的降级、Run 里是否起拨号器、本机控制口上哪些
+	// 操作要交给面板裁决（panelSession）。
+	mode                RunMode
 	portRange           string
 	declaredRelayHost   string
 	declaredRelayHostV6 string
-	dialer              atomic.Pointer[Dialer]
+	// dialer 只在托管形态下由 Run 创建一次。用原子指针是因为本机控制口的处理协程
+	// 在 Run 写入它之前就已经开始服务；读到 nil 表示会话还没建立，按离线对待。
+	dialer atomic.Pointer[Dialer]
 
 	// reconcileMu 让对数据面的两种操作互斥：dp.Reconcile（applySerialized）与关停时的
 	// dp.Close（closeSerialized）。后者不经过 reconcileOwners，所以 writeMu 管不到它：
@@ -152,14 +144,16 @@ func (d *Daemon) reconcileOwners(
 		log.Printf("reconcile: holding back %d rule(s) with unresolved target (retry in refresh loop): %v", len(unresolved), rerr)
 	}
 
-	// The kernel apply is skipped whenever the applyable set is unchanged
-	// from what's already live -- this covers both the DNS-refresh no-op
-	// case and a write (create/update/delete) whose only effect was to
-	// add/hold a rule that's still unresolved. DNS-refresh callers additionally
-	// skip the commit below (nothing to persist); write callers still commit
-	// so the new/edited rule (even an unresolved one) lands in d.owners and
-	// on disk for the refresh loop to retry.
-	if !rulesDiffer(prev, applyable) {
+	// 数据面只在它读的字段变了的时候重放（nft.SameDataplane 比的是 prev 与 applyable
+	// 的数据面投影）：重放是整表重建（nft.Apply 先删表再建），内核里每条规则的计数
+	// 随之归零，不该为数据面不读的字段付这个代价。不重放的情形例如：DNS 刷新后地址
+	// 没变；写入只动了一条目标还没解析出来的规则（它不在 applyable 里）；写入只改了
+	// 名称、备注、跳数这类数据面不读的字段。
+	//
+	// 不重放不等于不提交：saveToDisk 为假的调用方（DNS 刷新，没有要落盘的东西）到此
+	// 为止；其余调用方照常走下面的提交，新的字段值与还没解析的规则都记进 d.owners
+	// 和状态文件。
+	if nft.SameDataplane(prev, applyable) {
 		if !saveToDisk {
 			return applyable, unresolved, false, nil
 		}
@@ -194,20 +188,6 @@ func (d *Daemon) closeSerialized(ctx context.Context) error {
 	d.reconcileMu.Lock()
 	defer d.reconcileMu.Unlock()
 	return d.dp.Close(ctx)
-}
-
-// managedByPanel 报告这个 daemon 是否归某个面板管（远程面板或本机面板）。
-func (d *Daemon) managedByPanel() bool {
-	return d.connectURL != "" || d.serverLocal
-}
-
-// localPanelSocket 返回要拨的本机入口 socket；不是 serverLocal 模式时为空，拨号器
-// 据此走 connectURL。
-func (d *Daemon) localPanelSocket() string {
-	if d.serverLocal {
-		return d.panelSocket
-	}
-	return ""
 }
 
 // Handler returns the HTTP mux serving all daemon endpoints.
@@ -245,8 +225,51 @@ func (d *Daemon) handleClearPanelSegment(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// statusResp is returned by GET /v1/status.
+// 本机控制口上“这一步要面板裁决，但现在办不到”的两个原因。
+var (
+	// 单机形态：没有面板，也就没有面板规则。
+	errNoPanel = errors.New("本机是单机形态，没有面板规则")
+	// 托管形态，但此刻没有与面板的会话。
+	errPanelUnreachable = errors.New("面板不可达：本机由面板托管，这一步要面板裁决，连接恢复后再试")
+)
+
+// panelSession 返回与面板的在线会话，供需要面板裁决的本机操作把命令转过去。
+//
+// 本机控制口上所有“归不归面板管、面板此刻在不在”的判断都经过这里，分两步：
+// 先看形态（d.mode，启动时定下、不变），单机形态回 errNoPanel；再看会话，托管
+// 形态下没有在线会话回 errPanelUnreachable。两个原因不能合成一个：前者是“没有这
+// 回事”，后者是“等会儿再试”。
+//
+// 返回的会话只在调用这一刻在线，随后可能断开；那时 Dialer.sendCommand 会报错，
+// 由调用方按网关错误回给本机客户端。
+func (d *Daemon) panelSession() (*Dialer, error) {
+	if !d.mode.Managed() {
+		return nil, errNoPanel
+	}
+	dl := d.dialer.Load()
+	if dl == nil || !dl.IsConnected() {
+		return nil, errPanelUnreachable
+	}
+	return dl, nil
+}
+
+// writePanelSessionError 把 panelSession 的错误回给本机客户端：没有面板是 404，
+// 面板不可达是 503。
+func writePanelSessionError(w http.ResponseWriter, err error) {
+	status := http.StatusServiceUnavailable
+	if errors.Is(err, errNoPanel) {
+		status = http.StatusNotFound
+	}
+	http.Error(w, err.Error(), status)
+}
+
+// statusResp 是 GET /v1/status 的应答，把形态与会话状态分开报。
+//
+// Mode 是 RunMode.Name()，进程存续期间不变。Connected 只在托管形态下可能为真，
+// 表示与面板的会话此刻在线。NodeName / NodeID 是最近一次握手时面板给的节点身份：
+// 断线后仍然报出，界面据此说明是哪个节点离线了；托管形态下从未握手成功过时为空。
 type statusResp struct {
+	Mode      string `json:"mode"`
 	Connected bool   `json:"connected"`
 	NodeName  string `json:"node_name,omitempty"`
 	NodeID    int64  `json:"node_id,omitempty"`
@@ -257,9 +280,9 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	resp := statusResp{}
-	if dl := d.Dialer(); dl != nil && dl.IsConnected() {
-		resp.Connected = true
+	resp := statusResp{Mode: d.mode.Name()}
+	if dl := d.dialer.Load(); d.mode.Managed() && dl != nil {
+		resp.Connected = dl.IsConnected()
 		resp.NodeName = dl.NodeName()
 		resp.NodeID = dl.NodeID()
 	}
@@ -278,16 +301,42 @@ func (d *Daemon) handleRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 规则地址里的两个命名空间，对应 /v1/rules/{命名空间}/{id}。
+// 规则地址里的两个命名空间，对应 /v1/rules/{命名空间}/{id}，与两个归属段一一对应：
+// local 是本地段，panel 是面板段。
 //
-// 本地规则（tui 段）的 id 由 nft.NewRuleID 生成，是 8 位十六进制串；面板规则的 id
-// 是面板数据库里的正整数。十六进制串可能恰好全是数字，两种 id 单看字符串分不开，
-// 所以由调用方在路径里写明命名空间：TUI 的每一行都知道自己是哪一种（面板规则的
-// nft.Rule.RuleID 非零）。这里不从 id 的长相推断归属。
+// 本地规则的 id 由 nft.NewRuleID 生成，是 8 位十六进制串；面板规则的 id 是面板
+// 数据库里的正整数。十六进制串可能恰好全是数字，两种 id 单看字符串分不开，所以
+// 地址必须带命名空间。地址由 daemon 在列规则时按规则所在的段给出（listRows），
+// 调用方原样带回，谁也不从 id 的长相或规则的字段推断归属。
 const (
 	ruleNSLocal = "local"
 	ruleNSPanel = "panel"
 )
+
+// ruleRef 是一条规则在本机控制口上的地址，即 /v1/rules/{NS}/{ID} 的两段。
+type ruleRef struct {
+	NS string `json:"ns"`
+	ID string `json:"id"`
+}
+
+// listedRule 是 GET /v1/rules 的一行：规则本身（字段平铺），加上它的地址。
+type listedRule struct {
+	nft.Rule
+	Ref ruleRef `json:"ref"`
+}
+
+// listRows 把归属段排成列表：面板段在前，本地段在后，每一行的地址取自它所在的段。
+// 段到命名空间的对应只写在这里。
+func listRows(owners OwnerRuleset) []listedRule {
+	rows := make([]listedRule, 0, len(owners[segPanel])+len(owners[segLocal]))
+	for _, r := range owners[segPanel] {
+		rows = append(rows, listedRule{Rule: r, Ref: ruleRef{NS: ruleNSPanel, ID: strconv.FormatInt(r.RuleID, 10)}})
+	}
+	for _, r := range owners[segLocal] {
+		rows = append(rows, listedRule{Rule: r, Ref: ruleRef{NS: ruleNSLocal, ID: r.ID}})
+	}
+	return rows
+}
 
 // handleRulesWithID 分发 PUT / DELETE /v1/rules/{命名空间}/{id}。
 func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
@@ -328,22 +377,17 @@ func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleListRules returns the active rule set: "panel" segment when connected
-// to the server, "tui" segment when running standalone.
-// handleListRules 返回数据面里的全部规则：面板下发的（panel 段）在前，本地的（tui
-// 段）在后。每一行自带归属——面板规则的 RuleID 非零——调用方据此决定改/删走哪个
-// 地址（见 ruleNSLocal / ruleNSPanel），列表本身不按连接状态取舍。
+// handleListRules 返回数据面里的全部规则：面板下发的在前，本地的在后，每一行带着
+// 自己的地址（见 listRows）。列表不按形态、也不按会话是否在线取舍。
 //
 // 两段同时非空是会发生的：接入面板时本地规则交给面板接管（Dialer.adoptLocalRules），
-// 被面板拒绝的那一批留在 tui 段继续转发；面板不可达时 panel 段也照常在转发。只列
+// 被面板拒绝的那一批留在本地段继续转发；面板不可达时面板段也照常在转发。只列
 // 其中一段，另一段的规则就在转发却没有任何界面能看到、改掉或删除。
 func (d *Daemon) handleListRules(w http.ResponseWriter, _ *http.Request) {
 	d.mu.Lock()
-	rules := make([]nft.Rule, 0, len(d.owners["panel"])+len(d.owners["tui"]))
-	rules = append(rules, d.owners["panel"]...)
-	rules = append(rules, d.owners["tui"]...)
+	rows := listRows(d.owners)
 	d.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rows})
 }
 
 type createRuleReq struct {
@@ -361,9 +405,16 @@ type createRuleResp struct {
 	ListenPort int    `json:"listen_port"`
 }
 
-// handleCreateRule creates a rule either through the server (when connected)
-// or locally in the "tui" segment (when standalone). Local rules get an
-// auto-assigned port when ListenPort is 0.
+// handleCreateRule 新建一条规则，往哪建由形态决定：
+//
+//   - 托管形态：规则由面板建。请求经会话转给面板，面板建好后随下发进入面板段。
+//     面板不可达时拒绝（503），不退回去建本地规则——那样规则会在面板不知情、
+//     不计入任何上限与账本的情况下开始转发，重连后才作为一条新规则请面板接管，
+//     而面板可以拒绝接管。
+//   - 单机形态：建一条本地规则，ListenPort 为 0 时自动挑一个空闲端口。
+//
+// 所以托管形态下本地段不会多出规则：里面只有接入面板之前留下、还没被面板接管的
+// 那些（clearTuiSegment 依赖这一点）。
 func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	var req createRuleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -371,8 +422,12 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connected: relay to server via WS.
-	if dl := d.Dialer(); dl != nil && dl.IsConnected() {
+	if d.mode.Managed() {
+		dl, err := d.panelSession()
+		if err != nil {
+			writePanelSessionError(w, err)
+			return
+		}
 		ack, err := dl.CreateRule(r.Context(), createToWSProto(req))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -386,7 +441,6 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Standalone: manage locally in "tui" segment.
 	listenPort := req.ListenPort
 	if listenPort == 0 {
 		proto := req.Proto
@@ -420,7 +474,7 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			candidate["tui"] = append(candidate["tui"], rule)
+			candidate[segLocal] = append(candidate[segLocal], rule)
 		}, nil, true)
 	if err != nil {
 		http.Error(w, err.Error(), d.classifyWriteError(err).(*ownerWriteError).status)
@@ -437,7 +491,7 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) panelHopCount(ruleID int64) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, r := range d.owners["panel"] {
+	for _, r := range d.owners[segPanel] {
 		if r.RuleID == ruleID {
 			return r.HopCount
 		}
@@ -471,13 +525,12 @@ func (d *Daemon) handleUpdatePanelRule(w http.ResponseWriter, r *http.Request, r
 	if !ok {
 		return
 	}
-	dl := d.Dialer()
-	if dl == nil || !dl.IsConnected() {
-		http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
+	dl, err := d.panelSession()
+	if err != nil {
+		writePanelSessionError(w, err)
 		return
 	}
 	var ack wsproto.RuleCmdAck
-	var err error
 	// Multi-hop chain rules only expose port/mode/comment to the node side;
 	// the server owns the rest of the skeleton and rejects rule_update on
 	// them, so those edits go through the per-hop channel instead.
@@ -499,7 +552,7 @@ func (d *Daemon) handleUpdatePanelRule(w http.ResponseWriter, r *http.Request, r
 	writeJSON(w, http.StatusOK, map[string]string{"entry": ack.Entry})
 }
 
-// handleUpdateLocalRule 修改 tui 段里 ID 等于 id 的那条规则。
+// handleUpdateLocalRule 修改本地段里 ID 等于 id 的那条规则。
 func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	req, ok := decodeUpdateRuleReq(w, r)
 	if !ok {
@@ -513,7 +566,7 @@ func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, i
 	found := false
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			rules := candidate["tui"]
+			rules := candidate[segLocal]
 			for i := range rules {
 				if rules[i].ID == id {
 					if req.Proto != "" {
@@ -556,9 +609,9 @@ func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, i
 
 // handleDeletePanelRule 把删除面板规则的请求经 WS 转给面板。
 func (d *Daemon) handleDeletePanelRule(w http.ResponseWriter, r *http.Request, ruleID int64) {
-	dl := d.Dialer()
-	if dl == nil || !dl.IsConnected() {
-		http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
+	dl, err := d.panelSession()
+	if err != nil {
+		writePanelSessionError(w, err)
 		return
 	}
 	ack, err := dl.DeleteRule(r.Context(), ruleID)
@@ -573,21 +626,21 @@ func (d *Daemon) handleDeletePanelRule(w http.ResponseWriter, r *http.Request, r
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleDeleteLocalRule 从 tui 段删除 ID 等于 id 的那条规则。
+// handleDeleteLocalRule 从本地段删除 ID 等于 id 的那条规则。
 func (d *Daemon) handleDeleteLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	found := false
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			rules := candidate["tui"]
+			rules := candidate[segLocal]
 			for i := range rules {
 				if rules[i].ID == id {
-					candidate["tui"] = append(rules[:i], rules[i+1:]...)
+					candidate[segLocal] = append(rules[:i], rules[i+1:]...)
 					found = true
 					break
 				}
 			}
-			if len(candidate["tui"]) == 0 {
-				delete(candidate, "tui")
+			if len(candidate[segLocal]) == 0 {
+				delete(candidate, segLocal)
 			}
 		}, nil, true)
 	if err != nil {

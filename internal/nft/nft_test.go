@@ -384,27 +384,25 @@ func TestRuleMetaIsInert(t *testing.T) {
 	}
 }
 
-func TestRule_OwnerNameRoundTripAndOmitempty(t *testing.T) {
-	r := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, OwnerName: "qqpw"}
-	b, err := json.Marshal(r)
+// 旧版面板下发的规则、旧版 agent 写下的 state.json 元素里带着 owner_name。这个字段
+// 已经不在 Rule 里（它从来没有读者），带着它的旧数据必须照常解出来，其余字段不受
+// 影响。
+func TestRule_DecodesDataThatStillCarriesOwnerName(t *testing.T) {
+	old := `{"id":"","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80,"rule_id":7,"rule_name":"r","owner_name":"qqpw","hop_count":2,"shape_group":5,"rate_mbytes":10}`
+	var got Rule
+	if err := json.Unmarshal([]byte(old), &got); err != nil {
+		t.Fatalf("带 owner_name 的旧数据应能解出: %v", err)
+	}
+	want := Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, RuleID: 7, RuleName: "r", HopCount: 2, ShapeGroup: 5, RateMBytes: 10}
+	if got != want {
+		t.Fatalf("旧数据解出的规则不对:\n got %+v\nwant %+v", got, want)
+	}
+	b, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"owner_name":"qqpw"`) {
-		t.Fatalf("owner_name not marshaled: %s", b)
-	}
-	var got Rule
-	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.OwnerName != "qqpw" {
-		t.Fatalf("owner_name round-trip mismatch: %q", got.OwnerName)
-	}
-
-	// Empty owner must be omitted from the wire (display-only metadata).
-	bare, _ := json.Marshal(Rule{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80})
-	if strings.Contains(string(bare), "owner_name") {
-		t.Fatalf("empty owner_name should be omitted, got: %s", bare)
+	if strings.Contains(string(b), "owner_name") {
+		t.Fatalf("重新写出的规则不应再带 owner_name: %s", b)
 	}
 }
 

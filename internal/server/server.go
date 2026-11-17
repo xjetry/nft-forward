@@ -220,10 +220,6 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	if ruleMap == nil {
 		ruleMap = map[int64]*db.Rule{}
 	}
-	users, _ := db.UsersByID(d)
-	if users == nil {
-		users = map[int64]*db.User{}
-	}
 
 	// Collect distinct rule IDs for a single bulk hop-count query
 	ruleIDSet := map[int64]bool{}
@@ -254,9 +250,6 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 			rule.RuleID = r.ID
 			rule.RuleName = r.Name
 			if r.OwnerID.Valid {
-				if u := users[r.OwnerID.Int64]; u != nil {
-					rule.OwnerName = u.Username
-				}
 				// Shaping follows the hop's logical segment's grant: the entry
 				// segment reads the entry grant, a middle-layer segment reads the
 				// layer grant — the same logical node its quota is tracked on.
@@ -279,24 +272,28 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	return rules
 }
 
-// computeRev returns a stable hash of the ruleset so a reconnecting
-// agent whose last_applied_rev matches can be skipped. Determinism
-// hinges on ActiveRuleHopsForPush returning rows in a stable order
-// (it sorts by listen_port).
+// computeRev 给一组规则算出版本号。它回答的问题是“节点的数据面是否已经是这组规则”：
+// 重连的节点在握手里报上它上次应用的 rev，与这里算出的相同就不再下发
+// （reconcileOnConnect）。同一组规则两次算出的 rev 是否相同，取决于
+// ActiveRuleHopsForPush 两次返回的顺序是否相同（它按 listen_port 排序）。
 //
-// Rule metadata is panel-side display info, not part of the data plane;
-// exclude it so a rule rename does not force a redundant re-apply on
-// reconnecting nodes.
+// 所以 rev 只覆盖数据面读的字段，取的是 nft.Rule.Dataplane 这个投影——daemon 判断
+// 数据面要不要重放用的是同一个投影（nft.SameDataplane），两边对“变没变”的回答因此
+// 一致，这里不另列一份字段清单。
+//
+// 由此而来的后果：规则名、备注、跳数这些数据面不读的字段如果在节点离线期间变了、
+// 而这个节点上的数据面字段没变，重连时 rev 相同、不会补发，节点本地存的这些值停在
+// 旧值上，直到下一次向它下发（dispatchRound 每次都发完整的规则，不看 rev）。这期间
+// 节点本机的 TUI 显示的是旧值，从本机提交的编辑会把旧备注带回面板。跳数旧了只影响
+// 本机选哪条编辑命令，改成什么仍由面板按数据库里的跳数裁决：handleRuleUpdate 拒绝
+// 不是单跳的规则，applyRuleHopEdit 只改本节点那一跳的端口、模式、备注。
 func computeRev(rules []nft.Rule) string {
-	bare := make([]nft.Rule, len(rules))
+	dataplane := make([]nft.Rule, len(rules))
 	for i, r := range rules {
-		r.RuleID = 0
-		r.RuleName = ""
-		r.OwnerName = ""
-		bare[i] = r
+		dataplane[i] = r.Dataplane()
 	}
 	h := sha256.New()
-	b, _ := json.Marshal(bare)
+	b, _ := json.Marshal(dataplane)
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }

@@ -14,22 +14,10 @@ import (
 // Declared locally so the TUI test suite can substitute a fake.
 type daemonClient interface {
 	Status() (daemonclient.StatusResp, error)
-	ListRules() ([]nft.Rule, error)
+	ListRules() ([]daemonclient.Row, error)
 	CreateRule(daemonclient.CreateRuleReq) (daemonclient.CreateRuleResp, error)
 	UpdateRule(ref daemonclient.RuleRef, req daemonclient.UpdateRuleReq) error
 	DeleteRule(ref daemonclient.RuleRef) error
-}
-
-// ruleRef 给出列表里一行规则在 daemon 上的地址，是改 / 删两条路径共用的唯一判定处。
-//
-// 归属由这一行自己的字段决定：面板下发的规则带着非零的 RuleID；本地规则的 RuleID
-// 为 0、以 ID 标识——daemon 里本地规则只来自 handleCreateRule（不设 RuleID）和
-// downgradePanelRule（把 RuleID 清零）。不看 ID 的长相：本地 ID 可能全是数字。
-func ruleRef(r nft.Rule) daemonclient.RuleRef {
-	if r.RuleID != 0 {
-		return daemonclient.PanelRule(r.RuleID)
-	}
-	return daemonclient.LocalRule(r.ID)
 }
 
 type viewMode int
@@ -60,8 +48,13 @@ var protoOptions = []string{"tcp", "udp", "tcp+udp"}
 var modeOptions = []string{nft.ModeKernel, nft.ModeUserspace}
 
 type model struct {
-	mode   viewMode
-	rules  []nft.Rule
+	mode viewMode
+	// daemon 与 rows 是最近一次从 daemon 读到的快照（loadSnapshot），只在启动和
+	// refresh 时更新：daemon 是它的形态与会话状态，rows 是它在转发的全部规则。
+	// 两者都可能在读完之后过时（会话断开、面板重新下发），所以它们只用于显示；
+	// 能不能做某个操作由 daemon 在收到请求时裁决。
+	daemon daemonclient.StatusResp
+	rows   []daemonclient.Row
 	cursor int
 	// editingRuleID is the rule a rule-hop edit targets (0 = the
 	// row is not a rule hop). It routes submitEdit to the rule command path
@@ -79,54 +72,64 @@ type model struct {
 	width  int
 	height int
 
-	connected bool
-	nodeName  string
-
 	client daemonClient
 }
 
 // Run starts the TUI bound to the given daemon client. Caller (cmd) is
 // responsible for verifying the daemon is reachable before invoking Run.
 func Run(client daemonClient) error {
-	rules, connected, nodeName, err := loadInitialRules(client)
+	st, rows, err := loadSnapshot(client)
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(initialModel(client, rules, connected, nodeName), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(client, st, rows), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func initialModel(client daemonClient, rules []nft.Rule, connected bool, nodeName string) model {
+func initialModel(client daemonClient, st daemonclient.StatusResp, rows []daemonclient.Row) model {
 	return model{
-		mode:      viewList,
-		rules:     rules,
-		inputs:    buildInputs(),
-		client:    client,
-		connected: connected,
-		nodeName:  nodeName,
+		mode:   viewList,
+		daemon: st,
+		rows:   rows,
+		inputs: buildInputs(),
+		client: client,
 	}
 }
 
-// loadInitialRules fetches the active ruleset and connection status from the daemon.
-func loadInitialRules(client daemonClient) ([]nft.Rule, bool, string, error) {
-	st, _ := client.Status()
-	rules, err := client.ListRules()
+// loadSnapshot 从 daemon 读一次形态、会话状态与规则列表。
+//
+// 状态读不到按失败处理，不拿零值顶上：界面的标题要靠形态区分“本地模式”与“面板
+// 托管”，状态缺失时显示哪一个都是在替 daemon 编一个它没说过的答案。
+func loadSnapshot(client daemonClient) (daemonclient.StatusResp, []daemonclient.Row, error) {
+	st, err := client.Status()
 	if err != nil {
-		return nil, false, "", fmt.Errorf("加载规则失败: %w", err)
+		return daemonclient.StatusResp{}, nil, fmt.Errorf("读取 daemon 状态失败: %w", err)
 	}
-	if rules == nil {
-		rules = []nft.Rule{}
+	rows, err := client.ListRules()
+	if err != nil {
+		return daemonclient.StatusResp{}, nil, fmt.Errorf("加载规则失败: %w", err)
 	}
-	return rules, st.Connected, st.NodeName, nil
+	if rows == nil {
+		rows = []daemonclient.Row{}
+	}
+	return st, rows, nil
 }
 
 func (m model) totalRows() int {
-	return len(m.rules)
+	return len(m.rows)
 }
 
+// rowAt 是第 i 行的规则内容，用于显示与预填表单。
 func (m model) rowAt(i int) nft.Rule {
-	return m.rules[i]
+	return m.rows[i].Rule
+}
+
+// refAt 是第 i 行在 daemon 上的地址，改与删都把它原样交回。地址是 daemon 列规则时
+// 给的（daemonclient.Row.Ref），这里不从规则的字段推断这一行是本地规则还是面板
+// 规则。
+func (m model) refAt(i int) daemonclient.RuleRef {
+	return m.rows[i].Ref
 }
 
 // lockedFields returns the form field indices that stay read-only for the
@@ -134,7 +137,7 @@ func (m model) rowAt(i int) nft.Rule {
 // editable. Multi-hop chain rows lock proto+target (the relay skeleton owned
 // by the server) but free listen_port/mode/comment.
 func (m model) lockedFields() map[int]bool {
-	if m.cursor >= len(m.rules) {
+	if m.cursor >= len(m.rows) {
 		return nil
 	}
 	r := m.rowAt(m.cursor)
@@ -193,14 +196,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) refresh() {
-	rules, connected, nodeName, err := loadInitialRules(m.client)
+	st, rows, err := loadSnapshot(m.client)
 	if err != nil {
 		m.err = err.Error()
 		return
 	}
-	m.rules = rules
-	m.connected = connected
-	m.nodeName = nodeName
+	m.daemon = st
+	m.rows = rows
 	if m.cursor >= m.totalRows() {
 		m.cursor = m.totalRows() - 1
 	}

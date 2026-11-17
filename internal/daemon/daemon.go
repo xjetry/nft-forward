@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -18,7 +17,6 @@ import (
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
-	"nft-forward/internal/wsproto"
 )
 
 const (
@@ -45,23 +43,10 @@ type Config struct {
 	LegacyPaths LegacyMigrationPaths
 	Iface       string
 
-	// ConnectURL, when non-empty, makes the daemon dial out to a remote panel's
-	// WebSocket endpoint (e.g. wss://panel/v1/agents). ConnectToken is the
-	// bearer credential sent in the hello frame; required when ConnectURL is
-	// set.
-	ConnectURL   string
-	ConnectToken string
-	PortRange    string
-
-	// ServerLocal 表示本 daemon 是面板宿主机自己的节点（cmd/nft-agent 的
-	// --server-local）：它经面板的本机入口 socket（PanelSocketPath）拨面板，用的是
-	// 与 ConnectURL 相同的 agent 协议，只是不带 token——面板按入口把它认定为 self
-	// 节点。ConnectURL 与 ServerLocal 二选一；两者都没有就是单机 daemon，不拨任何
-	// 面板。
-	ServerLocal bool
-	// PanelSocketPath 是 ServerLocal 模式下要拨的 socket，缺省为
-	// wsproto.LocalAgentSocketPath。
-	PanelSocketPath string
+	// Mode 是这个 daemon 的运行形态：单机（零值）、由远端面板托管、面板机本机。
+	// 见 RunMode。
+	Mode      RunMode
+	PortRange string
 
 	// DeclaredRelayHost/DeclaredRelayHostV6, when set, are sent with every
 	// hello as the authoritative data-plane address for this node — see
@@ -81,12 +66,6 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	if cfg.GroupName == "" {
 		cfg.GroupName = DefaultGroupName
-	}
-	if cfg.PanelSocketPath == "" {
-		cfg.PanelSocketPath = wsproto.LocalAgentSocketPath
-	}
-	if cfg.ConnectURL != "" && cfg.ServerLocal {
-		return nil, errors.New("远程面板地址（--connect）与本机面板模式（--server-local）不能同时指定：一个 daemon 只归一个面板管")
 	}
 	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
 		cfg.LegacyPaths = DefaultLegacyPaths()
@@ -114,28 +93,19 @@ func New(cfg Config) (*Daemon, error) {
 		legacyPaths:         cfg.LegacyPaths,
 		countersFn:          cfg.Dataplane.Counters,
 		resolveFn:           defaultResolver(resolver.New()),
-		connectURL:          cfg.ConnectURL,
-		connectTok:          cfg.ConnectToken,
-		serverLocal:         cfg.ServerLocal,
-		panelSocket:         cfg.PanelSocketPath,
+		mode:                cfg.Mode,
 		portRange:           cfg.PortRange,
 		declaredRelayHost:   cfg.DeclaredRelayHost,
 		declaredRelayHostV6: cfg.DeclaredRelayHostV6,
 	}, nil
 }
 
-// downgradePanelRule turns a panel-pushed rule into a standalone tui rule:
-// fresh local id, panel metadata cleared. Group shaping is dropped with it —
-// the limit is priced by a panel-side grant that no longer governs this
-// daemon — while the self-contained legacy per-rule cap is kept.
+// downgradePanelRule 把一条面板下发的规则变成本机自有的本地规则：去掉面板给的全部
+// 字段（哪些算面板给的由 nft.Rule.WithoutPanelBinding 定义），再给它一个新的本地 id
+// ——本地规则靠 ID 寻址，面板下发的规则没有。
 func downgradePanelRule(r nft.Rule) nft.Rule {
+	r = r.WithoutPanelBinding()
 	r.ID = nft.NewRuleID()
-	r.RuleID = 0
-	r.RuleName = ""
-	r.OwnerName = ""
-	r.HopCount = 0
-	r.ShapeGroup = 0
-	r.RateMBytes = 0
 	return r
 }
 
@@ -171,13 +141,13 @@ func (d *Daemon) Bootstrap() error {
 	//
 	// 归面板管的 daemon 不做这件事：面板在它连上之后会重新下发 "panel" 段，降级出
 	// 来的 "tui" 副本会和重新下发的规则抢同一个端口。
-	if !d.managedByPanel() && len(owners["panel"]) > 0 {
-		downgraded := make([]nft.Rule, len(owners["panel"]))
-		for i, r := range owners["panel"] {
+	if !d.mode.Managed() && len(owners[segPanel]) > 0 {
+		downgraded := make([]nft.Rule, len(owners[segPanel]))
+		for i, r := range owners[segPanel] {
 			downgraded[i] = downgradePanelRule(r)
 		}
-		owners["tui"] = append(owners["tui"], downgraded...)
-		delete(owners, "panel")
+		owners[segLocal] = append(owners[segLocal], downgraded...)
+		delete(owners, segPanel)
 		meta.LastAppliedRev = ""
 		if err := SaveState(d.statePath, owners, meta); err != nil {
 			return fmt.Errorf("save downgraded state: %w", err)
@@ -186,7 +156,7 @@ func (d *Daemon) Bootstrap() error {
 
 	// Backfill: assign local IDs to any tui rules that lack one (left by
 	// an older downgrade that did not generate IDs).
-	if rules := owners["tui"]; len(rules) > 0 {
+	if rules := owners[segLocal]; len(rules) > 0 {
 		patched := false
 		for i := range rules {
 			if rules[i].ID == "" {
@@ -252,13 +222,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.probeFirewallEnvironment()
 	go d.refreshLoop(ctx)
 
-	if d.managedByPanel() {
-		// 两种接法共用同一个拨号器，只在“往哪拨”上不同：远程面板给 URL 与 token，
-		// 本机面板给 socket 路径（两者由 New 保证不同时出现）。
+	if d.mode.Managed() {
+		// 两种托管形态共用同一个拨号器，只在“往哪拨”上不同，由 d.mode 给出。拨号器
+		// 只在这里创建，所以“有拨号器”与“托管形态”是同一件事。
 		dl := NewDialer(DialerConfig{
-			URL:                 d.connectURL,
-			Token:               d.connectTok,
-			SocketPath:          d.localPanelSocket(),
+			Panel:               d.mode,
 			AgentVersion:        agentVersion(),
 			AgentSHA:            agentSHA(),
 			PortRange:           d.portRange,
@@ -389,9 +357,9 @@ func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Ru
 	_, unresolved, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			if len(rules) == 0 {
-				delete(candidate, "panel")
+				delete(candidate, segPanel)
 			} else {
-				candidate["panel"] = append([]nft.Rule(nil), rules...)
+				candidate[segPanel] = append([]nft.Rule(nil), rules...)
 			}
 			superseded = dropLocalRulesClaimedByPanel(candidate)
 		},
@@ -429,24 +397,24 @@ func summarizeUnresolved(rules []nft.Rule) string {
 	return fmt.Sprintf("%d 条规则的目标无法解析：%s", len(rules), strings.Join(parts, "，"))
 }
 
-// clearTuiSegment removes the "tui" segment after a successful migration
-// to the server. Called from the dialer's OnMigrated callback.
+// clearTuiSegment 在面板应答接管成功后清掉整个本地段，由拨号器的 OnMigrated 回调
+// 调用。
+//
+// 清的是整段，而交给面板的是拨号器在此之前取的一份快照（Dialer.adoptLocalRules）。
+// 两者之间本地段不会多出快照里没有的规则：拨号器只在托管形态下存在，而托管形态
+// 下本机控制口不建本地规则（handleCreateRule 一律交给面板），其余写本地段的路径
+// 只改或只删已有的规则。所以整段清掉不会带走一条面板没接管的规则。这个窗口里对
+// 本地规则的修改或删除则不受保护：面板接管的是快照里的版本。
 func (d *Daemon) clearTuiSegment() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
-			delete(candidate, "tui")
+			delete(candidate, segLocal)
 		}, nil, true)
 	if err != nil {
 		log.Printf("daemon: clear tui segment after migration: %v", err)
 	}
-}
-
-// Dialer returns the currently-active Dialer, or nil when --connect
-// was not set. Safe for concurrent read from goroutines outside Run.
-func (d *Daemon) Dialer() *Dialer {
-	return d.dialer.Load()
 }
 
 // SnapshotForDialer returns defensive copies of owners and meta so the

@@ -40,12 +40,11 @@ const (
 // owner-segmented state through plain function values so the test in
 // dialer_test.go can substitute fakes without spinning up a daemon.
 type DialerConfig struct {
-	// 往哪拨，二选一：URL + Token 是远程面板（握手带 token，面板按 token 认节点）；
-	// SocketPath 是本机面板的本机入口 socket（握手不带 token，面板按入口认定为
-	// self 节点）。SocketPath 非空时 URL 与 Token 不使用。
-	URL          string
-	Token        string
-	SocketPath   string
+	// Panel 是 daemon 的运行形态，拨号器从中取往哪拨：远端面板托管拨它的 URL、
+	// 握手带 token；面板机本机拨本机入口 socket、握手不带 token。拨号器只为托管
+	// 形态创建（Daemon.Run）；拿单机形态构造出的拨号器没有可拨的地址，每次拨号都
+	// 失败。
+	Panel        RunMode
 	AgentVersion string
 	AgentSHA     string
 	PortRange    string
@@ -110,19 +109,19 @@ const localPanelURL = "ws://nft-forward-panel/v1/agents"
 
 // target 是本拨号器的拨号目标，用于日志。
 func (d *Dialer) target() string {
-	if d.cfg.SocketPath != "" {
-		return "unix " + d.cfg.SocketPath
+	if d.cfg.Panel.kind == runLocalPanel {
+		return "unix " + d.cfg.Panel.socket
 	}
-	return d.cfg.URL
+	return d.cfg.Panel.url
 }
 
-// dialTarget 返回握手用的地址与选项。SocketPath 非空时 WebSocket 握手跑在那个 unix
-// socket 上（忽略 URL）；否则按 URL 走网络。
+// dialTarget 返回握手用的地址与选项。面板机本机形态下 WebSocket 握手跑在面板的本机
+// 入口 socket 上；否则按面板的 URL 走网络。
 func (d *Dialer) dialTarget() (string, *websocket.DialOptions) {
-	if d.cfg.SocketPath == "" {
-		return d.cfg.URL, nil
+	if d.cfg.Panel.kind != runLocalPanel {
+		return d.cfg.Panel.url, nil
 	}
-	path := d.cfg.SocketPath
+	path := d.cfg.Panel.socket
 	return localPanelURL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var nd net.Dialer
@@ -208,7 +207,7 @@ func (d *Dialer) MigrateRules(ctx context.Context, rules []nft.Rule) (wsproto.Ru
 // 前断开时，本地段原样保留，规则继续转发，下次会话再试。
 func (d *Dialer) adoptLocalRules(ctx context.Context) {
 	owners, _ := d.cfg.GetState()
-	local := owners["tui"]
+	local := owners[segLocal]
 	if len(local) == 0 {
 		return
 	}
@@ -353,7 +352,7 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	_, currentMeta := d.cfg.GetState()
 	probedV4, probedV6 := probeOutboundIPs()
 	helloPayload, err := json.Marshal(wsproto.Hello{
-		NodeToken:           d.cfg.Token,
+		NodeToken:           d.cfg.Panel.token,
 		AgentVersion:        d.cfg.AgentVersion,
 		AgentSHA:            d.cfg.AgentSHA,
 		OS:                  runtime.GOOS,

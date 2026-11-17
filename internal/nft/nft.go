@@ -22,27 +22,38 @@ const (
 	ModeUserspace = "userspace"
 )
 
+// Rule 是一条转发规则。同一个类型既是数据面的输入，也是面板下发与本地规则迁移的
+// 线上载荷、状态文件里的元素和 TUI 列表的一行，所以已有字段的 JSON 名字受已部署
+// 的 agent、面板和磁盘上的 state.json 约束，不能改。
+//
+// 关于字段有两个问题，各自只在本文件里回答一次，别处不逐字段列举：
+//
+//   - 数据面读不读它：Dataplane。
+//   - 它是不是面板给的、规则脱离面板时要去掉：WithoutPanelBinding。
+//
+// 加字段时两处都要归类；TestEveryRuleFieldIsClassified 在有字段没归类时红。
 type Rule struct {
-	ID            string `json:"id"`
-	Proto         string `json:"proto"`
-	SrcPort       int    `json:"src_port"`
-	DestIP        string `json:"dest_ip,omitempty"`
-	DestHost      string `json:"dest_host,omitempty"`
-	DestPort      int    `json:"dest_port"`
+	// ID 是本地规则在本机的 id（NewRuleID 生成）；面板下发的规则不带它，面板规则
+	// 用 RuleID 标识。数据面不读。
+	ID       string `json:"id"`
+	Proto    string `json:"proto"`
+	SrcPort  int    `json:"src_port"`
+	DestIP   string `json:"dest_ip,omitempty"`
+	DestHost string `json:"dest_host,omitempty"`
+	DestPort int    `json:"dest_port"`
+	// Comment 是给人看的备注。数据面不读。
 	Comment       string `json:"comment,omitempty"`
 	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
 	// Mode selects the data plane for this forward: "" / "kernel" = nftables
 	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
 	Mode string `json:"mode,omitempty"`
-	// RuleID/RuleName/OwnerName are panel-side metadata: when a rule
-	// belongs to a relay rule they identify it so the TUI can show the
-	// owning rule and gate which fields are locally editable; OwnerName
-	// names the owning user for display. The data plane (DNAT / userspace /
-	// MergedRuleset / DNS) never reads them.
-	RuleID    int64  `json:"rule_id,omitempty"`
-	RuleName  string `json:"rule_name,omitempty"`
-	OwnerName string `json:"owner_name,omitempty"`
-	HopCount  int    `json:"hop_count,omitempty"`
+	// RuleID、RuleName、HopCount 是面板给的标识：这一条属于面板上的哪条规则、那条
+	// 规则叫什么、整条链有几跳。TUI 用 RuleName 显示所属链路、用 HopCount 决定哪些
+	// 字段可在本机改；daemon 用 HopCount 决定本机发起的编辑走哪条命令
+	// （handleUpdatePanelRule）。数据面不读。
+	RuleID   int64  `json:"rule_id,omitempty"`
+	RuleName string `json:"rule_name,omitempty"`
+	HopCount int    `json:"hop_count,omitempty"`
 	// ShapeGroup/RateMBytes carry the per-grant shared rate limit: every rule
 	// in the same group (one user's rules on one panel node, priced by one
 	// grant) shares a single RateMBytes MB/s bucket, both directions combined.
@@ -62,6 +73,56 @@ func (r Rule) EffectiveMode() string {
 		return ModeUserspace
 	}
 	return ModeKernel
+}
+
+// Dataplane 返回 r 的数据面投影：数据面不读的字段清零，Mode 归一成 EffectiveMode
+// （空值与 "kernel" 在数据面上是同一回事）。两条规则的投影相等，数据面对它们的处理
+// 就相同。
+//
+// “哪些字段数据面不读”只在这里列一次。读它的有两处，用的是同一个投影：daemon 用它
+// 判断数据面要不要重放（SameDataplane），面板用它算规则集的 rev。
+//
+// 写成“清掉不读的”而不是“抄下读的”，是为了让漏归类的后果落在安全的一侧：新加的
+// 字段忘了在这里处理时会留在投影里，它的变化多触发一次重放；反过来写，忘了的字段
+// 不在投影里，数据面字段的变化会被当成没变，数据面不更新。
+func (r Rule) Dataplane() Rule {
+	r.ID = ""
+	r.Comment = ""
+	r.RuleID = 0
+	r.RuleName = ""
+	r.HopCount = 0
+	r.Mode = r.EffectiveMode()
+	return r
+}
+
+// SameDataplane 报告两组规则在数据面上是否相同：条数相同，且同一下标上的规则数据面
+// 投影相等。按下标比，所以同样的规则换了顺序算不同；调用方要自己保证顺序稳定。
+func SameDataplane(a, b []Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Dataplane() != b[i].Dataplane() {
+			return false
+		}
+	}
+	return true
+}
+
+// WithoutPanelBinding 返回脱离面板后的 r：面板给的标识（RuleID、RuleName、HopCount）
+// 和面板给的分组限速（ShapeGroup、RateMBytes）清零，其余不动。“哪些字段是面板给的”
+// 只在这里列一次。
+//
+// 分组限速跟着去掉，是因为那个额度由面板侧的授权定价，脱离面板后没有谁再管它。按
+// 规则的 BandwidthMbps 留着：它不依赖面板，ShapeGroup 与 RateMBytes 清零之后
+// RenderRuleset、tc 与用户态转发（setLimits）都按它限速。
+func (r Rule) WithoutPanelBinding() Rule {
+	r.RuleID = 0
+	r.RuleName = ""
+	r.HopCount = 0
+	r.ShapeGroup = 0
+	r.RateMBytes = 0
+	return r
 }
 
 // GroupShapeMark returns the fwmark for a validly group-shaped rule, or 0.

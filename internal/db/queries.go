@@ -274,19 +274,6 @@ func RenameUser(d *sql.DB, id int64, newUsername string) error {
 	return err
 }
 
-// UsersByID returns all users keyed by ID in a single query.
-func UsersByID(d *sql.DB) (map[int64]*User, error) {
-	all, err := ListUsers(d)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[int64]*User, len(all))
-	for _, u := range all {
-		m[u.ID] = u
-	}
-	return m, nil
-}
-
 // Sessions
 
 func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {

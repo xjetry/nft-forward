@@ -82,13 +82,12 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	}
 }
 
-// A daemon started without --connect but carrying a "panel" segment downgrades
-// it to "tui" — unless it is the panel host's own node (serverLocal), where the
-// co-located panel re-pushes those rules and the downgrade would leave two
-// segments fighting over the same port.
-func TestBootstrap_PanelDowngradeGatedByServerLocal(t *testing.T) {
+// 降级只发生在单机形态：启动时面板段里还有规则，就去掉面板侧的元数据搬进本地段。
+// 两种托管形态都不降级——面板连上后会重新下发面板段，降级出来的本地副本会和它
+// 抢同一个端口。
+func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 	panelRule := nft.Rule{
-		ID: "p1", RuleID: 42, RuleName: "r", OwnerName: "u", HopCount: 1,
+		ID: "p1", RuleID: 42, RuleName: "r", HopCount: 1,
 		ShapeGroup: 5, RateMBytes: 10,
 		Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080,
 	}
@@ -116,7 +115,7 @@ func TestBootstrap_PanelDowngradeGatedByServerLocal(t *testing.T) {
 		if len(tui) != 1 {
 			t.Fatalf("expected 1 downgraded tui rule, got %+v", tui)
 		}
-		if tui[0].RuleID != 0 || tui[0].OwnerName != "" || tui[0].ShapeGroup != 0 || tui[0].RateMBytes != 0 || tui[0].HopCount != 0 {
+		if tui[0].RuleID != 0 || tui[0].RuleName != "" || tui[0].ShapeGroup != 0 || tui[0].RateMBytes != 0 || tui[0].HopCount != 0 {
 			t.Fatalf("downgraded rule kept panel metadata: %+v", tui[0])
 		}
 		if tui[0].ID == "" || tui[0].ID == panelRule.ID {
@@ -127,34 +126,36 @@ func TestBootstrap_PanelDowngradeGatedByServerLocal(t *testing.T) {
 		}
 	})
 
-	t.Run("server-local daemon keeps panel segment", func(t *testing.T) {
-		statePath := filepath.Join(t.TempDir(), "state.json")
-		if err := SaveState(statePath, OwnerRuleset{"panel": []nft.Rule{panelRule}}, AgentMeta{}); err != nil {
-			t.Fatal(err)
-		}
-		d, err := New(Config{
-			StatePath:   statePath,
-			SocketPath:  filepath.Join(shortSockDir(t), "s2.sock"),
-			Dataplane:   &fakeDataplane{},
-			ServerLocal: true,
+	for name, mode := range managedModes {
+		t.Run(name+"保留面板段", func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.json")
+			if err := SaveState(statePath, OwnerRuleset{"panel": []nft.Rule{panelRule}}, AgentMeta{}); err != nil {
+				t.Fatal(err)
+			}
+			d, err := New(Config{
+				StatePath:  statePath,
+				SocketPath: filepath.Join(shortSockDir(t), "s2.sock"),
+				Dataplane:  &fakeDataplane{},
+				Mode:       mode,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Bootstrap(); err != nil {
+				t.Fatalf("Bootstrap: %v", err)
+			}
+			if len(d.owners["tui"]) != 0 {
+				t.Fatalf("托管形态下启动不应生出本地段，实际 %+v", d.owners["tui"])
+			}
+			panel := d.owners["panel"]
+			if len(panel) != 1 {
+				t.Fatalf("panel segment should survive, got %+v", panel)
+			}
+			if panel[0].RuleID != 42 || panel[0].RuleName != "r" || panel[0].ShapeGroup != 5 {
+				t.Fatalf("panel rule metadata must be untouched: %+v", panel[0])
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := d.Bootstrap(); err != nil {
-			t.Fatalf("Bootstrap: %v", err)
-		}
-		if len(d.owners["tui"]) != 0 {
-			t.Fatalf("server-local must not create a tui segment, got %+v", d.owners["tui"])
-		}
-		panel := d.owners["panel"]
-		if len(panel) != 1 {
-			t.Fatalf("panel segment should survive, got %+v", panel)
-		}
-		if panel[0].RuleID != 42 || panel[0].OwnerName != "u" || panel[0].ShapeGroup != 5 {
-			t.Fatalf("panel rule metadata must be untouched: %+v", panel[0])
-		}
-	})
+	}
 }
 
 func TestBootstrap_EmptyStateIsFine(t *testing.T) {

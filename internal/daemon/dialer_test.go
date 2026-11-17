@@ -116,8 +116,7 @@ func TestDialerSendsHelloAndReceivesAck(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState: func() (OwnerRuleset, AgentMeta) {
 			return OwnerRuleset{}, AgentMeta{}
@@ -146,8 +145,7 @@ func TestDialerStoresNodeIdentityFromHelloAck(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -182,8 +180,7 @@ func TestDialerEditRuleHopRoundtripsAck(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -216,8 +213,7 @@ func TestDialerCreateRuleRoundtripsAck(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -250,8 +246,7 @@ func TestDialerUpdateRuleRoundtripsAck(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -271,7 +266,7 @@ func TestDialerUpdateRuleRoundtripsAck(t *testing.T) {
 }
 
 func TestDialerSendCommandFailsWhenDisconnected(t *testing.T) {
-	dl := NewDialer(DialerConfig{URL: "ws://127.0.0.1:1/"})
+	dl := NewDialer(DialerConfig{Panel: RemotePanel("ws://127.0.0.1:1/", "")})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := dl.DeleteRule(ctx, 9); err == nil {
@@ -293,8 +288,7 @@ func TestDialerCommandWokenOnDisconnect(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -365,8 +359,7 @@ func TestDialerMigratesTuiRulesOnConnect(t *testing.T) {
 	migrated := make(chan struct{}, 1)
 	tuiRules := []nft.Rule{{ID: "t1", Proto: "tcp", SrcPort: 12000, DestHost: "1.2.3.4", DestPort: 80}}
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState: func() (OwnerRuleset, AgentMeta) {
 			return OwnerRuleset{"tui": tuiRules}, AgentMeta{}
@@ -424,8 +417,7 @@ func TestDialerHelloIncludesProbedV4(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:          "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:        "tok",
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion: "v1",
 		GetState:     func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:      func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
@@ -459,8 +451,7 @@ func TestDialerHelloIncludesDeclaredRelayHost(t *testing.T) {
 	defer srv.Close()
 
 	dl := NewDialer(DialerConfig{
-		URL:                 "ws" + strings.TrimPrefix(srv.URL, "http") + "/",
-		Token:               "tok",
+		Panel:               RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
 		AgentVersion:        "v1",
 		DeclaredRelayHost:   "203.0.113.50",
 		DeclaredRelayHostV6: "2001:db8::50",

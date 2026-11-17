@@ -15,9 +15,9 @@ import (
 // memory; SaveState always writes the current version.
 const stateSchemaVersion = 4
 
-// OwnerRuleset is the in-memory representation: each known controller
-// ("tui", "panel", future additions) owns a slice of rules. The daemon
-// merges all owners into one ruleset before calling dp.Reconcile.
+// OwnerRuleset 是按归属段分开的规则集，内存里与 state.json 里都是这个形状。键只有
+// 两个：segLocal 与 segPanel（见 owners.go）。daemon 在调 dp.Reconcile 之前把各段
+// 合成一个规则集（MergedRuleset）。
 type OwnerRuleset map[string][]nft.Rule
 
 // stateFile is the on-disk JSON layout for the current schema version.
@@ -117,7 +117,7 @@ func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 		}
 		out := OwnerRuleset{}
 		if len(v1.Rules) > 0 {
-			out["tui"] = v1.Rules
+			out[segLocal] = v1.Rules
 		}
 		return out, AgentMeta{}, nil
 	default:

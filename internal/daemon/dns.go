@@ -79,18 +79,6 @@ func (d *Daemon) refreshOnce(ctx context.Context) error {
 	return nil
 }
 
-func rulesDiffer(a, b []nft.Rule) bool {
-	if len(a) != len(b) {
-		return true
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return true
-		}
-	}
-	return false
-}
-
 // dnsInterval honours NFT_FORWARD_DNS_INTERVAL for parity with the previous
 // agent loop. When the env var is set to a zero or invalid duration the loop
 // is disabled; when unset, the default is 60 s.

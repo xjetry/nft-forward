@@ -97,38 +97,84 @@ func TestHealth_FailsOnOkFalse(t *testing.T) {
 	}
 }
 
-func TestStatus_Connected(t *testing.T) {
+// respondWith 起一个只回固定应答体的假 daemon，返回连到它的客户端。
+func respondWith(t *testing.T, body string) *Client {
+	t.Helper()
 	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"connected":true,"node_name":"edge","node_id":7}`))
+		_, _ = w.Write([]byte(body))
 	})
 	c, err := New(sock)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	s, err := c.Status()
+	return c
+}
+
+func TestStatus_ReportsModeAndSession(t *testing.T) {
+	s, err := respondWith(t, `{"mode":"remote-panel","connected":true,"node_name":"edge","node_id":7}`).Status()
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if !s.Connected || s.NodeName != "edge" || s.NodeID != 7 {
+	if s.Mode != ModeRemotePanel || !s.Mode.Managed() || !s.Connected || s.NodeName != "edge" || s.NodeID != 7 {
 		t.Fatalf("unexpected status: %+v", s)
+	}
+
+	s, err = respondWith(t, `{"mode":"local-panel","connected":false}`).Status()
+	if err != nil || s.Mode != ModeLocalPanel || !s.Mode.Managed() || s.Connected {
+		t.Fatalf("面板机本机、离线：得到 %+v, %v", s, err)
+	}
+
+	s, err = respondWith(t, `{"mode":"standalone","connected":false}`).Status()
+	if err != nil || s.Mode != ModeStandalone || s.Mode.Managed() {
+		t.Fatalf("单机：得到 %+v, %v", s, err)
 	}
 }
 
-func TestListRules_RoundTrip(t *testing.T) {
-	sock := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"rules":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80}]}`))
-	})
-	c, err := New(sock)
-	if err != nil {
-		t.Fatalf("New: %v", err)
+// 形态认不出时报错，不猜成某一种。缺了 mode 的应答（比本程序旧的 daemon 就是这样
+// 回的）也走这条路：把它当成单机，就是把托管但离线的 daemon 说成本地模式。
+func TestStatus_RefusesAnUnrecognisedMode(t *testing.T) {
+	for _, body := range []string{
+		`{"connected":true,"node_name":"edge","node_id":7}`,
+		`{"mode":"","connected":false}`,
+		`{"mode":"clustered","connected":false}`,
+	} {
+		if s, err := respondWith(t, body).Status(); err == nil || !strings.Contains(err.Error(), "无法识别的运行形态") {
+			t.Errorf("应答 %s：应报形态认不出，实际 %+v, %v", body, s, err)
+		}
 	}
-	got, err := c.ListRules()
+}
+
+func TestListRules_RowsCarryTheDaemonsAddress(t *testing.T) {
+	got, err := respondWith(t, `{"rules":[
+		{"proto":"tcp","src_port":90,"dest_ip":"2.0.0.0","dest_port":90,"rule_id":12345678,"ref":{"ns":"panel","id":"12345678"}},
+		{"id":"12345678","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80,"ref":{"ns":"local","id":"12345678"}}
+	]}`).ListRules()
 	if err != nil {
 		t.Fatalf("ListRules: %v", err)
 	}
-	if len(got) != 1 || got[0].ID != "r1" {
-		t.Fatalf("unexpected rules: %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("unexpected rows: %+v", got)
+	}
+	if got[0].SrcPort != 90 || got[0].Ref != PanelRule(12345678) || got[0].Ref.Local() {
+		t.Errorf("第一行应是面板规则 panel/12345678，实际 %+v", got[0])
+	}
+	if got[1].SrcPort != 80 || got[1].Ref != LocalRule("12345678") || !got[1].Ref.Local() {
+		t.Errorf("第二行应是本地规则 local/12345678，实际 %+v", got[1])
+	}
+}
+
+// 行的地址只认 daemon 给的。没给地址（比本程序旧的 daemon）或地址不成形时整个列表
+// 作废，不拿规则的字段去补一个出来。
+func TestListRules_RefusesRowsWithoutAUsableAddress(t *testing.T) {
+	for name, body := range map[string]string{
+		"没有地址":   `{"rules":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80}]}`,
+		"未知命名空间": `{"rules":[{"id":"r1","proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80,"ref":{"ns":"tui","id":"r1"}}]}`,
+		"id 为空":  `{"rules":[{"proto":"tcp","src_port":80,"dest_ip":"1.2.3.4","dest_port":80,"ref":{"ns":"local","id":""}}]}`,
+	} {
+		if rows, err := respondWith(t, body).ListRules(); err == nil {
+			t.Errorf("%s：应报错，实际返回 %+v", name, rows)
+		}
 	}
 }
 

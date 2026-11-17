@@ -204,14 +204,14 @@ func TestSaveLoad_V4RoundTripUserspace(t *testing.T) {
 func TestDowngradePanelRuleStripsPanelState(t *testing.T) {
 	in := nft.Rule{
 		ID: "p1", Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.1", DestPort: 8443,
-		RuleID: 7, RuleName: "r", OwnerName: "alice", HopCount: 2,
+		RuleID: 7, RuleName: "r", HopCount: 2,
 		ShapeGroup: 5, RateMBytes: 10, BandwidthMbps: 84,
 	}
 	out := downgradePanelRule(in)
 	if out.ID == "" || out.ID == in.ID {
 		t.Fatalf("downgrade must assign a fresh local id, got %q", out.ID)
 	}
-	if out.RuleID != 0 || out.RuleName != "" || out.OwnerName != "" || out.HopCount != 0 {
+	if out.RuleID != 0 || out.RuleName != "" || out.HopCount != 0 {
 		t.Fatalf("panel metadata must be cleared: %+v", out)
 	}
 	if out.ShapeGroup != 0 || out.RateMBytes != 0 {
@@ -222,6 +222,37 @@ func TestDowngradePanelRuleStripsPanelState(t *testing.T) {
 	}
 	if out.Proto != "tcp" || out.SrcPort != 443 || out.DestIP != "10.0.0.1" || out.DestPort != 8443 {
 		t.Fatalf("forwarding fields must survive: %+v", out)
+	}
+	// 降级去掉的恰好是 nft.Rule.WithoutPanelBinding 定义的那些字段，此外只换了 ID；
+	// “哪些字段是面板给的”不在降级这里另列一份。
+	want := in.WithoutPanelBinding()
+	want.ID = out.ID
+	if out != want {
+		t.Fatalf("降级的结果应等于去掉面板字段、换上新 ID 的规则:\n got %+v\nwant %+v", out, want)
+	}
+}
+
+// 旧版 agent 写下的状态文件里，面板段的规则带着 owner_name。这个字段已经不在
+// nft.Rule 里，带着它的状态文件必须照常读出来，rev 与其余字段不受影响。
+func TestLoadStateReadsRulesThatStillCarryOwnerName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	old := `{"version":4,"owners":{"panel":[{"id":"","proto":"tcp","src_port":12000,"dest_ip":"10.0.0.1","dest_port":443,"mode":"kernel","rule_id":7,"rule_name":"r","owner_name":"alice","hop_count":1,"shape_group":5,"rate_mbytes":10}]},"agent_meta":{"last_applied_rev":"abc"}}`
+	if err := os.WriteFile(path, []byte(old), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	owners, meta, err := LoadState(path)
+	if err != nil {
+		t.Fatalf("带 owner_name 的状态文件应能读出: %v", err)
+	}
+	want := nft.Rule{
+		Proto: "tcp", SrcPort: 12000, DestIP: "10.0.0.1", DestPort: 443, Mode: nft.ModeKernel,
+		RuleID: 7, RuleName: "r", HopCount: 1, ShapeGroup: 5, RateMBytes: 10,
+	}
+	if got := owners[segPanel]; len(got) != 1 || got[0] != want {
+		t.Fatalf("读出的面板段不对:\n got %+v\nwant %+v", got, want)
+	}
+	if meta.LastAppliedRev != "abc" {
+		t.Fatalf("rev 应原样读出，实际 %q", meta.LastAppliedRev)
 	}
 }
 
