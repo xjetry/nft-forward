@@ -70,7 +70,7 @@ func runDaemon(t *testing.T, d *Daemon) {
 }
 
 // 面板机本机形态的 daemon（LocalPanel）经面板的本机入口 socket 拨号，走的是与远程
-// 节点相同的 agent 协议：握手不带 token，之后面板经这条连接下发的规则集落进 panel 段。
+// 节点相同的 agent 协议：握手不带 token，之后面板经这条连接下发的规则集落到面板名下。
 func TestServerLocalDaemonDialsThePanelSocket(t *testing.T) {
 	dir := shortSockDir(t)
 	panelSock := filepath.Join(dir, "panel.sock")
@@ -115,7 +115,7 @@ func TestServerLocalDaemonDialsThePanelSocket(t *testing.T) {
 	}
 	owners, meta := d.SnapshotForDialer()
 	if len(owners["panel"]) != 1 || owners["panel"][0].SrcPort != 12003 {
-		t.Fatalf("下发的规则应落进 panel 段，实际 %+v", owners["panel"])
+		t.Fatalf("下发的规则应落到面板名下，实际 %+v", owners["panel"])
 	}
 	if meta.LastAppliedRev != "rev-1" {
 		t.Fatalf("应记下已应用的 rev，实际 %q", meta.LastAppliedRev)
@@ -158,7 +158,7 @@ func TestStandaloneDaemonHasNoDialer(t *testing.T) {
 
 // daemon 接入面板时把本地规则交给面板接管（migrate_rules）。面板在应答它之前可能先
 // 发来一次规则下发——握手后面板总会核对一次规则集，两件事在面板那边并行。下发必须
-// 照常被应用并应答，迁移的应答到达后本地段才清掉：两帧谁先到都不能丢。
+// 照常被应用并应答，迁移的应答到达后本地名下才清掉：两帧谁先到都不能丢。
 func TestLocalRulesAreAdoptedEvenWhenAPushArrivesFirst(t *testing.T) {
 	dir := shortSockDir(t)
 	panelSock := filepath.Join(dir, "panel.sock")
@@ -226,14 +226,14 @@ func TestLocalRulesAreAdoptedEvenWhenAPushArrivesFirst(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("面板应答接管成功后本地段应清空，实际仍有 %+v", owners["tui"])
+			t.Fatalf("面板应答接管成功后本地名下应清空，实际仍有 %+v", owners["tui"])
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // 接管的另一种到达顺序：面板为本地规则建好面板规则后，带着它的下发先于接管的应答
-// 到达。这时本地段里还留着同一端口的那条规则；下发必须被接受（本地那条让位），而且
+// 到达。这时本地名下还留着同一端口的那条规则；下发必须被接受（本地那条让位），而且
 // 从头到尾数据面里都有这个端口的规则——接管不能造成转发中断。
 func TestAdoptionConvergesWhenTheAdoptedRuleIsPushedBeforeTheAck(t *testing.T) {
 	dir := shortSockDir(t)
@@ -295,12 +295,12 @@ func TestAdoptionConvergesWhenTheAdoptedRuleIsPushedBeforeTheAck(t *testing.T) {
 		owners, _ := d.SnapshotForDialer()
 		if len(owners["tui"]) == 0 && len(owners["panel"]) == 1 {
 			if owners["panel"][0].RuleID != 7 || owners["panel"][0].SrcPort != port {
-				t.Fatalf("面板段应是被接管后的那条规则，实际 %+v", owners["panel"])
+				t.Fatalf("面板名下应是被接管后的那条规则，实际 %+v", owners["panel"])
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("应收敛到“面板段 1 条、本地段为空”，实际 panel=%+v tui=%+v", owners["panel"], owners["tui"])
+			t.Fatalf("应收敛到“面板名下 1 条、本地名下为空”，实际 panel=%+v tui=%+v", owners["panel"], owners["tui"])
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -324,7 +324,7 @@ func TestAdoptionConvergesWhenTheAdoptedRuleIsPushedBeforeTheAck(t *testing.T) {
 	}
 }
 
-// 归属段的写入是“取当前内容 → 改 → 解析 → 下数据面 → 提交”，中间的解析可以很慢。
+// 规则集的写入是“取当前内容 → 改 → 解析 → 下数据面 → 提交”，中间的解析可以很慢。
 // 两次写入若交叠，后提交的不能把先提交的改动冲掉：这里让面板下发卡在解析上，其间
 // 删掉一条本地规则，两个改动最后都必须在。
 func TestConcurrentOwnerWritesDoNotLoseEachOthersChanges(t *testing.T) {
@@ -358,7 +358,7 @@ func TestConcurrentOwnerWritesDoNotLoseEachOthersChanges(t *testing.T) {
 
 	deleteDone := make(chan struct{})
 	go func() {
-		d.clearTuiSegment()
+		d.clearLocalRules()
 		close(deleteDone)
 	}()
 	// 给第二个写入一点时间：没有串行化时它会在这段时间里跑完并提交。
@@ -381,7 +381,7 @@ func TestConcurrentOwnerWritesDoNotLoseEachOthersChanges(t *testing.T) {
 	}
 }
 
-// 面板下发占用某个端口时，本地段里占同一端口的规则让位；其余本地规则不受影响。
+// 面板下发占用某个端口时，本地名下占同一端口的规则让位；其余本地规则不受影响。
 func TestPanelPushSupersedesOnlyTheLocalRulesOnItsPorts(t *testing.T) {
 	d := newTestDaemon(t)
 	d.owners = OwnerRuleset{"tui": {
@@ -396,20 +396,20 @@ func TestPanelPushSupersedesOnlyTheLocalRulesOnItsPorts(t *testing.T) {
 	}
 	owners, _ := d.SnapshotForDialer()
 	if len(owners["panel"]) != 1 || owners["panel"][0].RuleID != 7 {
-		t.Fatalf("面板段应是下发的那一条，实际 %+v", owners["panel"])
+		t.Fatalf("面板名下应是下发的那一条，实际 %+v", owners["panel"])
 	}
 	var left []string
 	for _, r := range owners["tui"] {
 		left = append(left, r.ID)
 	}
 	if len(left) != 2 || left[0] != "t2" || left[1] != "t3" {
-		t.Fatalf("只有同协议同端口的 t1 该让位，本地段应剩 t2、t3，实际 %v", left)
+		t.Fatalf("只有同协议同端口的 t1 该让位，本地名下应剩 t2、t3，实际 %v", left)
 	}
 }
 
-// DELETE /v1/rules/panel 清空 panel 段——卸载面板角色时由安装脚本调用，把面板下发过
+// DELETE /v1/rules/panel 清空面板名下的规则——卸载面板角色时由安装脚本调用，把面板下发过
 // 的规则撤出数据面。本地规则不受影响。
-func TestClearPanelSegmentLeavesLocalRulesAlone(t *testing.T) {
+func TestClearPanelRulesLeavesLocalRulesAlone(t *testing.T) {
 	dp := &fakeDataplane{}
 	d, srv := newTestServer(t, dp)
 	defer srv.Close()
@@ -428,12 +428,12 @@ func TestClearPanelSegmentLeavesLocalRulesAlone(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("清空 panel 段应成功，实际 HTTP %d", resp.StatusCode)
+		t.Fatalf("清空面板名下的规则应成功，实际 HTTP %d", resp.StatusCode)
 	}
 
 	owners, meta := d.SnapshotForDialer()
 	if len(owners["panel"]) != 0 {
-		t.Fatalf("panel 段应为空，实际 %+v", owners["panel"])
+		t.Fatalf("面板名下应为空，实际 %+v", owners["panel"])
 	}
 	if len(owners["tui"]) != 1 || owners["tui"][0].ID != "t1" {
 		t.Fatalf("本地规则不应受影响，实际 %+v", owners["tui"])
@@ -449,8 +449,8 @@ func TestClearPanelSegmentLeavesLocalRulesAlone(t *testing.T) {
 	}
 }
 
-// panel 段没有别的本地写入口：整段替换只能由面板经 agent 连接下发。
-func TestNoLocalEndpointReplacesThePanelSegment(t *testing.T) {
+// 面板名下没有别的本地写入口：整体替换只能由面板经 agent 连接下发。
+func TestNoLocalEndpointReplacesThePanelRules(t *testing.T) {
 	d, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
 	body := `{"rules":[{"proto":"tcp","src_port":12005,"dest_ip":"10.0.0.7","dest_port":80,"rule_id":9}]}`
@@ -465,6 +465,6 @@ func TestNoLocalEndpointReplacesThePanelSegment(t *testing.T) {
 		}
 	}
 	if owners, _ := d.SnapshotForDialer(); len(owners["panel"]) != 0 {
-		t.Fatalf("panel 段不应被本地请求写入，实际 %+v", owners["panel"])
+		t.Fatalf("面板名下不应被本地请求写入，实际 %+v", owners["panel"])
 	}
 }

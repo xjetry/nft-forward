@@ -111,19 +111,19 @@ func (d *Daemon) Bootstrap() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// 降级：单机 daemon（不归任何面板管）启动时若 "panel" 段里还有规则——上一次
-	// 归面板管时留下的——就把它们去掉面板侧的元数据搬进 "tui" 段，再删掉 "panel"
-	// 段，这样规则在单机模式下照常转发、可在 TUI 里管理。
+	// 降级：单机 daemon（不归任何面板管）启动时若 "panel" 名下还有规则——上一次
+	// 归面板管时留下的——就把它们去掉面板侧的元数据搬到 "tui" 名下，再删掉 "panel"
+	// 这个键，这样规则在单机模式下照常转发、可在 TUI 里管理。
 	//
-	// 归面板管的 daemon 不做这件事：面板在它连上之后会重新下发 "panel" 段，降级出
+	// 归面板管的 daemon 不做这件事：面板在它连上之后会重新下发 "panel" 名下的规则，降级出
 	// 来的 "tui" 副本会和重新下发的规则抢同一个端口。
-	if !d.mode.Managed() && len(owners[segPanel]) > 0 {
-		downgraded := make([]nft.Rule, len(owners[segPanel]))
-		for i, r := range owners[segPanel] {
+	if !d.mode.Managed() && len(owners[ownerPanel]) > 0 {
+		downgraded := make([]nft.Rule, len(owners[ownerPanel]))
+		for i, r := range owners[ownerPanel] {
 			downgraded[i] = downgradePanelRule(r)
 		}
-		owners[segLocal] = append(owners[segLocal], downgraded...)
-		delete(owners, segPanel)
+		owners[ownerLocal] = append(owners[ownerLocal], downgraded...)
+		delete(owners, ownerPanel)
 		meta.LastAppliedRev = ""
 		if err := SaveState(d.statePath, owners, meta); err != nil {
 			return fmt.Errorf("save downgraded state: %w", err)
@@ -132,7 +132,7 @@ func (d *Daemon) Bootstrap() error {
 
 	// Backfill: assign local IDs to any tui rules that lack one (left by
 	// an older downgrade that did not generate IDs).
-	if rules := owners[segLocal]; len(rules) > 0 {
+	if rules := owners[ownerLocal]; len(rules) > 0 {
 		patched := false
 		for i := range rules {
 			if rules[i].ID == "" {
@@ -210,7 +210,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			DeclaredRelayHostV6: d.declaredRelayHostV6,
 			GetState:            d.SnapshotForDialer,
 			OnApply:             d.SetPanelRuleset,
-			OnMigrated:          d.clearTuiSegment,
+			OnMigrated:          d.clearLocalRules,
 			CountersFn:          d.counterSamples,
 			CountersReadd:       d.reAddCounters,
 			OnConfigUpdate: func(poolSize int) {
@@ -316,26 +316,26 @@ func (d *Daemon) RunWithSignals() error {
 	return d.Run(ctx)
 }
 
-// SetPanelRuleset 把 "panel" 段整体替换为 rules，走统一的 reconcileOwners 写路径。
-// daemon 对外服务期间 "panel" 段只在这里被写（另一处写入是 Bootstrap 的降级，在
+// SetPanelRuleset 把 "panel" 名下的规则整体替换为 rules，走统一的 reconcileOwners 写路径。
+// daemon 对外服务期间 "panel" 名下只在这里被写（另一处写入是 Bootstrap 的降级，在
 // 启动阶段、开始服务之前）。调用方有两个：拨号器收到 apply_ruleset 帧时（rev 取
-// 帧里的值），以及本机清空 panel 段时（rev 为空）。
+// 帧里的值），以及本机清空面板名下的规则时（rev 为空）。
 //
 // rev 与规则在同一次 SaveState 里落盘，所以 agent_meta.LastAppliedRev 始终是“当前
-// panel 段对应面板的哪个版本”：握手时 daemon 把它报给面板，面板算出的版本与它相同
+// 面板名下的规则对应面板的哪个版本”：握手时 daemon 把它报给面板，面板算出的版本与它相同
 // 就不再重发。空 rev 表示当前内容不对应面板的任何版本——本机清空之后必须如此，
 // 否则面板下次连上时会以为规则仍在而跳过下发。
 //
-// 同一次写入里，本地段中与新 panel 段占同一位置的规则让位（见
+// 同一次写入里，本地名下与新下发的面板规则占同一位置的规则让位（见
 // dropLocalRulesClaimedByPanel）。
 func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) (string, error) {
 	var superseded []nft.Rule
 	_, unresolved, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			if len(rules) == 0 {
-				delete(candidate, segPanel)
+				delete(candidate, ownerPanel)
 			} else {
-				candidate[segPanel] = append([]nft.Rule(nil), rules...)
+				candidate[ownerPanel] = append([]nft.Rule(nil), rules...)
 			}
 			superseded = dropLocalRulesClaimedByPanel(candidate)
 		},
@@ -406,23 +406,23 @@ func summarizeUnresolved(rules []nft.Rule) string {
 	return fmt.Sprintf("%d 条规则的目标无法解析：%s", len(rules), strings.Join(parts, "，"))
 }
 
-// clearTuiSegment 在面板应答接管成功后清掉整个本地段，由拨号器的 OnMigrated 回调
+// clearLocalRules 在面板应答接管成功后清掉本地名下的全部规则，由拨号器的 OnMigrated 回调
 // 调用。
 //
-// 清的是整段，而交给面板的是拨号器在此之前取的一份快照（Dialer.adoptLocalRules）。
-// 两者之间本地段不会多出快照里没有的规则：拨号器只在托管形态下存在，而托管形态
-// 下本机控制口不建本地规则（handleCreateRule 一律交给面板），其余写本地段的路径
-// 只改或只删已有的规则。所以整段清掉不会带走一条面板没接管的规则。这个窗口里对
+// 清的是全部，而交给面板的是拨号器在此之前取的一份快照（Dialer.adoptLocalRules）。
+// 两者之间本地名下不会多出快照里没有的规则：拨号器只在托管形态下存在，而托管形态
+// 下本机控制口不建本地规则（handleCreateRule 一律交给面板），其余写本地名下的路径
+// 只改或只删已有的规则。所以全部清掉不会带走一条面板没接管的规则。这个窗口里对
 // 本地规则的修改或删除则不受保护：面板接管的是快照里的版本。
-func (d *Daemon) clearTuiSegment() {
+func (d *Daemon) clearLocalRules() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
-			delete(candidate, segLocal)
+			delete(candidate, ownerLocal)
 		}, nil, true)
 	if err != nil {
-		log.Printf("daemon: clear tui segment after migration: %v", err)
+		log.Printf("daemon: clear local rules after migration: %v", err)
 	}
 }
 

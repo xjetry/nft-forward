@@ -197,7 +197,7 @@ func TestDowngradePanelRuleStripsPanelState(t *testing.T) {
 	}
 }
 
-// 旧版 agent 写下的状态文件里，面板段的规则带着 owner_name。这个字段已经不在
+// 旧版 agent 写下的状态文件里，面板名下的规则带着 owner_name。这个字段已经不在
 // nft.Rule 里，带着它的状态文件必须照常读出来，rev 与其余字段不受影响。
 func TestLoadStateReadsRulesThatStillCarryOwnerName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
@@ -213,8 +213,8 @@ func TestLoadStateReadsRulesThatStillCarryOwnerName(t *testing.T) {
 		Proto: "tcp", SrcPort: 12000, DestIP: "10.0.0.1", DestPort: 443, Mode: nft.ModeKernel,
 		RuleID: 7, RuleName: "r", HopCount: 1, ShapeGroup: 5, RateMBytes: 10,
 	}
-	if got := owners[segPanel]; len(got) != 1 || got[0] != want {
-		t.Fatalf("读出的面板段不对:\n got %+v\nwant %+v", got, want)
+	if got := owners[ownerPanel]; len(got) != 1 || got[0] != want {
+		t.Fatalf("读出的面板规则不对:\n got %+v\nwant %+v", got, want)
 	}
 	if meta.LastAppliedRev != "abc" {
 		t.Fatalf("rev 应原样读出，实际 %q", meta.LastAppliedRev)

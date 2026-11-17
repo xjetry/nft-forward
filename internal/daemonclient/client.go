@@ -178,7 +178,7 @@ func (c *Client) Status() (StatusResp, error) {
 // Row 是 daemon 规则列表里的一行：规则本身，加上 daemon 给它的地址。
 //
 // 改或删这一行时把 Ref 原样交回（UpdateRule / DeleteRule）。这一行是本地规则还是
-// 面板规则由 Ref 说了算——它是 daemon 按规则所在的归属段填的；不要从 Rule 的字段
+// 面板规则由 Ref 说了算——它是 daemon 按规则的归属填的；不要从 Rule 的字段
 // （比如 RuleID 是否为零）去推断。
 type Row struct {
 	nft.Rule
@@ -289,7 +289,7 @@ const (
 	nsPanel = "panel"
 )
 
-// LocalRule 指向本地段里 ID 等于 id 的本地规则。
+// LocalRule 指向本地名下 ID 等于 id 的本地规则。
 func LocalRule(id string) RuleRef { return RuleRef{ns: nsLocal, id: id} }
 
 // PanelRule 指向面板规则 ruleID。

@@ -20,7 +20,7 @@ import (
 	"nft-forward/internal/wsproto"
 )
 
-// Daemon holds the in-memory owner-segmented ruleset and data-plane wiring
+// Daemon holds the in-memory per-owner ruleset and data-plane wiring
 // shared by the HTTP handlers and the lifecycle code.
 // Fields are unexported; production callers go through New().
 type Daemon struct {
@@ -52,7 +52,7 @@ type Daemon struct {
 	// 收到退出信号时可能正有一次写入停在 dp.Reconcile 里。取 reconcileMu 时不持有 mu。
 	reconcileMu sync.Mutex
 
-	// writeMu 让 reconcileOwners 的一次调用——取当前归属段、改、解析、下数据面、
+	// writeMu 让 reconcileOwners 的一次调用——取当前规则集、改、解析、下数据面、
 	// 提交——整体串行。每次调用都是在当前内容的一份拷贝上改完再整体写回；两次调用
 	// 交叠时后提交的会把先提交的改动原样冲掉（它的拷贝是在对方提交之前取的）。
 	// 调用方互相是并发的：本机控制口的各个 HTTP 处理、拨号器主循环里的面板下发、
@@ -78,7 +78,7 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 }
 
 // reconcileOwners is the shared merge->resolve->apply pipeline used by
-// every path that writes the owner-segmented ruleset.
+// every path that writes the per-owner ruleset.
 //
 // 整个调用在 writeMu 下串行（理由见该字段），所以 mutate 看到的总是上一次写入提交后
 // 的内容。调用方不得持有 d.mu：这里取它拿当前内容的拷贝，在慢操作（解析、下数据面）
@@ -126,7 +126,7 @@ func (d *Daemon) reconcileOwners(
 		return nil, nil, false, err
 	}
 
-	// 归属段里存的是未解析的规则（域名规则的 DestIP 为空），每一轮都从头解析。
+	// 规则集里存的是未解析的规则（域名规则的 DestIP 为空），每一轮都从头解析。
 	// 解析失败的那一项要沿用该域名此刻在数据面里生效的地址，否则一次 DNS 抖动就
 	// 会把正在转发的规则摘掉。所以先把 prev（上一次真正下到数据面的规则集）里同一
 	// 域名的地址填进待解析的规则：nft.ResolveHosts 对解析失败的项保持输入的 DestIP
@@ -190,9 +190,9 @@ func (d *Daemon) closeSerialized(ctx context.Context) error {
 
 // Handler returns the HTTP mux serving all daemon endpoints.
 //
-// 这些都是本机控制口（TUI、安装脚本）。其中没有“整段替换 panel 段”的入口：panel
-// 段的内容只由面板经 agent 连接下发（Dialer 的 OnApply → SetPanelRuleset），本机
-// 能对它做的只有逐条的受限编辑（转给面板裁决）和整段清空。
+// 这些都是本机控制口（TUI、安装脚本）。其中没有“整体替换面板名下的规则”的入口：面板
+// 名下的规则只由面板经 agent 连接下发（Dialer 的 OnApply → SetPanelRuleset），本机
+// 能对它做的只有逐条的受限编辑（转给面板裁决）和整体清空。
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", d.handleHealth)
@@ -207,7 +207,7 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleClearPanelSegment 清空 panel 段（DELETE /v1/rules/panel）：面板下发过的规则
+// handleClearPanelRules 清空面板名下的规则（DELETE /v1/rules/panel）：面板下发过的规则
 // 全部撤出数据面并从状态文件里去掉。给安装脚本在带 --purge 卸载时用：卸载面板角色
 // 时面板已停，卸载 agent 角色时 daemon 即将脱离面板，两种情况下都不会再有人来撤
 // 这些规则。
@@ -215,7 +215,7 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // 已应用的 rev 一并作废（传空 rev）：daemon 若之后又连上面板，握手里报的 rev 对
 // 不上，面板会把规则集重新下发。所以这个操作清不掉一个仍在管着本 daemon 的面板的
 // 规则，只对“面板已停或即将脱离”的 daemon 有持久效果。
-func (d *Daemon) handleClearPanelSegment(w http.ResponseWriter, r *http.Request) {
+func (d *Daemon) handleClearPanelRules(w http.ResponseWriter, r *http.Request) {
 	if _, err := d.SetPanelRuleset(r.Context(), "", nil); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -299,19 +299,19 @@ func (d *Daemon) handleRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// 规则地址里的两个命名空间，对应 /v1/rules/{命名空间}/{id}，与两个归属段一一对应：
-// local 是本地段，panel 是面板段。
+// 规则地址里的两个命名空间，对应 /v1/rules/{命名空间}/{id}，与两种归属一一对应：
+// local 是本地，panel 是面板。
 //
 // 本地规则的 id 由 nft.NewRuleID 生成，是 8 位十六进制串；面板规则的 id 是面板
 // 数据库里的正整数。十六进制串可能恰好全是数字，两种 id 单看字符串分不开，所以
-// 地址必须带命名空间。地址由 daemon 在列规则时按规则所在的段给出（listRows），
+// 地址必须带命名空间。地址由 daemon 在列规则时按规则的归属给出（listRows），
 // 调用方原样带回，谁也不从 id 的长相或规则的字段推断归属。
 const (
 	ruleNSLocal = "local"
 	ruleNSPanel = "panel"
 )
 
-// ruleRef 是一条规则在本机控制口上的地址，即 /v1/rules/{NS}/{ID} 的两段。
+// ruleRef 是一条规则在本机控制口上的地址，即 /v1/rules/{NS}/{ID} 里的两个部分。
 type ruleRef struct {
 	NS string `json:"ns"`
 	ID string `json:"id"`
@@ -323,14 +323,14 @@ type listedRule struct {
 	Ref ruleRef `json:"ref"`
 }
 
-// listRows 把归属段排成列表：面板段在前，本地段在后，每一行的地址取自它所在的段。
-// 段到命名空间的对应只写在这里。
+// listRows 把两种归属名下的规则排成列表：面板的在前，本地的在后，每一行的地址取自它的
+// 归属。归属到命名空间的对应只写在这里。
 func listRows(owners OwnerRuleset) []listedRule {
-	rows := make([]listedRule, 0, len(owners[segPanel])+len(owners[segLocal]))
-	for _, r := range owners[segPanel] {
+	rows := make([]listedRule, 0, len(owners[ownerPanel])+len(owners[ownerLocal]))
+	for _, r := range owners[ownerPanel] {
 		rows = append(rows, listedRule{Rule: r, Ref: ruleRef{NS: ruleNSPanel, ID: strconv.FormatInt(r.RuleID, 10)}})
 	}
-	for _, r := range owners[segLocal] {
+	for _, r := range owners[ownerLocal] {
 		rows = append(rows, listedRule{Rule: r, Ref: ruleRef{NS: ruleNSLocal, ID: r.ID}})
 	}
 	return rows
@@ -339,9 +339,9 @@ func listRows(owners OwnerRuleset) []listedRule {
 // handleRulesWithID 分发 PUT / DELETE /v1/rules/{命名空间}/{id}。
 func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
 	ns, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/rules/"), "/")
-	// 不带 id 的地址指整个命名空间，只支持一个操作：清空 panel 段。
+	// 不带 id 的地址指整个命名空间，只支持一个操作：清空面板名下的规则。
 	if id == "" && ns == ruleNSPanel && r.Method == http.MethodDelete {
-		d.handleClearPanelSegment(w, r)
+		d.handleClearPanelRules(w, r)
 		return
 	}
 	if id == "" {
@@ -378,9 +378,9 @@ func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
 // handleListRules 返回数据面里的全部规则：面板下发的在前，本地的在后，每一行带着
 // 自己的地址（见 listRows）。列表不按形态、也不按会话是否在线取舍。
 //
-// 两段同时非空是会发生的：接入面板时本地规则交给面板接管（Dialer.adoptLocalRules），
-// 被面板拒绝的那一批留在本地段继续转发；面板不可达时面板段也照常在转发。只列
-// 其中一段，另一段的规则就在转发却没有任何界面能看到、改掉或删除。
+// 两种归属名下同时有规则是会发生的：接入面板时本地规则交给面板接管（Dialer.adoptLocalRules），
+// 被面板拒绝的那一批留在本地名下继续转发；面板不可达时面板名下的规则也照常在转发。只列
+// 其中一种，另一种的规则就在转发却没有任何界面能看到、改掉或删除。
 func (d *Daemon) handleListRules(w http.ResponseWriter, _ *http.Request) {
 	d.mu.Lock()
 	rows := listRows(d.owners)
@@ -405,14 +405,14 @@ type createRuleResp struct {
 
 // handleCreateRule 新建一条规则，往哪建由形态决定：
 //
-//   - 托管形态：规则由面板建。请求经会话转给面板，面板建好后随下发进入面板段。
+//   - 托管形态：规则由面板建。请求经会话转给面板，面板建好后随下发记到面板名下。
 //     面板不可达时拒绝（503），不退回去建本地规则——那样规则会在面板不知情、
 //     不计入任何上限与账本的情况下开始转发，重连后才作为一条新规则请面板接管，
 //     而面板可以拒绝接管。
 //   - 单机形态：建一条本地规则，ListenPort 为 0 时自动挑一个空闲端口。
 //
-// 所以托管形态下本地段不会多出规则：里面只有接入面板之前留下、还没被面板接管的
-// 那些（clearTuiSegment 依赖这一点）。
+// 所以托管形态下本地名下不会多出规则：里面只有接入面板之前留下、还没被面板接管的
+// 那些（clearLocalRules 依赖这一点）。
 func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	var req createRuleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -468,7 +468,7 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			candidate[segLocal] = append(candidate[segLocal], rule)
+			candidate[ownerLocal] = append(candidate[ownerLocal], rule)
 		}, nil, true)
 	if err != nil {
 		http.Error(w, err.Error(), d.classifyWriteError(err).(*ownerWriteError).status)
@@ -478,14 +478,14 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, createRuleResp{ListenPort: listenPort})
 }
 
-// panelHopCount returns the HopCount metadata of the panel-segment rule with
+// panelHopCount returns the HopCount metadata of the panel's rule with
 // the given server RuleID, or 0 when the rule is not in local state. Chain
 // rules (HopCount > 1) must be edited through the per-hop channel: the server
 // rejects whole-rule updates on multi-hop rules.
 func (d *Daemon) panelHopCount(ruleID int64) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, r := range d.owners[segPanel] {
+	for _, r := range d.owners[ownerPanel] {
 		if r.RuleID == ruleID {
 			return r.HopCount
 		}
@@ -513,7 +513,7 @@ func decodeUpdateRuleReq(w http.ResponseWriter, r *http.Request) (updateRuleReq,
 }
 
 // handleUpdatePanelRule 把对面板规则的修改经 WS 转给面板；规则的真值在面板数据库
-// 里，daemon 不在本地改 panel 段，等面板重新下发。
+// 里，daemon 不在本地改面板名下的规则，等面板重新下发。
 func (d *Daemon) handleUpdatePanelRule(w http.ResponseWriter, r *http.Request, ruleID int64) {
 	req, ok := decodeUpdateRuleReq(w, r)
 	if !ok {
@@ -556,11 +556,11 @@ func setLocalRuleTarget(r *nft.Rule, exitHost string) {
 	}
 }
 
-// handleUpdateLocalRule 修改本地段里 ID 等于 id 的那条规则。
+// handleUpdateLocalRule 修改本地名下 ID 等于 id 的那条规则。
 //
 // 请求里没给的字段沿用原值，所以合不合法要看改完之后的整条规则（nft.Validate），
 // 不能只看请求：把一条 UDP 规则的模式改成用户态，请求里的每个字段单看都合法。不
-// 合法时本地段保持原样。
+// 合法时本地名下保持原样。
 func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	req, ok := decodeUpdateRuleReq(w, r)
 	if !ok {
@@ -571,7 +571,7 @@ func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, i
 	var invalid error
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			rules := candidate[segLocal]
+			rules := candidate[ownerLocal]
 			for i := range rules {
 				if rules[i].ID != id {
 					continue
@@ -634,21 +634,21 @@ func (d *Daemon) handleDeletePanelRule(w http.ResponseWriter, r *http.Request, r
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleDeleteLocalRule 从本地段删除 ID 等于 id 的那条规则。
+// handleDeleteLocalRule 从本地名下删除 ID 等于 id 的那条规则。
 func (d *Daemon) handleDeleteLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	found := false
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
-			rules := candidate[segLocal]
+			rules := candidate[ownerLocal]
 			for i := range rules {
 				if rules[i].ID == id {
-					candidate[segLocal] = append(rules[:i], rules[i+1:]...)
+					candidate[ownerLocal] = append(rules[:i], rules[i+1:]...)
 					found = true
 					break
 				}
 			}
-			if len(candidate[segLocal]) == 0 {
-				delete(candidate, segLocal)
+			if len(candidate[ownerLocal]) == 0 {
+				delete(candidate, ownerLocal)
 			}
 		}, nil, true)
 	if err != nil {
@@ -663,7 +663,7 @@ func (d *Daemon) handleDeleteLocalRule(w http.ResponseWriter, r *http.Request, i
 }
 
 // pickLocalFreePort finds an unoccupied port in the chain-port range
-// across all owner segments. A port is considered occupied if any rule
+// across the rules of every owner. A port is considered occupied if any rule
 // with a matching or overlapping protocol already uses it.
 func (d *Daemon) pickLocalFreePort(proto string) int {
 	d.mu.Lock()

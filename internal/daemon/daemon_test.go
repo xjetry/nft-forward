@@ -52,7 +52,7 @@ func TestNew_ExplicitOverrides(t *testing.T) {
 	}
 }
 
-func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
+func TestBootstrap_LoadsBothOwnersAndAppliesMerged(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	if err := SaveState(statePath, OwnerRuleset{
 		"tui": []nft.Rule{
@@ -82,10 +82,10 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 	}
 }
 
-// 降级只发生在单机形态：启动时面板段里还有规则，就去掉面板侧的元数据搬进本地段。
-// 两种托管形态都不降级——面板连上后会重新下发面板段，降级出来的本地副本会和它
+// 降级只发生在单机形态：启动时面板名下还有规则，就去掉面板侧的元数据搬到本地名下。
+// 两种托管形态都不降级——面板连上后会重新下发面板名下的规则，降级出来的本地副本会和它
 // 抢同一个端口。
-func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
+func TestBootstrap_PanelRulesAreDowngradedOnlyWhenStandalone(t *testing.T) {
 	panelRule := nft.Rule{
 		ID: "p1", RuleID: 42, RuleName: "r", HopCount: 1,
 		ShapeGroup: 5, RateMBytes: 10,
@@ -109,7 +109,7 @@ func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 			t.Fatalf("Bootstrap: %v", err)
 		}
 		if len(d.owners["panel"]) != 0 {
-			t.Fatalf("panel segment should be gone after downgrade, got %+v", d.owners["panel"])
+			t.Fatalf("panel rules should be gone after downgrade, got %+v", d.owners["panel"])
 		}
 		tui := d.owners["tui"]
 		if len(tui) != 1 {
@@ -127,7 +127,7 @@ func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 	})
 
 	for name, mode := range managedModes {
-		t.Run(name+"保留面板段", func(t *testing.T) {
+		t.Run(name+"保留面板的规则", func(t *testing.T) {
 			statePath := filepath.Join(t.TempDir(), "state.json")
 			if err := SaveState(statePath, OwnerRuleset{"panel": []nft.Rule{panelRule}}, AgentMeta{}); err != nil {
 				t.Fatal(err)
@@ -145,11 +145,11 @@ func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 				t.Fatalf("Bootstrap: %v", err)
 			}
 			if len(d.owners["tui"]) != 0 {
-				t.Fatalf("托管形态下启动不应生出本地段，实际 %+v", d.owners["tui"])
+				t.Fatalf("托管形态下启动不应生出本地名下的规则，实际 %+v", d.owners["tui"])
 			}
 			panel := d.owners["panel"]
 			if len(panel) != 1 {
-				t.Fatalf("panel segment should survive, got %+v", panel)
+				t.Fatalf("panel rules should survive, got %+v", panel)
 			}
 			if panel[0].RuleID != 42 || panel[0].RuleName != "r" || panel[0].ShapeGroup != 5 {
 				t.Fatalf("panel rule metadata must be untouched: %+v", panel[0])

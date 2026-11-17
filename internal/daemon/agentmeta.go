@@ -4,7 +4,7 @@ package daemon
 // the daemon needs across restarts to short-circuit redundant
 // apply_ruleset pushes after reconnect.
 type AgentMeta struct {
-	// LastAppliedRev is the panel-segment version identifier the daemon
+	// LastAppliedRev is the version identifier of the panel's rules the daemon
 	// has most recently acknowledged. Reported in hello so the server
 	// can skip pushing an apply_ruleset whose contents the daemon already
 	// has on disk.

@@ -35,7 +35,7 @@ func serve(d *Daemon, method, path, body string) *httptest.ResponseRecorder {
 
 const createBody = `{"proto":"tcp","exit_host":"1.2.3.4","exit_port":80,"listen_port":12000}`
 
-// 托管形态下规则由面板建。面板不可达时本机控制口不替它建：请求被拒绝，本地段里
+// 托管形态下规则由面板建。面板不可达时本机控制口不替它建：请求被拒绝，本地名下的规则
 // 不多出规则，数据面不动。否则这条规则在面板不知情、不计费的情况下开始转发，等
 // 重连后再作为一条新规则交给面板接管——而面板可能拒绝接管它。
 func TestManagedDaemonRefusesToCreateWhileThePanelIsUnreachable(t *testing.T) {
@@ -53,7 +53,7 @@ func TestManagedDaemonRefusesToCreateWhileThePanelIsUnreachable(t *testing.T) {
 			t.Errorf("%s：应说明原因是面板不可达，实际 %q", name, w.Body.String())
 		}
 		if n := len(d.owners["tui"]); n != 0 {
-			t.Errorf("%s：被拒绝的新建不应落进本地段，实际 %d 条", name, n)
+			t.Errorf("%s：被拒绝的新建不应落到本地名下，实际 %d 条", name, n)
 		}
 		if n := len(dp.nftCalls); n != 0 {
 			t.Errorf("%s：被拒绝的新建不应动数据面，实际下发 %d 次", name, n)
@@ -66,7 +66,7 @@ func TestManagedDaemonRefusesToCreateWhileThePanelIsUnreachable(t *testing.T) {
 		t.Fatalf("单机形态下新建应成功，实际 %d %s", w.Code, w.Body.String())
 	}
 	if n := len(d.owners["tui"]); n != 1 {
-		t.Fatalf("单机形态下新建应落进本地段，实际 %d 条", n)
+		t.Fatalf("单机形态下新建应落到本地名下，实际 %d 条", n)
 	}
 }
 
@@ -141,9 +141,9 @@ func TestStatusReportsRunModeSeparatelyFromSessionState(t *testing.T) {
 	}
 }
 
-// 列表里每一行带着自己的地址，由 daemon 按规则所在的归属段给出。两种 id 的取值
+// 列表里每一行带着自己的地址，由 daemon 按规则的归属给出。两种 id 的取值
 // 可以相同（本地 id 是 8 位十六进制，可能全是数字），地址仍然不同。
-func TestListedRulesCarryTheAddressOfTheSegmentTheyLiveIn(t *testing.T) {
+func TestListedRulesCarryTheAddressOfTheOwnerTheyBelongTo(t *testing.T) {
 	d := newTestDaemon(t)
 	d.owners = OwnerRuleset{
 		"panel": {{RuleID: 12345678, RuleName: "r", Proto: "tcp", SrcPort: 90, DestIP: "2.0.0.0", DestPort: 90}},

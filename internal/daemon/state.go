@@ -14,8 +14,8 @@ import (
 // 一版，SaveState 只写这一版。
 const stateSchemaVersion = 4
 
-// OwnerRuleset 是按归属段分开的规则集，内存里与 state.json 里都是这个形状。键只有
-// 两个：segLocal 与 segPanel（见 owners.go）。daemon 在调 dp.Reconcile 之前把各段
+// OwnerRuleset 是按归属分开的规则集，内存里与 state.json 里都是这个形状。键只有
+// 两个：ownerLocal 与 ownerPanel（见 owners.go）。daemon 在调 dp.Reconcile 之前把两边
 // 合成一个规则集（MergedRuleset）。
 type OwnerRuleset map[string][]nft.Rule
 

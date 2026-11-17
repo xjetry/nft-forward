@@ -133,9 +133,9 @@ func TestHandler_ListRules_EmptyReturnsEmptyArray(t *testing.T) {
 }
 
 // 规则列表覆盖数据面里的每一条规则，与此刻连没连着面板无关：面板下发的在前，本地的
-// 在后。两段同时非空的情形是真实存在的——接入面板时本地规则交给面板接管，被面板
-// 拒绝的那一批留在本地段继续转发；面板不可达时面板段也照常在转发。
-func TestHandler_ListRules_CoversBothSegmentsWhateverTheConnectionState(t *testing.T) {
+// 在后。两种归属名下同时有规则的情形是真实存在的——接入面板时本地规则交给面板接管，被面板
+// 拒绝的那一批留在本地名下继续转发；面板不可达时面板名下的规则也照常在转发。
+func TestHandler_ListRules_CoversBothOwnersWhateverTheConnectionState(t *testing.T) {
 	for _, connected := range []bool{false, true} {
 		d := newTestDaemon(t)
 		d.owners = OwnerRuleset{
@@ -187,7 +187,7 @@ func TestHandler_CreateRule_LocalAppliesAndSaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(saved["tui"]) != 1 {
-		t.Fatalf("state segment not saved: %+v", saved)
+		t.Fatalf("state not saved: %+v", saved)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestHandler_DeleteRule_LocalHexID(t *testing.T) {
 		t.Fatalf("status=%d: %s", w.Code, w.Body.String())
 	}
 	if _, exists := d.owners["tui"]; exists {
-		t.Fatalf("tui segment should be deleted after last rule removed: %+v", d.owners)
+		t.Fatalf("the local owner's key should be gone after its last rule is removed: %+v", d.owners)
 	}
 }
 
@@ -434,7 +434,7 @@ func TestCreateRule_AcceptsUnresolvableButValidHost(t *testing.T) {
 	}
 	// 规则入库（供刷新循环重试），但未下发到数据面（DestIP 空被跳过）
 	if len(d.owners["tui"]) != 1 {
-		t.Fatalf("rule should be stored in tui segment, got %+v", d.owners["tui"])
+		t.Fatalf("rule should be stored under the local owner, got %+v", d.owners["tui"])
 	}
 	if len(fake.nftCalls) != 0 {
 		t.Fatalf("unresolved rule must not reach dataplane, got %d apply calls", len(fake.nftCalls))
@@ -519,7 +519,7 @@ func TestRefreshReAppliesWhenIPChanges(t *testing.T) {
 	d := newTestDaemon(t)
 	fake := d.dp.(*fakeDataplane)
 
-	// Seed an owner segment with a host-only rule.
+	// Seed one owner's rules with a host-only rule.
 	d.owners = OwnerRuleset{
 		"tui": {{Proto: "tcp", SrcPort: 80, DestHost: "x.example.com", DestPort: 80}},
 	}

@@ -31,7 +31,7 @@ func defaultResolver(r *resolver.Resolver) resolveFunc {
 // 写入），其中域名规则的 DestIP 就是该域名此刻生效的地址。按域名而不是按规则匹配：
 // 地址是域名的属性，规则的目标一旦改成别的域名，就不会取到旧域名的地址。
 //
-// 返回拷贝而不就地修改 rules：传进来的规则取自归属段，归属段保存的是用户或面板
+// 返回拷贝而不就地修改 rules：传进来的规则取自内存里的规则集（d.owners），它保存的是用户或面板
 // 给出的规则原样（域名规则不带地址），落盘到 state.json 的也是它；解析出的地址只
 // 进 d.lastResolved 与数据面。
 func carryResolvedTargets(rules, live []nft.Rule) []nft.Rule {

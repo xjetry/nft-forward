@@ -10,7 +10,7 @@ import (
 )
 
 // 本地规则合不合法由 daemon 在收到请求时裁决（nft.Validate），TUI 只做表单层面的
-// 粗检。不合法的请求回 400 并说明原因，本地段与数据面都不动。
+// 粗检。不合法的请求回 400 并说明原因，本地名下与数据面都不动。
 var invalidLocalRules = []struct {
 	what, body, reason string
 }{
@@ -38,8 +38,8 @@ func TestStandaloneDaemonRefusesAnInvalidLocalRule(t *testing.T) {
 		if !strings.Contains(w.Body.String(), c.reason) {
 			t.Errorf("%s：应说明原因（含“%s”），实际 %q", c.what, c.reason, strings.TrimSpace(w.Body.String()))
 		}
-		if n := len(d.owners[segLocal]); n != 0 {
-			t.Errorf("%s：被拒绝的新建不应落进本地段，实际 %d 条", c.what, n)
+		if n := len(d.owners[ownerLocal]); n != 0 {
+			t.Errorf("%s：被拒绝的新建不应落到本地名下，实际 %d 条", c.what, n)
 		}
 		if n := len(dp.nftCalls); n != 0 {
 			t.Errorf("%s：被拒绝的新建不应动数据面，实际下发 %d 次", c.what, n)
@@ -52,8 +52,8 @@ func TestStandaloneDaemonRefusesAnInvalidLocalRule(t *testing.T) {
 	if w := serve(d, http.MethodPost, "/v1/rules", createBody); w.Code != http.StatusOK {
 		t.Fatalf("合法的新建应成功，实际 %d %s", w.Code, w.Body.String())
 	}
-	if n := len(d.owners[segLocal]); n != 1 {
-		t.Fatalf("合法的新建应落进本地段，实际 %d 条", n)
+	if n := len(d.owners[ownerLocal]); n != 1 {
+		t.Fatalf("合法的新建应落到本地名下，实际 %d 条", n)
 	}
 }
 
@@ -69,17 +69,17 @@ func TestStandaloneDaemonRefusesAnEditThatMakesALocalRuleInvalid(t *testing.T) {
 		{"不认识的协议", `{"proto":"icmp"}`, "协议"},
 		{"目标既不是 IP 也不是域名", `{"exit_host":"bad host!"}`, "目标"},
 	}
-	// 先经本机控制口建一条合法的 UDP 规则，让它落进本地段与数据面，再改它。
+	// 先经本机控制口建一条合法的 UDP 规则，让它落到本地名下与数据面，再改它。
 	seeded := func() (*Daemon, *fakeDataplane, nft.Rule) {
 		t.Helper()
 		dp := &fakeDataplane{}
 		d := newTestDaemon(t)
 		d.dp = dp
 		w := serve(d, http.MethodPost, "/v1/rules", `{"proto":"udp","exit_host":"1.2.3.4","exit_port":53,"listen_port":12000,"comment":"dns"}`)
-		if w.Code != http.StatusOK || len(d.owners[segLocal]) != 1 {
-			t.Fatalf("前置条件：应建成一条本地规则，实际 %d %s，本地段 %d 条", w.Code, w.Body.String(), len(d.owners[segLocal]))
+		if w.Code != http.StatusOK || len(d.owners[ownerLocal]) != 1 {
+			t.Fatalf("前置条件：应建成一条本地规则，实际 %d %s，本地名下 %d 条", w.Code, w.Body.String(), len(d.owners[ownerLocal]))
 		}
-		return d, dp, d.owners[segLocal][0]
+		return d, dp, d.owners[ownerLocal][0]
 	}
 	for _, c := range edits {
 		d, dp, before := seeded()
@@ -91,7 +91,7 @@ func TestStandaloneDaemonRefusesAnEditThatMakesALocalRuleInvalid(t *testing.T) {
 		} else if !strings.Contains(w.Body.String(), c.reason) {
 			t.Errorf("%s：应说明原因（含“%s”），实际 %q", c.what, c.reason, strings.TrimSpace(w.Body.String()))
 		}
-		if got := d.owners[segLocal]; len(got) != 1 || got[0] != before {
+		if got := d.owners[ownerLocal]; len(got) != 1 || got[0] != before {
 			t.Errorf("%s：被拒绝的修改不应改动原规则，实际 %s", c.what, fmt.Sprintf("%+v", got))
 		}
 		if n := len(dp.nftCalls) - applied; n != 0 {
@@ -104,7 +104,7 @@ func TestStandaloneDaemonRefusesAnEditThatMakesALocalRuleInvalid(t *testing.T) {
 	if w := serve(d, http.MethodPut, "/v1/rules/local/"+before.ID, `{"exit_port":5353,"comment":"mdns"}`); w.Code != http.StatusOK {
 		t.Fatalf("合法的修改应成功，实际 %d %s", w.Code, w.Body.String())
 	}
-	if got := d.owners[segLocal][0]; got.DestPort != 5353 || got.Comment != "mdns" {
+	if got := d.owners[ownerLocal][0]; got.DestPort != 5353 || got.Comment != "mdns" {
 		t.Fatalf("合法的修改应生效，实际 %+v", got)
 	}
 }

@@ -48,7 +48,7 @@ func TestRuleAddressLocalNamespaceIgnoresIDShape(t *testing.T) {
 	}
 }
 
-// 反方向：panel 命名空间的请求永远走面板通道。同一串数字在 tui 段里存在同名的
+// 反方向：panel 命名空间的请求永远走面板通道。同一串数字在本地名下存在同名的
 // 本地规则时，也不得落到本地规则上。
 func TestRuleAddressPanelNamespaceNeverTouchesLocalRules(t *testing.T) {
 	// 面板通道在两种情形下都用不了：单机形态没有面板，托管形态此刻没有会话。请求

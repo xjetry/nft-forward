@@ -324,7 +324,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
 
 // computeRev 给一份下发的规则载荷算出版本号。rev 标识的是载荷本身：节点把收下的
 // rev 与规则在同一次落盘里存下（daemon 的 SetPanelRuleset），重连握手时报回来；
-// 面板此刻要发的载荷算出同一个 rev，就说明节点存着的面板段与这份载荷逐字段相同，
+// 面板此刻要发的载荷算出同一个 rev，就说明节点存着的面板规则与这份载荷逐字段相同，
 // 不再下发（reconcileOnConnect）。
 //
 // 所以 rev 覆盖载荷的每个字段，包括数据面不读的规则名、备注、跳数。节点存着这些

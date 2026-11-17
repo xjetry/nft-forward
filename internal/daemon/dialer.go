@@ -37,7 +37,7 @@ const (
 
 // DialerConfig wires the dialer to its host daemon without import cycles.
 // GetState/OnApply give the dialer read-and-write access to the
-// owner-segmented state through plain function values so the test in
+// per-owner state through plain function values so the test in
 // dialer_test.go can substitute fakes without spinning up a daemon.
 type DialerConfig struct {
 	// Panel 是 daemon 的运行形态，拨号器从中取往哪拨：远端面板托管拨它的 URL、
@@ -60,7 +60,7 @@ type DialerConfig struct {
 	OnApply  func(ctx context.Context, rev string, rules []nft.Rule) (warning string, err error)
 
 	// OnMigrated is called after a successful migrate_rules handshake.
-	// The daemon clears the tui segment so rules now live server-side only.
+	// The daemon clears the local rules so rules now live server-side only.
 	OnMigrated func()
 
 	// CountersFn returns deltas since the last call. nil = skip counters.
@@ -199,15 +199,15 @@ func (d *Dialer) MigrateRules(ctx context.Context, rules []nft.Rule) (wsproto.Ru
 	return d.sendCommand(ctx, wsproto.TypeMigrateRules, p)
 }
 
-// adoptLocalRules 把本地（tui）段的规则交给面板接管：面板为每条建一条归节点属主的
-// 规则，成功后 OnMigrated 清掉本地段，这些规则此后由面板下发。每次会话建立时调用
-// 一次；本地段为空时什么都不做。
+// adoptLocalRules 把本地名下（state.json 里的 "tui"）的规则交给面板接管：面板为每条建一条归节点属主的
+// 规则，成功后 OnMigrated 清掉本地名下的规则，这些规则此后由面板下发。每次会话建立时调用
+// 一次；本地名下为空时什么都不做。
 //
 // 面板拒绝（属主的转发数上限、端口不在节点的端口范围内等，整批拒绝）或会话在应答
-// 前断开时，本地段原样保留，规则继续转发，下次会话再试。
+// 前断开时，本地名下原样保留，规则继续转发，下次会话再试。
 func (d *Dialer) adoptLocalRules(ctx context.Context) {
 	owners, _ := d.cfg.GetState()
-	local := owners[segLocal]
+	local := owners[ownerLocal]
 	if len(local) == 0 {
 		return
 	}

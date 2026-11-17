@@ -46,8 +46,8 @@ type fakeDaemonClient struct {
 	ruleErr     error
 }
 
-// rowsOf 给一组规则配上地址，配法与 daemon 的归属段一致：带面板规则 id 的算面板
-// 段，其余算本地段。只是测试夹具的简写——被测的 TUI 不这样推断，它用行自带的
+// rowsOf 给一组规则配上地址，配法与 daemon 的归属一致：带面板规则 id 的算面板
+// 的，其余算本地的。只是测试夹具的简写——被测的 TUI 不这样推断，它用行自带的
 // 地址（TestRowAddressComesFromTheDaemonNotFromRuleFields 钉住这一点）。
 func rowsOf(rules []nft.Rule) []daemonclient.Row {
 	rows := make([]daemonclient.Row, len(rules))

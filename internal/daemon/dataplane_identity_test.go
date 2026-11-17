@@ -17,7 +17,7 @@ func reconcileCount(dp *fakeDataplane) int {
 
 // 面板重新下发的规则集如果只在数据面不读的字段上与现状不同（改了规则名、备注、
 // 跳数），数据面不重放：重放是整表重建，会让每条规则的内核计数归零。新的字段值
-// 照常记进归属段和状态文件，rev 也照常更新——不重放的只是数据面。
+// 照常记进内存里的规则集和状态文件，rev 也照常更新——不重放的只是数据面。
 func TestPanelPushThatChangesNoDataplaneFieldDoesNotReapply(t *testing.T) {
 	dp := &fakeDataplane{}
 	d := newTestDaemon(t)
@@ -45,16 +45,16 @@ func TestPanelPushThatChangesNoDataplaneFieldDoesNotReapply(t *testing.T) {
 		t.Errorf("只改了规则名、备注、跳数，数据面不应重放；落地次数从 %d 变成了 %d", applied, got)
 	}
 	d.mu.Lock()
-	stored, rev := append([]nft.Rule(nil), d.owners[segPanel]...), d.meta.LastAppliedRev
+	stored, rev := append([]nft.Rule(nil), d.owners[ownerPanel]...), d.meta.LastAppliedRev
 	d.mu.Unlock()
 	if len(stored) != 1 || stored[0] != relabelled || rev != "rev-2" {
-		t.Errorf("新的名称、备注、跳数与 rev 应记进归属段，实际 %+v，rev %q", stored, rev)
+		t.Errorf("新的名称、备注、跳数与 rev 应记进内存里的规则集，实际 %+v，rev %q", stored, rev)
 	}
 	onDisk, meta, err := LoadState(d.statePath)
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if got := onDisk[segPanel]; len(got) != 1 || got[0] != relabelled || meta.LastAppliedRev != "rev-2" {
+	if got := onDisk[ownerPanel]; len(got) != 1 || got[0] != relabelled || meta.LastAppliedRev != "rev-2" {
 		t.Errorf("新的名称、备注、跳数与 rev 应落盘，实际 %+v，rev %q", got, meta.LastAppliedRev)
 	}
 
@@ -79,7 +79,7 @@ func TestPanelPushThatChangesNoDataplaneFieldDoesNotReapply(t *testing.T) {
 // 字段再下发，重放当且仅当数据面投影变了。字段从 nft.Rule 的定义里枚举
 // （nfttest.FieldVariants），这里不抄字段清单。
 //
-// 不论重放与否，新的规则都要记进归属段。
+// 不论重放与否，新的规则都要记进内存里的规则集。
 func TestDataplaneIsReappliedExactlyWhenTheProjectionChanges(t *testing.T) {
 	base := nft.Rule{
 		RuleID: 7, RuleName: "r", HopCount: 1, Comment: "c",
@@ -102,10 +102,10 @@ func TestDataplaneIsReappliedExactlyWhenTheProjectionChanges(t *testing.T) {
 			t.Errorf("只改 %s：数据面重放了=%v，按数据面投影应为 %v", field, reapplied, want)
 		}
 		d.mu.Lock()
-		stored := append([]nft.Rule(nil), d.owners[segPanel]...)
+		stored := append([]nft.Rule(nil), d.owners[ownerPanel]...)
 		d.mu.Unlock()
 		if len(stored) != 1 || stored[0] != variant {
-			t.Errorf("只改 %s：新的规则应记进归属段，实际 %+v", field, stored)
+			t.Errorf("只改 %s：新的规则应记进内存里的规则集，实际 %+v", field, stored)
 		}
 	}
 }

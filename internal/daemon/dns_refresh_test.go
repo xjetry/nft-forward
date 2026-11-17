@@ -84,12 +84,12 @@ func TestDNSFailureKeepsLiveHostnameTarget(t *testing.T) {
 	if got := applyCount(dp); got != applied {
 		t.Fatalf("DNS 解析失败不应触发数据面重放：apply 次数 %d → %d", applied, got)
 	}
-	// 沿用的地址只存在于解析结果里：归属段（也是落盘的内容）仍是规则的原样。
+	// 沿用的地址只存在于解析结果里：规则集（也是落盘的内容）仍是规则的原样。
 	d.mu.Lock()
 	stored := d.owners["panel"][0]
 	d.mu.Unlock()
 	if stored.DestHost != "a.example.test" || stored.DestIP != "" {
-		t.Fatalf("解析出的地址被写回了归属段: %+v", stored)
+		t.Fatalf("解析出的地址被写回了规则集: %+v", stored)
 	}
 
 	// 解析恢复且答案变了：跟上新地址。

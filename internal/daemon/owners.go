@@ -7,19 +7,19 @@ import (
 	"nft-forward/internal/nft"
 )
 
-// 归属段的名字，即 OwnerRuleset 的键。一条规则从哪来由它所在的段决定，不由规则
+// 归属的名字，即 OwnerRuleset 的键。一条规则从哪来由它记在谁名下决定，不由规则
 // 自己的字段决定：
 //
-//   - segLocal：本地规则，由本机控制口建、改、删，以 nft.Rule.ID 标识；
-//   - segPanel：面板下发的规则，只由 SetPanelRuleset 整段替换，以 nft.Rule.RuleID
+//   - ownerLocal：本地规则，由本机控制口建、改、删，以 nft.Rule.ID 标识；
+//   - ownerPanel：面板下发的规则，只由 SetPanelRuleset 整体替换，以 nft.Rule.RuleID
 //     （面板数据库里的规则 id）标识。
 //
 // 键的字面值就是 state.json 里 owners 对象的键，不能改：已部署主机上的 state.json
-// 用的是这两个键，换了字面值的二进制在里面找不到自己名下的规则。本地段叫 "tui" 是
-// 沿用下来的名字——最初只有 TUI 写这一段。
+// 用的是这两个键，换了字面值的二进制在里面找不到自己名下的规则。本地这个键叫 "tui" 是
+// 沿用下来的名字——最初只有 TUI 写它。
 const (
-	segLocal = "tui"
-	segPanel = "panel"
+	ownerLocal = "tui"
+	ownerPanel = "panel"
 )
 
 // portClaim 是一条规则在数据面上占的位置：(协议, 监听端口)。MergedRuleset 用它判定
@@ -29,25 +29,25 @@ func portClaim(r nft.Rule) string {
 	return fmt.Sprintf("%s/%d", r.Proto, r.SrcPort)
 }
 
-// dropLocalRulesClaimedByPanel 把 "tui" 段里与 "panel" 段占同一位置的规则去掉，返回
+// dropLocalRulesClaimedByPanel 把 "tui" 名下与 "panel" 名下占同一位置的规则去掉，返回
 // 被去掉的那些。
 //
 // 归面板管的 daemon 上，一个位置归面板还是归本地以面板的下发为准。本地规则被面板
 // 接管（Dialer.adoptLocalRules）就是靠它落地的：面板为本地规则建出的面板规则随下发
 // 到达时，本地那一份在同一次写入里换成面板这一份，数据面上这个位置始终恰有一条
-// 规则。面板对接管的应答（→ clearTuiSegment）与这次下发在线路上谁先到没有保证，
-// 有了让位，两种顺序收敛到同一个结果；没有它，下发先到时 MergedRuleset 会因两段抢
-// 同一位置拒绝整次下发，随后应答又把本地段清掉，规则就从数据面上消失了。
+// 规则。面板对接管的应答（→ clearLocalRules）与这次下发在线路上谁先到没有保证，
+// 有了让位，两种顺序收敛到同一个结果；没有它，下发先到时 MergedRuleset 会因两边抢
+// 同一位置拒绝整次下发，随后应答又把本地名下的规则清掉，规则就从数据面上消失了。
 func dropLocalRulesClaimedByPanel(owners OwnerRuleset) []nft.Rule {
-	if len(owners[segLocal]) == 0 || len(owners[segPanel]) == 0 {
+	if len(owners[ownerLocal]) == 0 || len(owners[ownerPanel]) == 0 {
 		return nil
 	}
-	claimed := make(map[string]bool, len(owners[segPanel]))
-	for _, r := range owners[segPanel] {
+	claimed := make(map[string]bool, len(owners[ownerPanel]))
+	for _, r := range owners[ownerPanel] {
 		claimed[portClaim(r)] = true
 	}
 	var kept, dropped []nft.Rule
-	for _, r := range owners[segLocal] {
+	for _, r := range owners[ownerLocal] {
 		if claimed[portClaim(r)] {
 			dropped = append(dropped, r)
 		} else {
@@ -58,14 +58,14 @@ func dropLocalRulesClaimedByPanel(owners OwnerRuleset) []nft.Rule {
 		return nil
 	}
 	if len(kept) == 0 {
-		delete(owners, segLocal)
+		delete(owners, ownerLocal)
 	} else {
-		owners[segLocal] = kept
+		owners[ownerLocal] = kept
 	}
 	return dropped
 }
 
-// MergedRuleset flattens all owner segments into a single ruleset suitable
+// MergedRuleset flattens the rules of every owner into a single ruleset suitable
 // for nft.Apply. Owners are sorted by name so the output is deterministic
 // across runs: reconcileOwners 按下标逐条比较新旧规则集的数据面投影
 // （nft.SameDataplane）来决定要不要重放，同样的规则换个顺序会被当成数据面变了，

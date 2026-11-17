@@ -48,11 +48,11 @@ func TestStatusModeNamesAgreeBetweenDaemonAndClient(t *testing.T) {
 	}
 }
 
-// 托管且在线的 daemon 上，本地段与面板段各有一条规则，两条规则的 id 取值相同。
-// 客户端从列表拿到每一行的地址、原样交回，请求必须回到这一行所在的段：改删本地
-// 那一行只动本地段，改删面板那一行只变成发给面板的命令。新建不看列表，同样由
+// 托管且在线的 daemon 上，本地名下与面板名下各有一条规则，两条规则的 id 取值相同。
+// 客户端从列表拿到每一行的地址、原样交回，请求必须回到这一行的归属上：改删本地
+// 那一行只动本地名下的规则，改删面板那一行只变成发给面板的命令。新建不看列表，同样由
 // 面板裁决。
-func TestListedAddressesRouteBackToTheSegmentTheyCameFrom(t *testing.T) {
+func TestListedAddressesRouteBackToTheOwnerTheyCameFrom(t *testing.T) {
 	fh := newFakeHub()
 	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
 		ack, _ := json.Marshal(wsproto.HelloAck{NodeID: 7, Name: "edge"})
@@ -78,7 +78,7 @@ func TestListedAddressesRouteBackToTheSegmentTheyCameFrom(t *testing.T) {
 	}
 	dl := NewDialer(DialerConfig{
 		Panel: panel, AgentVersion: "v1",
-		// 本地段不交给假面板接管：这里要看的是地址的路由，接管另有测试。
+		// 本地名下不交给假面板接管：这里要看的是地址的路由，接管另有测试。
 		GetState: func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:  func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})
@@ -104,7 +104,7 @@ func TestListedAddressesRouteBackToTheSegmentTheyCameFrom(t *testing.T) {
 		t.Fatalf("面板那一行不应是本地地址、本地那一行应是本地地址，实际 %v / %v", panelRow.Ref, localRow.Ref)
 	}
 
-	localSegment := func() []nft.Rule {
+	localRules := func() []nft.Rule {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		return append([]nft.Rule(nil), d.owners["tui"]...)
@@ -119,7 +119,7 @@ func TestListedAddressesRouteBackToTheSegmentTheyCameFrom(t *testing.T) {
 		return out
 	}
 
-	// 面板那一行：改与删都变成发给面板的命令，带的是面板规则 id；本地段不动。
+	// 面板那一行：改与删都变成发给面板的命令，带的是面板规则 id；本地名下不动。
 	if err := c.UpdateRule(panelRow.Ref, daemonclient.UpdateRuleReq{Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443, Comment: "x"}); err != nil {
 		t.Fatalf("改面板那一行: %v", err)
 	}
@@ -142,32 +142,32 @@ func TestListedAddressesRouteBackToTheSegmentTheyCameFrom(t *testing.T) {
 	if err := json.Unmarshal(deletes[0].Payload, &del); err != nil || del.RuleID != 12345678 {
 		t.Fatalf("rule_delete 应指向面板规则 12345678，实际 %+v（%v）", del, err)
 	}
-	if left := localSegment(); len(left) != 1 || left[0].Comment != "orig" {
-		t.Fatalf("面板那一行的改删不应动本地段，实际 %+v", left)
+	if left := localRules(); len(left) != 1 || left[0].Comment != "orig" {
+		t.Fatalf("面板那一行的改删不应动本地名下的规则，实际 %+v", left)
 	}
 
-	// 新建：托管形态下交给面板，本地段不多出规则。
+	// 新建：托管形态下交给面板，本地名下不多出规则。
 	if _, err := c.CreateRule(daemonclient.CreateRuleReq{Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443, ListenPort: 12000}); err != nil {
 		t.Fatalf("新建: %v", err)
 	}
 	if n := len(framesOf(wsproto.TypeRuleCreate)); n != 1 {
 		t.Fatalf("托管形态下新建应向面板发一条 rule_create，实际 %d 条", n)
 	}
-	if left := localSegment(); len(left) != 1 {
-		t.Fatalf("托管形态下新建不应落进本地段，实际 %+v", left)
+	if left := localRules(); len(left) != 1 {
+		t.Fatalf("托管形态下新建不应落到本地名下，实际 %+v", left)
 	}
 
-	// 本地那一行：改与删只动本地段，不向面板发任何规则命令。
+	// 本地那一行：改与删只动本地名下的规则，不向面板发任何规则命令。
 	if err := c.UpdateRule(localRow.Ref, daemonclient.UpdateRuleReq{Comment: "edited"}); err != nil {
 		t.Fatalf("改本地那一行: %v", err)
 	}
-	if left := localSegment(); len(left) != 1 || left[0].Comment != "edited" {
+	if left := localRules(); len(left) != 1 || left[0].Comment != "edited" {
 		t.Fatalf("本地那一行应被改掉，实际 %+v", left)
 	}
 	if err := c.DeleteRule(localRow.Ref); err != nil {
 		t.Fatalf("删本地那一行: %v", err)
 	}
-	if left := localSegment(); len(left) != 0 {
+	if left := localRules(); len(left) != 0 {
 		t.Fatalf("本地那一行应被删掉，实际 %+v", left)
 	}
 	if u, dd := len(framesOf(wsproto.TypeRuleUpdate)), len(framesOf(wsproto.TypeRuleDelete)); u != 1 || dd != 1 {

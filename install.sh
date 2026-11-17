@@ -154,13 +154,13 @@ switch_role_cleanup() {
   esac
 }
 
-# 清空 daemon 的 panel 段（面板下发的规则）。成功返回 0。
+# 清空 daemon 里面板下发的规则。成功返回 0。
 #
 # 用的是 daemon 本机控制口上的 DELETE /v1/rules/panel（internal/daemon/handlers.go
-# 的 handleClearPanelSegment）：daemon 把这些规则撤出数据面并落盘。它清不掉一个仍
+# 的 handleClearPanelRules）：daemon 把这些规则撤出数据面并落盘。它清不掉一个仍
 # 连着 daemon 的面板的规则——面板下次下发会填回来——所以只在面板已停、或 daemon
 # 马上要脱离面板时调用。
-clear_panel_segment() {
+clear_panel_rules() {
   curl -sf --unix-socket /var/run/nft-forward.sock \
        -X DELETE http://daemon/v1/rules/panel >/dev/null 2>&1
 }
@@ -171,7 +171,7 @@ clear_panel_segment() {
 do_uninstall() {
   local target="$1"
   local purge="${2:-0}"
-  local seg_note
+  local panel_rules_note
   case "$target" in
     server)
       systemctl disable --now nft-forward-server.service 2>/dev/null || true
@@ -183,44 +183,44 @@ do_uninstall() {
       if [[ "$purge" -eq 1 ]]; then
         # 面板数据库删掉之后没有人再管这些规则，所以先把它们从本机 daemon 清掉。
         # 面板服务在上面已经停了，清空之后不会再有下发把它们填回来。
-        if clear_panel_segment; then
-          seg_note="daemon 的 panel 段已清空"
+        if clear_panel_rules; then
+          panel_rules_note="daemon 里面板下发的规则已清空"
         else
-          seg_note="daemon 的 panel 段未能清空，其中的规则已转为本地规则"
-          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
+          panel_rules_note="daemon 里面板下发的规则未能清空，其中的规则已转为本地规则"
+          echo "警告: 未能清空 daemon 里面板下发的规则（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
         fi
         # 面板连同数据库一起清掉了，不会再回来：daemon 改回单机模式。留着
         # --server-local 的话它会一直去连面板的本机入口 socket。改回单机后，
-        # panel 段若没清掉，daemon 启动时会把里面的规则转成本地规则（同下面
+        # 面板下发的规则若没清掉，daemon 启动时会把它们转成本地规则（同下面
         # agent 分支的说明）。
         write_daemon_unit ""
         restart_daemon
         rm -f /var/lib/nft-forward/panel.db \
               /var/lib/nft-forward/panel.db-wal \
               /var/lib/nft-forward/panel.db-shm
-        ok "已卸载 server 角色 + 清 panel.db，daemon 改回单机模式；${seg_note}"
+        ok "已卸载 server 角色 + 清 panel.db，daemon 改回单机模式；${panel_rules_note}"
       else
         # daemon 保持 --server-local：它留着面板下发的规则继续转发，并等面板装回
         # 来之后重新接入（期间会周期性地尝试连接面板的本机入口并在日志里记失败）。
-        ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
+        ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon 里面板下发的规则保留）"
       fi
       ;;
     agent)
       # 不带 --purge 时，面板下发的规则要留下来继续转发。这件事不在这里做：下面
       # 把 daemon 改成不带 --connect 再重启，daemon 启动时发现自己是单机模式而
-      # panel 段非空，就把 panel 段的规则转成本地规则（internal/daemon/daemon.go
+      # 还存着面板下发的规则，就把它们转成本地规则（internal/daemon/daemon.go
       # 的 Bootstrap）。
       #
       # 带 --purge 时这些规则要去掉，而上述转换恰恰会把它们留下，所以必须赶在
-      # 重启之前清空 panel 段。清空与重启之间 daemon 仍连着面板：面板若恰好在这
+      # 重启之前清空面板下发的规则。清空与重启之间 daemon 仍连着面板：面板若恰好在这
       # 之间又下发一次，那一批规则会在重启时被转成本地规则留下来。
-      seg_note=""
+      panel_rules_note=""
       if [[ "$purge" -eq 1 ]]; then
-        if clear_panel_segment; then
-          seg_note="daemon 的 panel 段已清空"
+        if clear_panel_rules; then
+          panel_rules_note="daemon 里面板下发的规则已清空"
         else
-          seg_note="daemon 的 panel 段未能清空，其中的规则已转为本地规则"
-          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
+          panel_rules_note="daemon 里面板下发的规则未能清空，其中的规则已转为本地规则"
+          echo "警告: 未能清空 daemon 里面板下发的规则（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
         fi
       fi
       write_daemon_unit ""
@@ -228,7 +228,7 @@ do_uninstall() {
       restart_daemon
       if [[ "$purge" -eq 1 ]]; then
         rm -rf /etc/nft-forward/
-        ok "已卸载 agent 角色 + 清 /etc/nft-forward/；${seg_note}"
+        ok "已卸载 agent 角色 + 清 /etc/nft-forward/；${panel_rules_note}"
       else
         ok "已卸载 agent 角色（daemon 保留；面板下发的规则已转为本地规则，token 文件已删）"
       fi
@@ -733,7 +733,7 @@ do_update() {
 
   # A server host's daemon unit must carry --server-local: that is what makes
   # the daemon connect to the co-located panel (through the panel's local
-  # socket) and keep its "panel" segment across restarts instead of converting
+  # socket) and keep the panel's rules across restarts instead of converting
   # it to local rules. do_update leaves units untouched otherwise — it lacks the
   # agent's --connect config — but the server daemon unit has no such
   # install-time args to lose.
