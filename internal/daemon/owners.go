@@ -68,8 +68,9 @@ func dropLocalRulesClaimedByPanel(owners OwnerRuleset) []nft.Rule {
 
 // MergedRuleset flattens all owner segments into a single ruleset suitable
 // for nft.Apply. Owners are sorted by name so the output is deterministic
-// across runs — nft.Apply diffs against the kernel and a flapping order
-// would cause unnecessary replace cycles.
+// across runs: reconcileOwners 按下标逐条比较新旧规则集的数据面投影
+// （nft.SameDataplane）来决定要不要重放，同样的规则换个顺序会被当成数据面变了，
+// 白白整表重建一次。
 //
 // A (proto, src_port) collision either within one owner or across owners
 // is rejected with an error that names the port and the colliding owners,

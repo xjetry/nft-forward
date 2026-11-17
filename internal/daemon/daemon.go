@@ -100,18 +100,12 @@ func New(cfg Config) (*Daemon, error) {
 	}, nil
 }
 
-// downgradePanelRule turns a panel-pushed rule into a standalone tui rule:
-// fresh local id, panel metadata cleared. Group shaping is dropped with it —
-// the limit is priced by a panel-side grant that no longer governs this
-// daemon — while the self-contained legacy per-rule cap is kept.
+// downgradePanelRule 把一条面板下发的规则变成本机自有的本地规则：去掉面板给的全部
+// 字段（哪些算面板给的由 nft.Rule.WithoutPanelBinding 定义），再给它一个新的本地 id
+// ——本地规则靠 ID 寻址，面板下发的规则没有。
 func downgradePanelRule(r nft.Rule) nft.Rule {
+	r = r.WithoutPanelBinding()
 	r.ID = nft.NewRuleID()
-	r.RuleID = 0
-	r.RuleName = ""
-	r.OwnerName = ""
-	r.HopCount = 0
-	r.ShapeGroup = 0
-	r.RateMBytes = 0
 	return r
 }
 

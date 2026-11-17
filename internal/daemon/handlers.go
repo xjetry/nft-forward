@@ -144,14 +144,16 @@ func (d *Daemon) reconcileOwners(
 		log.Printf("reconcile: holding back %d rule(s) with unresolved target (retry in refresh loop): %v", len(unresolved), rerr)
 	}
 
-	// The kernel apply is skipped whenever the applyable set is unchanged
-	// from what's already live -- this covers both the DNS-refresh no-op
-	// case and a write (create/update/delete) whose only effect was to
-	// add/hold a rule that's still unresolved. DNS-refresh callers additionally
-	// skip the commit below (nothing to persist); write callers still commit
-	// so the new/edited rule (even an unresolved one) lands in d.owners and
-	// on disk for the refresh loop to retry.
-	if !rulesDiffer(prev, applyable) {
+	// 数据面只在它读的字段变了的时候重放（nft.SameDataplane 比的是 prev 与 applyable
+	// 的数据面投影）：重放是整表重建（nft.Apply 先删表再建），内核里每条规则的计数
+	// 随之归零，不该为数据面不读的字段付这个代价。不重放的情形例如：DNS 刷新后地址
+	// 没变；写入只动了一条目标还没解析出来的规则（它不在 applyable 里）；写入只改了
+	// 名称、备注、跳数这类数据面不读的字段。
+	//
+	// 不重放不等于不提交：saveToDisk 为假的调用方（DNS 刷新，没有要落盘的东西）到此
+	// 为止；其余调用方照常走下面的提交，新的字段值与还没解析的规则都记进 d.owners
+	// 和状态文件。
+	if nft.SameDataplane(prev, applyable) {
 		if !saveToDisk {
 			return applyable, unresolved, false, nil
 		}

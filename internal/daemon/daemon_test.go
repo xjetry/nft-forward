@@ -87,7 +87,7 @@ func TestBootstrap_LoadsOwnerSegmentsAndAppliesMerged(t *testing.T) {
 // 抢同一个端口。
 func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 	panelRule := nft.Rule{
-		ID: "p1", RuleID: 42, RuleName: "r", OwnerName: "u", HopCount: 1,
+		ID: "p1", RuleID: 42, RuleName: "r", HopCount: 1,
 		ShapeGroup: 5, RateMBytes: 10,
 		Proto: "tcp", SrcPort: 80, DestIP: "1.2.3.4", DestPort: 8080,
 	}
@@ -115,7 +115,7 @@ func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 		if len(tui) != 1 {
 			t.Fatalf("expected 1 downgraded tui rule, got %+v", tui)
 		}
-		if tui[0].RuleID != 0 || tui[0].OwnerName != "" || tui[0].ShapeGroup != 0 || tui[0].RateMBytes != 0 || tui[0].HopCount != 0 {
+		if tui[0].RuleID != 0 || tui[0].RuleName != "" || tui[0].ShapeGroup != 0 || tui[0].RateMBytes != 0 || tui[0].HopCount != 0 {
 			t.Fatalf("downgraded rule kept panel metadata: %+v", tui[0])
 		}
 		if tui[0].ID == "" || tui[0].ID == panelRule.ID {
@@ -151,7 +151,7 @@ func TestBootstrap_PanelSegmentIsDowngradedOnlyWhenStandalone(t *testing.T) {
 			if len(panel) != 1 {
 				t.Fatalf("panel segment should survive, got %+v", panel)
 			}
-			if panel[0].RuleID != 42 || panel[0].OwnerName != "u" || panel[0].ShapeGroup != 5 {
+			if panel[0].RuleID != 42 || panel[0].RuleName != "r" || panel[0].ShapeGroup != 5 {
 				t.Fatalf("panel rule metadata must be untouched: %+v", panel[0])
 			}
 		})
