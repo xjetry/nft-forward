@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -356,5 +357,81 @@ func TestNoDatabaseErrorIsHandledUnexamined(t *testing.T) {
 		if !exempted[fn] {
 			t.Errorf("unexaminedByDesign names %s, where nothing of the kind is found any more", fn)
 		}
+	}
+}
+
+// uncheckedResults lists the results of a Query in file whose Err is never
+// called in the function that holds them, as "function\tposition".
+func uncheckedResults(fset *token.FileSet, file *ast.File) (unchecked []string, results int) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		held := map[string]token.Pos{}
+		checked := map[string]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				if len(n.Lhs) == 0 || len(n.Rhs) != 1 {
+					return true
+				}
+				call, ok := n.Rhs[0].(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "Query" && sel.Sel.Name != "QueryContext") {
+					return true
+				}
+				if id, ok := n.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+					held[id.Name] = call.Pos()
+				}
+			case *ast.CallExpr:
+				if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Err" {
+					if id, ok := sel.X.(*ast.Ident); ok {
+						checked[id.Name] = true
+					}
+				}
+			}
+			return true
+		})
+		results += len(held)
+		for name, pos := range held {
+			if !checked[name] {
+				p := fset.Position(pos)
+				unchecked = append(unchecked, fmt.Sprintf("%s\t%s:%d: %s is read without %s.Err() being checked", fn.Name.Name, p.Filename, p.Line, name, name))
+			}
+		}
+	}
+	return unchecked, results
+}
+
+// TestEveryQueryResultIsCheckedForAnErrorAfterReading: reading a result can
+// fail partway, and rows.Next then just returns false — the same as at the
+// end of the result. Only rows.Err tells the two apart; a function that does
+// not ask goes on with the rows it got as if they were all there are.
+//
+// The statement sweep fails fetches too (faultAt.fetch), but cannot tell an
+// unchecked result from a checked one where the result is empty anyway: no
+// rows is what the caller ends up with either way. This check does not
+// depend on what the result holds.
+func TestEveryQueryResultIsCheckedForAnErrorAfterReading(t *testing.T) {
+	var found []string
+	results := 0
+	eachGoFile(t, func(fset *token.FileSet, file *ast.File) {
+		unchecked, n := uncheckedResults(fset, file)
+		results += n
+		for _, entry := range unchecked {
+			fn, where, _ := strings.Cut(entry, "\t")
+			found = append(found, where+" (in "+fn+")")
+		}
+	})
+	if results == 0 {
+		t.Fatal("found no Query result in the tree; the check would pass vacuously")
+	}
+	sort.Strings(found)
+	if len(found) > 0 {
+		t.Errorf("%d query result(s) are read without their error being checked:\n%s", len(found), strings.Join(found, "\n"))
 	}
 }

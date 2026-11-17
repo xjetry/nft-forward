@@ -247,8 +247,8 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 
 	// Run a batch of (call, failAt) jobs on a pool; each has its own database.
 	type job struct {
-		call   sweepCall
-		failAt int
+		call sweepCall
+		at   faultAt
 	}
 	type outcome struct {
 		job
@@ -270,7 +270,7 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for i := range next {
-					run, err := runSweepCall(seed, paths[i], jobs[i].call, jobs[i].failAt)
+					run, err := runSweepCallAt(seed, paths[i], jobs[i].call, jobs[i].at)
 					out[i] = outcome{jobs[i], run, err}
 				}
 			}()
@@ -366,24 +366,35 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 		t.FailNow()
 	}
 
+	// Every statement of every call fails once as a statement, and once each
+	// at the first and second fetch from its result. The fetch faults fire
+	// only for queries whose result is read that far; the rest of those runs
+	// report no failed statement and are passed over below.
 	var jobs []job
 	for _, c := range calls {
 		for k := 1; k <= len(base[c.String()].run.stmts); k++ {
-			jobs = append(jobs, job{c, k})
+			for fetch := 0; fetch <= 2; fetch++ {
+				jobs = append(jobs, job{c, faultAt{stmt: k, fetch: fetch}})
+			}
 		}
 	}
 	var misreported, blamed, partial []string
-	checked := 0
+	checked, fetchFaults := 0, 0
 	for _, o := range runAll(jobs) {
 		if o.err != nil {
-			t.Fatalf("%s, statement %d: %v", o.call, o.failAt, o.err)
+			t.Fatalf("%s, statement %d: %v", o.call, o.at.stmt, o.err)
 		}
 		if o.run.failed == "" {
-			continue // this run issued fewer statements than the fault-free one
+			// The run issued fewer statements than the fault-free one, or the
+			// fetch to fail was never made.
+			continue
 		}
 		checked++
+		if o.at.fetch > 0 {
+			fetchFaults++
+		}
 		b := base[o.call.String()]
-		where := fmt.Sprintf("%s\n    failed statement %d: %s\n    answered %d %s", o.call, o.failAt, o.run.failed, o.run.status, o.run.body)
+		where := fmt.Sprintf("%s\n    failed statement %d: %s\n    answered %d %s", o.call, o.at.stmt, o.run.failed, o.run.status, o.run.body)
 		if o.run.failedIn != "" {
 			where += "\n    (the statement belongs to " + o.run.failedIn + ")"
 		}
@@ -420,5 +431,10 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 	if len(partial) > 0 {
 		t.Errorf("%d failure(s) left a change stored without saying so:\n%s", len(partial), strings.Join(partial, "\n"))
 	}
-	t.Logf("%d calls, %d statement failures checked", len(calls), checked)
+	// The fetch faults are a third of the jobs; if hardly any fired, results
+	// are not being read through the wrapper that fails them.
+	if fetchFaults < checked/10 {
+		t.Errorf("only %d of the %d failures checked were failed fetches; the result wrapper is not in the path", fetchFaults, checked)
+	}
+	t.Logf("%d calls, %d failures checked (%d of them a failed fetch)", len(calls), checked, fetchFaults)
 }
