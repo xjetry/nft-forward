@@ -63,7 +63,7 @@ type nftExpr struct {
 }
 
 type nftMatch struct {
-	Left  nftMatchSide `json:"left"`
+	Left  nftMatchSide    `json:"left"`
 	Right json.RawMessage `json:"right"`
 }
 
@@ -149,20 +149,44 @@ func extractMatch(m *nftMatch, c *Counter) {
 	}
 }
 
-// parseL4Proto reads the right side of a `meta l4proto` match: nft emits a bare
-// string ("tcp") for a single protocol or {"set":["tcp","udp"]} for tcp+udp.
+// l4protoName 把 nft 输出里的一个传输层协议值归一成协议名。
+//
+// 同一条 `meta l4proto tcp` 规则，nft 列出来时协议可能是名字 "tcp"，也可能是 IANA
+// 协议号 6：名字取自机器上的 /etc/protocols，没有这个文件（极简镜像、没装 netbase）
+// 时 nft 就原样输出数字——在 nftables 1.0.6 上实测，把该文件挪走后同一张表的输出从
+// "tcp" / "udp" 变成 6 / 17。规则的协议只有 tcp、udp、tcp+udp 三种（Validate），计数链
+// 里 tcp+udp 又展开成前两种（accountProtos），所以协议号只需认 6 和 17；认不出的返回
+// 空串，调用方据此丢弃这条计数。
+func l4protoName(raw json.RawMessage) string {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		return name
+	}
+	var number int
+	if json.Unmarshal(raw, &number) == nil {
+		switch number {
+		case 6:
+			return "tcp"
+		case 17:
+			return "udp"
+		}
+	}
+	return ""
+}
+
+// parseL4Proto 读 `meta l4proto` 匹配的右值：单个协议，或 tcp+udp 的集合写法
+// {"set":[…]}。两种写法里的每个协议值都经 l4protoName 归一，名字与协议号等价。
 func parseL4Proto(raw json.RawMessage) string {
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
+	if name := l4protoName(raw); name != "" {
+		return name
 	}
 	var set struct {
-		Set []string `json:"set"`
+		Set []json.RawMessage `json:"set"`
 	}
 	if json.Unmarshal(raw, &set) == nil && len(set.Set) > 0 {
 		tcp, udp := false, false
-		for _, p := range set.Set {
-			switch p {
+		for _, member := range set.Set {
+			switch l4protoName(member) {
 			case "tcp":
 				tcp = true
 			case "udp":
@@ -172,7 +196,7 @@ func parseL4Proto(raw json.RawMessage) string {
 		if tcp && udp {
 			return "tcp+udp"
 		}
-		return set.Set[0]
+		return l4protoName(set.Set[0])
 	}
 	return ""
 }
