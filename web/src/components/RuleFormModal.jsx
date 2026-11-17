@@ -136,6 +136,18 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     if (v) next.push(Number(v))
     return { ...f, via_node_ids: next }
   })
+  // “禁止直接转发”是物理节点的设置：发起出口段的是链尾的物理节点，所以组合节点
+  // 由它的最后一个成员代表（n.hops 是服务端展平好的物理成员，按顺序）。服务端建
+  // 规则时按同一规则校验链尾的物理跳。成员不在 nodes 里时（用户侧只拿得到被授权
+  // 的节点）这里判断不了，返回 false，由服务端在提交时拒绝。
+  const forbidsDirectExit = (n) => {
+    if (!n) return false
+    if (n.node_type === 'composite') {
+      const last = n.hops?.[n.hops.length - 1]
+      return !!nodeById[last?.node_id]?.no_direct_exit
+    }
+    return !!n.no_direct_exit
+  }
   const viaLevels = []
   if (form.node_id) {
     let upstream = Number(form.node_id)
@@ -146,7 +158,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
       if (!cands.length && !chosen) break
       // A no_direct_exit upstream can't terminate the chain here, so this
       // level loses its 直接转发 option and must pick a layer.
-      viaLevels.push({ level, cands, chosen, mustVia: !!nodeById[upstream]?.no_direct_exit })
+      viaLevels.push({ level, cands, chosen, mustVia: forbidsDirectExit(nodeById[upstream]) })
       if (!chosen) break
       soFar.push(chosen)
       upstream = chosen
@@ -162,7 +174,7 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
   // The tail launches the exit segment, which a no_direct_exit node may never
   // do. The server enforces the same rule when deriving the chain; blocking
   // submit here just surfaces the error before the round trip.
-  const tailNoDirect = !!tailNode?.no_direct_exit
+  const tailNoDirect = forbidsDirectExit(tailNode)
 
   // Flatten a chain node into physical member names for display: a composite is
   // shown as its member nodes (the reference is what's stored/selected; the

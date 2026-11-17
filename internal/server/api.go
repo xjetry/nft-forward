@@ -1132,6 +1132,10 @@ func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := db.UpdateNodeUnidirectional(s.DB, id, body.Unidirectional); err != nil {
+		if errors.Is(err, db.ErrPhysicalNodeSetting) {
+			jsonErr(w, http.StatusBadRequest, "组合节点没有自己的计费方向：按上报流量的成员节点各自的设置计费，请在成员节点上设置")
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1165,6 +1169,10 @@ func (s *Server) apiSetNodeNoDirectExit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.UpdateNodeNoDirectExit(s.DB, id, body.NoDirectExit); err != nil {
+		if errors.Is(err, db.ErrPhysicalNodeSetting) {
+			jsonErr(w, http.StatusBadRequest, "组合节点不能设置“禁止直接转发”：能否作为链尾由组合里最后一个成员节点决定，请在该成员节点上设置")
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

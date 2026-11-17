@@ -286,14 +286,9 @@ export default function NodeDetail() {
                 <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
               </form>
             </ConfigField>
-            <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
-              <div className="flex items-center gap-2">
-                <button onClick={toggleNoDirectExit} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${noDirectExit ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-                  {noDirectExit ? '禁止直接转发' : '允许直接转发'}
-                </button>
-                <span className="text-xs text-ink-mut">当前：{noDirectExit ? '禁止' : '允许'}</span>
-              </div>
-            </ConfigField>
+            {/* 计费方向与“禁止直接转发”是物理节点的设置，组合节点上没有这两项：
+                计费方向取上报流量的成员节点自己的设置，能否作链尾取最后一个成员
+                节点的设置（服务端也拒绝在组合节点上写这两项）。 */}
           </section>
         ) : (
         /* ===== TWO COLUMN: 基本信息 + 安装命令 | 节点配置 ===== */

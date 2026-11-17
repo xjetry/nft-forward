@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -666,13 +667,40 @@ func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
 	return err
 }
 
-func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
+// ErrPhysicalNodeSetting 表示试图在组合节点上写一个只对物理节点有意义的设置。
+var ErrPhysicalNodeSetting = errors.New("setting applies to physical nodes only")
+
+// setPhysicalNodeFlag 写 nodes 表上只对物理节点有意义的布尔列（unidirectional、
+// no_direct_exit）。column 只接受本文件里的字面量。
+//
+// 这两列的读者都只看物理节点：unidirectional 由 Hub 入账时读上报计数的节点，
+// no_direct_exit 由建规则时读链尾的物理跳。组合节点不上报计数，也不会成为物理跳
+// （建规则时被展平成成员），写在它身上的值没有任何读者。所以“组合节点上这两列恒
+// 为 0”由这条 UPDATE 的 WHERE 直接保证，不依赖调用方先判断节点类型；node_type 只在
+// 创建组合节点时写一次，之后不变，已有的物理节点不会带着非零值变成组合。
+func setPhysicalNodeFlag(d *sql.DB, column string, id int64, on bool) error {
 	v := 0
-	if uni {
+	if on {
 		v = 1
 	}
-	_, err := d.Exec(`UPDATE nodes SET unidirectional=? WHERE id=?`, v, id)
-	return err
+	res, err := d.Exec(`UPDATE nodes SET `+column+`=? WHERE id=? AND node_type<>'composite'`, v, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n > 0 {
+		return err
+	}
+	// 没有改到行：分清是节点不存在还是节点是组合。
+	var nodeType string
+	if err := d.QueryRow(`SELECT node_type FROM nodes WHERE id=?`, id).Scan(&nodeType); err != nil {
+		return err
+	}
+	return ErrPhysicalNodeSetting
+}
+
+// UpdateNodeUnidirectional 设置物理节点的计费方向；组合节点返回 ErrPhysicalNodeSetting。
+func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
+	return setPhysicalNodeFlag(d, "unidirectional", id, uni)
 }
 
 func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
@@ -680,13 +708,10 @@ func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
 	return err
 }
 
+// UpdateNodeNoDirectExit 设置物理节点能否作为链尾直连目标；组合节点返回
+// ErrPhysicalNodeSetting。
 func UpdateNodeNoDirectExit(d *sql.DB, id int64, v bool) error {
-	n := 0
-	if v {
-		n = 1
-	}
-	_, err := d.Exec(`UPDATE nodes SET no_direct_exit=? WHERE id=?`, n, id)
-	return err
+	return setPhysicalNodeFlag(d, "no_direct_exit", id, v)
 }
 
 // UpdateNodePortRange sets a node's port_range spec. An empty string resets to
