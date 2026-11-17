@@ -300,7 +300,8 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 
 // --- Dashboard ---
 
-// apiDashboard 是管理员仪表盘，挂在管理员路由下：它给的是全部节点的管理员视图。
+// apiDashboard 是管理员仪表盘，挂在管理员路由下：它给的是全部节点的管理员视图，以及
+// 规则与用户的总数。用户自己的概览是 apiMyDashboard（/api/my）。
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	cat, err := db.LoadNodeCatalog(s.DB)
 	if err != nil {
