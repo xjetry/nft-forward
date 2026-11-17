@@ -52,7 +52,10 @@ func NewHub(d *sql.DB) *Hub {
 }
 
 type agentConn struct {
-	nodeID  int64
+	nodeID int64
+	// arch 是这条连接的 hello 里上报的 GOARCH，构造后不再改写（重连会换一个新的
+	// agentConn），所以读它不需要锁。升级推送据此挑选对应架构的 nft-agent。
+	arch    string
 	ws      *websocket.Conn
 	writeCh chan []byte
 	closed  chan struct{}
@@ -83,6 +86,17 @@ func (h *Hub) IsOnline(nodeID int64) bool {
 	_, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	return ok
+}
+
+// NodeArch 返回节点当前连接在 hello 里上报的 GOARCH；节点未连接时 ok=false。
+func (h *Hub) NodeArch(nodeID int64) (arch string, ok bool) {
+	h.mu.RLock()
+	ac, ok := h.conns[nodeID]
+	h.mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	return ac.arch, true
 }
 
 // ServeWS handles the /v1/agents WS endpoint. Upgrades the request,
@@ -126,6 +140,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// "hello_ack visible => conn is in the hub map".
 	ac := &agentConn{
 		nodeID:  node.ID,
+		arch:    hello.Arch,
 		ws:      ws,
 		writeCh: make(chan []byte, 16),
 		closed:  make(chan struct{}),

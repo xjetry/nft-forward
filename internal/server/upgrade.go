@@ -20,26 +20,58 @@ import (
 	"nft-forward/internal/wsproto"
 )
 
-// agentRepo / agentCacheRoot locate the nft-agent the panel pushes. Since the
-// split the panel no longer contains the agent; it fetches the asset for its own
-// release version from the GitHub release once and caches it on disk, then ships
-// it to nodes over the WS link so the nodes never reach GitHub themselves.
+// agentRepo / agentCacheRoot 定位面板要推送的 nft-agent。面板二进制里不含 agent：
+// 它按自身的 release 版本从 GitHub release 取产物（每种节点架构一份，首次用到时
+// 才取），缓存在磁盘上，再经 WS 链路发给节点，节点自己不需要访问 GitHub。
 const (
 	agentRepo      = "xjetry/nft-forward"
 	agentCacheRoot = "/var/lib/nft-forward/agent-cache"
 )
 
-// agentArtifact is the nft-agent binary the panel would push: the asset for the
-// panel's own release version, with its sha256.
+// agentAssets 是面板能推送的 nft-agent 发布资产：键是节点在 hello 里上报的
+// GOARCH，值是该架构在 GitHub release 里的资产名。
+//
+// amd64 沿用无后缀名：已部署主机上持久化的升级脚本按 nft-agent 这个名字从
+// latest release 取二进制，install.sh 也要能安装此前只发布了无后缀资产的旧
+// release，所以这个名字不能挪作他用；其余架构一律带 -<arch> 后缀。release 里另有
+// 内容相同的 nft-agent-amd64，是供按架构名手工取用的别名，面板不取它。
+//
+// 同一口径还有两处落点：install.sh 的「uname -m → 资产名」映射，以及
+// scripts/build-release.sh 的构建矩阵。增删架构必须三处同改，否则会出现
+// “release 里有产物但装不上/推不了”或反过来“面板去取一个不存在的资产”。
+var agentAssets = map[string]string{
+	"amd64": "nft-agent",
+	"arm64": "nft-agent-arm64",
+}
+
+// errNodeNotConnected：升级只能推给当前挂在 hub 上的连接，节点离线时没有推送对象，
+// 也无从得知它的架构。
+var errNodeNotConnected = errors.New("节点未连接")
+
+// agentAssetName 返回 arch 对应的发布资产名。表里没有的架构（含空串）一律报错
+// 而不回落到某个默认产物：推过去的二进制节点跑不了时，带目标架构校验的 agent
+// 会拒收，不带这项校验的 agent 会照单换上，重启后就起不来了。
+func agentAssetName(arch string) (string, error) {
+	asset, ok := agentAssets[arch]
+	if !ok {
+		return "", fmt.Errorf("节点架构 %q 没有对应的 nft-agent 发布产物，无法推送升级", arch)
+	}
+	return asset, nil
+}
+
+// agentArtifact 是面板会推给某一种架构节点的 nft-agent：面板自身 release 版本里
+// 该架构的那份资产，连同它的 sha256。
 type agentArtifact struct {
 	Version string
+	Arch    string
 	SHA     string
 	Data    []byte
 }
 
+// agentArtCache 按架构缓存已取到的产物；读写都持 agentArtMu。
 var (
 	agentArtMu    sync.Mutex
-	agentArtCache *agentArtifact
+	agentArtCache = map[string]*agentArtifact{}
 )
 
 func serverVersion() string {
@@ -64,51 +96,54 @@ func stripPseudoVersion(v string) string {
 	return v
 }
 
-// loadAgentArtifact returns the nft-agent for the panel's release version,
-// fetching+caching it on first use. A "dev" panel build has no matching release,
-// so push/upgrade is unavailable there.
-func (s *Server) loadAgentArtifact() (*agentArtifact, error) {
+// loadAgentArtifact 返回面板 release 版本里指定架构的 nft-agent，首次用到时拉取
+// 并缓存。dev 构建的面板没有对应的 release，因此无法推送升级。
+func (s *Server) loadAgentArtifact(arch string) (*agentArtifact, error) {
+	asset, err := agentAssetName(arch)
+	if err != nil {
+		return nil, err
+	}
 	v := serverVersion()
 	agentArtMu.Lock()
 	defer agentArtMu.Unlock()
-	// A warmed cache for the current version short-circuits the download (and
-	// lets a dev build push a pre-seeded agent).
-	if agentArtCache != nil && agentArtCache.Version == v {
-		return agentArtCache, nil
+	// 缓存里已有当前版本的产物就不再下载（dev 构建也因此能推送预置进缓存的 agent）。
+	if art := agentArtCache[arch]; art != nil && art.Version == v {
+		return art, nil
 	}
 	if v == "dev" {
 		return nil, errors.New("dev 构建无对应 agent release，无法推送升级")
 	}
-	data, sha, err := fetchAgentBinary(v)
+	data, sha, err := fetchAgentBinary(v, asset)
 	if err != nil {
 		return nil, err
 	}
-	agentArtCache = &agentArtifact{Version: v, SHA: sha, Data: data}
-	return agentArtCache, nil
+	art := &agentArtifact{Version: v, Arch: arch, SHA: sha, Data: data}
+	agentArtCache[arch] = art
+	return art, nil
 }
 
-// fetchAgentBinary loads nft-agent for version from the on-disk cache, else
-// downloads it from the GitHub release and verifies it against that release's
-// SHA256SUMS before caching.
-func fetchAgentBinary(version string) ([]byte, string, error) {
-	cacheBin := filepath.Join(agentCacheRoot, version, "nft-agent")
+// fetchAgentBinary 取 version 这个 release 里名为 asset（agentAssets 的某个值）的
+// 资产：磁盘缓存里有就直接用，否则从 GitHub release 下载，对照该 release 的
+// SHA256SUMS 校验通过后再写入缓存。缓存文件以资产名命名，各架构互不覆盖。
+func fetchAgentBinary(version, asset string) ([]byte, string, error) {
+	cacheBin := filepath.Join(agentCacheRoot, version, asset)
 	if data, err := os.ReadFile(cacheBin); err == nil {
 		sum := sha256.Sum256(data)
 		return data, hex.EncodeToString(sum[:]), nil
 	}
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", agentRepo, version)
-	want, err := fetchSumFor(base+"/SHA256SUMS", "nft-agent")
+	want, err := fetchSumFor(base+"/SHA256SUMS", asset)
 	if err != nil {
 		return nil, "", err
 	}
-	data, err := httpGetBytes(base + "/nft-agent")
+	data, err := httpGetBytes(base + "/" + asset)
 	if err != nil {
 		return nil, "", err
 	}
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
-	if want != "" && got != want {
-		return nil, "", fmt.Errorf("nft-agent sha256 校验失败: got %s want %s", got, want)
+	if got != want {
+		return nil, "", fmt.Errorf("%s sha256 校验失败: got %s want %s", asset, got, want)
 	}
 	if err := os.MkdirAll(filepath.Dir(cacheBin), 0o755); err == nil {
 		_ = os.WriteFile(cacheBin, data, 0o755)
@@ -144,22 +179,51 @@ func httpGetBytes(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// upgradeFor builds the Upgrade to send a node: a label-only sync (empty Data)
-// when the node already runs the target binary by sha, else the full payload
-// with the inline binary and an HTTP fallback URL.
+// upgradeFor 构造发给节点的 Upgrade：节点按 sha 已在运行目标二进制时只同步版本
+// 标签（Data 为空），否则是带内联二进制与 HTTP 回退地址的完整推送。art 必须是
+// 该节点自身架构的产物（由 upgradeNode 保证）；回退地址里带上这个架构，
+// serveBinary 才会返回同一份字节。
 func upgradeFor(node *db.Node, art *agentArtifact, panelURL string) wsproto.Upgrade {
 	if node.AgentSHA != "" && node.AgentSHA == art.SHA {
 		return wsproto.Upgrade{Version: art.Version, SHA256: art.SHA}
 	}
 	return wsproto.Upgrade{
 		Version: art.Version, SHA256: art.SHA,
-		Size: int64(len(art.Data)), DownloadAt: panelURL + "/v1/binary",
+		Size: int64(len(art.Data)), DownloadAt: panelURL + "/v1/binary?arch=" + art.Arch,
 		Data: art.Data,
 	}
 }
 
+// upgradeNode 把面板当前版本的 nft-agent 推给一个节点。
+// 架构取自该节点当前 WS 连接的 hello（Hub.NodeArch），而不是库里的历史记录：
+// 推送只能发给在线连接，而在线连接的 hello 就是“此刻那台机器上跑的是什么”的
+// 第一手陈述；同一 token 换到另一种架构的机器上重装后，这里立刻跟着变。
+func (s *Server) upgradeNode(node *db.Node, panelURL string) error {
+	arch, ok := s.Hub.NodeArch(node.ID)
+	if !ok {
+		return errNodeNotConnected
+	}
+	art, err := s.loadAgentArtifact(arch)
+	if err != nil {
+		return err
+	}
+	return s.Hub.SendUpgrade(node.ID, upgradeFor(node, art, panelURL))
+}
+
+// serveBinary 是 upgradeFor 给出的 HTTP 回退下载口。arch 必须显式给出：
+// 这里没有“默认架构”可言，缺省时任选一个产物返回，等于让请求方装上一个可能
+// 跑不了的二进制。
 func (s *Server) serveBinary(w http.ResponseWriter, r *http.Request) {
-	art, err := s.loadAgentArtifact()
+	arch := r.URL.Query().Get("arch")
+	if arch == "" {
+		http.Error(w, "缺少 arch 参数", http.StatusBadRequest)
+		return
+	}
+	if _, err := agentAssetName(arch); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	art, err := s.loadAgentArtifact(arch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -175,7 +239,7 @@ func (h *Hub) SendUpgrade(nodeID int64, u wsproto.Upgrade) error {
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("节点未连接")
+		return errNodeNotConnected
 	}
 
 	id := ac.nextID()
@@ -208,4 +272,3 @@ func (h *Hub) SendUpgrade(nodeID int64, u wsproto.Upgrade) error {
 		return fmt.Errorf("连接在升级期间断开")
 	}
 }
-
