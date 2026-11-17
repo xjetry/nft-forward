@@ -37,8 +37,28 @@ function httpErrorMessage(status) {
   return `请求失败（${status}）`
 }
 
-/** 永不落定的 Promise：页面即将整体跳转，调用方不需要再做任何事。 */
+/** 永不落定的 Promise：会话已经结束，发起请求的页面即将被换成登录页。 */
 const NEVER = new Promise(() => {})
+
+/**
+ * 某个请求被答复 401、会话因此结束时要做的事，由 SessionProvider 登记：它把
+ * 会话状态改成未登录，路由守卫随即在页内转到登录页。请求层自己不做跳转 ——
+ * 会话状态只有一份，由它的持有者来改。
+ * @type {null | (() => void)}
+ */
+let onSessionEnded = null
+
+/** @param {null | (() => void)} handler */
+export function setSessionEndedHandler(handler) {
+  onSessionEnded = handler
+}
+
+/**
+ * @typedef {object} RequestOptions
+ * @property {boolean} [own401] 这个请求的 401 本身就是调用方要的答复，照常
+ *   抛给调用方。只有两处：确认会话的 /me（401 = 没有登录）与登录请求本身
+ *   （401 = 用户名或密码错误）。
+ */
 
 /**
  * 不变式：request 要么返回成功的数据（204 为 null），要么抛出 ApiError。
@@ -46,18 +66,20 @@ const NEVER = new Promise(() => {})
  * 是不是其实失败了”。
  *
  * 401 的两种情形：
- * - 会话失效（当前不在登录页）：整页跳到 /login，并返回一个永不落定的
- *   Promise。页面马上就要卸载，让调用方停在原地（保持加载态），比让它
- *   先走进错误分支、闪一下错误提示再跳走要干净。
- * - 登录请求本身被拒（当前就在登录页）：按普通失败抛出，登录页才能把
- *   “用户名或密码错误”显示出来。
+ * - 会话结束：需要登录的接口只在请求没有带来可用的会话时回 401
+ *   （requireAPIAuth：没有 cookie，或它对应的会话不存在、已过期）。通知会话的
+ *   持有者，并返回一个永不落定的 Promise —— 发起请求的页面马上会被登录页
+ *   换掉，让调用方停在原地（保持加载态），比让它先走进错误分支、闪一下错误
+ *   提示再被换掉要干净。
+ * - 调用方声明了 own401，或者还没有人登记会话结束的处理：按普通失败抛出。
  *
  * @param {string} method
  * @param {string} path
  * @param {unknown} [body]
+ * @param {RequestOptions} [options]
  * @returns {Promise<any>}
  */
-async function request(method, path, body) {
+async function request(method, path, body, options) {
   /** @type {RequestInit} */
   const opts = { method, headers: {} }
   if (body !== undefined) {
@@ -70,8 +92,8 @@ async function request(method, path, body) {
   } catch {
     throw new ApiError('网络错误，请检查网络连接后重试', 0)
   }
-  if (res.status === 401 && window.location.pathname !== '/login') {
-    window.location.href = '/login'
+  if (res.status === 401 && !options?.own401 && onSessionEnded) {
+    onSessionEnded()
     return NEVER
   }
   if (res.status === 204) return null
@@ -87,10 +109,10 @@ async function request(method, path, body) {
 }
 
 export const api = {
-  /** @param {string} path */
-  get: (path) => request('GET', path),
-  /** @param {string} path @param {unknown} [body] */
-  post: (path, body) => request('POST', path, body),
+  /** @param {string} path @param {RequestOptions} [options] */
+  get: (path, options) => request('GET', path, undefined, options),
+  /** @param {string} path @param {unknown} [body] @param {RequestOptions} [options] */
+  post: (path, body, options) => request('POST', path, body, options),
   /** @param {string} path @param {unknown} [body] */
   put: (path, body) => request('PUT', path, body),
   /** @param {string} path @param {unknown} [body] */
