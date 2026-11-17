@@ -15,9 +15,9 @@ type NodeHop struct {
 }
 
 type UserNode struct {
-	UserID      int64 `json:"user_id"`
-	NodeID      int64 `json:"node_id"`
-	MaxForwards int   `json:"max_forwards"`
+	UserID   int64 `json:"user_id"`
+	NodeID   int64 `json:"node_id"`
+	MaxRules int   `json:"max_forwards"`
 	// TrafficQuotaBytes 是这条授权自己的配额，0 表示这条授权不设上限。它与用户的全局
 	// 配额各自独立判定（suppressedRulesSQL 里各一条子句）：全局配额用尽，该用户的规则
 	// 全部不转发；授权配额用尽，只是他经过这个逻辑节点的规则不转发。
@@ -104,12 +104,12 @@ func CompositeReferrers(d *sql.DB, nodeID int64) ([]*Node, error) {
 }
 
 // GrantNode grants a user access to a node. If the grant already exists its
-// max_forwards and traffic quota are overwritten; the rate limit, roles and
+// max_rules and traffic quota are overwritten; the rate limit, roles and
 // usage counters are kept.
-func GrantNode(d DBTX, userID, nodeID int64, maxForwards int, trafficQuotaBytes int64) error {
-	_, err := d.Exec(`INSERT INTO user_nodes(user_id, node_id, max_forwards, traffic_quota_bytes, granted_at) VALUES (?,?,?,?,?)
-		ON CONFLICT(user_id, node_id) DO UPDATE SET max_forwards=excluded.max_forwards, traffic_quota_bytes=excluded.traffic_quota_bytes`,
-		userID, nodeID, maxForwards, trafficQuotaBytes, now())
+func GrantNode(d DBTX, userID, nodeID int64, maxRules int, trafficQuotaBytes int64) error {
+	_, err := d.Exec(`INSERT INTO user_nodes(user_id, node_id, max_rules, traffic_quota_bytes, granted_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(user_id, node_id) DO UPDATE SET max_rules=excluded.max_rules, traffic_quota_bytes=excluded.traffic_quota_bytes`,
+		userID, nodeID, maxRules, trafficQuotaBytes, now())
 	return err
 }
 
@@ -117,7 +117,7 @@ func GrantNode(d DBTX, userID, nodeID int64, maxForwards int, trafficQuotaBytes 
 type GrantWrite struct {
 	UserID            int64
 	NodeID            int64
-	MaxForwards       int
+	MaxRules          int
 	TrafficQuotaBytes int64
 	RateLimitMBytes   int64
 }
@@ -134,7 +134,7 @@ type GrantWrite struct {
 // slice is parallel to grants: true where a row was inserted or overwritten,
 // false where an existing grant was kept.
 func ApplyGrants(d *sql.DB, grants []GrantWrite, keepExisting bool) ([]bool, error) {
-	onConflict := `DO UPDATE SET max_forwards=excluded.max_forwards, traffic_quota_bytes=excluded.traffic_quota_bytes, rate_limit_mbytes=excluded.rate_limit_mbytes`
+	onConflict := `DO UPDATE SET max_rules=excluded.max_rules, traffic_quota_bytes=excluded.traffic_quota_bytes, rate_limit_mbytes=excluded.rate_limit_mbytes`
 	if keepExisting {
 		onConflict = `DO NOTHING`
 	}
@@ -146,9 +146,9 @@ func ApplyGrants(d *sql.DB, grants []GrantWrite, keepExisting bool) ([]bool, err
 	written := make([]bool, len(grants))
 	at := now()
 	for i, g := range grants {
-		res, err := tx.Exec(`INSERT INTO user_nodes(user_id, node_id, max_forwards, traffic_quota_bytes, rate_limit_mbytes, granted_at) VALUES (?,?,?,?,?,?)
+		res, err := tx.Exec(`INSERT INTO user_nodes(user_id, node_id, max_rules, traffic_quota_bytes, rate_limit_mbytes, granted_at) VALUES (?,?,?,?,?,?)
 			ON CONFLICT(user_id, node_id) `+onConflict,
-			g.UserID, g.NodeID, g.MaxForwards, g.TrafficQuotaBytes, g.RateLimitMBytes, at)
+			g.UserID, g.NodeID, g.MaxRules, g.TrafficQuotaBytes, g.RateLimitMBytes, at)
 		if err != nil {
 			return nil, err
 		}
@@ -177,9 +177,9 @@ func SetGrantRoles(d *sql.DB, userID, nodeID, roles int64) error {
 }
 
 func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
-	row := d.QueryRow(`SELECT user_id, node_id, max_forwards, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, roles, granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
+	row := d.QueryRow(`SELECT user_id, node_id, max_rules, traffic_quota_bytes, traffic_used_bytes, rate_limit_mbytes, roles, granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
 	g := &UserNode{}
-	if err := row.Scan(&g.UserID, &g.NodeID, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt); err != nil {
+	if err := row.Scan(&g.UserID, &g.NodeID, &g.MaxRules, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt); err != nil {
 		return nil, err
 	}
 	return g, nil
@@ -190,7 +190,7 @@ func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	rows, err := d.Query(`
 		SELECT `+nodeColsQualified+`,
-		       g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.roles, g.granted_at
+		       g.max_rules, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.roles, g.granted_at
 		FROM nodes n JOIN user_nodes g ON g.node_id = n.id
 		WHERE g.user_id = ? ORDER BY n.sort_order, n.id`, userID)
 	if err != nil {
@@ -201,7 +201,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	var grants []*UserNode
 	for rows.Next() {
 		g := &UserNode{UserID: userID}
-		n, err := scanNodeAnd(rows, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt)
+		n, err := scanNodeAnd(rows, &g.MaxRules, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -213,7 +213,7 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 }
 
 // CountRulesForUserNode 数 userID 名下以逻辑节点 nodeID 为入口的规则条数，是授权的
-// 条数上限（user_nodes.max_forwards）比较的那个数：按规则计，一条经组合展开成多跳
+// 条数上限（user_nodes.max_rules）比较的那个数：按规则计，一条经组合展开成多跳
 // 的规则也只算一条；只把节点用作中转层的规则不计在这个节点的授权上。
 //
 // 接受事务：上限检查与插入要在同一个事务里（见 internal/rulechange）。
@@ -225,14 +225,14 @@ func CountRulesForUserNode(d DBTX, userID, nodeID int64) (int, error) {
 func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 	UserID            int64  `json:"user_id"`
 	Username          string `json:"username"`
-	MaxForwards       int    `json:"max_forwards"`
+	MaxRules          int    `json:"max_forwards"`
 	TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
 	RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 	Roles             int64  `json:"roles"`
 	GrantedAt         int64  `json:"granted_at"`
 }, error) {
-	rows, err := d.Query(`SELECT g.user_id, u.username, g.max_forwards, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.roles, g.granted_at
+	rows, err := d.Query(`SELECT g.user_id, u.username, g.max_rules, g.traffic_quota_bytes, g.traffic_used_bytes, g.rate_limit_mbytes, g.roles, g.granted_at
 		FROM user_nodes g JOIN users u ON u.id = g.user_id
 		WHERE g.node_id = ? ORDER BY g.granted_at`, nodeID)
 	if err != nil {
@@ -242,7 +242,7 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 	var out []struct {
 		UserID            int64  `json:"user_id"`
 		Username          string `json:"username"`
-		MaxForwards       int    `json:"max_forwards"`
+		MaxRules          int    `json:"max_forwards"`
 		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 		TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
 		RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
@@ -253,14 +253,14 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 		var r struct {
 			UserID            int64  `json:"user_id"`
 			Username          string `json:"username"`
-			MaxForwards       int    `json:"max_forwards"`
+			MaxRules          int    `json:"max_forwards"`
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 			TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
 			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 			Roles             int64  `json:"roles"`
 			GrantedAt         int64  `json:"granted_at"`
 		}
-		if err := rows.Scan(&r.UserID, &r.Username, &r.MaxForwards, &r.TrafficQuotaBytes, &r.TrafficUsedBytes, &r.RateLimitMBytes, &r.Roles, &r.GrantedAt); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Username, &r.MaxRules, &r.TrafficQuotaBytes, &r.TrafficUsedBytes, &r.RateLimitMBytes, &r.Roles, &r.GrantedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

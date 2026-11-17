@@ -102,7 +102,7 @@ func (m model) View() string {
 		r := m.rowAt(m.cursor)
 		if r.HopCount > 1 {
 			inner = m.viewConfirm(fmt.Sprintf(
-				"确认删除整条链路「%s」？\n\n  这会删除该链路在所有节点上的全部转发，不可恢复。\n", r.RuleName))
+				"确认删除整条链路「%s」？\n\n  这会把这条链路从它经过的所有节点上一并删除，不可恢复。\n", r.RuleName))
 		} else {
 			inner = m.viewConfirm(
 				fmt.Sprintf("确认删除该规则？\n\n  %s\n", r.Display()))

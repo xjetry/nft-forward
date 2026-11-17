@@ -272,7 +272,7 @@ function GrantedNodes({ userId, nodes, grants, showRate, accountQuota }) {
                   {speed && <span className="font-mono">{speed}</span>}
                   <span>{fmtGrantTraffic(g?.traffic_used_bytes, g?.traffic_quota_bytes, accountQuota)}</span>
                   {g?.rate_limit_mbytes > 0 && <span>限速 {g.rate_limit_mbytes} MB/s</span>}
-                  {g?.max_forwards != null && <span>规则上限 {g.max_forwards}</span>}
+                  {g?.max_forwards != null && <span>规则数上限 {g.max_forwards}</span>}
                 </div>
               </ListItem>
             )
@@ -290,7 +290,7 @@ function GrantedNodes({ userId, nodes, grants, showRate, accountQuota }) {
                 <th>实时速率</th>
                 <th className="num">已用 / 配额</th>
                 <th className="num">限速</th>
-                <th className="num">规则上限</th>
+                <th className="num">规则数上限</th>
               </tr>
             </thead>
             <tbody>

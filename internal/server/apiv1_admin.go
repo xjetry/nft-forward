@@ -30,7 +30,7 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Username          string `json:"username"`
 		Password          string `json:"password"`
 		Role              string `json:"role"`
-		MaxForwards       int    `json:"max_forwards"`
+		MaxRules          int    `json:"max_forwards"`
 		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 		ExpiresAt         int64  `json:"expires_at"`
 		IssueToken        *bool  `json:"issue_token"`
@@ -53,7 +53,7 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user, aerr := s.provisionUser(admin.ID, provisionParams{
 		Username: body.Username, Password: password, Role: body.Role,
-		MaxForwards: body.MaxForwards, TrafficQuotaBytes: body.TrafficQuotaBytes,
+		MaxRules: body.MaxRules, TrafficQuotaBytes: body.TrafficQuotaBytes,
 		ExpiresAt: expiresAt,
 	})
 	if aerr != nil {
@@ -198,7 +198,7 @@ func (s *Server) v1AdminSetLandingSubURL(w http.ResponseWriter, r *http.Request)
 	v1OK(w, map[string]any{"updated": true, "sub_error": saved.SubError})
 }
 
-func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
+func (s *Server) v1AdminSetMaxRules(w http.ResponseWriter, r *http.Request) {
 	admin := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -209,13 +209,13 @@ func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		MaxForwards int `json:"max_forwards"`
+		MaxRules int `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
 		return
 	}
-	if aerr := s.setUserMaxForwards(admin.ID, id, body.MaxForwards); aerr != nil {
+	if aerr := s.setUserMaxRules(admin.ID, id, body.MaxRules); aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
@@ -267,11 +267,11 @@ func (s *Server) v1AdminGrantNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		MaxForwards       int   `json:"max_forwards"`
+		MaxRules          int   `json:"max_forwards"`
 		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	}
 	_ = decodeJSON(r, &body)
-	if aerr := s.grantUserNodes(admin.ID, id, []int64{nodeID}, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+	if aerr := s.grantUserNodes(admin.ID, id, []int64{nodeID}, body.MaxRules, body.TrafficQuotaBytes); aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
@@ -389,7 +389,7 @@ func (s *Server) v1AdminBatchApplyGrants(w http.ResponseWriter, r *http.Request)
 		UserIDs []int64 `json:"user_ids"`
 		Grants  []struct {
 			NodeName          string `json:"node_name"`
-			MaxForwards       int    `json:"max_forwards"`
+			MaxRules          int    `json:"max_forwards"`
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 		} `json:"grants"`
@@ -400,7 +400,7 @@ func (s *Server) v1AdminBatchApplyGrants(w http.ResponseWriter, r *http.Request)
 	}
 	specs := make([]batchGrantSpec, len(body.Grants))
 	for i, g := range body.Grants {
-		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
+		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxRules: g.MaxRules, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
 	// The public API always overwrites: its request and response shapes are
 	// fixed by openapi.yaml and carry no keep-existing option.

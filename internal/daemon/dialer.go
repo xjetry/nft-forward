@@ -203,7 +203,7 @@ func (d *Dialer) MigrateRules(ctx context.Context, rules []nft.Rule) (wsproto.Ru
 // 规则，成功后 OnMigrated 清掉本地名下的规则，这些规则此后由面板下发。每次会话建立时调用
 // 一次；本地名下为空时什么都不做。
 //
-// 面板拒绝（属主的转发数上限、端口不在节点的端口范围内等，整批拒绝）或会话在应答
+// 面板拒绝（属主的规则数上限、端口不在节点的端口范围内等，整批拒绝）或会话在应答
 // 前断开时，本地名下原样保留，规则继续转发，下次会话再试。
 func (d *Dialer) adoptLocalRules(ctx context.Context) {
 	owners, _ := d.cfg.GetState()

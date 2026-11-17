@@ -149,8 +149,8 @@ func TestV1AdminUserScalarSets(t *testing.T) {
 	}
 	// max-forwards
 	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/max-forwards", target), adminTok, map[string]any{"max_forwards": 7})
-	if u, _ = db.GetUserByID(d, target); u.MaxForwards != 7 {
-		t.Fatalf("max_forwards not applied: %d", u.MaxForwards)
+	if u, _ = db.GetUserByID(d, target); u.MaxRules != 7 {
+		t.Fatalf("max_forwards not applied: %d", u.MaxRules)
 	}
 	// expiry (unix)
 	v1Do(t, s, "PUT", fmt.Sprintf("/api/v1/users/%d/expiry", target), adminTok, map[string]any{"expires_at": 1893456000})

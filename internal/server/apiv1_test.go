@@ -15,9 +15,9 @@ import (
 
 // --- helpers ---
 
-func v1UserToken(t *testing.T, d *sql.DB, maxForwards int, scope string) (int64, string) {
+func v1UserToken(t *testing.T, d *sql.DB, maxRules int, scope string) (int64, string) {
 	t.Helper()
-	uid, _ := loginAsUser(t, d, maxForwards)
+	uid, _ := loginAsUser(t, d, maxRules)
 	tok, err := db.CreateAPIToken(d, uid, scope)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func v1ErrCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return env.Error.Code
 }
 
-func grantedNode(t *testing.T, d *sql.DB, name string, uid int64, maxForwards int) *db.Node {
+func grantedNode(t *testing.T, d *sql.DB, name string, uid int64, maxRules int) *db.Node {
 	t.Helper()
 	n, err := db.CreateNode(d, name, "https://p", "t-"+name)
 	if err != nil {
@@ -94,7 +94,7 @@ func grantedNode(t *testing.T, d *sql.DB, name string, uid int64, maxForwards in
 	if err := db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.GrantNode(d, uid, n.ID, maxForwards, 0); err != nil {
+	if err := db.GrantNode(d, uid, n.ID, maxRules, 0); err != nil {
 		t.Fatal(err)
 	}
 	return n

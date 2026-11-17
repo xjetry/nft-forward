@@ -49,7 +49,7 @@ type provisionParams struct {
 	Username          string
 	Password          string // caller ensures non-empty (generate a random one for API-only users)
 	Role              string
-	MaxForwards       int
+	MaxRules          int
 	TrafficQuotaBytes int64
 	ExpiresAt         sql.NullInt64 // 由 parseExpiryDate / parseExpiryUnix 给出
 	LandingSubURL     string
@@ -80,7 +80,7 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	maxFwd := p.MaxForwards
+	maxFwd := p.MaxRules
 	if maxFwd <= 0 {
 		maxFwd = 100
 	}
@@ -99,7 +99,7 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
+		if _, err := tx.Exec(`UPDATE users SET max_rules=?, traffic_quota_bytes=? WHERE id=?`,
 			maxFwd, p.TrafficQuotaBytes, id); err != nil {
 			return nil, err
 		}
@@ -147,12 +147,12 @@ func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
 	return nil
 }
 
-// setUserMaxForwards sets the user's absolute max forward-rule count.
-func (s *Server) setUserMaxForwards(adminID, userID int64, n int) *adminError {
+// setUserMaxRules sets the user's absolute max forward-rule count.
+func (s *Server) setUserMaxRules(adminID, userID int64, n int) *adminError {
 	if n < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "配额数无效"}
 	}
-	if err := db.UpdateRow(s.DB, `UPDATE users SET max_forwards=? WHERE id=?`, n, userID); err != nil {
+	if err := db.UpdateRow(s.DB, `UPDATE users SET max_rules=? WHERE id=?`, n, userID); err != nil {
 		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_max_forwards", strconv.FormatInt(userID, 10), strconv.Itoa(n))
@@ -218,7 +218,7 @@ func (s *Server) setUserExpiry(adminID, userID int64, at sql.NullInt64) *adminEr
 }
 
 // grantUserNodes 确保用户在每个节点上都有给定上限的授权（经 db.GrantNodes 建或改），
-// 要么全部写入、要么一条都不写。maxForwards<=0 取默认值。
+// 要么全部写入、要么一条都不写。maxRules<=0 取默认值。
 //
 // 每条授权的两端都先查一遍，“没有这个用户”“没有这个节点”由这两次查找回答。
 // user_nodes 上的外键同样会拒绝这样的写入，但这里不去读一次失败的写入的原因：它
@@ -226,9 +226,9 @@ func (s *Server) setUserExpiry(adminID, userID int64, at sql.NullInt64) *adminEr
 //
 // db.GrantNode 对已存在的授权是覆盖写，配额也在其中，所以这里可能改动已有授权的
 // 配额：写完要重新下发经过这些授权的规则。
-func (s *Server) grantUserNodes(adminID, userID int64, nodeIDs []int64, maxForwards int, quotaBytes int64) *adminError {
-	if maxForwards <= 0 {
-		maxForwards = defaultGrantMaxForwards
+func (s *Server) grantUserNodes(adminID, userID int64, nodeIDs []int64, maxRules int, quotaBytes int64) *adminError {
+	if maxRules <= 0 {
+		maxRules = defaultGrantMaxRules
 	}
 	if _, err := db.GetUserByID(s.DB, userID); err != nil {
 		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
@@ -238,7 +238,7 @@ func (s *Server) grantUserNodes(adminID, userID int64, nodeIDs []int64, maxForwa
 			return adminLookupErr(err, http.StatusNotFound, codeNotFound, fmt.Sprintf("节点 #%d 不存在", nid))
 		}
 	}
-	if err := db.GrantNodes(s.DB, userID, nodeIDs, maxForwards, quotaBytes); err != nil {
+	if err := db.GrantNodes(s.DB, userID, nodeIDs, maxRules, quotaBytes); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
 	for _, nid := range nodeIDs {
@@ -308,7 +308,7 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 // batchGrantSpec is one node grant applied across a set of users by batchApplyGrants.
 type batchGrantSpec struct {
 	NodeName          string
-	MaxForwards       int
+	MaxRules          int
 	TrafficQuotaBytes int64
 	RateLimitMBytes   int64
 }
@@ -370,16 +370,16 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	writes := make([]db.GrantWrite, 0, len(nodeOrder)*len(users))
 	for _, nid := range nodeOrder {
 		g := specByNode[nid]
-		mf := g.MaxForwards
+		mf := g.MaxRules
 		if mf <= 0 {
-			mf = defaultGrantMaxForwards
+			mf = defaultGrantMaxRules
 		}
 		mb := g.RateLimitMBytes
 		if mb < 0 {
 			mb = 0
 		}
 		for _, uid := range users {
-			writes = append(writes, db.GrantWrite{UserID: uid, NodeID: nid, MaxForwards: mf, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: mb})
+			writes = append(writes, db.GrantWrite{UserID: uid, NodeID: nid, MaxRules: mf, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: mb})
 		}
 	}
 	written, err := db.ApplyGrants(s.DB, writes, keepExisting)

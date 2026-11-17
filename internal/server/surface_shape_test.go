@@ -55,7 +55,7 @@ func newSurfaceFixture(t *testing.T) *surfaceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, d, `UPDATE users SET max_forwards=20, billing_rate=1.5, expires_at=2000000000,
+	mustExec(t, d, `UPDATE users SET max_rules=20, billing_rate=1.5, expires_at=2000000000,
 		traffic_quota_bytes=1073741824, traffic_used_bytes=4096, traffic_reset_days=30,
 		last_traffic_reset_at=1700000500, admin_note='vip', created_at=1700000001 WHERE id=?`, f.alice)
 	mustExec(t, d, `UPDATE users SET created_at=1700000000, last_traffic_reset_at=1700000400 WHERE id=?`, adminID)

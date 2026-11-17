@@ -53,7 +53,7 @@ func TestApplyGrantsOverwritesCapsAndKeepsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	written, err := ApplyGrants(d, []GrantWrite{{UserID: uid, NodeID: nid, MaxForwards: 7, TrafficQuotaBytes: 500, RateLimitMBytes: 4}}, false)
+	written, err := ApplyGrants(d, []GrantWrite{{UserID: uid, NodeID: nid, MaxRules: 7, TrafficQuotaBytes: 500, RateLimitMBytes: 4}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestApplyGrantsOverwritesCapsAndKeepsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.MaxForwards != 7 || g.TrafficQuotaBytes != 500 || g.RateLimitMBytes != 4 {
+	if g.MaxRules != 7 || g.TrafficQuotaBytes != 500 || g.RateLimitMBytes != 4 {
 		t.Fatalf("caps not overwritten: %+v", g)
 	}
 	if g.TrafficUsedBytes != 42 || g.Roles != 2 {
@@ -89,8 +89,8 @@ func TestApplyGrantsKeepExistingLeavesGrantUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	written, err := ApplyGrants(d, []GrantWrite{
-		{UserID: uid, NodeID: nid1, MaxForwards: 10, TrafficQuotaBytes: 0, RateLimitMBytes: 0},
-		{UserID: uid, NodeID: nid2, MaxForwards: 10, TrafficQuotaBytes: 0, RateLimitMBytes: 5},
+		{UserID: uid, NodeID: nid1, MaxRules: 10, TrafficQuotaBytes: 0, RateLimitMBytes: 0},
+		{UserID: uid, NodeID: nid2, MaxRules: 10, TrafficQuotaBytes: 0, RateLimitMBytes: 5},
 	}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -102,14 +102,14 @@ func TestApplyGrantsKeepExistingLeavesGrantUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kept.MaxForwards != 3 || kept.TrafficQuotaBytes != 100 || kept.RateLimitMBytes != 9 {
+	if kept.MaxRules != 3 || kept.TrafficQuotaBytes != 100 || kept.RateLimitMBytes != 9 {
 		t.Fatalf("existing grant was modified: %+v", kept)
 	}
 	added, err := GetNodeGrant(d, uid, nid2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if added.MaxForwards != 10 || added.RateLimitMBytes != 5 {
+	if added.MaxRules != 10 || added.RateLimitMBytes != 5 {
 		t.Fatalf("missing grant not written as given: %+v", added)
 	}
 }
@@ -118,8 +118,8 @@ func TestApplyGrantsIsAllOrNothing(t *testing.T) {
 	d, uid, _, nid1, nid2 := applyGrantsFixture(t)
 	const noSuchUser = 987654
 	_, err := ApplyGrants(d, []GrantWrite{
-		{UserID: uid, NodeID: nid1, MaxForwards: 10},
-		{UserID: noSuchUser, NodeID: nid2, MaxForwards: 10},
+		{UserID: uid, NodeID: nid1, MaxRules: 10},
+		{UserID: noSuchUser, NodeID: nid2, MaxRules: 10},
 	}, false)
 	if err == nil {
 		t.Fatal("want an error for a user id that does not exist")

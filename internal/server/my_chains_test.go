@@ -13,16 +13,16 @@ import (
 	"nft-forward/internal/db"
 )
 
-// loginAsUser creates a user with role "user" and the given max_forwards quota,
+// loginAsUser creates a user with role "user" and the given max_rules quota,
 // returns the user ID and a session cookie.
-func loginAsUser(t *testing.T, d *sql.DB, maxForwards int) (int64, *http.Cookie) {
+func loginAsUser(t *testing.T, d *sql.DB, maxRules int) (int64, *http.Cookie) {
 	t.Helper()
 	hash, _ := HashPassword("pw")
 	uid, err := db.CreateUser(d, fmt.Sprintf("user-%d", time.Now().UnixNano()), hash, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, maxForwards, uid); err != nil {
+	if _, err := d.Exec(`UPDATE users SET max_rules=? WHERE id=?`, maxRules, uid); err != nil {
 		t.Fatal(err)
 	}
 	tok, err := db.CreateSession(d, uid, time.Hour)
@@ -89,7 +89,7 @@ func TestUserCreateRuleRejectsOverQuota(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "gomami", "https://p", "t1")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	uid, cookie := loginAsUser(t, d, 0) // max_forwards = 0
+	uid, cookie := loginAsUser(t, d, 0) // max_rules = 0
 	_ = db.GrantNode(d, uid, g.ID, 5, 0)
 
 	s, _ := New(d)
@@ -106,7 +106,7 @@ func TestUserCreateRuleRejectsOverQuota(t *testing.T) {
 	s.Router().ServeHTTP(rec, req)
 	rules, _ := db.ListRulesByUser(d, uid)
 	if len(rules) != 0 {
-		t.Fatalf("rule exceeding max_forwards must be rejected; got %d rules", len(rules))
+		t.Fatalf("rule exceeding max_rules must be rejected; got %d rules", len(rules))
 	}
 }
 

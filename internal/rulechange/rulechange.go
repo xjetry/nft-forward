@@ -701,8 +701,8 @@ func (u *usage) add(entry int64, grant *db.UserNode) {
 // withinCaps 检查 owner 再添 use 这些规则之后仍在条数上限之内。
 //
 // 两个上限数的都是规则条数，一条规则占一个名额，与链有几跳无关：授权的上限数
-// owner 以该节点为入口的规则，账号的上限（users.max_forwards）数 owner 名下全部规则。
-// 管理员没有上限：users.max_forwards 只约束普通用户（管理员账号的这一列默认是 0），
+// owner 以该节点为入口的规则，账号的上限（users.max_rules）数 owner 名下全部规则。
+// 管理员没有上限：users.max_rules 只约束普通用户（管理员账号的这一列默认是 0），
 // 他也没有授权行。
 //
 // 必须在写入的事务里调用：db.Open 把连接数限成 1，一个事务从开始到提交独占这个连
@@ -718,8 +718,8 @@ func withinCaps(tx db.DBTX, owner *db.User, use usage) *Error {
 	if err != nil {
 		return internal(err)
 	}
-	if total+use.rules > owner.MaxForwards {
-		return conflict("超出用户最大转发数（%d）", owner.MaxForwards)
+	if total+use.rules > owner.MaxRules {
+		return conflict("超出账号的规则数上限（%d）", owner.MaxRules)
 	}
 	return nil
 }
@@ -732,8 +732,8 @@ func withinNodeCaps(tx db.DBTX, owner *db.User, use usage) *Error {
 		if err != nil {
 			return internal(err)
 		}
-		if n+use.adding[entry] > grant.MaxForwards {
-			return conflict("超出该节点的转发上限（%d）", grant.MaxForwards)
+		if n+use.adding[entry] > grant.MaxRules {
+			return conflict("超出该节点的规则数上限（%d）", grant.MaxRules)
 		}
 	}
 	return nil

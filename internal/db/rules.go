@@ -383,7 +383,7 @@ func DeleteRule(d DBTX, id int64) ([]int64, error) {
 	return nodes, nil
 }
 
-// CountRulesForUser 数 userID 名下的规则条数，是账号的条数上限（users.max_forwards）
+// CountRulesForUser 数 userID 名下的规则条数，是账号的条数上限（users.max_rules）
 // 比较的那个数：一条规则占一个名额，与它的链有几跳无关。
 //
 // 接受事务：上限检查与插入要在同一个事务里（见 internal/rulechange）。
@@ -502,7 +502,7 @@ func RulesReferencingNode(d DBTX, nodeID int64) ([]int64, error) {
 }
 
 // FillUserRuleCounts sets each user's RuleCount to the number of rules they own,
-// for showing used/total rule quota against MaxForwards.
+// for showing used/total rule quota against MaxRules.
 func FillUserRuleCounts(d DBTX, users []*User) error {
 	if len(users) == 0 {
 		return nil

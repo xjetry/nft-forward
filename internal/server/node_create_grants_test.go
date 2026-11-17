@@ -53,8 +53,8 @@ func TestCreateNodeGrantsUsers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("grant for user %d missing: %v", uid, err)
 		}
-		if g.MaxForwards != defaultGrantMaxForwards {
-			t.Fatalf("max_forwards = %d, want %d", g.MaxForwards, defaultGrantMaxForwards)
+		if g.MaxRules != defaultGrantMaxRules {
+			t.Fatalf("max_forwards = %d, want %d", g.MaxRules, defaultGrantMaxRules)
 		}
 	}
 }

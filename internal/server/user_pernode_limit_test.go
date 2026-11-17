@@ -7,13 +7,13 @@ import (
 	"nft-forward/internal/db"
 )
 
-// The per-node grant limit (user_nodes.max_forwards) must cap how many rules a
+// The per-node grant limit (user_nodes.max_rules) must cap how many rules a
 // user can create on that node, independently of the generous global limit.
 func TestUserCreateRuleRespectsPerNodeLimit(t *testing.T) {
 	d := openDB(t)
 	g, _ := db.CreateNode(d, "node", "", "")
 	_ = db.UpdateNodeRelayHost(d, g.ID, "1.1.1.1")
-	uid, cookie := loginAsUser(t, d, 100) // generous global max_forwards
+	uid, cookie := loginAsUser(t, d, 100) // generous global max_rules
 	_ = db.GrantNode(d, uid, g.ID, 1, 0)     // per-node cap = 1
 
 	s, _ := New(d)

@@ -193,9 +193,9 @@ function UsageCard({ userId, user, ruleCount, onReset }) {
           label="规则"
           value={ruleCount}
           unit={`/ ${user.max_forwards}`}
-          hint={user.max_forwards === 0 ? '规则配额为 0，该用户不能创建规则' : undefined}
+          hint={user.max_forwards === 0 ? '规则数上限为 0，该用户不能创建规则' : undefined}
         >
-          <Meter value={ruleCount} max={user.max_forwards} tone={ruleCount >= user.max_forwards ? 'warn' : 'accent'} label="规则配额用量" />
+          <Meter value={ruleCount} max={user.max_forwards} tone={ruleCount >= user.max_forwards ? 'warn' : 'accent'} label="规则数用量" />
         </Stat>
         <Stat
           label="流量"
@@ -222,7 +222,7 @@ function SettingsCard({ userId, user, reload }) {
   // 刷新）不会冲掉这里输入到一半的内容。
   const [form, setForm] = useState(() => ({
     expiresAt: savedExpiry,
-    maxForwards: String(user.max_forwards || 0),
+    maxRules: String(user.max_forwards || 0),
     quotaGB: bytesToGBText(user.traffic_quota_bytes),
     resetDays: String(user.traffic_reset_days || 0),
     billingRate: String(user.billing_rate ?? 1),
@@ -232,12 +232,12 @@ function SettingsCard({ userId, user, reload }) {
   const set = key => value => setForm(f => ({ ...f, [key]: value }))
 
   const save = useAction(async () => {
-    const maxForwards = parseNumber(form.maxForwards, { integer: true })
+    const maxRules = parseNumber(form.maxRules, { integer: true })
     const quotaGB = parseNumber(form.quotaGB)
     const resetDays = parseNumber(form.resetDays, { integer: true })
     const billingRate = parseNumber(form.billingRate)
     const found = {}
-    if (maxForwards == null) found.maxForwards = '填写不小于 0 的整数'
+    if (maxRules == null) found.maxRules = '填写不小于 0 的整数'
     if (quotaGB == null) found.quotaGB = '填写不小于 0 的数'
     if (resetDays == null) found.resetDays = '填写不小于 0 的整数'
     if (!billingRate) found.billingRate = '填写大于 0 的数'
@@ -245,7 +245,7 @@ function SettingsCard({ userId, user, reload }) {
     if (Object.keys(found).length) return
     await api.patch(`/users/${userId}/profile`, {
       expires_at: form.expiresAt,
-      max_forwards: maxForwards,
+      max_forwards: maxRules,
       traffic_quota_gb: quotaGB,
       traffic_reset_days: resetDays,
       admin_note: form.adminNote,
@@ -261,8 +261,8 @@ function SettingsCard({ userId, user, reload }) {
       <CardSection>
         <form noValidate className="flex max-w-2xl flex-col gap-4" onSubmit={e => { e.preventDefault(); save.run() }}>
           <ExpiryField layout="row" value={form.expiresAt} onChange={set('expiresAt')} saved={savedExpiry} />
-          <Field label="规则配额" layout="row" error={errors.maxForwards} hint="该用户最多可创建的规则数。0 = 不允许创建规则。">
-            <Input type="number" min="0" step="1" className="w-44" value={form.maxForwards} onChange={set('maxForwards')} suffix="条" />
+          <Field label="规则数上限" layout="row" error={errors.maxRules} hint="该用户最多可创建的规则数。0 = 不允许创建规则。">
+            <Input type="number" min="0" step="1" className="w-44" value={form.maxRules} onChange={set('maxRules')} suffix="条" />
           </Field>
           <Field label="流量配额" layout="row" error={errors.quotaGB} hint="0 = 不限。">
             <Input type="number" min="0" step="0.1" className="w-44" value={form.quotaGB} onChange={set('quotaGB')} suffix="GB" />
@@ -313,7 +313,7 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
   const tabNodes = tab === 'composite' ? composites : singles
   // 选择集里可能留着刚被撤销的节点；一切判断都以当前页签里实际还在的节点为准。
   const chosen = tabNodes.filter(n => selected.has(n.id))
-  // 节点规则配额按“以该节点为入口的规则数”计，与服务端创建规则时的口径相同。
+  // 节点规则数上限按“以该节点为入口的规则数”计，与服务端创建规则时的口径相同。
   const entryRuleCount = new Map()
   for (const r of rules) entryRuleCount.set(r.node_id, (entryRuleCount.get(r.node_id) || 0) + 1)
 
@@ -434,7 +434,7 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
                       </div>
                     </th>
                     <th>类型</th>
-                    <th className="num">规则配额</th>
+                    <th className="num">规则数上限</th>
                     <th className="num">流量</th>
                     <th className="num">限速</th>
                     <th>用途</th>
@@ -503,7 +503,7 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
   const toast = useToast()
   const formId = useId()
   const [nodeIds, setNodeIds] = useState([])
-  const [maxForwards, setMaxForwards] = useState('10')
+  const [maxRules, setMaxRules] = useState('10')
   const [errors, setErrors] = useState({})
   const available = allNodes.filter(n => !granted.has(n.id))
   const optionsOf = composite => available
@@ -511,10 +511,10 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
     .map(n => ({ value: n.id, label: n.name }))
 
   const grant = useAction(async () => {
-    const max = parseNumber(maxForwards, { min: 1, integer: true })
+    const max = parseNumber(maxRules, { min: 1, integer: true })
     const found = {}
     if (nodeIds.length === 0) found.nodes = '至少选择一个节点'
-    if (max == null) found.maxForwards = '填写不小于 1 的整数'
+    if (max == null) found.maxRules = '填写不小于 1 的整数'
     setErrors(found)
     if (Object.keys(found).length) return
     await api.post(`/users/${userId}/grants`, { node_ids: nodeIds, max_forwards: max })
@@ -556,8 +556,8 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
             groups={[{ label: '单点', options: optionsOf(false) }, { label: '组合', options: optionsOf(true) }]}
           />
         </Field>
-        <Field label="规则配额" error={errors.maxForwards} hint="该用户以每个所选节点为入口最多可创建的规则数，授权后可以逐个调整。">
-          <Input type="number" min="1" step="1" className="w-44" value={maxForwards} onChange={setMaxForwards} suffix="条" />
+        <Field label="规则数上限" error={errors.maxRules} hint="该用户以每个所选节点为入口最多可创建的规则数，授权后可以逐个调整。">
+          <Input type="number" min="1" step="1" className="w-44" value={maxRules} onChange={setMaxRules} suffix="条" />
         </Field>
       </form>
     </Modal>
@@ -566,7 +566,7 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
 
 function grantFormOf(grant) {
   return {
-    maxForwards: String(grant.max_forwards),
+    maxRules: String(grant.max_forwards),
     quotaGB: bytesToGBText(grant.traffic_quota_bytes),
     rate: String(grant.rate_limit_mbytes || 0),
     roles: grant.roles || 0,
@@ -587,18 +587,18 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
   const dirty = Object.keys(current).some(changed)
 
   const save = useAction(async () => {
-    const maxForwards = parseNumber(form.maxForwards, { min: 1, integer: true })
+    const maxRules = parseNumber(form.maxRules, { min: 1, integer: true })
     const quotaGB = parseNumber(form.quotaGB)
     const rate = parseNumber(form.rate, { integer: true })
     const found = {}
-    if (maxForwards == null) found.maxForwards = '填写不小于 1 的整数'
+    if (maxRules == null) found.maxRules = '填写不小于 1 的整数'
     if (quotaGB == null) found.quotaGB = '填写不小于 0 的数'
     if (rate == null) found.rate = '填写不小于 0 的整数'
     setErrors(found)
     if (Object.keys(found).length) return
     // 四项设置各有自己的接口，只提交改过的项。
     const requests = [
-      changed('maxForwards') && ['max-forwards', { max_forwards: maxForwards }],
+      changed('maxRules') && ['max-forwards', { max_forwards: maxRules }],
       changed('quotaGB') && ['quota', { traffic_quota_bytes: Math.round(quotaGB * GB) }],
       changed('rate') && ['rate-limit', { rate_limit_mbytes: rate }],
       changed('roles') && ['roles', { roles: form.roles }],
@@ -631,8 +631,8 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
       }
     >
       <form id={formId} noValidate className="flex flex-col gap-4" onSubmit={e => { e.preventDefault(); save.run() }}>
-        <Field label="规则配额" error={errors.maxForwards} hint="该用户以这个节点为入口最多可创建的规则数，至少为 1。">
-          <Input type="number" min="1" step="1" className="w-44" value={form.maxForwards} onChange={set('maxForwards')} suffix="条" />
+        <Field label="规则数上限" error={errors.maxRules} hint="该用户以这个节点为入口最多可创建的规则数，至少为 1。">
+          <Input type="number" min="1" step="1" className="w-44" value={form.maxRules} onChange={set('maxRules')} suffix="条" />
         </Field>
         <Field label="流量配额" error={errors.quotaGB} hint="0 = 不单独设限，只受该用户的总流量配额约束。">
           <Input type="number" min="0" step="0.1" className="w-44" value={form.quotaGB} onChange={set('quotaGB')} suffix="GB" />

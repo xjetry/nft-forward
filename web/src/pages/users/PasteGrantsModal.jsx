@@ -7,10 +7,10 @@ import { TableBox } from '../../components/page'
 import { ResourceView } from '../../components/ResourceView'
 import { Button, Checkbox, Field, Modal, ModalActions, Select, StatusDot, Textarea, useAction, useToast } from '../../components/ui'
 
-function grantPayload(name, { maxForwards, quotaGB, rateMBytes }) {
+function grantPayload(name, { maxRules, quotaGB, rateMBytes }) {
   return {
     node_name: name,
-    max_forwards: maxForwards,
+    max_forwards: maxRules,
     traffic_quota_bytes: Math.round(quotaGB * GB),
     rate_limit_mbytes: rateMBytes,
   }
@@ -99,7 +99,7 @@ export default function PasteGrantsModal({ initialUserIds = [], onClose, onDone 
           <div className="flex flex-col gap-4">
             <Field
               label="授权文本"
-              hint="每行一个节点：节点名 | max=规则配额（至少 1）| quota=流量配额GB | rate=限速MB/s。可以直接粘贴用户详情页“复制授权”得到的文本。"
+              hint="每行一个节点：节点名 | max=规则数上限（至少 1）| quota=流量配额GB | rate=限速MB/s。可以直接粘贴用户详情页“复制授权”得到的文本。"
             >
               <Textarea
                 mono
@@ -114,11 +114,11 @@ export default function PasteGrantsModal({ initialUserIds = [], onClose, onDone 
               <Select multiple searchable selectAll value={userIds} onChange={setUserIds} options={users.map(u => ({ value: u.id, label: u.username }))} placeholder="选择用户" />
             </Field>
             <div className="flex flex-col gap-1.5">
-              <Checkbox checked={applySettings} onChange={setApplySettings}>套用文本里的规则配额、流量配额与限速</Checkbox>
+              <Checkbox checked={applySettings} onChange={setApplySettings}>套用文本里的规则数上限、流量配额与限速</Checkbox>
               <p className="text-caption text-ink-mut">
                 {applySettings
-                  ? '已有授权会被改成文本里的值；文本里没写的项按默认值写入（规则配额 10、流量配额不限、不限速）。'
-                  : '只给还没有这些节点的用户补上授权，按默认值写入（规则配额 10、流量配额不限、不限速）；已有的授权保持不变。'}
+                  ? '已有授权会被改成文本里的值；文本里没写的项按默认值写入（规则数上限 10、流量配额不限、不限速）。'
+                  : '只给还没有这些节点的用户补上授权，按默认值写入（规则数上限 10、流量配额不限、不限速）；已有的授权保持不变。'}
               </p>
             </div>
             {rows.length > 0 && (
@@ -127,7 +127,7 @@ export default function PasteGrantsModal({ initialUserIds = [], onClose, onDone 
                   <thead>
                     <tr>
                       <th>节点</th>
-                      <th className="num">规则配额</th>
+                      <th className="num">规则数上限</th>
                       <th className="num">流量配额</th>
                       <th className="num">限速</th>
                       <th>状态</th>
@@ -137,7 +137,7 @@ export default function PasteGrantsModal({ initialUserIds = [], onClose, onDone 
                     {rows.map(row => (
                       <tr key={row.name}>
                         <td className="font-mono">{row.name}</td>
-                        <td className="num">{written(row).maxForwards}</td>
+                        <td className="num">{written(row).maxRules}</td>
                         <td className="num">{written(row).quotaGB ? `${written(row).quotaGB} GB` : '不限'}</td>
                         <td className="num">{written(row).rateMBytes ? `${written(row).rateMBytes} MB/s` : '不限'}</td>
                         <td>

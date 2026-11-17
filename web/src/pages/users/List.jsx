@@ -239,7 +239,7 @@ function genPassword(len = 16) {
 
 // 到期日默认留空（永不到期）：服务端把日期按 UTC 0 点换算成到期时刻，填当天
 // 等于创建出来就已到期。
-const NEW_USER = { username: '', password: '', role: 'user', maxForwards: '100', quotaGB: '0', expiresAt: '', subURL: '', adminNote: '' }
+const NEW_USER = { username: '', password: '', role: 'user', maxRules: '100', quotaGB: '0', expiresAt: '', subURL: '', adminNote: '' }
 
 function CreateUserModal({ onClose, onCreated }) {
   const formId = useId()
@@ -258,14 +258,14 @@ function CreateUserModal({ onClose, onCreated }) {
     // 面板地址还没读回来时不提交：此刻复制出去的登录信息会带上错的地址。
     if (settings.state.status === 'loading') return
     const username = form.username.trim()
-    const maxForwards = parseNumber(form.maxForwards, { min: 1, integer: true })
+    const maxRules = parseNumber(form.maxRules, { min: 1, integer: true })
     const quotaGB = parseNumber(form.quotaGB)
     const subURL = form.subURL.trim()
     const found = {}
     if (!username) found.username = '填写用户名'
     if (!form.password) found.password = '填写密码，或点“随机生成”'
     if (isUser) {
-      if (maxForwards == null) found.maxForwards = '填写不小于 1 的整数'
+      if (maxRules == null) found.maxRules = '填写不小于 1 的整数'
       if (quotaGB == null) found.quotaGB = '填写不小于 0 的数'
       if (subURL && !/^https?:\/\//.test(subURL)) found.subURL = '订阅地址要以 http:// 或 https:// 开头'
     }
@@ -284,7 +284,7 @@ function CreateUserModal({ onClose, onCreated }) {
       password: form.password,
       role: form.role,
       ...(isUser ? {
-        max_forwards: maxForwards,
+        max_forwards: maxRules,
         traffic_quota_bytes: Math.round(quotaGB * GB),
         expires_at: form.expiresAt || undefined,
         landing_sub_url: subURL || undefined,
@@ -333,8 +333,8 @@ function CreateUserModal({ onClose, onCreated }) {
         </Field>
         {isUser && (
           <>
-            <Field label="规则配额" error={errors.maxForwards} hint="该用户最多可创建的规则数。">
-              <Input type="number" min="1" step="1" className="w-44" value={form.maxForwards} onChange={set('maxForwards')} suffix="条" />
+            <Field label="规则数上限" error={errors.maxRules} hint="该用户最多可创建的规则数。">
+              <Input type="number" min="1" step="1" className="w-44" value={form.maxRules} onChange={set('maxRules')} suffix="条" />
             </Field>
             <Field label="流量配额" error={errors.quotaGB} hint="0 = 不限。">
               <Input type="number" min="0" step="0.1" className="w-44" value={form.quotaGB} onChange={set('quotaGB')} suffix="GB" />

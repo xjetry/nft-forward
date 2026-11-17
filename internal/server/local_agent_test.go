@@ -226,7 +226,7 @@ func TestLocalAgentRelayHostComesFromProbedAddress(t *testing.T) {
 	}
 }
 
-// self 节点的属主是管理员，而管理员没有转发数上限（管理员账号的 max_forwards 默认是 0，
+// self 节点的属主是管理员，而管理员没有规则数上限（管理员账号的 max_rules 默认是 0，
 // 管理员的 HTTP 建规则接口从不检查它）。所以面板机上原有的本地规则在 daemon 接入时
 // 能被面板接管，之后从节点侧（TUI）也能照常建规则。
 func TestSelfNodeAdoptsLocalRulesAndCreatesFromTheNodeSide(t *testing.T) {
@@ -239,8 +239,8 @@ func TestSelfNodeAdoptsLocalRulesAndCreatesFromTheNodeSide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if owner.Role != "admin" || owner.MaxForwards != 0 {
-		t.Fatalf("前置条件：属主应是 max_forwards=0 的管理员，实际 role=%s max_forwards=%d", owner.Role, owner.MaxForwards)
+	if owner.Role != "admin" || owner.MaxRules != 0 {
+		t.Fatalf("前置条件：属主应是 max_rules=0 的管理员，实际 role=%s max_rules=%d", owner.Role, owner.MaxRules)
 	}
 	a := connectFakeAgent(t, wsURL(e.local), wsproto.Hello{OS: "linux", Arch: "amd64", ProbedV4: "203.0.113.7"}, nil)
 
@@ -263,7 +263,7 @@ func TestSelfNodeAdoptsLocalRulesAndCreatesFromTheNodeSide(t *testing.T) {
 	}
 }
 
-// 反方向：普通用户名下的节点仍受该用户的转发数上限约束，超出时整批迁移被拒、一条
+// 反方向：普通用户名下的节点仍受该用户的规则数上限约束，超出时整批迁移被拒、一条
 // 都不落库；从节点侧建规则同样被拒。
 func TestNodeSideRuleCommandsStillCapRegularOwners(t *testing.T) {
 	e := newLocalAgentEnv(t)
@@ -272,7 +272,7 @@ func TestNodeSideRuleCommandsStillCapRegularOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.d.Exec(`UPDATE users SET max_forwards=1 WHERE id=?`, uid); err != nil {
+	if _, err := e.d.Exec(`UPDATE users SET max_rules=1 WHERE id=?`, uid); err != nil {
 		t.Fatal(err)
 	}
 	node, err := db.CreateNode(e.d, "user-edge", "", "tok-user-edge")

@@ -451,9 +451,9 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// defaultGrantMaxForwards is the per-node forward cap applied when a grant is
+// defaultGrantMaxRules is the per-node forward cap applied when a grant is
 // created without an explicit value.
-const defaultGrantMaxForwards = 10
+const defaultGrantMaxRules = 10
 
 // nodeExists reports whether id names a node, answering the request (404)
 // when it does not. It is for the handlers that read what belongs to a node
@@ -515,7 +515,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	// 节点连同它的成员与初始授权在一个事务里建成（db.CreateCompositeNode、
 	// db.CreateMachineNode），要么带着请求要的一切建出来，要么什么都不留下。所以能
 	// 事先查的都先查完，要授权的用户是否存在也在其中（usersExist）。
-	line := db.LineSpec{RateMultiplier: body.RateMultiplier, GrantUserIDs: body.UserIDs, GrantMaxForwards: defaultGrantMaxForwards}
+	line := db.LineSpec{RateMultiplier: body.RateMultiplier, GrantUserIDs: body.UserIDs, GrantMaxRules: defaultGrantMaxRules}
 	var (
 		n      *db.Node
 		action string
@@ -1954,7 +1954,7 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		Username          string `json:"username"`
 		Password          string `json:"password"`
 		Role              string `json:"role"`
-		MaxForwards       int    `json:"max_forwards"`
+		MaxRules          int    `json:"max_forwards"`
 		TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 		ExpiresAt         string `json:"expires_at"`
 		LandingSubURL     string `json:"landing_sub_url"`
@@ -1971,7 +1971,7 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user, aerr := s.provisionUser(u.ID, provisionParams{
 		Username: body.Username, Password: body.Password, Role: body.Role,
-		MaxForwards: body.MaxForwards, TrafficQuotaBytes: body.TrafficQuotaBytes,
+		MaxRules: body.MaxRules, TrafficQuotaBytes: body.TrafficQuotaBytes,
 		ExpiresAt: expiresAt, LandingSubURL: body.LandingSubURL, AdminNote: body.AdminNote,
 	})
 	if aerr != nil {
@@ -1991,7 +1991,7 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		NodeID            int64   `json:"node_id"`
 		NodeIDs           []int64 `json:"node_ids"`
-		MaxForwards       int     `json:"max_forwards"`
+		MaxRules          int     `json:"max_forwards"`
 		TrafficQuotaBytes int64   `json:"traffic_quota_bytes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -2006,7 +2006,7 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
-	if aerr := s.grantUserNodes(u.ID, userID, ids, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+	if aerr := s.grantUserNodes(u.ID, userID, ids, body.MaxRules, body.TrafficQuotaBytes); aerr != nil {
 		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
@@ -2084,7 +2084,7 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 	var body struct {
 		AddUserIDs    []int64 `json:"add_user_ids"`
 		RemoveUserIDs []int64 `json:"remove_user_ids"`
-		MaxForwards   int     `json:"max_forwards"`
+		MaxRules      int     `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2094,8 +2094,8 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "没有需要变更的授权")
 		return
 	}
-	if body.MaxForwards <= 0 {
-		body.MaxForwards = defaultGrantMaxForwards
+	if body.MaxRules <= 0 {
+		body.MaxRules = defaultGrantMaxRules
 	}
 	if _, err := db.GetNode(s.DB, nodeID); err != nil {
 		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
@@ -2108,7 +2108,7 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 	// lists ends up revoked, which matches the roster editor's semantics (the
 	// final list is authoritative). The whole diff is applied or none of it
 	// (db.UpdateNodeGrantRoster).
-	affected, err := db.UpdateNodeGrantRoster(s.DB, nodeID, body.AddUserIDs, body.MaxForwards, body.RemoveUserIDs)
+	affected, err := db.UpdateNodeGrantRoster(s.DB, nodeID, body.AddUserIDs, body.MaxRules, body.RemoveUserIDs)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2153,7 +2153,7 @@ func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiSetMaxForwards(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiSetMaxRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -2161,13 +2161,13 @@ func (s *Server) apiSetMaxForwards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		MaxForwards int `json:"max_forwards"`
+		MaxRules int `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if aerr := s.setUserMaxForwards(u.ID, id, body.MaxForwards); aerr != nil {
+	if aerr := s.setUserMaxRules(u.ID, id, body.MaxRules); aerr != nil {
 		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
@@ -2230,7 +2230,7 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		ExpiresAt        string  `json:"expires_at"`
-		MaxForwards      int     `json:"max_forwards"`
+		MaxRules         int     `json:"max_forwards"`
 		TrafficQuotaGB   float64 `json:"traffic_quota_gb"`
 		TrafficResetDays int     `json:"traffic_reset_days"`
 		AdminNote        string  `json:"admin_note"`
@@ -2240,7 +2240,7 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.MaxForwards < 0 {
+	if body.MaxRules < 0 {
 		jsonErr(w, http.StatusBadRequest, "配额数无效")
 		return
 	}
@@ -2269,8 +2269,8 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		billingRate = 1.0
 	}
 	if err := db.UpdateRow(s.DB,
-		`UPDATE users SET expires_at=?, max_forwards=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=?, billing_rate=? WHERE id=?`,
-		expiresAt, body.MaxForwards, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), billingRate, id,
+		`UPDATE users SET expires_at=?, max_rules=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=?, billing_rate=? WHERE id=?`,
+		expiresAt, body.MaxRules, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), billingRate, id,
 	); err != nil {
 		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
@@ -2536,7 +2536,7 @@ func adminUserView(u *db.User) map[string]any {
 func selfUserView(u *db.User) map[string]any {
 	m := loginUserView(u)
 	m["disabled"] = u.Disabled
-	m["max_forwards"] = u.MaxForwards
+	m["max_forwards"] = u.MaxRules
 	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
 	m["traffic_used_bytes"] = u.TrafficUsedBytes
 	m["over_quota"] = u.OverQuota
@@ -2577,7 +2577,7 @@ func isValidRelayHostV6(host string) bool {
 	return ip != nil && ip.To4() == nil
 }
 
-func (s *Server) apiSetPerNodeMaxForwards(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiSetPerNodeMaxRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -2590,23 +2590,23 @@ func (s *Server) apiSetPerNodeMaxForwards(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body struct {
-		MaxForwards int `json:"max_forwards"`
+		MaxRules int `json:"max_forwards"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if body.MaxForwards < 1 {
+	if body.MaxRules < 1 {
 		jsonErr(w, http.StatusBadRequest, "规则数上限至少为 1")
 		return
 	}
-	if err := db.UpdateRow(s.DB, `UPDATE user_nodes SET max_forwards=? WHERE user_id=? AND node_id=?`,
-		body.MaxForwards, userID, nodeID); err != nil {
+	if err := db.UpdateRow(s.DB, `UPDATE user_nodes SET max_rules=? WHERE user_id=? AND node_id=?`,
+		body.MaxRules, userID, nodeID); err != nil {
 		jsonLookupErr(w, err, http.StatusNotFound, msgNoGrant)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_node_max_forwards", strconv.FormatInt(userID, 10),
-		fmt.Sprintf("node=%d max=%d", nodeID, body.MaxForwards))
+		fmt.Sprintf("node=%d max=%d", nodeID, body.MaxRules))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2834,7 +2834,7 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 		UserIDs []int64 `json:"user_ids"`
 		Grants  []struct {
 			NodeName          string `json:"node_name"`
-			MaxForwards       int    `json:"max_forwards"`
+			MaxRules          int    `json:"max_forwards"`
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 		} `json:"grants"`
@@ -2849,7 +2849,7 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	specs := make([]batchGrantSpec, len(body.Grants))
 	for i, g := range body.Grants {
-		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
+		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxRules: g.MaxRules, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
 	granted, kept, skipped, aerr := s.batchApplyGrants(u.ID, body.UserIDs, specs, body.OnlyMissing)
 	if aerr != nil {

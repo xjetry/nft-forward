@@ -61,8 +61,8 @@ func onlyRuleOf(t *testing.T, d *sql.DB, ownerID int64) *db.Rule {
 	return rules[0]
 }
 
-// users.max_forwards 数的是规则条数：一条规则占一个名额，不论它的链有几跳。
-func TestMaxForwardsCountsRulesNotHops(t *testing.T) {
+// users.max_rules 数的是规则条数：一条规则占一个名额，不论它的链有几跳。
+func TestMaxRulesCountsRulesNotHops(t *testing.T) {
 	d := openDB(t)
 	var members []int64
 	for i, name := range []string{"a", "b", "c"} {
@@ -86,7 +86,7 @@ func TestMaxForwardsCountsRulesNotHops(t *testing.T) {
 		t.Fatalf("第二条应能建，实际 %d %s", rec.Code, rec.Body.String())
 	}
 	rec := createMyRule(t, s, cookie, single.ID, "r3")
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "超出用户最大转发数") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "超出账号的规则数上限") {
 		t.Fatalf("第三条应因条数上限被拒，实际 %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -278,7 +278,7 @@ func TestNodeSideCommandsNeedTheOwnersGrant(t *testing.T) {
 	if ack := create(80); !ack.OK {
 		t.Fatalf("有授权后应能建，实际被拒: %s", ack.Error)
 	}
-	if ack := create(81); ack.OK || !strings.Contains(ack.Error, "超出该节点的转发上限") {
+	if ack := create(81); ack.OK || !strings.Contains(ack.Error, "超出该节点的规则数上限") {
 		t.Fatalf("超出授权的条数上限应被拒绝，实际 %+v", ack)
 	}
 }

@@ -30,14 +30,14 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{t: t, d: d, c: New(d)}
 }
 
-func (f *fixture) user(role string, maxForwards int) *db.User {
+func (f *fixture) user(role string, maxRules int) *db.User {
 	f.t.Helper()
 	f.n++
 	id, err := db.CreateUser(f.d, fmt.Sprintf("u%d", f.n), "hash", role)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if _, err := f.d.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, maxForwards, id); err != nil {
+	if _, err := f.d.Exec(`UPDATE users SET max_rules=? WHERE id=?`, maxRules, id); err != nil {
 		f.t.Fatal(err)
 	}
 	return f.reload(id)
@@ -66,9 +66,9 @@ func (f *fixture) node(name string) int64 {
 	return n.ID
 }
 
-func (f *fixture) grant(u *db.User, nodeID int64, maxForwards int) {
+func (f *fixture) grant(u *db.User, nodeID int64, maxRules int) {
 	f.t.Helper()
-	if err := db.GrantNode(f.d, u.ID, nodeID, maxForwards, 0); err != nil {
+	if err := db.GrantNode(f.d, u.ID, nodeID, maxRules, 0); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -165,7 +165,7 @@ func TestCapsCountRulesAndABatchCountsAsAWhole(t *testing.T) {
 	})
 	refused(t, "一批 3 条、授权上限 2", cerr, Conflict)
 
-	// 管理员：账号的 max_forwards 是 0，也没有授权，照样能建。
+	// 管理员：账号的 max_rules 是 0，也没有授权，照样能建。
 	admin := f.user("admin", 0)
 	for i := 0; i < 3; i++ {
 		mustCreate(t, f.c, Actor{User: admin}, fmt.Sprintf("a%d", i), n)
@@ -187,7 +187,7 @@ func TestMovingARuleCountsAgainstTheNewEntrysGrant(t *testing.T) {
 	_, cerr := f.c.Update(actor, onN1.ID, fields("on-n1"), Path{Entry: n2})
 	refused(t, "换到名额已满的入口", cerr, Conflict)
 
-	if _, err := f.d.Exec(`UPDATE users SET max_forwards=1 WHERE id=?`, u.ID); err != nil {
+	if _, err := f.d.Exec(`UPDATE users SET max_rules=1 WHERE id=?`, u.ID); err != nil {
 		t.Fatal(err)
 	}
 	f.grant(u, n1, 0)

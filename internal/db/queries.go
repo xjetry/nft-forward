@@ -36,7 +36,7 @@ type User struct {
 	Role              string
 	Disabled          bool
 	DisableReason     sql.NullString
-	MaxForwards       int
+	MaxRules          int
 	TrafficQuotaBytes int64
 	// TrafficUsedBytes 是本周期的全局已用量，加权字节（accounting.Weighted），只在
 	// 规则的入口跳记账；配额 TrafficQuotaBytes 与它同一单位。
@@ -262,7 +262,7 @@ func CreateUser(d DBTX, username, pwHash, role string) (int64, error) {
 func scanUser(r rowScanner) (*User, error) {
 	u := &User{}
 	var disabled int
-	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxForwards, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.TrafficResetDays, &u.LastTrafficResetAt, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs, &u.AdminNote, &u.BillingRate); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PwHash, &u.Role, &disabled, &u.DisableReason, &u.MaxRules, &u.TrafficQuotaBytes, &u.TrafficUsedBytes, &u.TrafficResetDays, &u.LastTrafficResetAt, &u.ExpiresAt, &u.LandingSubURL, &u.LandingURIs, &u.AdminNote, &u.BillingRate); err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
@@ -277,7 +277,7 @@ func QuotaReached(quotaBytes, usedBytes int64) bool {
 	return quotaBytes > 0 && usedBytes >= quotaBytes
 }
 
-const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris, admin_note, billing_rate`
+const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_rules, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris, admin_note, billing_rate`
 
 func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
@@ -348,7 +348,7 @@ func CreateSession(d *sql.DB, userID int64, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
-const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_forwards, u.traffic_quota_bytes, u.traffic_used_bytes, u.traffic_reset_days, u.last_traffic_reset_at, u.expires_at, u.landing_sub_url, u.landing_uris, u.admin_note, u.billing_rate`
+const userColsQualified = `u.id, u.username, u.pw_hash, u.role, u.disabled, u.disable_reason, u.max_rules, u.traffic_quota_bytes, u.traffic_used_bytes, u.traffic_reset_days, u.last_traffic_reset_at, u.expires_at, u.landing_sub_url, u.landing_uris, u.admin_note, u.billing_rate`
 
 func GetSessionUser(d *sql.DB, token string) (*User, error) {
 	return scanUser(d.QueryRow(`
@@ -436,11 +436,11 @@ type LineSpec struct {
 	// 免费只经专门的倍率接口（UpdateNodeRateMultiplier）设置。
 	RateMultiplier float64
 	// GrantUserIDs 里的每个用户在建成时各得一条这条线路的授权，条数上限为
-	// GrantMaxForwards。授权与节点行在同一个事务里写：其中一条写不进去，节点也不建。
+	// GrantMaxRules。授权与节点行在同一个事务里写：其中一条写不进去，节点也不建。
 	// 调用方先确认这些用户存在——外键也会拒绝不存在的用户，但那是一次失败的写入，
 	// 调用方读不出原因。
-	GrantUserIDs     []int64
-	GrantMaxForwards int
+	GrantUserIDs  []int64
+	GrantMaxRules int
 }
 
 func (l LineSpec) rate() float64 {
@@ -455,7 +455,7 @@ const newLineRoles = NodeRoleEntry | NodeRoleVia
 // grantNewLine 在建节点的事务里写下 LineSpec 要求的初始授权。
 func grantNewLine(tx *sql.Tx, nodeID int64, l LineSpec) error {
 	for _, uid := range l.GrantUserIDs {
-		if err := GrantNode(tx, uid, nodeID, l.GrantMaxForwards, 0); err != nil {
+		if err := GrantNode(tx, uid, nodeID, l.GrantMaxRules, 0); err != nil {
 			return err
 		}
 	}

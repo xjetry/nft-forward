@@ -171,7 +171,7 @@ func (s *Server) registerV1Routes(r chi.Router) {
 			r.Post("/users/{id}/token", s.v1AdminMintUserToken)
 			r.Delete("/users/{id}/token", s.v1AdminDeleteUserToken)
 			r.Put("/users/{id}/quota", s.v1AdminSetUserQuota)
-			r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxForwards)
+			r.Put("/users/{id}/max-forwards", s.v1AdminSetMaxRules)
 			r.Put("/users/{id}/expiry", s.v1AdminSetExpiry)
 			r.Put("/users/{id}/enabled", s.v1AdminSetEnabled)
 			r.Put("/users/{id}/grants/{nodeId}", s.v1AdminGrantNode)
@@ -234,7 +234,7 @@ type v1User struct {
 	Username          string  `json:"username"`
 	Role              string  `json:"role"`
 	Disabled          bool    `json:"disabled"`
-	MaxForwards       int     `json:"max_forwards"`
+	MaxRules          int     `json:"max_forwards"`
 	RuleCount         int     `json:"rule_count"`
 	TrafficUsedBytes  int64   `json:"traffic_used_bytes"`
 	TrafficQuotaBytes int64   `json:"traffic_quota_bytes"`
@@ -246,7 +246,7 @@ type v1User struct {
 func toV1User(u *db.User) v1User {
 	return v1User{
 		ID: u.ID, Username: u.Username, Role: u.Role, Disabled: u.Disabled,
-		MaxForwards: u.MaxForwards, RuleCount: u.RuleCount,
+		MaxRules: u.MaxRules, RuleCount: u.RuleCount,
 		TrafficUsedBytes: u.TrafficUsedBytes, TrafficQuotaBytes: u.TrafficQuotaBytes,
 		TrafficResetDays: u.TrafficResetDays, ExpiresAt: unixOrNil(u.ExpiresAt), BillingRate: u.BillingRate,
 	}
@@ -358,7 +358,7 @@ func (s *Server) v1Info(w http.ResponseWriter, r *http.Request) {
 		"last_traffic_reset_at": u.LastTrafficResetAt,
 		"expires_at":            unixOrNil(u.ExpiresAt),
 		"rule_count":            ruleCount,
-		"max_forwards":          u.MaxForwards,
+		"max_forwards":          u.MaxRules,
 		"billing_rate":          u.BillingRate,
 		"nodes":                 nodeViews,
 	})

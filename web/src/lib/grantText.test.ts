@@ -13,7 +13,7 @@ test('每行一个节点；空行与 # 开头的行跳过', () => {
 
 test('三项设置都能读出；没写的项取默认值', () => {
   assert.deepEqual(one('gateway-hk | max=3 | quota=5GB | rate=20'),
-    { name: 'gateway-hk', maxForwards: 3, quotaGB: 5, rateMBytes: 20, nodeId: 1, found: true, invalid: [] })
+    { name: 'gateway-hk', maxRules: 3, quotaGB: 5, rateMBytes: 20, nodeId: 1, found: true, invalid: [] })
   assert.deepEqual(one('relay-jp'),
     { name: 'relay-jp', ...GRANT_DEFAULTS, nodeId: 2, found: true, invalid: [] })
   assert.equal(one('gateway-hk | QUOTA=0.5 gb').quotaGB, 0.5)
@@ -29,11 +29,11 @@ test('读不懂的数字不会变成默认值，而是记进 invalid', () => {
   for (const part of ['quota=1.2.3GB', 'quota=1e3GB', 'quota=-1GB', 'quota=GB', 'quota=5', 'max=1.5', 'max=-2', 'rate=2.5', 'rate=fast']) {
     const row = one(`gateway-hk | ${part}`)
     assert.deepEqual(row.invalid, [part], part)
-    assert.deepEqual({ maxForwards: row.maxForwards, quotaGB: row.quotaGB, rateMBytes: row.rateMBytes }, { ...GRANT_DEFAULTS }, part)
+    assert.deepEqual({ maxRules: row.maxRules, quotaGB: row.quotaGB, rateMBytes: row.rateMBytes }, { ...GRANT_DEFAULTS }, part)
   }
 })
 
-test('规则配额至少为 1：max=0 记进 invalid', () => {
+test('规则数上限至少为 1：max=0 记进 invalid', () => {
   const row = one('gateway-hk | max=0 | rate=5')
   assert.deepEqual(row.invalid, ['max=0'])
   assert.equal(row.rateMBytes, 5)
@@ -56,7 +56,7 @@ test('写出的行能读回同样的三项设置', () => {
   for (const grant of grants) {
     const row = one(formatGrantLine('gateway-hk', grant))
     assert.deepEqual(row.invalid, [], JSON.stringify(grant))
-    assert.equal(row.maxForwards, grant.max_forwards)
+    assert.equal(row.maxRules, grant.max_forwards)
     assert.equal(row.rateMBytes, grant.rate_limit_mbytes)
     // 弹窗提交时就是这样换算回字节的。
     assert.ok(Math.abs(Math.round(row.quotaGB * GB) - grant.traffic_quota_bytes) <= 1, JSON.stringify(grant))

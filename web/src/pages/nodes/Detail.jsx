@@ -1014,7 +1014,7 @@ function GrantsCard({ node, grantedUsers, reload }) {
         <TableBox className="border-t border-line-soft">
           <table className="tbl">
             <thead>
-              <tr><th>用户</th><th>规则配额</th><th>用途</th><th>授权时间</th><th className="num">操作</th></tr>
+              <tr><th>用户</th><th>规则数上限</th><th>用途</th><th>授权时间</th><th className="num">操作</th></tr>
             </thead>
             <tbody>
               {grantedUsers.map(g => (

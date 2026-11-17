@@ -133,15 +133,15 @@ func TestAPIBatchApplyGrantsOnlyMissingKeepsExistingGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kept.MaxForwards != 3 || kept.TrafficQuotaBytes != 4096 {
+	if kept.MaxRules != 3 || kept.TrafficQuotaBytes != 4096 {
 		t.Fatalf("existing grant must be left as it was, got %+v", kept)
 	}
 	added, err := db.GetNodeGrant(d, lacks, n.ID)
 	if err != nil {
 		t.Fatalf("the user without the grant must receive it: %v", err)
 	}
-	if added.MaxForwards != 10 {
-		t.Fatalf("want max_forwards 10 on the new grant, got %d", added.MaxForwards)
+	if added.MaxRules != 10 {
+		t.Fatalf("want max_rules 10 on the new grant, got %d", added.MaxRules)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestAPIBatchApplyGrantsOverwritesByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.MaxForwards != 8 || g.TrafficQuotaBytes != 0 || g.RateLimitMBytes != 2 {
+	if g.MaxRules != 8 || g.TrafficQuotaBytes != 0 || g.RateLimitMBytes != 2 {
 		t.Fatalf("existing grant must be overwritten, got %+v", g)
 	}
 }
@@ -217,7 +217,7 @@ func TestAPIBatchApplyGrantsRepeatedNodeKeepsLastSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.MaxForwards != 9 {
-		t.Fatalf("want the last spec for the node to win (9), got %d", g.MaxForwards)
+	if g.MaxRules != 9 {
+		t.Fatalf("want the last spec for the node to win (9), got %d", g.MaxRules)
 	}
 }

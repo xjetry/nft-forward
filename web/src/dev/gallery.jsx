@@ -265,7 +265,7 @@ function Gallery() {
             <CardSection className="flex flex-col gap-4">
               <Row label="浮层">
                 <Button onClick={() => setModal(true)}>打开弹窗</Button>
-                <Button onClick={async () => toast((await confirm({ title: '删除节点', message: '确认删除节点 hk-01？此操作会清空节点上的转发。', confirmText: '删除', danger: true })) ? '已确认' : '已取消')}>确认框</Button>
+                <Button onClick={async () => toast((await confirm({ title: '删除节点', message: '确认删除节点 hk-01？此操作会清空节点上的规则。', confirmText: '删除', danger: true })) ? '已确认' : '已取消')}>确认框</Button>
                 <Button onClick={() => toast('已保存')}>成功提示</Button>
                 <Button onClick={() => toast('端口范围无效：起始端口必须小于结束端口', 'error')}>错误提示</Button>
                 <Tooltip content="node 2 not connected"><Badge tone="danger" dot>错误</Badge></Tooltip>

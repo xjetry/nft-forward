@@ -82,10 +82,10 @@ func DeleteCompositeAndRules(d *sql.DB, nodeID int64) ([]int64, error) {
 
 // GrantNodes gives a user a grant on each of the nodes, as GrantNode would
 // one by one, or on none of them.
-func GrantNodes(d *sql.DB, userID int64, nodeIDs []int64, maxForwards int, trafficQuotaBytes int64) error {
+func GrantNodes(d *sql.DB, userID int64, nodeIDs []int64, maxRules int, trafficQuotaBytes int64) error {
 	return inTx(d, func(tx *sql.Tx) error {
 		for _, nid := range nodeIDs {
-			if err := GrantNode(tx, userID, nid, maxForwards, trafficQuotaBytes); err != nil {
+			if err := GrantNode(tx, userID, nid, maxRules, trafficQuotaBytes); err != nil {
 				return err
 			}
 		}
@@ -129,13 +129,13 @@ func revokeGrants(tx *sql.Tx, grants []GrantKey) ([]int64, error) {
 }
 
 // UpdateNodeGrantRoster changes who holds a grant on one node: every user in
-// add gets one capped at maxForwards rules, every user in remove loses theirs
+// add gets one capped at maxRules rules, every user in remove loses theirs
 // as RevokeGrants would take it. It returns the nodes to re-push.
-func UpdateNodeGrantRoster(d *sql.DB, nodeID int64, add []int64, maxForwards int, remove []int64) ([]int64, error) {
+func UpdateNodeGrantRoster(d *sql.DB, nodeID int64, add []int64, maxRules int, remove []int64) ([]int64, error) {
 	var nodes []int64
 	err := inTx(d, func(tx *sql.Tx) error {
 		for _, uid := range add {
-			if err := GrantNode(tx, uid, nodeID, maxForwards, 0); err != nil {
+			if err := GrantNode(tx, uid, nodeID, maxRules, 0); err != nil {
 				return err
 			}
 		}

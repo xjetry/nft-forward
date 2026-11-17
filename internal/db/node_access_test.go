@@ -30,7 +30,7 @@ func TestNodeAccess(t *testing.T) {
 		}
 	}
 	g, ok, err := NodeAccess(d, user, granted)
-	if err != nil || !ok || g == nil || g.MaxForwards != 7 {
+	if err != nil || !ok || g == nil || g.MaxRules != 7 {
 		t.Errorf("有授权：应放行并带回那条授权，得到 grant=%+v ok=%v err=%v", g, ok, err)
 	}
 	if _, ok, err := NodeAccess(d, user, owned); err != nil || ok {
@@ -85,12 +85,17 @@ func TestMigrationTurnsImpliedOwnerAccessIntoGrants(t *testing.T) {
 	byV4 := rule("  ", "", "8.8.4.4", 80)
 	byV6 := rule("", "", "2001:db8::1", 443)
 
-	res, err := d.Exec(`DELETE FROM schema_migrations WHERE version=?`, migration)
+	// 回到迁移 0047 之前的形状：那时条数上限的列还叫 max_forwards（0055 才改名），0047
+	// 的 SQL 写的是这个名字。0055 同时改 users 与 user_nodes 两张表，所以两张表都改回去；
+	// 两个迁移的登记都删掉，migrate 按序重放它们。
+	mustExec(t, d, `ALTER TABLE users RENAME COLUMN max_rules TO max_forwards`)
+	mustExec(t, d, `ALTER TABLE user_nodes RENAME COLUMN max_rules TO max_forwards`)
+	res, err := d.Exec(`DELETE FROM schema_migrations WHERE version IN (?, ?)`, migration, "0055_rule_cap_columns.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		t.Fatalf("前置条件：迁移 %s 应已登记，删除了 %d 行", migration, n)
+	if n, _ := res.RowsAffected(); n != 2 {
+		t.Fatalf("前置条件：迁移 %s 与改列名的迁移应都已登记，删除了 %d 行", migration, n)
 	}
 	before := time.Now().Unix()
 	if err := migrate(d); err != nil {
@@ -109,9 +114,9 @@ func TestMigrationTurnsImpliedOwnerAccessIntoGrants(t *testing.T) {
 		t.Errorf("补出的授权应记迁移执行的时刻（%d..%d），实际 %d", before, after, grantedAt)
 	}
 
-	maxForwards := func(nodeID int64) (int, bool) {
+	maxRules := func(nodeID int64) (int, bool) {
 		var n int
-		err := d.QueryRow(`SELECT max_forwards FROM user_nodes WHERE user_id=? AND node_id=?`, uid, nodeID).Scan(&n)
+		err := d.QueryRow(`SELECT max_rules FROM user_nodes WHERE user_id=? AND node_id=?`, uid, nodeID).Scan(&n)
 		if err == sql.ErrNoRows {
 			return 0, false
 		}
@@ -120,10 +125,10 @@ func TestMigrationTurnsImpliedOwnerAccessIntoGrants(t *testing.T) {
 		}
 		return n, true
 	}
-	if n, ok := maxForwards(ownedBare); !ok || n != 9999 {
+	if n, ok := maxRules(ownedBare); !ok || n != 9999 {
 		t.Errorf("非管理员属主、原先没有授权：应得到一条授权（条数上限 9999），实际 %d 存在=%v", n, ok)
 	}
-	if n, ok := maxForwards(ownedGranted); !ok || n != 3 {
+	if n, ok := maxRules(ownedGranted); !ok || n != 3 {
 		t.Errorf("已有的授权应原样保留（条数上限 3），实际 %d 存在=%v", n, ok)
 	}
 	var grants int
