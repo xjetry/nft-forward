@@ -1132,28 +1132,6 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// rewireRulesReferencingNode 重新生成所有引用 nodeID 的规则，并下发受影响的节点。
-//
-// relay_host 是其他节点把流量送到本节点时用的数据面地址，建规则时被抄进上游跳的
-// rule_hops.target_host。节点 hello 里的声明与回填改写了 relay_host 之后经
-// Hub.OnRelayHostChange 调到这里：这个地址是节点自己报上来的，面板没有拒绝的余地，
-// 所以地址先落库、规则随后逐条跟进（db.RewireEachRule），重生成不了的那条不拖住
-// 其余的。管理员接口 apiSetNodeRelayHost 不走这里，它把改地址与重生成放在一个事务
-// 里（db.SetNodeRelayHostAndRewire），重生成不了就连地址也不改。
-//
-// 返回的错误有两种来源：没能读出哪些规则引用了这个节点（这时没有任何规则跟着重接），
-// 或者其中一些规则没能重新生成（其余的已经重新生成并下发）。单个节点下发失败不在
-// 返回值里（见 dispatchNodes）。
-func (s *Server) rewireRulesReferencingNode(nodeID int64) error {
-	ruleIDs, err := db.RulesReferencingNode(s.DB, nodeID)
-	if err != nil {
-		return err
-	}
-	affected, err := db.RewireEachRule(s.DB, ruleIDs)
-	s.dispatchNodes("规则变更", affected)
-	return err
-}
-
 func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")

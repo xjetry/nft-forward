@@ -73,11 +73,6 @@ func newServer(d *sql.DB) (*Server, error) {
 		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
-	hub.OnRelayHostChange = func(nodeID int64) {
-		if err := s.rewireRulesReferencingNode(nodeID); err != nil {
-			log.Printf("hub: node %d changed its relay host: rewiring the rules that reference it: %v", nodeID, err)
-		}
-	}
 	return s, nil
 }
 

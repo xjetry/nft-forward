@@ -55,12 +55,6 @@ type Hub struct {
 	// 正是由这个读循环收的。
 	Redispatch func(nodeIDs []int64)
 
-	// OnRelayHostChange 在一次 hello 改写了节点的 relay_host 之后被调用（另起
-	// goroutine）。其他节点上指向该节点的跳，目标地址是建规则时从 relay_host 抄下
-	// 的快照（rule_hops.target_host），地址变了就得重新生成这些规则；规则的重新
-	// 生成与下发属于面板，hub 只负责报告“地址变了”。
-	OnRelayHostChange func(nodeID int64)
-
 	mu         sync.RWMutex
 	conns      map[int64]*agentConn
 	speedCache *speedCache
@@ -254,23 +248,7 @@ func (h *Hub) serveAgent(w http.ResponseWriter, r *http.Request, identify func(w
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, peer.origin); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	// storeHelloRelayHosts 可能改写 relay_host：声明值每次 hello 都覆盖库里的值，回填
-	// 则在字段为空或存着 v6 字面量时写入。
-	relayHostBefore := node.RelayHost
-	if err := storeHelloRelayHosts(h.DB, node, peer.observedIP, hello); err != nil {
-		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
-	}
-	// relay_host 改写之后要通知面板重接引用本节点的规则。判定以库里的最终值为准
-	// （重读一次），不依赖 storeHelloRelayHosts 是否同步了内存里的 node：它中途失败时
-	// 地址可能已经写进库里而 node 还没跟上。
-	if h.OnRelayHostChange != nil {
-		cur, err := db.GetNode(h.DB, node.ID)
-		if err != nil {
-			log.Printf("hub: node %d: re-read after storing relay hosts: %v", node.ID, err)
-		} else if cur.RelayHost != relayHostBefore {
-			go h.OnRelayHostChange(node.ID)
-		}
-	}
+	h.settleHelloRelayHosts(node, peer.observedIP, hello)
 	if hello.PortRange != "" {
 		if err := db.ValidatePortRange(hello.PortRange); err != nil {
 			log.Printf("hub: node %d reported invalid port range %q, ignoring: %v", node.ID, hello.PortRange, err)
@@ -539,6 +517,36 @@ func extractIP(r *http.Request) string {
 		host = host[:i]
 	}
 	return strings.Trim(host, "[]")
+}
+
+// settleHelloRelayHosts stores what a hello says about the node's relay
+// addresses (storeHelloRelayHosts) and brings the rules in line with the
+// address the node then has.
+//
+// In every rule, the hop before one on this node targets the node's relay
+// address, as stored when the rule was generated. A hello can change that
+// address — the daemon declares another one, or an empty field is seeded —
+// and the hops that target the old one would go on sending traffic there.
+// db.RewireRulesIntoNode re-generates the rules that do not target the
+// stored address. It decides from the stored rows alone, so it is run on
+// every hello, including one whose store step failed or changed nothing:
+// that is what picks up a rule it could not re-generate on an earlier hello,
+// and a rule that is stale in the database the panel was started on.
+//
+// The nodes of the re-generated rules are re-pushed off-goroutine. The node
+// saying hello is among them, and its ack to a push cannot be read before
+// this hello has been handled (serveAgent starts reading frames after it).
+func (h *Hub) settleHelloRelayHosts(node *db.Node, connectIP string, hello wsproto.Hello) {
+	if err := storeHelloRelayHosts(h.DB, node, connectIP, hello); err != nil {
+		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
+	}
+	nodes, err := db.RewireRulesIntoNode(h.DB, node.ID)
+	if err != nil {
+		log.Printf("hub: node %d: rules left targeting an address the node no longer has: %v", node.ID, err)
+	}
+	if len(nodes) > 0 && h.Redispatch != nil {
+		go h.Redispatch(nodes)
+	}
 }
 
 // storeHelloRelayHosts brings a node's stored relay addresses in line with a
