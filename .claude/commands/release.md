@@ -72,12 +72,14 @@ Release notes 用中文，分节（新增/修复/改进），与历史版本风�
 ## 部署到服务器
 
 ```bash
-/usr/bin/ssh hosthatch-jp "nft-forward-upgrade"
+/usr/bin/ssh hosthatch-jp "nft-forward-upgrade update-script && nft-forward-upgrade"
 ```
+
+先 `update-script` 再 update：失败时的回滚由主机上执行 update 的那份脚本完成，而主机上的 `nft-forward-upgrade` 是上一次保存的版本。`update-script` 取的是 main 分支的 `install.sh`，所以要在 main 推送之后执行。
 
 注意：必须用 `/usr/bin/ssh` 而非 `ssh`（环境有 wrapper 会导致失败）。
 
-upgrade 脚本会自动：下载 latest → sha256 校验 → 备份 → 原子替换 → 重启 daemon + server → health-check。失败自动回滚。
+upgrade 脚本会自动：下载 latest → sha256 校验 → 快照（二进制、daemon 单元、身份文件、`state.json`，server 机再加 `panel.db`，期间面板短暂停止）→ 原子替换 → 重启 daemon + server → health-check（daemon 与面板）。任何一步失败都自动回滚：快照里的文件全部还原后重新启动服务。
 
 ## 验证
 

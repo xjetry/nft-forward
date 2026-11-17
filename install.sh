@@ -290,7 +290,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   tui              单机 TUI（装 nft-agent；host daemon 已被自动安装为 systemd 服务）
   server           控制面板（装 nft-server + nft-agent；依赖 daemon；自动叠加安装）
   agent            受控节点（装 nft-agent；daemon 主动 dial panel WebSocket 反向纳管）
-  update           拉二进制原子替换 + restart + 失败回滚（默认 latest，可 --release 指定版本）
+  update           拉二进制原子替换 + restart；失败时把二进制与数据还原到 update 之前（默认 latest，可 --release 指定版本）
   update-script    从 GitHub main 分支拉取最新 install.sh 覆盖本地升级脚本
   uninstall <角色> 卸载指定角色（server / agent / daemon / all）；daemon 单独卸载前请先卸 server/agent
   reset-password   重置面板 admin 密码（仅限装了 server 的机器；自动停/起 server）
@@ -448,18 +448,220 @@ fetch_and_verify() {
   echo "$got"
 }
 
-rollback_update() {
-  echo "update 失败，回滚到旧二进制" >&2
-  for bin in nft-server nft-agent; do
-    if [[ -f "$INSTALL_DIR/$bin.bak" ]]; then
-      mv -f "$INSTALL_DIR/$bin.bak" "$INSTALL_DIR/$bin"
-    fi
-  done
-  systemctl restart nft-forward-daemon.service 2>/dev/null || true
-  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
-    systemctl restart nft-forward-server.service 2>/dev/null || true
+# ---- update 的快照与回滚 ------------------------------------------------------
+#
+# 不变式：update 要么走完（新二进制在运行、health-check 通过），要么把本机还原成它
+# 开始之前的样子。“之前的样子”不只是二进制——新二进制一启动就会改写它自己的数据：
+# nft-server 打开 panel.db 时执行它带的迁移，迁移过的库旧版 nft-server 用不了；
+# nft-agent daemon 只读它自己那一版的 state.json。所以凡是 update 自己写的、或新
+# 二进制启动后会写的文件，都在动手之前收进快照（update_snapshot_paths 是这份清单
+# 唯一的出处），回滚时按快照逐个还原；拍快照时不存在的文件，回滚时删掉。
+#
+# 回滚挂在 EXIT 陷阱上（update_on_exit），由 _update_stage 决定做什么，不挂在 ERR
+# 上：本脚本没有开 errtrace，ERR 陷阱不被函数继承，函数里的命令失败时 set -e 直接让
+# 脚本退出，只有 EXIT 陷阱看得到这次退出。
+UPDATE_SNAPSHOT_DIR="/var/lib/nft-forward/update-snapshot"
+# health-check 的上限（秒）。是上限不是等待时间：都健康就立即结束，起不来才会等满。
+# 面板要先打开库、跑完迁移才开始监听，所以不能只给一两秒。
+UPDATE_HEALTH_SECS=30
+# _update_stage 记录 update 走到了哪一步，EXIT 时据此收尾：
+#   ""            本机还没有被动过
+#   snapshotting  正在拍快照：装了面板的机器此时面板是停着的，别的都没动
+#   changing      快照已完整；文件与进程可能已被改动
+_update_stage=""
+_update_want_server=0
+_daemon_ok=0
+_panel_ok=0
+
+# 本机面板单元里的监听地址（--addr 的值）；单元里没写时输出为空。
+installed_panel_addr() {
+  sed -n 's/^ExecStart=.*nft-server.* --addr[ =]\([^ ]*\).*$/\1/p' \
+    "$SYSTEMD_DIR/nft-forward-server.service" | head -1
+}
+
+# 本机访问面板 /healthz 的地址。单元里没写 --addr 时面板用的是 nft-server 自己的
+# 缺省值 :8080（cmd/nft-server 的 --addr 缺省），不是本脚本安装时的缺省 :7788。
+panel_health_url() {
+  local addr
+  addr="$(installed_panel_addr)"
+  addr="${addr:-:8080}"
+  if [[ "$addr" == :* ]]; then
+    echo "http://127.0.0.1$addr/healthz"
+  else
+    echo "http://$addr/healthz"
   fi
-  exit 1
+}
+
+daemon_healthy() {
+  local out
+  systemctl is-active --quiet nft-forward-daemon.service || return 1
+  out="$(curl -sf --max-time 3 --unix-socket /var/run/nft-forward.sock \
+              http://daemon/v1/health 2>/dev/null)" || return 1
+  [[ "$out" == *'"ok":true'* ]]
+}
+
+# 面板健康 = 单元在运行，并且 /healthz 答了 ok。只看 systemctl 不够：面板单元没有
+# 声明 Type，systemctl start 在进程启动之后就返回成功，而面板要先打开库、跑完迁移
+# 才开始监听——库打不开时进程随即退出，start 的结果里看不到。
+#   $1 = panel_health_url 的输出
+panel_healthy() {
+  local out
+  systemctl is-active --quiet nft-forward-server.service || return 1
+  out="$(curl -sf --max-time 3 --noproxy '*' "$1" 2>/dev/null)" || return 1
+  [[ "$out" == *'"ok":true'* ]]
+}
+
+# 最多等 $1 秒，直到 daemon（装了面板的机器再加上面板）都健康；都健康返回 0。
+# 结束时 _daemon_ok / _panel_ok 是最后一次检查的结果，没装面板时 _panel_ok 恒为 1。
+wait_update_health() {
+  local secs="$1" i url=""
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    url="$(panel_health_url)"
+  fi
+  for i in $(seq 1 "$secs"); do
+    _daemon_ok=0
+    _panel_ok=0
+    if daemon_healthy; then
+      _daemon_ok=1
+    fi
+    if [[ "$_update_want_server" -eq 0 ]] || panel_healthy "$url"; then
+      _panel_ok=1
+    fi
+    if [[ "$_daemon_ok" -eq 1 && "$_panel_ok" -eq 1 ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# update 可能改动的文件，一行一个。二进制、身份文件、daemon 单元是 do_update 自己
+# 写的；state.json 与 panel.db 是新二进制启动后会写的。panel.db 是 WAL 模式的
+# SQLite，主文件与 -wal、-shm 是一组，必须整组拍、整组还原——拿旧的主文件配新的
+# -wal，打开时会把新版写的页重放进旧库。
+update_snapshot_paths() {
+  echo "$INSTALL_DIR/nft-agent"
+  echo "$ETC_DIR/agent.version"
+  echo "$ETC_DIR/agent.sha"
+  echo "$SYSTEMD_DIR/nft-forward-daemon.service"
+  echo "/var/lib/nft-forward/state.json"
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    echo "$INSTALL_DIR/nft-server"
+    echo "/var/lib/nft-forward/panel.db"
+    echo "/var/lib/nft-forward/panel.db-wal"
+    echo "/var/lib/nft-forward/panel.db-shm"
+  fi
+}
+
+# 把 update_snapshot_paths 里现有的文件拷进快照目录（按原绝对路径放在 files/ 下），
+# 并把完整清单写进 paths。paths 最后才出现：它在，就表示快照是完整的；拍到一半失败
+# 留下的目录里没有它。
+# 调用方保证面板此时没有在运行（见 update_snapshot_paths 对 panel.db 的说明）。
+#
+# 清单里的路径必须不存在或者是普通文件。还原靠“把拷下的内容放回原路径”，这只对普通
+# 文件成立：路径是符号链接时拷下的是链接本身，而经链接原地写入的内容（面板写
+# panel.db、本脚本写身份文件）落在链接指向的地方，放回链接并不能把它换回去。本脚本
+# 装出来的这些路径都是普通文件；不是的话在动手之前就拒绝，不留一个还原不了的 update。
+take_update_snapshot() {
+  local p
+  rm -rf "$UPDATE_SNAPSHOT_DIR"
+  mkdir -p "$UPDATE_SNAPSHOT_DIR/files"
+  chmod 0700 "$UPDATE_SNAPSHOT_DIR"
+  update_snapshot_paths >"$UPDATE_SNAPSHOT_DIR/paths.partial"
+  while IFS= read -r p; do
+    if [[ -L "$p" || ( -e "$p" && ! -f "$p" ) ]]; then
+      die "$p 不是普通文件（是符号链接、目录或其他类型）：update 失败时无法保证把它还原，所以不开始"
+    fi
+    if [[ -f "$p" ]]; then
+      mkdir -p "$UPDATE_SNAPSHOT_DIR/files$(dirname "$p")"
+      cp -a "$p" "$UPDATE_SNAPSHOT_DIR/files$p"
+    fi
+  done <"$UPDATE_SNAPSHOT_DIR/paths.partial"
+  mv "$UPDATE_SNAPSHOT_DIR/paths.partial" "$UPDATE_SNAPSHOT_DIR/paths"
+}
+
+# 按快照还原：清单里的每个路径，快照里有就换回去，没有（拍快照时不存在）就删掉。
+# 每个文件都还原了返回 0。调用方保证两个服务都已停止。
+restore_update_snapshot() {
+  local p failed=0
+  while IFS= read -r p; do
+    if [[ -f "$UPDATE_SNAPSHOT_DIR/files$p" ]]; then
+      # 先拷到同目录的临时名再改名：改名是原子的，目标要么是旧内容要么是新内容。
+      if ! { cp -a "$UPDATE_SNAPSHOT_DIR/files$p" "$p.rollback" && mv -f "$p.rollback" "$p"; }; then
+        warn "没能还原 $p"
+        rm -f "$p.rollback"
+        failed=1
+      fi
+    elif ! rm -f "$p"; then
+      warn "没能删除 $p（update 之前它不存在）"
+      failed=1
+    fi
+  done <"$UPDATE_SNAPSHOT_DIR/paths"
+  return "$failed"
+}
+
+# 把本机还原到 update 之前。只在 EXIT 陷阱里、_update_stage 为 changing 时调用。
+rollback_update() {
+  # set -e 在陷阱里仍然有效，任何一步失败都会让回滚停在半路；这里关掉，每一步自己
+  # 判断成败并继续。
+  set +e
+  echo "update 失败，回滚：把本机还原到 update 之前 ..." >&2
+  # 先停再还原：panel.db 一组文件要在没有进程打开它时换回；state.json 要在 daemon
+  # 停着时换回，否则 daemon 之后的落盘会把它盖掉。停 daemon 会连带停面板（面板单元
+  # Requires daemon），这里仍显式停面板，不依赖这层关系。
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    systemctl stop nft-forward-server.service 2>/dev/null
+  fi
+  systemctl stop nft-forward-daemon.service 2>/dev/null
+  local restored=0
+  if restore_update_snapshot; then
+    restored=1
+  fi
+  systemctl daemon-reload
+  systemctl start nft-forward-daemon.service
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    systemctl start nft-forward-server.service
+  fi
+  if [[ "$restored" -eq 1 ]]; then
+    rm -rf "$UPDATE_SNAPSHOT_DIR"
+    echo "回滚完成：update 之前的二进制、单元与数据已还原" >&2
+  else
+    warn "有文件没能还原，快照保留在 ${UPDATE_SNAPSHOT_DIR}（files/ 下按原路径存放）"
+  fi
+  if wait_update_health "$UPDATE_HEALTH_SECS"; then
+    echo "回滚后服务运行正常" >&2
+  else
+    [[ "$_daemon_ok" -eq 1 ]] || warn "回滚后 daemon 没有起来: journalctl -u nft-forward-daemon.service"
+    [[ "$_panel_ok" -eq 1 ]] || warn "回滚后面板没有起来: journalctl -u nft-forward-server.service"
+  fi
+}
+
+# do_update 的 EXIT 陷阱：按 _update_stage 收尾，并保留非零的退出码。
+update_on_exit() {
+  local code=$?
+  trap - EXIT
+  # 收尾期间不响应中断：回滚停在半路比多等几秒糟得多。
+  trap '' INT TERM
+  case "$_update_stage" in
+    changing)
+      rollback_update
+      [[ "$code" -ne 0 ]] || code=1
+      ;;
+    snapshotting)
+      set +e
+      echo "update 在改动本机之前失败，没有东西需要还原" >&2
+      rm -rf "$UPDATE_SNAPSHOT_DIR"
+      if [[ "$_update_want_server" -eq 1 ]]; then
+        echo "重新启动面板 ..." >&2
+        systemctl start nft-forward-server.service
+      fi
+      [[ "$code" -ne 0 ]] || code=1
+      ;;
+  esac
+  if [[ -n "$_update_tmp" ]]; then
+    rm -rf "$_update_tmp"
+  fi
+  exit "$code"
 }
 
 do_update() {
@@ -473,21 +675,31 @@ do_update() {
   [[ -x "$INSTALL_DIR/nft-agent" ]] \
     || die "未安装：$INSTALL_DIR/nft-agent 不存在；请先 install.sh tui/server/agent"
 
+  # 完整的快照还在，说明上一次 update 既没有走完，也没有回滚完（两者都会删掉它）。
+  # 这时本机处在哪个状态脚本判断不了：自动还原会丢掉此后写入的数据，自动丢弃会丢掉
+  # update 之前唯一的一份副本。交给人来定。
+  if [[ -e "$UPDATE_SNAPSHOT_DIR/paths" ]]; then
+    die "发现上一次 update 留下的快照 ${UPDATE_SNAPSHOT_DIR}：那次 update 没有走完，也没有回滚完。确认本机现在的状态可以接受后删除该目录再重试；需要那次 update 之前的文件，它们在该目录的 files/ 下按原路径存放"
+  fi
+
   # A server install always carries nft-server alongside nft-agent; pull both
   # so the panel and its local node daemon advance in lockstep.
-  local want_server=0
-  [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]] && want_server=1
+  _update_want_server=0
+  if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
+    _update_want_server=1
+  fi
 
   # ---- 下载到 tmp ----
   _update_tmp="$(mktemp -d)"
-  trap 'rm -rf "$_update_tmp"' EXIT
+  trap update_on_exit EXIT
+  trap 'exit 130' INT TERM
 
   local tag agent_sha
   tag="$(resolve_release_tag)"
 
   note "[1/5] 下载二进制 ($tag, $arch) ..."
   agent_sha="$(fetch_and_verify "$base" "$agent_asset" "$_update_tmp/nft-agent")"
-  if [[ "$want_server" -eq 1 ]]; then
+  if [[ "$_update_want_server" -eq 1 ]]; then
     fetch_and_verify "$base" "$server_asset" "$_update_tmp/nft-server" >/dev/null
   fi
 
@@ -496,21 +708,24 @@ do_update() {
   #   - 上面的 sha256 把下载内容逐字节钉在 release 里以该名字发布的那份资产上；
   #   - “以该名字发布的资产确实是该架构的 ELF”由发版时 scripts/build-release.sh
   #     对每个产物的 ELF 头自检保证。
-  # 二进制在本机是否真的能跑，由替换后的 health-check 证明：daemon 起不来会
-  # 自动回滚到 .bak。
+  # 二进制在本机是否真的能跑，由替换后的 health-check 证明：daemon 或面板起不来，
+  # 脚本退出时会把本机还原（见 rollback_update）。
 
-  # ---- 备份旧二进制 ----
-  note "[2/5] 备份旧二进制到 $INSTALL_DIR/*.bak ..."
-  cp -a "$INSTALL_DIR/nft-agent" "$INSTALL_DIR/nft-agent.bak"
-  if [[ "$want_server" -eq 1 && -x "$INSTALL_DIR/nft-server" ]]; then
-    cp -a "$INSTALL_DIR/nft-server" "$INSTALL_DIR/nft-server.bak"
+  # ---- 快照 ----
+  note "[2/5] 保存 update 之前的二进制与数据 ..."
+  _update_stage="snapshotting"
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    # 面板停着才能拍到一致的 panel.db（见 update_snapshot_paths）。面板停着不影响
+    # 转发：规则在内核与 daemon 里。
+    systemctl stop nft-forward-server.service
   fi
-  trap 'rm -rf "$_update_tmp"; rollback_update' ERR INT TERM
+  take_update_snapshot
+  _update_stage="changing"
 
   # ---- 原子替换 ----
   note "[3/5] 原子替换二进制 ..."
   install -m 0755 "$_update_tmp/nft-agent" "$INSTALL_DIR/nft-agent"
-  if [[ "$want_server" -eq 1 ]]; then
+  if [[ "$_update_want_server" -eq 1 ]]; then
     install -m 0755 "$_update_tmp/nft-server" "$INSTALL_DIR/nft-server"
   fi
   # Record the freshly-installed nft-agent identity on this upgrade path too.
@@ -522,7 +737,7 @@ do_update() {
   # it to local rules. do_update leaves units untouched otherwise — it lacks the
   # agent's --connect config — but the server daemon unit has no such
   # install-time args to lose.
-  if [[ "$want_server" -eq 1 ]]; then
+  if [[ "$_update_want_server" -eq 1 ]]; then
     write_daemon_unit " --server-local"
   fi
 
@@ -530,29 +745,23 @@ do_update() {
   note "[4/5] 重启 daemon (+ server, if present) ..."
   systemctl daemon-reload
   systemctl restart nft-forward-daemon.service
-  if [[ "$want_server" -eq 1 ]]; then
-    systemctl restart nft-forward-server.service
+  if [[ "$_update_want_server" -eq 1 ]]; then
+    systemctl start nft-forward-server.service
   fi
 
-  # ---- health-check 10 秒预算 ----
-  note "[5/5] health-check (10s) ..."
-  local i ok_count=0
-  for i in $(seq 1 10); do
-    if systemctl is-active --quiet nft-forward-daemon.service \
-       && curl -sf --unix-socket /var/run/nft-forward.sock \
-               http://daemon/v1/health 2>/dev/null \
-          | grep -q '"ok":true'; then
-      ok_count=1
-      break
-    fi
-    sleep 1
-  done
-  [[ "$ok_count" -eq 1 ]] || rollback_update
+  # ---- health-check ----
+  note "[5/5] health-check（最多 ${UPDATE_HEALTH_SECS}s）..."
+  if ! wait_update_health "$UPDATE_HEALTH_SECS"; then
+    [[ "$_daemon_ok" -eq 1 ]] \
+      || echo "health-check 未通过: daemon 没有起来（journalctl -u nft-forward-daemon.service）" >&2
+    [[ "$_panel_ok" -eq 1 ]] \
+      || echo "health-check 未通过: 面板没有起来（journalctl -u nft-forward-server.service）" >&2
+    exit 1
+  fi
 
   # ---- 成功收尾 ----
-  trap 'rm -rf "$_update_tmp"' EXIT
-  trap - ERR INT TERM
-  rm -f "$INSTALL_DIR/nft-agent.bak" "$INSTALL_DIR/nft-server.bak"
+  _update_stage=""
+  rm -rf "$UPDATE_SNAPSHOT_DIR"
   ok "===== Update 完成 ====="
   echo "版本标签:       $tag"
   echo "nft-agent sha256: $agent_sha"
@@ -748,7 +957,7 @@ case "$mode" in
     if [[ -z "$addr" && -z "${PANEL_ADDR:-}" ]]; then
       # Preserve existing bind address on re-install.
       if [[ -f "$SYSTEMD_DIR/nft-forward-server.service" ]]; then
-        addr="$(sed -n 's/^ExecStart=.*nft-server --addr //p' "$SYSTEMD_DIR/nft-forward-server.service" | head -1)"
+        addr="$(installed_panel_addr)"
       fi
       if [[ -z "$addr" && -t 0 ]]; then
         read -rp "面板绑定地址（端口或 地址:端口，默认 :7788）: " _port

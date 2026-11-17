@@ -15,9 +15,8 @@ import (
 //     （面板数据库里的规则 id）标识。
 //
 // 键的字面值就是 state.json 里 owners 对象的键，不能改：已部署主机上的 state.json
-// 用的是这两个键；并且 install.sh 的 update 在健康检查不过时会换回旧版二进制
-// （rollback_update），旧版要能读新版已经写下的 state.json。本地段叫 "tui" 是沿用
-// 下来的名字——最初只有 TUI 写这一段。
+// 用的是这两个键，换了字面值的二进制在里面找不到自己名下的规则。本地段叫 "tui" 是
+// 沿用下来的名字——最初只有 TUI 写这一段。
 const (
 	segLocal = "tui"
 	segPanel = "panel"

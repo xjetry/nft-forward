@@ -43,7 +43,7 @@ curl -fsSL ... | sudo bash -s tui
 | `tui` | 单机 TUI（装 nft-agent，自动启动 daemon） |
 | `server` | 控制面板（装 nft-server + nft-agent，含 daemon） |
 | `agent` | 远程节点（daemon 反向 dial 面板 WebSocket） |
-| `update` | 拉 latest 二进制原子替换 + restart + 失败自动回滚 |
+| `update` | 拉 latest 二进制原子替换 + restart；失败自动回滚（二进制与数据一并还原） |
 | `update-script` | 更新本地 install.sh（不动二进制） |
 | `uninstall <角色>` | 卸载指定角色（`server` / `agent` / `daemon` / `all`） |
 | `reset-password` | 重置面板 admin 密码 |
@@ -214,7 +214,11 @@ sudo nft-forward-upgrade
 sudo bash install.sh update
 ```
 
-拉 latest → sha256 校验 → 备份 → 原子替换 → 重启 → health-check → 失败自动回滚。
+拉 latest → sha256 校验 → 快照 → 原子替换 → 重启 → health-check → 失败自动回滚。
+
+快照收的是 update 会改动的全部文件：二进制、daemon 单元、节点身份文件、`state.json`，装了面板的机器再加上 `panel.db`（拍快照期间面板短暂停止，转发不受影响）。health-check 同时检查 daemon 与面板；任何一步失败，脚本都会把这些文件还原到 update 之前再重新启动服务。新版面板启动时会迁移 `panel.db`，迁移过的库旧版面板无法使用，所以回滚必须连库一起还原。
+
+要让这套回滚生效，执行 update 的得是新版脚本：已装机器上的 `nft-forward-upgrade` 是上一次安装或 `update-script` 时保存的那一份，先运行 `sudo nft-forward-upgrade update-script` 再 update。
 
 ---
 
