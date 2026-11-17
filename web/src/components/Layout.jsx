@@ -79,7 +79,7 @@ export function AppLayout() {
   return (
     <AppShell
       brand={{
-        name: panelName || 'nft-forward',
+        name: panelName,
         sub: version ? <span className="font-mono">{version}</span> : null,
         mark: <IconRoute />,
       }}

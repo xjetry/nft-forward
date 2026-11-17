@@ -160,6 +160,8 @@ export function Textarea({ value, onChange, mono = false, invalid, rows = 4, cla
 
 /**
  * 复选框 + 文字标签。`onChange` 直接给出布尔值。
+ * 放在 Field 里时与其它控件一样接上 Field 的标签与提示：点 Field 的标签
+ * 也能切换它。一个 Field 只放一个复选框 —— 两个会拿到同一个 id。
  * @param {{
  *   checked: boolean,
  *   onChange: (checked: boolean) => void,
@@ -169,9 +171,18 @@ export function Textarea({ value, onChange, mono = false, invalid, rows = 4, cla
  * } & Record<string, unknown>} props
  */
 export function Checkbox({ checked, onChange, disabled = false, className, children, ...rest }) {
+  const field = useField()
   return (
     <label className={cx('inline-flex items-center gap-2 text-body text-ink select-none', disabled && 'opacity-50', className)}>
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={e => onChange(e.target.checked)} {...rest} />
+      <input
+        type="checkbox"
+        id={field.id}
+        aria-describedby={field.describedBy}
+        checked={checked}
+        disabled={disabled}
+        onChange={e => onChange(e.target.checked)}
+        {...rest}
+      />
       {children}
     </label>
   )

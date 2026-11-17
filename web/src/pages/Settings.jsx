@@ -127,16 +127,18 @@ function SettingsForm({ id, initial, onSave }) {
 
 export default function Settings() {
   const toast = useToast()
-  const { refresh: refreshSession } = useSession()
+  const { setPanelName } = useSession()
   const formId = useId()
   const settings = useResource(() => api.get('/settings'), [])
 
   const save = useAction(async (payload) => {
     await api.post('/settings', payload)
     toast('设置已保存')
-    // 面板名称还显示在侧栏和标签页标题上，那两处读的是会话里的那一份
-    // （SessionProvider 的 panelName），所以连同设置本身一起重新读取。
-    await Promise.all([settings.reload(), refreshSession()])
+    // 面板名称还显示在侧栏和标签页标题上，那两处读的是 SessionProvider 里的
+    // 那一份。保存已经成功，新名称就是刚提交的值（服务端只做首尾去空白，
+    // 见 apiSaveSettings），直接交过去，不需要为此重新确认一次会话。
+    setPanelName(payload.panel_name.trim())
+    await settings.reload()
   })
 
   return (

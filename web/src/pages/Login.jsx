@@ -19,7 +19,9 @@ function missingFields(username, password) {
  * 按顺序取第一条成立的原因：
  * - 本次提交失败：服务端拒绝（密码错误、账号被禁用、尝试过于频繁），或请求
  *   没能发出去；
- * - 没能确认会话（session 为 error，即 /me 请求失败且不是 401），给出重试；
+ * - 没能确认会话（session 为 error：/me 没有得到答复），给出重试；
+ * - 服务端拒绝了浏览器里现有的登录（anonymous 且带 reason，如账号被禁用）。
+ *   重试不会有别的结果，所以只说明原因，表单照常可以换一个账号登录；
  * - 提交已被接受，但随后 /me 仍然回答未登录。服务端在请求没带会话 Cookie、
  *   或按 Cookie 查不到有效会话时这样回答（requireAPIAuth），所以提示用户
  *   检查 Cookie。不提示的话，这种情况在用户眼里就是“点了登录没有任何反应”。
@@ -41,6 +43,9 @@ function LoginNotice({ outcome, session, retry }) {
         <TextLink disabled={retry.pending} onClick={() => retry.run()}>重试</TextLink>
       </Alert>
     )
+  }
+  if (session.status === 'anonymous' && session.reason) {
+    return <Alert tone="danger">当前登录的账号不可用：{session.reason}。可以换一个账号登录。</Alert>
   }
   if (outcome?.kind === 'accepted' && session.status === 'anonymous') {
     return <Alert tone="danger">用户名和密码正确，但登录状态没有保存下来。请确认浏览器允许本站保存 Cookie，然后重新登录。</Alert>
@@ -93,7 +98,7 @@ export default function Login() {
           {/* 校验由上面的 missingFields 负责并显示在字段下方；noValidate 关掉
               浏览器自带的气泡提示，避免同一个问题出现两种样式的提示。 */}
           <form noValidate className="flex flex-col gap-4" onSubmit={e => { e.preventDefault(); void login.run() }}>
-            <h1 className="break-words text-heading text-ink">{panelName || 'nft-forward'}</h1>
+            <h1 className="break-words text-heading text-ink">{panelName}</h1>
             <LoginNotice outcome={outcome} session={session} retry={retry} />
             <Field label="用户名" error={errors.username}>
               <Input
