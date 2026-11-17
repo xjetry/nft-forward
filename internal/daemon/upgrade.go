@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"debug/elf"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -50,6 +52,15 @@ func (d *Dialer) handleUpgrade(ctx context.Context, u wsproto.Upgrade) wsproto.U
 	exePath, err = filepath.EvalSymlinks(exePath)
 	if err != nil {
 		return wsproto.UpgradeAck{Error: "resolve symlink: " + err.Error()}
+	}
+
+	cur, err := readELFHeader(runningExe)
+	if err != nil {
+		return wsproto.UpgradeAck{Error: "read running binary: " + err.Error()}
+	}
+	if err := checkUpgradeTarget(binary, cur); err != nil {
+		log.Printf("upgrade: rejected: %v", err)
+		return wsproto.UpgradeAck{Error: err.Error()}
 	}
 
 	if err := atomicReplace(exePath, binary); err != nil {
@@ -114,6 +125,88 @@ func downloadBinary(u wsproto.Upgrade) ([]byte, error) {
 		return nil, fmt.Errorf("sha256 mismatch: got %s, want %s", got, u.SHA256)
 	}
 	return data, nil
+}
+
+// runningExe 是内核为本进程记录的可执行镜像，即启动时 exec 的那个文件。它跟着
+// 镜像走而不是跟着路径走：磁盘上同一路径的文件被换掉后（进程尚未重启），按路径
+// 读到的是新文件，经它读到的仍是正在运行的这一份。
+const runningExe = "/proc/self/exe"
+
+// elfHeaderLen 覆盖 e_ident（16 字节）、e_type（2 字节）与 e_machine（2 字节）；
+// 这一段的布局在 ELF32 与 ELF64 里相同。
+const elfHeaderLen = 20
+
+// elfTarget 是 ELF 头里决定“这个可执行文件能在哪种机器上跑”的三个字段。
+type elfTarget struct {
+	class   elf.Class
+	data    elf.Data
+	machine elf.Machine
+}
+
+func (t elfTarget) String() string {
+	return fmt.Sprintf("%s/%s/%s", t.machine, t.class, t.data)
+}
+
+// parseELFTarget 只读定长头部，不解析节表与程序头表：判定目标机器用不到它们，
+// 而 UPX 压缩后的 nft-agent 没有节表，不该让校验结果取决于完整解析器对这类
+// 文件的容忍度。
+func parseELFTarget(b []byte) (elfTarget, error) {
+	if len(b) < elfHeaderLen || string(b[:len(elf.ELFMAG)]) != elf.ELFMAG {
+		return elfTarget{}, errors.New("not an ELF executable")
+	}
+	t := elfTarget{class: elf.Class(b[elf.EI_CLASS]), data: elf.Data(b[elf.EI_DATA])}
+	switch t.data {
+	case elf.ELFDATA2LSB:
+		t.machine = elf.Machine(uint16(b[18]) | uint16(b[19])<<8)
+	case elf.ELFDATA2MSB:
+		t.machine = elf.Machine(uint16(b[18])<<8 | uint16(b[19]))
+	default:
+		return elfTarget{}, fmt.Errorf("unknown ELF data encoding %d", b[elf.EI_DATA])
+	}
+	return t, nil
+}
+
+func readELFHeader(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := make([]byte, elfHeaderLen)
+	if _, err := io.ReadFull(f, h); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// checkUpgradeTarget 拒绝 ELF 目标（机器类型 / 位宽 / 字节序）与本进程正在运行的
+// 可执行镜像不一致的升级包。curHeader 是该镜像的头部（readELFHeader(runningExe)）。
+//
+// 不变式：装上去的二进制必须能在本机执行。handleUpgrade 在 atomicReplace 之后
+// 调 restartSelf，由 systemd 用新文件重启本单元；新文件若不是本机架构，内核会以
+// exec format error 拒绝执行它（除非主机为那种架构注册了 binfmt 模拟器），daemon
+// 起不来，也就没有进程能再接收一次推送来纠正——只能人工登录重装。
+//
+// 上游的 sha256 校验（upgradeBinary）保证不了这一点：它证明的是“字节与面板声称
+// 的一致”，不是“面板挑对了架构”。不按架构选产物的面板版本只持有 amd64 的
+// nft-agent，对 sha 不同的节点一律推它，arm64 节点也不例外。
+//
+// 基准取正在运行的镜像：它此刻就在本机上跑着，它的目标必然是本机能执行的。
+// 不取 exePath 处的磁盘文件，因为那个文件可能已被换成别的东西而进程还没重启；
+// 也不取 runtime.GOARCH，那样要另外维护一张 GOARCH → e_machine 对照表。
+func checkUpgradeTarget(newBin, curHeader []byte) error {
+	cur, err := parseELFTarget(curHeader)
+	if err != nil {
+		return fmt.Errorf("running binary: %w", err)
+	}
+	next, err := parseELFTarget(newBin)
+	if err != nil {
+		return fmt.Errorf("upgrade binary: %w", err)
+	}
+	if next != cur {
+		return fmt.Errorf("upgrade binary targets %s but this host runs %s; refusing to install", next, cur)
+	}
+	return nil
 }
 
 func atomicReplace(path string, data []byte) error {
