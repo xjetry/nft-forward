@@ -258,29 +258,52 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 		{"U 7.7.7.7 下行", f.one(t, `SELECT used_bytes_down FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 252},
 		{"A 6.6.6.6 合计", f.one(t, `SELECT used_bytes FROM user_landing_exits WHERE user_id=? AND host='6.6.6.6'`, f.a), 100},
 
-		// 逐跳累计：入口跳记加权（无属主按折算），其余跳记各自物理节点的折算。
-		{"R1#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r1][0].ID), 3000},
-		{"R2#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][0].ID), 676},
+		// 逐跳累计：每一跳都记各自物理节点的折算，入口跳也一样。
+		{"R1#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r1][0].ID), 1000},
+		{"R2#0（E2 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][0].ID), 901},
 		{"R2#1（M1 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][1].ID), 901},
 		{"R2#2（M2 双向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][2].ID), 1001},
-		{"R3#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][0].ID), 1355 + 455},
+		{"R3#0（tcp 与 udp 扇入）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][0].ID), 301 + 101},
 		{"R3#1（P2 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][1].ID), 252},
-		{"R4#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r4][0].ID), 200},
+		{"R4#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r4][0].ID), 100},
 		{"R5#0（无属主）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r5][0].ID), 40},
+
+		// 规则账：规则的加权流量，只在入口跳记；无属主的规则不向任何人计价，倍率与费率按 1。
+		{"R1 规则账", f.one(t, `SELECT weighted_bytes FROM rules WHERE id=?`, f.r1), 3000},
+		{"R2 规则账", f.one(t, `SELECT weighted_bytes FROM rules WHERE id=?`, f.r2), 676},
+		{"R3 规则账", f.one(t, `SELECT weighted_bytes FROM rules WHERE id=?`, f.r3), 1355 + 455},
+		{"R4 规则账", f.one(t, `SELECT weighted_bytes FROM rules WHERE id=?`, f.r4), 200},
+		{"R5 规则账（无属主）", f.one(t, `SELECT weighted_bytes FROM rules WHERE id=?`, f.r5), 40},
 	}
 
-	// 规则流量（对外 JSON 的 rule.total_bytes）：规则的加权流量；无属主的规则按折算。
+	// 对外 JSON：rule.total_bytes 是规则账，hops[].total_bytes 是逐跳账。
 	for _, rc := range []struct {
 		rule int64
 		want int64
-	}{{f.r1, 3000}, {f.r2, 676}, {f.r3, 1355 + 455}, {f.r4, 200}, {f.r5, 40}} {
+		hops []int64
+	}{
+		{f.r1, 3000, []int64{1000}},
+		{f.r2, 676, []int64{901, 901, 1001}},
+		{f.r3, 1355 + 455, []int64{402, 252}},
+		{f.r4, 200, []int64{100}},
+		{f.r5, 40, []int64{40}},
+	} {
 		var body struct {
 			Rule struct {
 				TotalBytes int64 `json:"total_bytes"`
 			} `json:"rule"`
+			Hops []struct {
+				TotalBytes int64 `json:"total_bytes"`
+			} `json:"hops"`
 		}
 		f.getJSON(t, "/api/rules/"+strconv.FormatInt(rc.rule, 10), &body)
 		rows = append(rows, row{fmt.Sprintf("规则 %d 的 total_bytes", rc.rule), body.Rule.TotalBytes, rc.want})
+		if len(body.Hops) != len(rc.hops) {
+			t.Fatalf("规则 %d 的 hops：%d 跳，期望 %d", rc.rule, len(body.Hops), len(rc.hops))
+		}
+		for i, want := range rc.hops {
+			rows = append(rows, row{fmt.Sprintf("规则 %d 第 %d 跳的 total_bytes", rc.rule, i), body.Hops[i].TotalBytes, want})
+		}
 	}
 	var dash struct {
 		TotalBytes int64 `json:"total_bytes"`
@@ -293,6 +316,65 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 			t.Errorf("%s: got %d, want %d", r.name, r.got, r.want)
 		}
 	}
+}
+
+// 规则的加权流量是规则行上的一列，只由计数入账与用户重置写：改表头
+// （UpdateRuleHeader）与重建链（RegenerateRule 把一条规则的跳整体删除重建）之后它
+// 都不变，并且仍与属主的全局已用量对得上——两边记的是同一批入口跳样本的同一个
+// 加权值。
+func TestRuleTrafficSurvivesHeaderEditAndRegeneration(t *testing.T) {
+	f := newLedgerFixture(t)
+	f.report()
+
+	check := func(after string) {
+		t.Helper()
+		var body struct {
+			Rule struct {
+				TotalBytes int64 `json:"total_bytes"`
+			} `json:"rule"`
+		}
+		f.getJSON(t, "/api/rules/"+strconv.FormatInt(f.r2, 10), &body)
+		if body.Rule.TotalBytes != 676 {
+			t.Fatalf("%s之后规则流量应仍为 676，实际 %d", after, body.Rule.TotalBytes)
+		}
+		sum := f.one(t, `SELECT SUM(weighted_bytes) FROM rules WHERE owner_id=?`, f.u)
+		used := f.one(t, `SELECT traffic_used_bytes FROM users WHERE id=?`, f.u)
+		if sum != used {
+			t.Fatalf("%s之后 U 名下规则流量之和 %d 应等于 U 的全局已用量 %d", after, sum, used)
+		}
+	}
+	inTx := func(fn func(tx *sql.Tx) error) {
+		t.Helper()
+		tx, err := f.d.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fn(tx); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rl, err := db.GetRule(f.d, f.r2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl.Name = "R2-renamed"
+	inTx(func(tx *sql.Tx) error { return db.UpdateRuleHeader(tx, rl) })
+	check("改表头")
+
+	inTx(func(tx *sql.Tx) error {
+		_, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
+			{NodeID: f.e2, Mode: "userspace", ViaNodeID: f.e2},
+			{NodeID: f.m1, Mode: "userspace", ViaNodeID: f.c},
+			{NodeID: f.m2, Mode: "kernel", ViaNodeID: f.c},
+		}, nil)
+		return err
+	})
+	check("重建链")
 }
 
 // 一批计数入账后，配额回调对每个配额账有增长的属主各触发；无属主的规则不触发。

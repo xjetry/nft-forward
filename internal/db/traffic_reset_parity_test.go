@@ -6,7 +6,7 @@ import (
 )
 
 // 一次重置把这个用户名下的全部账本一起归零：全局已用量、各授权的已用量、落地出口
-// 账本、每条规则展示的累计流量。管理员手动重置与按周期自动重置是同一件事的两个
+// 账本、每条规则的加权流量与逐跳流量。管理员手动重置与按周期自动重置是同一件事的两个
 // 触发方式，归零的范围必须一致——否则周期重置之后规则上显示的流量会比用户的已用
 // 流量大，两个数再也对不上。
 func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
@@ -34,8 +34,9 @@ func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
 			nid := createTestNode(t, d, "n")
 			grantNode(t, d, uid, nid)
 			grantNode(t, d, other, nid)
-			mine := seedRuleWithTraffic(t, d, uid, nid, 20001, 5000)
-			theirs := seedRuleWithTraffic(t, d, other, nid, 20002, 6000)
+			mineHop := seedRuleWithTraffic(t, d, uid, nid, 20001, 5000)
+			theirHop := seedRuleWithTraffic(t, d, other, nid, 20002, 6000)
+			mineRule, theirRule := ruleOfHop(t, d, mineHop), ruleOfHop(t, d, theirHop)
 			SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
 			for _, q := range []struct {
 				sql  string
@@ -68,10 +69,12 @@ func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
 				{"用户全局已用量", one(`SELECT traffic_used_bytes FROM users WHERE id=?`, uid), 0},
 				{"授权已用量", one(`SELECT traffic_used_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, uid, nid), 0},
 				{"落地出口账本", one(`SELECT used_bytes+used_bytes_up+used_bytes_down FROM user_landing_exits WHERE user_id=?`, uid), 0},
-				{"规则累计流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, mine), 0},
+				{"规则的加权流量", one(`SELECT weighted_bytes FROM rules WHERE id=?`, mineRule), 0},
+				{"逐跳流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, mineHop), 0},
 				{"别的用户的全局已用量", one(`SELECT traffic_used_bytes FROM users WHERE id=?`, other), 9000},
 				{"别的用户的授权已用量", one(`SELECT traffic_used_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, other, nid), 8000},
-				{"别的用户的规则累计流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs), 6000},
+				{"别的用户的规则的加权流量", one(`SELECT weighted_bytes FROM rules WHERE id=?`, theirRule), 6000},
+				{"别的用户的逐跳流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirHop), 6000},
 			} {
 				if c.got != c.want {
 					t.Errorf("%s: 期望 %d，实际 %d", c.what, c.want, c.got)

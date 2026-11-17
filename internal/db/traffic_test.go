@@ -31,12 +31,12 @@ func TestResetAllUserTraffic(t *testing.T) {
 	}
 }
 
-// seedRuleWithTraffic creates one single-hop rule owned by uid with the given
-// accumulated display counter.
+// seedRuleWithTraffic 建一条 uid 名下的单跳规则，规则的加权流量
+// （rules.weighted_bytes）与这一跳的逐跳流量（rule_hops.total_bytes）都记 totalBytes。
 func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort int, totalBytes int64) (hopID int64) {
 	t.Helper()
-	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at) VALUES (?,?,?,?,?,?,0)`,
-		nodeID, uid, "r", "tcp", "8.8.8.8", 443)
+	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at, weighted_bytes) VALUES (?,?,?,?,?,?,0,?)`,
+		nodeID, uid, "r", "tcp", "8.8.8.8", 443, totalBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,30 +50,48 @@ func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort 
 	return hopID
 }
 
+// ruleOfHop 返回 hopID 所属规则的 id。
+func ruleOfHop(t *testing.T, d *sql.DB, hopID int64) int64 {
+	t.Helper()
+	var ruleID int64
+	if err := d.QueryRow(`SELECT rule_id FROM rule_hops WHERE id=?`, hopID).Scan(&ruleID); err != nil {
+		t.Fatal(err)
+	}
+	return ruleID
+}
+
 func TestResetAllUserTrafficClearsRuleCounters(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)
 	other := createTestUser(t, d)
 	n1 := createTestNode(t, d, "rc")
-	mine := seedRuleWithTraffic(t, d, uid, n1, 20001, 5000)
-	theirs := seedRuleWithTraffic(t, d, other, n1, 20002, 6000)
+	mineHop := seedRuleWithTraffic(t, d, uid, n1, 20001, 5000)
+	theirHop := seedRuleWithTraffic(t, d, other, n1, 20002, 6000)
+	mineRule, theirRule := ruleOfHop(t, d, mineHop), ruleOfHop(t, d, theirHop)
 
 	if err := ResetAllUserTraffic(d, uid); err != nil {
 		t.Fatal(err)
 	}
 
-	var total int64
-	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, mine).Scan(&total); err != nil {
-		t.Fatal(err)
+	one := func(q string, id int64) int64 {
+		t.Helper()
+		var v int64
+		if err := d.QueryRow(q, id).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	if total != 0 {
-		t.Fatalf("user's rule counter should reset with the user ledgers, got %d", total)
+	if got := one(`SELECT total_bytes FROM rule_hops WHERE id=?`, mineHop); got != 0 {
+		t.Fatalf("user's hop counter should reset with the user ledgers, got %d", got)
 	}
-	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs).Scan(&total); err != nil {
-		t.Fatal(err)
+	if got := one(`SELECT weighted_bytes FROM rules WHERE id=?`, mineRule); got != 0 {
+		t.Fatalf("user's rule ledger should reset with the user ledgers, got %d", got)
 	}
-	if total != 6000 {
-		t.Fatalf("another user's rule counter must be untouched, got %d", total)
+	if got := one(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirHop); got != 6000 {
+		t.Fatalf("another user's hop counter must be untouched, got %d", got)
+	}
+	if got := one(`SELECT weighted_bytes FROM rules WHERE id=?`, theirRule); got != 6000 {
+		t.Fatalf("another user's rule ledger must be untouched, got %d", got)
 	}
 }
 

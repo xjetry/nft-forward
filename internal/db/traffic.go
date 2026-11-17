@@ -13,10 +13,10 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 }
 
 // zeroUserLedgers 把一个用户名下的全部用量账本归零：全局已用量、各授权的已用量、
-// 落地出口账本、每条规则展示的累计流量。
+// 落地出口账本、每条规则的加权流量与逐跳流量。
 //
-// 这四样在页面上是同一个周期的用量，必须一起归零：只清前三样的话，规则上显示的
-// 累计流量会比用户的已用流量大，两个数对不上。“重置”只有这一份定义，管理员手动
+// 这几样在页面上是同一个周期的用量，必须一起归零：只清前三样的话，规则上显示的
+// 流量会比用户的已用流量大，两个数对不上。“重置”只有这一份定义，管理员手动
 // 重置（ResetAllUserTraffic）与按周期自动重置（CheckAndResetTrafficCycle）都走这里，
 // 新增账本时加在这里，两种重置同时生效。
 func zeroUserLedgers(tx *sql.Tx, userID int64) error {
@@ -24,6 +24,7 @@ func zeroUserLedgers(tx *sql.Tx, userID int64) error {
 		`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`,
 		`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`,
 		`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`,
+		`UPDATE rules SET weighted_bytes = 0 WHERE owner_id = ?`,
 		`UPDATE rule_hops SET total_bytes = 0 WHERE rule_id IN (SELECT id FROM rules WHERE owner_id = ?)`,
 	} {
 		if _, err := tx.Exec(q, userID); err != nil {

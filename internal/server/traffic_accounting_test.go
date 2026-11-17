@@ -183,10 +183,15 @@ func TestBillingEntryOnlyAndRawGrantBytes(t *testing.T) {
 	if ge.TrafficUsedBytes != 1000 || gm.TrafficUsedBytes != 1000 {
 		t.Fatalf("grant raw bytes want 1000/1000, got %d/%d", ge.TrafficUsedBytes, gm.TrafficUsedBytes)
 	}
-	// hop totals: entry hop stores the billed 2000; every other hop stores raw 1000
+	// 逐跳累计每一跳都是折算流量（这里三台都是双向节点，等于 1000）；乘过倍率的
+	// 2000 只记在规则账上。
 	hops, _ = db.ListRuleHops(d, id)
-	if hops[0].TotalBytes != 2000 || hops[1].TotalBytes != 1000 || hops[2].TotalBytes != 1000 {
-		t.Fatalf("hop totals: %d/%d/%d", hops[0].TotalBytes, hops[1].TotalBytes, hops[2].TotalBytes)
+	if hops[0].FoldedBytes != 1000 || hops[1].FoldedBytes != 1000 || hops[2].FoldedBytes != 1000 {
+		t.Fatalf("hop totals: %d/%d/%d", hops[0].FoldedBytes, hops[1].FoldedBytes, hops[2].FoldedBytes)
+	}
+	rl, _ := db.GetRule(d, id)
+	if rl.WeightedBytes != 2000 {
+		t.Fatalf("rule weighted traffic want 2000, got %d", rl.WeightedBytes)
 	}
 }
 
@@ -306,10 +311,14 @@ func TestApplyCountersZeroMultiplierIsFree(t *testing.T) {
 	if gc.TrafficUsedBytes != 5000 {
 		t.Fatalf("free entry per-grant quota want raw 5000, got %d", gc.TrafficUsedBytes)
 	}
+	// 免费入口只让加权的规则账为 0；逐跳的折算流量照记。
+	rl, _ = db.GetRule(d, ruleID)
+	if rl.WeightedBytes != 0 {
+		t.Fatalf("free entry rule weighted traffic want 0, got %d", rl.WeightedBytes)
+	}
 	hops, _ = db.ListRuleHops(d, ruleID)
-	// entry hop stores the billed amount, which is 0 under a free multiplier
-	if hops[0].TotalBytes != 0 {
-		t.Fatalf("free entry hop total_bytes (billed) want 0, got %d", hops[0].TotalBytes)
+	if hops[0].FoldedBytes != 5000 {
+		t.Fatalf("free entry hop folded total want 5000, got %d", hops[0].FoldedBytes)
 	}
 }
 

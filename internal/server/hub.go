@@ -743,6 +743,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	// MaxOpenConns(1) a tx holds the only connection, so a pool read or a
 	// redispatch goroutine inside it would deadlock.
 	hopWrites := map[int64]int64{}
+	ruleAdds := map[int64]int64{}
 	userNodeAdds := map[userNode]int64{}
 	userAdds := map[int64]int64{}
 	type exitAdd struct{ up, down int64 }
@@ -836,14 +837,13 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
 		}
 
-		// rule_hops.total_bytes carries the billed (weighted) amount on the entry
-		// hop — what per-rule traffic shows and the global quota consumes — and
-		// the direction-folded amount on every other hop. A tcp+udp hop can fan
-		// in as two samples to the same row; the total sums them.
+		// rule_hops.total_bytes is each hop's direction-folded traffic; the
+		// rule's weighted traffic — what per-rule traffic shows, equal to what
+		// the global quota consumes for it — is booked once, at the entry hop.
+		// A tcp+udp hop can fan in as two samples to the same row; both sum.
+		hopWrites[rh.ID] += billedDelta
 		if rh.Position == 0 {
-			hopWrites[rh.ID] += weighted
-		} else {
-			hopWrites[rh.ID] += billedDelta
+			ruleAdds[rh.RuleID] += weighted
 		}
 
 		if !hasOwner {
@@ -867,7 +867,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	// Flush every accumulated mutation in a single transaction: one commit (one
 	// fsync) for the whole batch instead of 3-5 auto-commits per sample.
-	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 || rawAdd > 0 {
+	if len(hopWrites) > 0 || len(ruleAdds) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 || rawAdd > 0 {
 		if tx, err := h.DB.Begin(); err != nil {
 			log.Printf("hub: node %d counters tx begin: %v", nodeID, err)
 		} else {
@@ -884,6 +884,16 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 				if _, err := tx.Exec(`UPDATE rule_hops SET total_bytes=total_bytes+? WHERE id=?`, add, id); err != nil {
 					log.Printf("hub: node %d counters rule_hop update: %v", nodeID, err)
+					ok = false
+					break
+				}
+			}
+			for id, add := range ruleAdds {
+				if !ok {
+					break
+				}
+				if _, err := tx.Exec(`UPDATE rules SET weighted_bytes = weighted_bytes + ? WHERE id=?`, add, id); err != nil {
+					log.Printf("hub: rule %d traffic add: %v", id, err)
 					ok = false
 					break
 				}

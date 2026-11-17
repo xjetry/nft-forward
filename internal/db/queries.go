@@ -143,9 +143,11 @@ type Rule struct {
 	// through (entry excluded). Persisted so node_id edits re-derive the same
 	// chain; empty for plain single/composite rules.
 	ViaNodeIDs []int64 `json:"via_node_ids"`
-	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
-	// from the entry hop so list/detail responses can show per-rule traffic.
-	TotalBytes int64 `json:"total_bytes"`
+	// WeightedBytes 是规则的加权流量（rules.weighted_bytes）。它与属主的全局已用量
+	// 同一单位：每个入口跳样本的加权字节在同一个事务里同时记进这里和属主的
+	// users.traffic_used_bytes，两边也由同一个用户重置一起归零。只有计数入账与用户
+	// 重置写这一列；建规则、改表头、重建跳都不写它。
+	WeightedBytes int64 `json:"total_bytes"`
 }
 
 type RuleHop struct {
@@ -162,9 +164,13 @@ type RuleHop struct {
 	// from (entry segment = the rule's node_id; explicit-hops path = the
 	// hop's own node). Quota suppression, per-grant accounting and shaping
 	// group hops by it rather than by physical node.
-	ViaNodeID  int64  `json:"via_node_id"`
-	Comment    string `json:"comment"`
-	TotalBytes int64  `json:"total_bytes"`
+	ViaNodeID int64  `json:"via_node_id"`
+	Comment   string `json:"comment"`
+	// FoldedBytes 是这一跳的折算流量（rule_hops.total_bytes）：按这一跳所在物理节点
+	// 的计费方向折算，双向节点取上下行之和，单向节点取较大的一侧；不乘倍率与费率。
+	// 每一跳都是这个单位，入口跳也一样。RegenerateRule 会把一条规则的跳整体删除重建，
+	// 所以它累计的是这一行建成或属主上次重置以来的流量。
+	FoldedBytes int64 `json:"total_bytes"`
 }
 
 func RandToken(n int) string {
@@ -544,12 +550,12 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,created_at,entry_family,via_node_ids`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,created_at,entry_family,via_node_ids,weighted_bytes`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var viaJSON string
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &rl.CreatedAt, &rl.EntryFamily, &viaJSON, &rl.WeightedBytes); err != nil {
 		return nil, err
 	}
 	rl.ViaNodeIDs = decodeViaNodeIDs(viaJSON)
@@ -560,7 +566,7 @@ const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,t
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.TotalBytes, &h.ViaNodeID); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.FoldedBytes, &h.ViaNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil

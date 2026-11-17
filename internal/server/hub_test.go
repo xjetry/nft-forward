@@ -226,8 +226,8 @@ func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
 	if got == nil {
 		t.Fatalf("rule hop not found for %s", key)
 	}
-	if got.TotalBytes != 1536 {
-		t.Fatalf("expected TotalBytes 1536 (1024 + 512), got %d", got.TotalBytes)
+	if got.FoldedBytes != 1536 {
+		t.Fatalf("expected FoldedBytes 1536 (1024 + 512), got %d", got.FoldedBytes)
 	}
 }
 

@@ -274,15 +274,14 @@ func toV1Rule(it ruleListItem) v1Rule {
 		ID: it.ID, Name: it.Name, NodeID: it.NodeID, Proto: it.Proto,
 		Entry: it.Entry, EntryV6: it.EntryV6, EntryFamily: it.EntryFamily,
 		Exit: it.Exit, ExitMode: it.ExitMode, Comment: it.Comment,
-		ViaNodeIDs: via, Chain: chain, TrafficUsedBytes: it.TotalBytes, CreatedAt: it.CreatedAt,
+		ViaNodeIDs: via, Chain: chain, TrafficUsedBytes: it.WeightedBytes, CreatedAt: it.CreatedAt,
 		Suppressed: string(it.Suppressed),
 	}
 }
 
-// v1RulesFromDB resolves a batch of rules into their slim DTOs, filling traffic
-// and the flattened chain (resolved over all nodes so composite members show).
+// v1RulesFromDB resolves a batch of rules into their slim DTOs, filling the
+// flattened chain (resolved over all nodes so composite members show).
 func (s *Server) v1RulesFromDB(rules []*db.Rule) []v1Rule {
-	db.FillRuleTraffic(s.DB, rules)
 	allNodes, _ := db.ListNodes(s.DB)
 	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	items := make([]ruleListItem, 0, len(rules))
