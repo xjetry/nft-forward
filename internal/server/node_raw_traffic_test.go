@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/db"
 	"nft-forward/internal/wsproto"
 )
@@ -57,7 +58,7 @@ func TestApplyCountersNodeRawTraffic(t *testing.T) {
 		t.Fatalf("global billed bytes want 2100, got %d", u.TrafficUsedBytes)
 	}
 
-	if err := db.ResetAllUserTraffic(d, uid); err != nil {
+	if err := accounting.ResetUser(d, uid); err != nil {
 		t.Fatal(err)
 	}
 	raw, err = db.NodeRawTraffic(d)
@@ -74,7 +75,7 @@ func TestApplyCountersNodeRawTraffic(t *testing.T) {
 func TestNodeRawTrafficCascadeOnNodeDelete(t *testing.T) {
 	d := openDB(t)
 	n, _ := db.CreateNode(d, "gone", "", "")
-	if err := db.AddNodeRawTraffic(d, n.ID, 4096); err != nil {
+	if _, err := d.Exec(`INSERT INTO node_raw_traffic(node_id, raw_bytes) VALUES (?, 4096)`, n.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.DeleteNode(d, n.ID); err != nil {

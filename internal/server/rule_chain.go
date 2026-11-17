@@ -46,7 +46,7 @@ type explicitHop struct {
 	NodeID int64  `json:"node_id"`
 	Mode   string `json:"mode"`
 	// ViaNodeID 标明这一跳属于哪个逻辑节点。按授权计流量时一个逻辑段只在段首那一跳
-	// 记一次、记到这个逻辑节点的授权上（db.SegmentFirstHops），所以把一个组合展开
+	// 记一次、记到这个逻辑节点的授权上（accounting.Seat），所以把一个组合展开
 	// 写成显式链时，各跳都要带 via = 组合的 id。没给（0）时取这一跳自己的 node_id，
 	// 即每跳自成一段。
 	ViaNodeID int64 `json:"via_node_id"`

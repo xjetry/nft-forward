@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
 	"nft-forward/internal/nft"
@@ -82,7 +83,7 @@ func (s *Server) expiryEnforcer() {
 // cycleResetEnforcer 定期检查每个用户的流量重置周期，周期翻转时把用量账本归零并
 // 重新下发该用户的节点，让因配额用尽被排除的规则在新周期恢复转发。
 //
-// 计数入账路径（Hub.applyCounters）里也有同样的周期检查，但它只在该用户有流量
+// 计数入账路径（accounting.Record）里也有同样的周期检查，但它只在该用户有流量
 // 上报时才走到；规则已全部撤出节点的用户不再产生计数，要靠这里的定时检查。
 //
 // 重置之后无条件重推：配额条件只在下发时求值（db.ActiveRuleHopsForPush），归零本身
@@ -104,7 +105,7 @@ func (s *Server) cycleResetEnforcer() {
 				if u.TrafficResetDays <= 0 {
 					continue
 				}
-				reset, err := db.CheckAndResetTrafficCycle(s.DB, u)
+				reset, err := accounting.ResetCycleIfDue(s.DB, u)
 				if err != nil {
 					log.Printf("cycle: check reset for user %d: %v", u.ID, err)
 					continue

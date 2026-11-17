@@ -144,12 +144,6 @@ func TestExitQuotaHelpers(t *testing.T) {
 	if len(keys) != 1 || keys[0].Host != "a.com" {
 		t.Fatalf("want a.com exceeding, got %+v", keys)
 	}
-	if _, _, err := ResetUserLandingExitTraffic(d, uid, "a.com", 443); err != nil {
-		t.Fatal(err)
-	}
-	if keys, _ = ExitsExceedingQuota(d, uid); len(keys) != 0 {
-		t.Fatal("reset should clear the overrun")
-	}
 
 	// delete is restricted to residual rows
 	if st, _ := DeleteUserLandingExit(d, uid, "a.com", 443); st != "present" {
@@ -164,33 +158,7 @@ func TestExitQuotaHelpers(t *testing.T) {
 	}
 }
 
-func TestCycleResetClearsExitLedger(t *testing.T) {
-	d := openTestDB(t)
-	uid := createTestUser(t, d)
-	SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
-	d.Exec(`UPDATE user_landing_exits SET used_bytes=500 WHERE user_id=?`, uid)
-	d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=strftime('%s','now')-31*86400, last_traffic_reset_at=0 WHERE id=?`, uid)
-	u, _ := GetUserByID(d, uid)
-	if reset, err := CheckAndResetTrafficCycle(d, u); err != nil || !reset {
-		t.Fatalf("reset=%v err=%v", reset, err)
-	}
-	exits, _ := ListUserLandingExits(d, uid)
-	if exits[0].UsedBytes != 0 {
-		t.Fatalf("cycle reset must clear the exit ledger, got %d", exits[0].UsedBytes)
-	}
-
-	SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
-	d.Exec(`UPDATE user_landing_exits SET used_bytes=500 WHERE user_id=?`, uid)
-	if err := ResetAllUserTraffic(d, uid); err != nil {
-		t.Fatal(err)
-	}
-	exits, _ = ListUserLandingExits(d, uid)
-	if exits[0].UsedBytes != 0 {
-		t.Fatal("manual full reset must clear the exit ledger too")
-	}
-}
-
-func TestLandingExitDirectionColumnsResetTogether(t *testing.T) {
+func TestLandingExitDirectionColumnsScan(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)
 	if _, err := d.Exec(`INSERT INTO user_landing_exits(user_id, host, port, name, protocol, uri, present, used_bytes, used_bytes_up, used_bytes_down, updated_at)
@@ -203,13 +171,6 @@ func TestLandingExitDirectionColumnsResetTogether(t *testing.T) {
 	}
 	if rows[0].UsedBytesUp != 400 || rows[0].UsedBytesDown != 600 {
 		t.Fatalf("direction columns not scanned: %+v", rows[0])
-	}
-	if _, _, err := ResetUserLandingExitTraffic(d, uid, "x.example", 443); err != nil {
-		t.Fatal(err)
-	}
-	rows, _ = ListUserLandingExits(d, uid)
-	if rows[0].UsedBytes != 0 || rows[0].UsedBytesUp != 0 || rows[0].UsedBytesDown != 0 {
-		t.Fatalf("reset must zero all three columns: %+v", rows[0])
 	}
 }
 

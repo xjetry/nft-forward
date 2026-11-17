@@ -129,7 +129,7 @@ var storedProtos = []string{"tcp", "udp", "tcp+udp"}
 // protoNamespaces returns the L4 transport namespaces a forward proto occupies:
 // tcp+udp spans both tcp and udp; tcp and udp each span only their own. This is
 // the single source of truth that keeps port-occupancy overlap and counter-key
-// fan-out (hopCounterKeys) from drifting apart, and mirrors the split
+// fan-out (CounterProtos) from drifting apart, and mirrors the split
 // forward.Partition performs on the daemon.
 func protoNamespaces(proto string) []string {
 	if proto == "tcp+udp" {
@@ -355,30 +355,6 @@ func RulesByID(d *sql.DB) (map[int64]*Rule, error) {
 		return nil, err
 	}
 	m := make(map[int64]*Rule, len(all))
-	for _, r := range all {
-		m[r.ID] = r
-	}
-	return m, nil
-}
-
-// RulesByIDs loads only the given rules into a map, so hot paths that already
-// know which rules they touch (e.g. counters for one node) don't scan the whole
-// rules table every batch. An empty id set returns an empty map.
-func RulesByIDs(d *sql.DB, ids []int64) (map[int64]*Rule, error) {
-	m := make(map[int64]*Rule, len(ids))
-	if len(ids) == 0 {
-		return m, nil
-	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	all, err := listRulesWhere(d, "id IN ("+strings.Join(placeholders, ",")+")", args...)
-	if err != nil {
-		return nil, err
-	}
 	for _, r := range all {
 		m[r.ID] = r
 	}

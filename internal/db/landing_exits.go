@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"strings"
 )
 
 // LandingExit is one row of a user's materialized landing-exit set plus its
@@ -41,13 +40,6 @@ type LandingExitInput struct {
 type LandingExitKey struct {
 	Host string
 	Port int
-}
-
-// UserExitKey addresses one exit ledger row across users.
-type UserExitKey struct {
-	UserID int64
-	Host   string
-	Port   int
 }
 
 // SyncUserLandingExits materializes a successfully resolved landing set.
@@ -185,62 +177,6 @@ func PresentLandingExitsForUser(d *sql.DB, userID int64) ([]*LandingExit, error)
 		scanLandingExit, userID)
 }
 
-// PresentLandingExitSet returns the present (user, host, port) triples for the
-// given users — the per-batch lookup applyCounters classifies samples against.
-func PresentLandingExitSet(d *sql.DB, userIDs []int64) (map[UserExitKey]bool, error) {
-	out := map[UserExitKey]bool{}
-	if len(userIDs) == 0 {
-		return out, nil
-	}
-	ph := strings.Repeat("?,", len(userIDs)-1) + "?"
-	args := make([]any, len(userIDs))
-	for i, id := range userIDs {
-		args[i] = id
-	}
-	rows, err := d.Query(`SELECT user_id, host, port FROM user_landing_exits WHERE present=1 AND user_id IN (`+ph+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var k UserExitKey
-		if err := rows.Scan(&k.UserID, &k.Host, &k.Port); err != nil {
-			return nil, err
-		}
-		out[k] = true
-	}
-	return out, rows.Err()
-}
-
-// MaxHopPositions returns each rule's final hop position. Only the final hop
-// meters into the exit ledger: middle hops target system relay addresses,
-// which must never be mistaken for the user's destination.
-func MaxHopPositions(d *sql.DB, ruleIDs []int64) (map[int64]int, error) {
-	out := map[int64]int{}
-	if len(ruleIDs) == 0 {
-		return out, nil
-	}
-	ph := strings.Repeat("?,", len(ruleIDs)-1) + "?"
-	args := make([]any, len(ruleIDs))
-	for i, id := range ruleIDs {
-		args[i] = id
-	}
-	rows, err := d.Query(`SELECT rule_id, MAX(position) FROM rule_hops WHERE rule_id IN (`+ph+`) GROUP BY rule_id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var pos int
-		if err := rows.Scan(&id, &pos); err != nil {
-			return nil, err
-		}
-		out[id] = pos
-	}
-	return out, rows.Err()
-}
-
 // exitRowPresent reports whether the row exists and is present. found=false
 // means no such row.
 func exitRowPresent(d *sql.DB, userID int64, host string, port int) (found, present bool, err error) {
@@ -265,17 +201,6 @@ func SetUserLandingExitQuota(d *sql.DB, userID int64, host string, port int, quo
 	}
 	_, err = d.Exec(`UPDATE user_landing_exits SET quota_bytes=?, updated_at=? WHERE user_id=? AND host=? AND port=?`,
 		quota, now(), userID, host, port)
-	return err == nil, present, err
-}
-
-// ResetUserLandingExitTraffic zeroes one exit's ledger.
-func ResetUserLandingExitTraffic(d *sql.DB, userID int64, host string, port int) (updated, present bool, err error) {
-	found, present, err := exitRowPresent(d, userID, host, port)
-	if err != nil || !found {
-		return false, false, err
-	}
-	_, err = d.Exec(`UPDATE user_landing_exits SET used_bytes=0, used_bytes_up=0, used_bytes_down=0, updated_at=? WHERE user_id=? AND host=? AND port=?`,
-		now(), userID, host, port)
 	return err == nil, present, err
 }
 

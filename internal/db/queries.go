@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -36,7 +35,9 @@ type User struct {
 	DisableReason     sql.NullString `json:"disable_reason"`
 	MaxForwards       int            `json:"max_forwards"`
 	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
-	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
+	// TrafficUsedBytes 是本周期的全局已用量，加权字节（accounting.Weighted），只在
+	// 规则的入口跳记账；配额 TrafficQuotaBytes 与它同一单位。
+	TrafficUsedBytes int64 `json:"traffic_used_bytes"`
 	// OverQuota 不是 users 表的列：scanUser 在读出这一行时用 QuotaReached 从上面两个
 	// 字段算出，供页面显示“已超额”。全局配额用尽只停转发（见 ActiveRuleHopsForPush），
 	// 与 Disabled 无关：超额的账号仍可登录。
@@ -599,35 +600,15 @@ func ExpiredUserNodeIDs(d *sql.DB) ([]int64, error) {
 		WHERE u.disabled = 0 AND `+userExpiredSQL)
 }
 
-func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {
-	hops, err := queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE node_id=? ORDER BY listen_port`, scanRuleHop, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]*RuleHop, len(hops))
-	for _, h := range hops {
-		// A tcp+udp hop is reported by the daemon either as one tcp+udp sample
-		// (kernel mode) or as separate tcp and udp samples (userspace mode, where
-		// Partition splits it into a udp kernel DNAT + a tcp userspace relay).
-		// Register every key that can carry this hop's bytes so applyCounters
-		// sums them into the same row. Cross-proto port occupancy guarantees no
-		// two hops on a node share an overlapping (proto, port), so keys stay unique.
-		for _, key := range hopCounterKeys(h.Proto, h.ListenPort) {
-			m[key] = h
-		}
-	}
-	return m, nil
-}
-
-// hopCounterKeys returns the proto/port counter keys a hop may receive samples
-// under. The daemon reports a kernel aggregate sample under the literal proto
-// (e.g. "tcp+udp/port" via th dport) and, when forward.Partition splits the
-// hop, separate per-namespace samples (tcp userspace + udp kernel). So a
-// tcp+udp hop fans in to tcp+udp, tcp, and udp; anything else uses its own
-// proto only. Derived from protoNamespaces so its key set stays a subset of
-// overlappingProtos — cross-proto port occupancy then guarantees no two hops on
-// a node ever produce the same key.
-func hopCounterKeys(proto string, port int) []string {
+// CounterProtos returns the protos a hop of the given proto may report counter
+// samples under, on its own listen port. The daemon reports a kernel aggregate
+// sample under the literal proto (e.g. "tcp+udp" via th dport) and, when
+// forward.Partition splits the hop, separate per-namespace samples (tcp
+// userspace + udp kernel). So a tcp+udp hop fans in from tcp+udp, tcp and udp;
+// anything else uses its own proto only. Derived from protoNamespaces so the
+// set stays a subset of overlappingProtos — cross-proto port occupancy then
+// guarantees no two hops on a node ever share a (proto, port) counter key.
+func CounterProtos(proto string) []string {
 	seen := map[string]bool{}
 	var protos []string
 	add := func(p string) {
@@ -640,11 +621,7 @@ func hopCounterKeys(proto string, port int) []string {
 	for _, ns := range protoNamespaces(proto) {
 		add(ns)
 	}
-	out := make([]string, len(protos))
-	for i, p := range protos {
-		out[i] = fmt.Sprintf("%s/%d", p, port)
-	}
-	return out
+	return protos
 }
 
 func ListRuleHopsByNode(d *sql.DB, nodeID int64) ([]*RuleHop, error) {

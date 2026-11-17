@@ -220,11 +220,15 @@ func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf2})
 	syncByPing(t, c)
 
-	hopMap, _ := db.RuleHopMapByNode(hub.DB, n.ID)
-	key := "tcp/" + strconv.Itoa(listenPort)
-	got := hopMap[key]
+	var got *db.RuleHop
+	hops, _ = db.ListRuleHopsByNode(hub.DB, n.ID)
+	for _, h := range hops {
+		if h.ID == hopID {
+			got = h
+		}
+	}
 	if got == nil {
-		t.Fatalf("rule hop not found for %s", key)
+		t.Fatalf("rule hop %d not found", hopID)
 	}
 	if got.FoldedBytes != 1536 {
 		t.Fatalf("expected FoldedBytes 1536 (1024 + 512), got %d", got.FoldedBytes)

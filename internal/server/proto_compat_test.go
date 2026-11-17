@@ -78,33 +78,6 @@ func TestOccupiedPortsCrossProto(t *testing.T) {
 	}
 }
 
-func TestTCPUDPHopCounterFanIn(t *testing.T) {
-	d := openDB(t)
-	n := mustNode(t, d, "edge")
-	rid, err := db.CreateRule(d, &db.Rule{NodeID: n.ID, Name: "r", Proto: "tcp+udp", ExitHost: "9.9.9.9", ExitPort: 443})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(
-		`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment) VALUES (?,0,?,?,?,?,?,?,?)`,
-		rid, n.ID, "tcp+udp", 10001, "9.9.9.9", 443, "userspace", ""); err != nil {
-		t.Fatal(err)
-	}
-
-	m, err := db.RuleHopMapByNode(d, n.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"tcp/10001", "udp/10001", "tcp+udp/10001"} {
-		if m[key] == nil {
-			t.Fatalf("key %s should map to the tcp+udp hop, got nil", key)
-		}
-	}
-	if m["tcp/10001"] != m["udp/10001"] {
-		t.Fatalf("tcp and udp keys must point to the same hop row")
-	}
-}
-
 // A tcp chain must not be able to claim a port a tcp+udp chain already holds on
 // the same node: tcp overlaps the tcp+udp claim, and letting it through would
 // produce a (proto, port) overlap the daemon's forward.Partition rejects,

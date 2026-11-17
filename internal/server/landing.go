@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
 )
@@ -328,7 +329,7 @@ func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	updated, present, err := db.ResetUserLandingExitTraffic(s.DB, id, body.Host, body.Port)
+	updated, present, err := accounting.ResetExit(s.DB, id, body.Host, body.Port)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return

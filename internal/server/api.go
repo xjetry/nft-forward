@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
@@ -2317,7 +2318,7 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := db.ResetAllUserTraffic(s.DB, id); err != nil {
+	if err := accounting.ResetUser(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -3309,7 +3310,7 @@ func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusBadRequest, "bad node id")
 		return
 	}
-	if err := db.ResetUserNodeTraffic(s.DB, userID, nodeID); err != nil {
+	if err := accounting.ResetGrant(s.DB, userID, nodeID); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

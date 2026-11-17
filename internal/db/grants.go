@@ -20,7 +20,10 @@ type UserNode struct {
 	MaxForwards int   `json:"max_forwards"`
 	// TrafficQuotaBytes is the per-grant quota override; 0 means fall back to the global user quota.
 	TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
-	TrafficUsedBytes  int64 `json:"traffic_used_bytes"`
+	// TrafficUsedBytes 是这条授权本周期的已用量，折算字节（accounting.Folded）：不乘
+	// 倍率与费率；用户每条经过这个逻辑节点的规则，在这个节点那一段的段首跳记一次。
+	// 与 users 上同名的列单位不同；授权配额 TrafficQuotaBytes 与它同一单位。
+	TrafficUsedBytes int64 `json:"traffic_used_bytes"`
 	// RateLimitMBytes is the per-grant shared rate limit in MB/s; all of the
 	// user's rules on this node share one bucket. 0 = unlimited (unlike the
 	// quota, there is no user-level fallback).
