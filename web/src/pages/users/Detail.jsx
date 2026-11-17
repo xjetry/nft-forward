@@ -179,7 +179,7 @@ function UsageCard({ userId, user, ruleCount, onReset }) {
   const askReset = async () => {
     const ok = await confirm({
       title: '重置流量',
-      message: `把 ${user.username} 的已用流量全部清零？各节点、各落地节点出口与各规则上的用量会一起清零；因流量超额被禁用的账号会恢复启用。清零后无法找回。`,
+      message: `把 ${user.username} 的已用流量全部清零？各节点、各落地节点出口与各规则上的用量会一起清零；因配额用尽而暂停的转发会恢复。清零后无法找回。`,
       confirmText: '重置流量',
     })
     if (ok) reset.run()
