@@ -35,9 +35,7 @@ func TestDataplane_KernelFailureRollsBackUserspace(t *testing.T) {
 	dp := newTestDataplane(&fakeKernel{err: errors.New("nft boom")})
 	defer dp.Close(context.Background())
 
-	l, _ := net.Listen("tcp4", "127.0.0.1:0")
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	port := freePort(t)
 
 	rules := []nft.Rule{{ID: "x", Proto: "tcp", SrcPort: port, DestIP: "127.0.0.1", DestPort: 9, Mode: nft.ModeUserspace}}
 	if err := dp.Reconcile(context.Background(), rules); err == nil {

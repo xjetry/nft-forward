@@ -17,15 +17,31 @@ import (
 
 // freePort grabs an ephemeral port number, then releases it so the relay can
 // bind it. Small TOCTOU window, acceptable for tests.
+// freePort 返回一个此刻能被转发后端监听的 TCP 端口。
+//
+// 后端按通配地址显式绑定规则的监听端口（userspace.go 里的 net.Listen("tcp", ":端口")）。
+// 绑定端口 0 由系统分配出来的端口不保证能这样再绑一次：在 macOS 开发机上实测，分配
+// 出来的端口里有一小部分显式绑定时报 address already in use，隔一秒重试仍然如此——
+// 不是“关掉与重绑之间被别人抢走”，是这个端口本来就绑不上。所以候选端口要用后端的
+// 那种绑定验过才交出去，验不过就换一个。
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 50; i++ {
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		probe, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			continue
+		}
+		probe.Close()
+		return p
 	}
-	p := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return p
+	t.Fatal("连续 50 个系统分配的端口都无法显式绑定")
+	return 0
 }
 
 // scriptListener is a net.Listener whose Accept returns a pre-programmed
