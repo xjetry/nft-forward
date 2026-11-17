@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -477,5 +478,70 @@ func TestDialerHelloIncludesDeclaredRelayHost(t *testing.T) {
 	}
 	if hello.DeclaredRelayHostV6 != "2001:db8::50" {
 		t.Errorf("DeclaredRelayHostV6 = %q, want 2001:db8::50", hello.DeclaredRelayHostV6)
+	}
+}
+
+// poolSizesAppliedFromHelloAck connects once against a hub that answers hello
+// with the given ack payload and returns every pool size the dialer applied.
+func poolSizesAppliedFromHelloAck(t *testing.T, ackJSON string) []int {
+	t.Helper()
+	fh := newFakeHub()
+	fh.onAck(wsproto.TypeHello, func(env wsproto.Envelope) wsproto.Envelope {
+		return wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: env.ID, Payload: json.RawMessage(ackJSON)}
+	})
+	srv := httptest.NewServer(fh.handler(t))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var applied []int
+	dl := NewDialer(DialerConfig{
+		Panel:        RemotePanel("ws"+strings.TrimPrefix(srv.URL, "http")+"/", "tok"),
+		AgentVersion: "v1",
+		GetState: func() (OwnerRuleset, AgentMeta) {
+			return OwnerRuleset{}, AgentMeta{}
+		},
+		OnApply: func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
+		OnConfigUpdate: func(n int) {
+			mu.Lock()
+			applied = append(applied, n)
+			mu.Unlock()
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = dl.runOnce(ctx)
+	}()
+	waitConnected(t, dl)
+	// Stop the session and wait for it to unwind, so that everything the
+	// dialer does on receiving the ack has happened before applied is read.
+	cancel()
+	<-done
+	if dl.NodeID() != 7 {
+		t.Fatalf("the ack was not processed: NodeID() = %d, want 7", dl.NodeID())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return append([]int(nil), applied...)
+}
+
+// A pool size of 0 in the hello ack is a setting like any other and must be
+// applied; only an ack without the field leaves the agent's default alone.
+func TestDialerAppliesPoolSizeFromHelloAck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ack  string
+		want []int
+	}{
+		{"zero", `{"node_id":7,"name":"edge","pool_size":0}`, []int{0}},
+		{"positive", `{"node_id":7,"name":"edge","pool_size":9}`, []int{9}},
+		{"absent", `{"node_id":7,"name":"edge"}`, nil},
+	} {
+		got := poolSizesAppliedFromHelloAck(t, tc.ack)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: applied pool sizes = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

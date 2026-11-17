@@ -113,11 +113,17 @@ type Hello struct {
 // HelloAck is the panel's response to Hello. Error == "" means the
 // node_token was accepted and NodeID/Name are populated; a non-empty
 // Error means the daemon should not proceed (token revoked or unknown).
+//
+// PoolSize is the panel's connection-pool size setting. It is a pointer so
+// that "the panel says 0" stays distinguishable on the wire from "the panel
+// sent no value" (an error ack, or a panel that predates the setting): the
+// agent applies any value that is present, 0 included, and keeps its own
+// default only when the field is absent.
 type HelloAck struct {
 	NodeID   int64  `json:"node_id,omitempty"`
 	Name     string `json:"name,omitempty"`
 	Error    string `json:"error,omitempty"`
-	PoolSize int    `json:"pool_size,omitempty"`
+	PoolSize *int   `json:"pool_size,omitempty"`
 }
 
 type ApplyRuleset struct {
