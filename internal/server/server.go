@@ -29,7 +29,11 @@ type Server struct {
 	Rules   *rulechange.Changes
 	Landing *landing.Fetcher
 	// dispatch 让对同一个节点的下发串行、合并；所有下发都经 dispatchToNode 走它。
-	dispatch        *nodeDispatchQueue
+	dispatch *nodeDispatchQueue
+	// pushRuleset 把一份规则集送到节点并等它应答，是一轮下发（dispatchRound）的最后
+	// 一步。newServer 把它接到 Hub.SendApplyRuleset；测试换成替身，不接 agent 就能
+	// 看到推给哪个节点的是什么、并决定这次推送的结果。
+	pushRuleset     func(nodeID int64, rules []nft.Rule, rev string) (string, error)
 	loginLimiter    *loginLimiter
 	tokenLimiter    *tokenLimiter
 	stopExpiry      chan struct{}
@@ -38,6 +42,12 @@ type Server struct {
 	// nodeRolesMu serializes apiSetNodeRoles' read-modify-write of the
 	// "node_roles" settings row.
 	nodeRolesMu sync.Mutex
+	// pushInline 让下发在调用方的 goroutine 上进行：redispatchNodes 不另起 goroutine，
+	// dispatchToNode 不经 nodeDispatchQueue、直接跑一轮。只有测试设置它，为的是让
+	// 一轮下发发出的语句与调用方自己的语句落在同一个 goroutine 上，可以逐条计数、
+	// 逐条注入失败。这时没有队列的串行与合并，设置它的测试自己保证同一个节点上没有
+	// 并发的下发。
+	pushInline bool
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -67,6 +77,7 @@ func newServer(d *sql.DB) (*Server, error) {
 	hub := NewHub(d)
 	s := &Server{DB: d, Hub: hub, Rules: hub.Rules, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	s.dispatch = newNodeDispatchQueue(s.dispatchRound)
+	s.pushRuleset = hub.SendApplyRuleset
 	hub.OnTrafficUpdate = func(userID int64) {
 		s.enforcePerNodeQuota(userID)
 		s.enforceUserQuota(userID)
@@ -89,14 +100,19 @@ func (s *Server) expiryEnforcer() {
 		case <-s.stopExpiry:
 			return
 		case <-ticker.C:
-			nodes, err := db.ExpiredUserNodeIDs(s.DB)
-			if err != nil {
-				log.Printf("expiry: query expired-user nodes: %v", err)
-				continue
-			}
-			s.dispatchNodes("账号到期", nodes)
+			s.expiryPass()
 		}
 	}
+}
+
+// expiryPass 是 expiryEnforcer 的一轮。
+func (s *Server) expiryPass() {
+	nodes, err := db.ExpiredUserNodeIDs(s.DB)
+	if err != nil {
+		log.Printf("expiry: query expired-user nodes: %v", err)
+		return
+	}
+	s.dispatchNodes("账号到期", nodes)
 }
 
 // cycleResetEnforcer 定期检查每个用户的流量重置周期，周期翻转时把用量账本归零并
@@ -115,28 +131,33 @@ func (s *Server) cycleResetEnforcer() {
 		case <-s.stopCycle:
 			return
 		case <-ticker.C:
-			users, err := db.ListUsers(s.DB)
-			if err != nil {
-				log.Printf("cycle: list users: %v", err)
-				continue
-			}
-			for _, u := range users {
-				if u.TrafficResetDays <= 0 {
-					continue
-				}
-				reset, err := accounting.ResetCycleIfDue(s.DB, u)
-				if err != nil {
-					log.Printf("cycle: check reset for user %d: %v", u.ID, err)
-					continue
-				}
-				if !reset {
-					continue
-				}
-				if err := s.redispatchUser(u.ID, "流量周期重置"); err != nil {
-					log.Printf("cycle: user %d was reset but its nodes could not be listed for re-dispatch: %v", u.ID, err)
-				}
-			}
+			s.cycleResetPass()
 		}
+	}
+}
+
+// cycleResetPass 是 cycleResetEnforcer 的一轮。
+func (s *Server) cycleResetPass() {
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("cycle: list users: %v", err)
+		return
+	}
+	for _, u := range users {
+		if u.TrafficResetDays <= 0 {
+			continue
+		}
+		// 重置与要重推的节点一起返回，否则重置不发生（accounting.ResetCycleIfDue）；
+		// 没成的重置在下一轮仍然到期。
+		reset, nodes, err := accounting.ResetCycleIfDue(s.DB, u)
+		if err != nil {
+			log.Printf("cycle: check reset for user %d: %v", u.ID, err)
+			continue
+		}
+		if !reset {
+			continue
+		}
+		s.dispatchNodes("流量周期重置", nodes)
 	}
 }
 

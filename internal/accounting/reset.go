@@ -52,40 +52,53 @@ func ResetUser(d *sql.DB, userID int64) error {
 }
 
 // ResetCycleIfDue 在用户的流量周期已经翻过时把他的全部用量账本归零（与手动重置同一
-// 范围，见 zeroUser），并记下这次重置的时间；返回是否重置了。
+// 范围，见 zeroUser），并记下这次重置的时间；reset 表示是否重置了。
+//
+// 重置要靠重推才到得了节点：配额条件在组装规则集时求值，因配额用尽被排除的规则要等
+// 节点下一次被下发才恢复。所以要重推的节点（repush，属主的规则所在的节点）与重置在
+// 同一个事务里读出、随它一起返回：读不出来就不重置，下一次检查看到的仍是“该重置
+// 了”。放到事务之后再读，读失败时重置已经落库却没有节点被告知，而下一次检查看到的
+// 是 last_traffic_reset_at 已在本周期内，不再重置，也就再没有谁去重推。
 //
 // traffic_reset_days ≤ 0 表示从不自动重置。周期从账号创建时刻起算，边界可以预期
 // （例如“从开户日起每 30 天”）。
-func ResetCycleIfDue(d *sql.DB, u *db.User) (bool, error) {
+func ResetCycleIfDue(d *sql.DB, u *db.User) (reset bool, repush []int64, err error) {
 	if u.TrafficResetDays <= 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	nowTs := time.Now().Unix()
 	period := int64(u.TrafficResetDays) * 86400
 	var createdAt int64
 	if err := d.QueryRow(`SELECT created_at FROM users WHERE id=?`, u.ID).Scan(&createdAt); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	elapsed := nowTs - createdAt
 	if elapsed < 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	cycleStart := createdAt + (elapsed/period)*period
 	if u.LastTrafficResetAt >= cycleStart {
-		return false, nil
+		return false, nil, nil
 	}
 	tx, err := d.Begin()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer tx.Rollback()
 	if err := zeroUser(tx, u.ID); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if _, err := tx.Exec(`UPDATE users SET last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, tx.Commit()
+	nodes, err := db.DistinctUserNodes(tx, u.ID)
+	if err != nil {
+		return false, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, nil, err
+	}
+	return true, nodes, nil
 }
 
 // ResetGrant 把用户在一个节点上的授权已用量归零，只动这一本账。用户在这个节点上没有

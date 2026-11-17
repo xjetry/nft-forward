@@ -774,15 +774,9 @@ func (h *Hub) applyCounters(nodeID int64, wire []wsproto.CounterSample) {
 	h.speedCache.update(nodeID, deltas)
 
 	// 配额条件只在下发时求值：周期翻转把账本清零之后不重推，因配额用尽被排除的规则
-	// 就一直不恢复。
-	if h.Redispatch != nil {
-		for _, uid := range res.RolledOver {
-			if nodes, err := db.DistinctUserNodes(h.DB, uid); err == nil {
-				go h.Redispatch(nodes)
-			} else {
-				log.Printf("hub: user %d nodes after cycle reset: %v", uid, err)
-			}
-		}
+	// 就一直不恢复。要重推的节点随翻转一起从记账返回（accounting.Result.Repush）。
+	if h.Redispatch != nil && len(res.Repush) > 0 {
+		go h.Redispatch(res.Repush)
 	}
 
 	// 配额判定（OnTrafficUpdate）可能回头经 Hub 重推规则集，重推要等这个 readerLoop

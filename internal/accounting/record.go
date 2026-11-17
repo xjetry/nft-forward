@@ -11,9 +11,11 @@ import (
 
 // Result 是一批计数入账之后，调用方（Hub）还要据此行动的事。
 type Result struct {
-	// RolledOver 是这一批入账之前周期翻转、账本被清零的属主。配额条件只在下发时
-	// 求值，调用方要重推他们的节点，因配额用尽被排除的规则才会在新周期恢复。
-	RolledOver []int64
+	// Repush 是这一批入账之前周期翻转、账本被清零的属主们的规则所在的节点（去重）。
+	// 配额条件只在下发时求值，调用方要重推这些节点，因配额用尽被排除的规则才会在新
+	// 周期恢复。节点与清零在同一个事务里读出（ResetCycleIfDue），所以每一次已经发生
+	// 的翻转要通知的节点都在这里，不论这一批后面的落库成功与否。
+	Repush []int64
 	// QuotaOwners 是这一批向其授权账或落地出口账记过账的属主（见
 	// Postings.QuotaOwners）。只在这一批成功落库时非空。
 	QuotaOwners []int64
@@ -46,19 +48,23 @@ func Record(d *sql.DB, nodeID int64, samples []Sample) (*Result, error) {
 	// 翻转在落库之前、在事务之外做：db.Open 把连接池限成一条连接，在 post 的事务里
 	// 再走连接池读写，就要等事务自己占着的那条连接，永远等不到。
 	var errs []error
+	repush := map[int64]bool{}
 	for _, uid := range sortedIDs(p.Charged) {
 		u, err := db.GetUserByID(d, uid)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("user %d: %w", uid, err))
 			continue
 		}
-		rolled, err := ResetCycleIfDue(d, u)
+		_, nodes, err := ResetCycleIfDue(d, u)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("user %d cycle reset: %w", uid, err))
 			continue
 		}
-		if rolled {
-			res.RolledOver = append(res.RolledOver, uid)
+		for _, n := range nodes {
+			if !repush[n] {
+				repush[n] = true
+				res.Repush = append(res.Repush, n)
+			}
 		}
 	}
 

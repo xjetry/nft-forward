@@ -51,7 +51,7 @@ func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
 				t.Fatal(err)
 			}
 			u, _ := db.GetUserByID(d, uid)
-			if reset, err := ResetCycleIfDue(d, u); err != nil || !reset {
+			if reset, _, err := ResetCycleIfDue(d, u); err != nil || !reset {
 				t.Fatalf("前置条件：周期已过应触发重置，reset=%v err=%v", reset, err)
 			}
 		},
@@ -93,6 +93,33 @@ func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
 	}
 }
 
+// 周期重置把要重推的节点随重置一起交回：就是这个用户的规则所在的节点，别人的不在
+// 其中；没有重置时不交回节点。
+func TestResetCycleIfDueReturnsTheNodesOfTheUsersRules(t *testing.T) {
+	d := openDB(t)
+	uid, other := newUser(t, d), newUser(t, d)
+	mine, theirs := newNode(t, d, "mine", "10.0.0.1"), newNode(t, d, "theirs", "10.0.0.2")
+	userLedgers(t, d, uid, mine, "a.com", 5000)
+	userLedgers(t, d, other, theirs, "b.com", 6000)
+
+	u, _ := db.GetUserByID(d, uid)
+	if reset, nodes, err := ResetCycleIfDue(d, u); err != nil || reset || nodes != nil {
+		t.Fatalf("没有到期的周期：不应重置、不应交回节点，实际 reset=%v nodes=%v err=%v", reset, nodes, err)
+	}
+
+	if _, err := d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=? WHERE id=?`, time.Now().Unix()-31*86400, uid); err != nil {
+		t.Fatal(err)
+	}
+	u, _ = db.GetUserByID(d, uid)
+	reset, nodes, err := ResetCycleIfDue(d, u)
+	if err != nil || !reset {
+		t.Fatalf("前置条件：周期已过应触发重置，reset=%v err=%v", reset, err)
+	}
+	if len(nodes) != 1 || nodes[0] != mine {
+		t.Fatalf("交回的节点是 %v，应当只有这个用户的规则所在的节点 %d", nodes, mine)
+	}
+}
+
 // 周期从开户时刻起算：traffic_reset_days=0 从不重置；周期翻过时重置一次并记下时间，
 // 同一个周期里再查不再重置；手动重置不动这个时间。
 func TestResetCycleIfDue(t *testing.T) {
@@ -102,7 +129,7 @@ func TestResetCycleIfDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ := db.GetUserByID(d, uid)
-	if reset, err := ResetCycleIfDue(d, u); err != nil || reset {
+	if reset, _, err := ResetCycleIfDue(d, u); err != nil || reset {
 		t.Fatalf("traffic_reset_days=0 不应重置：reset=%v err=%v", reset, err)
 	}
 
@@ -111,7 +138,7 @@ func TestResetCycleIfDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ = db.GetUserByID(d, uid)
-	if reset, err := ResetCycleIfDue(d, u); err != nil || !reset {
+	if reset, _, err := ResetCycleIfDue(d, u); err != nil || !reset {
 		t.Fatalf("开户 31 天、周期 30 天应重置：reset=%v err=%v", reset, err)
 	}
 	u, _ = db.GetUserByID(d, uid)
@@ -124,7 +151,7 @@ func TestResetCycleIfDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ = db.GetUserByID(d, uid)
-	if reset, err := ResetCycleIfDue(d, u); err != nil || reset {
+	if reset, _, err := ResetCycleIfDue(d, u); err != nil || reset {
 		t.Fatalf("同一个周期里不应再重置：reset=%v err=%v", reset, err)
 	}
 	if err := ResetUser(d, uid); err != nil {
@@ -159,7 +186,7 @@ func TestCycleResetIsAllOrNothing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if reset, err := ResetCycleIfDue(d, u); err == nil || reset {
+			if reset, _, err := ResetCycleIfDue(d, u); err == nil || reset {
 				t.Fatalf("期望报错且未重置，实际 reset=%v err=%v", reset, err)
 			}
 			for _, c := range []struct {

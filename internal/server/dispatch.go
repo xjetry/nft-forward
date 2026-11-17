@@ -20,6 +20,12 @@ import (
 //	一个落地出口的配额与用量                redispatchUserExit
 //	节点启停                              redispatchThroughNode
 //	时间流逝使账号到期                      Server.expiryEnforcer 定时重推
+//	流量周期翻转把用量清零                  随清零一起返回的节点（accounting.ResetCycleIfDue）
+//	落地出口进出用户的落地集合              随同步一起返回的节点（db.SyncUserLandingExits）
+//
+// 最后两行的节点清单是在改动自己的事务里读出来的。这两种改动没有发起方可以告知，
+// 落库之后也再看不出“还有节点没通知”——下一轮检查看到的是周期已重置、集合已同步；
+// 所以清单读不出来就不改，留给下一轮原样重做。
 
 // nodeDispatchQueue 让同一个节点的下发一轮接一轮地进行，并把等待中的请求并进同一轮。
 //
@@ -84,6 +90,9 @@ func (q *nodeDispatchQueue) drain(nodeID int64) {
 // dispatchToNode 把 nodeID 此刻应有的规则集下发给它，返回这次下发的结果。并发的
 // 调用经 nodeDispatchQueue 串行、合并。
 func (s *Server) dispatchToNode(nodeID int64) error {
+	if s.pushInline {
+		return s.dispatchRound(nodeID)
+	}
 	return s.dispatch.run(nodeID)
 }
 
@@ -113,7 +122,7 @@ func (s *Server) dispatchRound(nodeID int64) error {
 		return fail(err)
 	}
 	rev := computeRev(rules)
-	warning, err := s.Hub.SendApplyRuleset(nodeID, rules, rev)
+	warning, err := s.pushRuleset(nodeID, rules, rev)
 	if err != nil {
 		return fail(err)
 	}
@@ -134,10 +143,17 @@ func (s *Server) dispatchNodes(why string, nodeIDs []int64) {
 }
 
 // redispatchNodes 在后台下发 nodeIDs，不等结果。给不能被下发阻塞的调用方用：Hub 的
-// 读循环处理节点侧的规则命令与计数时，下发的应答要靠同一个读循环收。
+// 读循环处理节点侧的规则命令与计数时，下发的应答要靠同一个读循环收。落地集合同步
+// （syncLandingExits）之后的重推也走这里：同步的调用方要的是集合落库，不等节点应答。
+//
+// 设了 Server.pushInline 时改为在调用方的 goroutine 上逐个下发。
 func (s *Server) redispatchNodes(nodeIDs []int64) {
 	for _, n := range nodeIDs {
-		go s.dispatchNodes("规则变更", []int64{n})
+		if s.pushInline {
+			s.dispatchNodes("规则变更", []int64{n})
+		} else {
+			go s.dispatchNodes("规则变更", []int64{n})
+		}
 	}
 }
 
@@ -170,7 +186,7 @@ func (s *Server) redispatchUserGrant(userID, nodeID int64, why string) error {
 }
 
 // redispatchUserExit 重新下发 userID 指向落地出口 host:port 的规则所在的每一个节点。
-// 改了这个出口的配额、已用量或它是否仍在用户的落地集合里之后调用。
+// 改了这个出口的配额或已用量之后调用。
 func (s *Server) redispatchUserExit(userID int64, host string, port int, why string) error {
 	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
 	if err != nil {
@@ -178,14 +194,6 @@ func (s *Server) redispatchUserExit(userID int64, host string, port int, why str
 	}
 	s.dispatchNodes(why, nodes)
 	return nil
-}
-
-// redispatchUserExitLogged 是 redispatchUserExit 给后台调用方的形式：调用它的 goroutine
-// 没有可以回答的发起方，读不出要通知哪些节点时记进日志。
-func (s *Server) redispatchUserExitLogged(userID int64, host string, port int, why string) {
-	if err := s.redispatchUserExit(userID, host, port, why); err != nil {
-		log.Printf("landing: user %d exit %s:%d (%s): could not list the nodes to re-dispatch: %v", userID, host, port, why, err)
-	}
 }
 
 // redispatchThroughNode 重新下发“经过 nodeID 的规则”所在的每一个节点，nodeID 自己

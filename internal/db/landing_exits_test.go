@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func inputs(hosts ...string) []LandingExitInput {
 	out := make([]LandingExitInput, 0, len(hosts))
@@ -104,27 +107,45 @@ func TestSyncDiscardsStaleSource(t *testing.T) {
 	}
 }
 
-func TestSyncReturnsFlippedOverQuotaKeys(t *testing.T) {
+// An exit that flips presence while at its quota changes which rules a push
+// excludes; the sync hands back the nodes carrying the rules that exit there,
+// and nothing when no exit flipped.
+func TestSyncReturnsTheNodesOfExitsThatFlippedOverQuota(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)
+	entry := relayNode(t, d, "entry", "10.0.0.1")
+	last := relayNode(t, d, "last", "10.0.0.2")
+	other := relayNode(t, d, "other", "10.0.0.3")
+	// One rule of the user's exits to a.com:443 over two nodes; another does
+	// not exit there.
+	for _, r := range []struct {
+		host  string
+		nodes []*Node
+	}{{"a.com", []*Node{entry, last}}, {"b.com", []*Node{other}}} {
+		id := chainRule(t, d, "to-"+r.host, r.nodes...)
+		if _, err := d.Exec(`UPDATE rules SET owner_id=?, exit_host=?, exit_port=443 WHERE id=?`, uid, r.host, id); err != nil {
+			t.Fatal(err)
+		}
+	}
 	SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
 	SetUserLandingExitQuota(d, uid, "a.com", 443, 100)
 	d.Exec(`UPDATE user_landing_exits SET used_bytes=100 WHERE user_id=?`, uid)
+	want := []int64{entry.ID, last.ID}
 
 	// present 1→0 on an exhausted exit lifts its push exclusion
-	flipped, _, _ := SyncUserLandingExits(d, uid, nil, "", "")
-	if len(flipped) != 1 || flipped[0].Host != "a.com" {
-		t.Fatalf("want a.com flipped, got %+v", flipped)
+	repush, _, err := SyncUserLandingExits(d, uid, nil, "", "")
+	if err != nil || !reflect.DeepEqual(sortedIDs(repush), want) {
+		t.Fatalf("a.com left the set: nodes to re-push %v (%v), want %v", repush, err, want)
 	}
 	// present 0→1 re-imposes it
-	flipped, _, _ = SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
-	if len(flipped) != 1 {
-		t.Fatalf("want flip back reported, got %+v", flipped)
+	repush, _, err = SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
+	if err != nil || !reflect.DeepEqual(sortedIDs(repush), want) {
+		t.Fatalf("a.com came back: nodes to re-push %v (%v), want %v", repush, err, want)
 	}
 	// steady state reports nothing
-	flipped, _, _ = SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
-	if len(flipped) != 0 {
-		t.Fatalf("no flip expected, got %+v", flipped)
+	repush, _, err = SyncUserLandingExits(d, uid, inputs("a.com"), "", "")
+	if err != nil || len(repush) != 0 {
+		t.Fatalf("nothing flipped: nodes to re-push %v (%v), want none", repush, err)
 	}
 }
 

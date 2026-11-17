@@ -70,27 +70,24 @@ func dedupLandingNodes(nodes []landing.Node) []landing.Node {
 }
 
 // syncLandingExits materializes a successfully resolved landing set and
-// re-pushes any exits whose push-exclusion state flipped with presence —
-// excluded rules generate no traffic, so no counters-driven path would ever
-// revive them. An error means the ledger was not brought up to date.
+// re-pushes the nodes of any exits whose push-exclusion state flipped with
+// presence — excluded rules generate no traffic, so no counters-driven path
+// would ever revive them. The nodes come out of the sync's own transaction
+// (db.SyncUserLandingExits); only pushing them is left to do afterwards. An
+// error means the ledger was not brought up to date.
 func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) error {
 	deduped := dedupLandingNodes(nodes)
 	exits := make([]db.LandingExitInput, 0, len(deduped))
 	for _, n := range deduped {
 		exits = append(exits, db.LandingExitInput{Host: n.Host, Port: n.Port, Name: n.Name, Protocol: n.Protocol, URI: n.URI})
 	}
-	flipped, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
+	repush, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
 	if err != nil {
 		return err
 	}
-	if !synced || len(flipped) == 0 {
-		return nil
+	if synced {
+		s.redispatchNodes(repush)
 	}
-	go func() {
-		for _, k := range flipped {
-			s.redispatchUserExitLogged(u.ID, k.Host, k.Port, "落地出口集合变更")
-		}
-	}()
 	return nil
 }
 
@@ -321,13 +318,16 @@ func (s *Server) apiSetLandingExitQuota(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
+	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
+		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
 	// A lowered quota may start excluding immediately; a raised/cleared one
 	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
 	if present {
-		go s.redispatchUserExitLogged(id, body.Host, body.Port, "设置落地出口流量配额")
+		if err := s.redispatchUserExit(id, body.Host, body.Port, "设置落地出口流量配额"); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "配额已保存，但没能确定需要重新下发的节点: "+err.Error())
+			return
+		}
 	}
-	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
-		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -352,11 +352,14 @@ func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
-	if present {
-		go s.redispatchUserExitLogged(id, body.Host, body.Port, "重置落地出口流量")
-	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_exit_traffic", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d", body.Host, body.Port))
+	if present {
+		if err := s.redispatchUserExit(id, body.Host, body.Port, "重置落地出口流量"); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "用量已重置，但没能确定需要重新下发的节点: "+err.Error())
+			return
+		}
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
