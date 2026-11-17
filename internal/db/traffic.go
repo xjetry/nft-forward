@@ -19,9 +19,6 @@ func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
 // 累计流量会比用户的已用流量大，两个数对不上。“重置”只有这一份定义，管理员手动
 // 重置（ResetAllUserTraffic）与按周期自动重置（CheckAndResetTrafficCycle）都走这里，
 // 新增账本时加在这里，两种重置同时生效。
-//
-// rule_hops.last_bytes* 不在归零范围内：它们不是累计账本，而是最近一个计数样本的
-// 字节数（Hub 入账计数批次时整体覆盖写入），下一个样本到来就被替换。
 func zeroUserLedgers(tx *sql.Tx, userID int64) error {
 	for _, q := range []string{
 		`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`,

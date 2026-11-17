@@ -742,8 +742,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	// loop. Reads, cycle resets and redispatch stay outside any tx: with
 	// MaxOpenConns(1) a tx holds the only connection, so a pool read or a
 	// redispatch goroutine inside it would deadlock.
-	type hopWrite struct{ lastBytes, lastUp, lastDown, addWeighted int64 }
-	hopWrites := map[int64]*hopWrite{}
+	hopWrites := map[int64]int64{}
 	userNodeAdds := map[userNode]int64{}
 	userAdds := map[int64]int64{}
 	type exitAdd struct{ up, down int64 }
@@ -837,23 +836,14 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
 		}
 
-		// rule_hops: last_bytes stay raw for speed display. total_bytes carries
-		// the billed (weighted) amount on the entry hop — what per-rule traffic
-		// shows and the global quota consumes — and raw bytes on every other hop.
-		// A tcp+udp hop can fan in as two samples to the same row; last_* take
-		// the last sample and the total sums.
-		w := hopWrites[rh.ID]
-		if w == nil {
-			w = &hopWrite{}
-			hopWrites[rh.ID] = w
-		}
-		w.lastBytes = totalDelta
-		w.lastUp = s.BytesUp
-		w.lastDown = s.BytesDown
+		// rule_hops.total_bytes carries the billed (weighted) amount on the entry
+		// hop — what per-rule traffic shows and the global quota consumes — and
+		// the direction-folded amount on every other hop. A tcp+udp hop can fan
+		// in as two samples to the same row; the total sums them.
 		if rh.Position == 0 {
-			w.addWeighted += weighted
+			hopWrites[rh.ID] += weighted
 		} else {
-			w.addWeighted += billedDelta
+			hopWrites[rh.ID] += billedDelta
 		}
 
 		if !hasOwner {
@@ -888,12 +878,11 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 					ok = false
 				}
 			}
-			for id, w := range hopWrites {
+			for id, add := range hopWrites {
 				if !ok {
 					break
 				}
-				if _, err := tx.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
-					w.lastBytes, w.lastUp, w.lastDown, w.addWeighted, id); err != nil {
+				if _, err := tx.Exec(`UPDATE rule_hops SET total_bytes=total_bytes+? WHERE id=?`, add, id); err != nil {
 					log.Printf("hub: node %d counters rule_hop update: %v", nodeID, err)
 					ok = false
 					break

@@ -32,7 +32,7 @@ func TestResetAllUserTraffic(t *testing.T) {
 }
 
 // seedRuleWithTraffic creates one single-hop rule owned by uid with the given
-// accumulated display counter and a nonzero last_bytes snapshot.
+// accumulated display counter.
 func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort int, totalBytes int64) (hopID int64) {
 	t.Helper()
 	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at) VALUES (?,?,?,?,?,?,0)`,
@@ -41,7 +41,7 @@ func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort 
 		t.Fatal(err)
 	}
 	ruleID, _ := res.LastInsertId()
-	res, err = d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, last_bytes, total_bytes) VALUES (?,0,?,?,?,?,?,777,?)`,
+	res, err = d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, total_bytes) VALUES (?,0,?,?,?,?,?,?)`,
 		ruleID, nodeID, "tcp", listenPort, "8.8.8.8", 443, totalBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -62,15 +62,12 @@ func TestResetAllUserTrafficClearsRuleCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var total, last int64
-	if err := d.QueryRow(`SELECT total_bytes, last_bytes FROM rule_hops WHERE id=?`, mine).Scan(&total, &last); err != nil {
+	var total int64
+	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, mine).Scan(&total); err != nil {
 		t.Fatal(err)
 	}
 	if total != 0 {
 		t.Fatalf("user's rule counter should reset with the user ledgers, got %d", total)
-	}
-	if last != 777 {
-		t.Fatalf("last_bytes is the latest counter sample, not a usage ledger, and a reset must leave it alone, got %d", last)
 	}
 	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs).Scan(&total); err != nil {
 		t.Fatal(err)

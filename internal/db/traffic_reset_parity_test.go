@@ -69,8 +69,6 @@ func TestManualAndCycleResetZeroTheSameLedgers(t *testing.T) {
 				{"授权已用量", one(`SELECT traffic_used_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, uid, nid), 0},
 				{"落地出口账本", one(`SELECT used_bytes+used_bytes_up+used_bytes_down FROM user_landing_exits WHERE user_id=?`, uid), 0},
 				{"规则累计流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, mine), 0},
-				// last_bytes 是最近一个计数样本的字节数，不是累计账本，重置不碰它。
-				{"规则最近一个样本的字节数 last_bytes", one(`SELECT last_bytes FROM rule_hops WHERE id=?`, mine), 777},
 				{"别的用户的全局已用量", one(`SELECT traffic_used_bytes FROM users WHERE id=?`, other), 9000},
 				{"别的用户的授权已用量", one(`SELECT traffic_used_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, other, nid), 8000},
 				{"别的用户的规则累计流量", one(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs), 6000},

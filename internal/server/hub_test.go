@@ -229,9 +229,6 @@ func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
 	if got.TotalBytes != 1536 {
 		t.Fatalf("expected TotalBytes 1536 (1024 + 512), got %d", got.TotalBytes)
 	}
-	if got.LastBytes != 512 {
-		t.Fatalf("expected LastBytes 512 (most recent delta), got %d", got.LastBytes)
-	}
 }
 
 func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {

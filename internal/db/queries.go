@@ -162,12 +162,9 @@ type RuleHop struct {
 	// from (entry segment = the rule's node_id; explicit-hops path = the
 	// hop's own node). Quota suppression, per-grant accounting and shaping
 	// group hops by it rather than by physical node.
-	ViaNodeID     int64  `json:"via_node_id"`
-	Comment       string `json:"comment"`
-	LastBytes     int64  `json:"last_bytes"`
-	LastBytesUp   int64  `json:"last_bytes_up"`
-	LastBytesDown int64  `json:"last_bytes_down"`
-	TotalBytes    int64  `json:"total_bytes"`
+	ViaNodeID  int64  `json:"via_node_id"`
+	Comment    string `json:"comment"`
+	TotalBytes int64  `json:"total_bytes"`
 }
 
 func RandToken(n int) string {
@@ -559,11 +556,11 @@ func scanRule(r rowScanner) (*Rule, error) {
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes,via_node_id`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,total_bytes,via_node_id`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes, &h.ViaNodeID); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.TotalBytes, &h.ViaNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil
