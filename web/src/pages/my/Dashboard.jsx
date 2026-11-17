@@ -6,12 +6,12 @@ import { useResource } from '../../lib/useResource'
 import { fmtSpeed, useSpeed } from '../../lib/useSpeed'
 import { ApiTokenSection } from '../../components/ApiTokenSection'
 import { NodeStatus, NodeTypeTag } from '../../components/net'
-import { ListItem, Page, PageHeader, TableBox } from '../../components/page'
+import { ListItem, Page, PageHeader, ReorderHandle, TableBox } from '../../components/page'
 import { ProxyURIEditor } from '../../components/ProxyURIEditor'
 import { ResourceView } from '../../components/ResourceView'
 import { useUser } from '../../components/session'
 import {
-  Alert, Badge, Button, Card, CardHeader, CardSection, Empty, Field, IconGrip, Input, Meter, Modal, ModalActions,
+  Alert, Badge, Button, Card, CardHeader, CardSection, Empty, Field, Input, Meter, Modal, ModalActions,
   Segmented, Stat, Tag, useAction, useToast,
 } from '../../components/ui'
 
@@ -19,8 +19,12 @@ export default function MyDashboard() {
   const my = useResource(() => api.get('/my'), [])
   const { refresh: refreshSession } = useUser()
   // 用户名同时出现在会话里（外壳、按用户名存放的本地数据都从那里取）和本页
-  // 的数据里，改名之后两处都要重新取。
-  const onRenamed = async () => { await Promise.all([refreshSession(), my.reload()]) }
+  // 的数据里，改名之后两处都要重新取。返回会话那一份有没有取到：没取到时
+  // 会话保持原样（见 lib/session 的 settle），外壳上还是旧用户名。
+  const onRenamed = async () => {
+    const [confirmed] = await Promise.all([refreshSession(), my.reload()])
+    return confirmed
+  }
 
   return (
     <Page>
@@ -117,8 +121,9 @@ function RenameModal({ current, onClose, onRenamed }) {
     }
     if (next !== current) {
       await api.post('/my/username', { username: next })
-      await onRenamed()
-      toast('用户名已修改')
+      const shown = await onRenamed()
+      if (shown) toast('用户名已修改')
+      else toast('用户名已修改，但登录信息没能刷新，页面上还是旧用户名；刷新页面后会更新', 'error')
     }
     onClose()
   }, { onError: err => setError(err instanceof Error ? err.message : '修改失败') })
@@ -193,15 +198,12 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
   const [tab, setTab] = useState(() => (singles.length === 0 && composites.length > 0 ? 'composite' : 'single'))
   const visible = tab === 'composite' ? composites : singles
 
-  const dropOn = (targetId) => {
-    setDragId(null)
-    if (dragId === null || dragId === targetId) return
+  // 把一个节点移到当前页签里的第 to 位。拖放与手柄的方向键都走这里。
+  const moveTo = (id, to) => {
     const ids = visible.map(n => n.id)
-    const from = ids.indexOf(dragId)
-    const to = ids.indexOf(targetId)
-    if (from < 0 || to < 0) return
-    ids.splice(from, 1)
-    ids.splice(to, 0, dragId)
+    const from = ids.indexOf(id)
+    if (from < 0 || to < 0 || to >= ids.length || from === to) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
     // 保存的名单总是单点在前、组合在后：在一类里调整顺序不改变另一类的顺序。
     const next = tab === 'composite'
       ? [...singles.map(n => n.id), ...ids]
@@ -222,7 +224,7 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
         title="已授权节点"
         description={nodes.length === 0
           ? undefined
-          : isMobile ? `共 ${nodes.length} 个` : `共 ${nodes.length} 个，拖动行首的手柄可以调整顺序（只记在本浏览器）`}
+          : isMobile ? `共 ${nodes.length} 个` : `共 ${nodes.length} 个，拖动行首的手柄或聚焦后按 ↑ ↓ 调整顺序（只记在本浏览器）`}
         actions={nodes.length > 0 && (
           <Segmented
             size="sm"
@@ -283,26 +285,26 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
               </tr>
             </thead>
             <tbody>
-              {visible.map((n) => {
+              {visible.map((n, i) => {
                 const g = grantOf.get(n.id)
                 const speed = speedText(n)
                 return (
                   <tr
                     key={n.id}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={() => dropOn(n.id)}
+                    onDragOver={dragId !== null ? e => e.preventDefault() : undefined}
+                    onDrop={dragId !== null ? () => { moveTo(dragId, i); setDragId(null) } : undefined}
                     className={dragId === n.id ? 'opacity-50' : undefined}
                   >
                     <td>
                       <span className="inline-flex items-center gap-2">
-                        <span
-                          draggable
+                        <ReorderHandle
+                          name={n.name}
+                          index={i}
+                          count={visible.length}
+                          onMove={to => moveTo(n.id, to)}
                           onDragStart={() => setDragId(n.id)}
                           onDragEnd={() => setDragId(null)}
-                          className="inline-flex cursor-grab text-ink-mut"
-                        >
-                          <IconGrip size={14} />
-                        </span>
+                        />
                         <span className="font-medium">{n.name}</span>
                         {isVia(n) && <Tag>中转</Tag>}
                       </span>

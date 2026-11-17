@@ -438,6 +438,34 @@ export function relayFor(rule, landingByKey) {
   return { node, relay_uri: rewrite(rule.entry), relay_uri_v6: rewrite(rule.entry_v6) }
 }
 
+/**
+ * 给一组一起导出的代理条目各取一个名称，互不相同。纯函数。
+ *
+ * 导出成 Clash 配置时名称就是代理的标识：mihomo 1.19.33 遇到同名代理会拒绝
+ * 整份配置（proxy … is the duplicate name）。同名在这里是常态而不是意外 ——
+ * 中转条目沿用落地节点的名称，而同一个落地节点可以同时是直连节点、被多条
+ * 规则选作出口。
+ *
+ * 取名规则：名称在这一组里独一无二的条目保持原名；重名的条目加上它的限定
+ * （qualifier，说明它是哪一条，如经哪条规则）；仍然撞名时再加序号。结果只
+ * 取决于条目的内容与顺序，所以同一份列表每次导出的名称相同。
+ *
+ * @param {Array<{ name: string, qualifier?: string }>} entries
+ * @returns {string[]} 与 entries 一一对应
+ */
+export function exportNames(entries) {
+  const count = new Map()
+  for (const e of entries) count.set(e.name, (count.get(e.name) || 0) + 1)
+  const taken = new Set()
+  return entries.map((e) => {
+    const base = count.get(e.name) > 1 && e.qualifier ? `${e.name}（${e.qualifier}）` : e.name
+    let name = base
+    for (let n = 2; taken.has(name); n++) name = `${base} ${n}`
+    taken.add(name)
+    return name
+  })
+}
+
 /* 给规则补上落地出口的展示信息与中转 URI。出口不是落地节点、或规则还没有
    入口可用于改写时，原样返回。 */
 export function enrichRule(rule, landingByKey) {

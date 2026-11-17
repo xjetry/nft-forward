@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { copyToClipboard } from '../lib/clipboard'
-import { hostPortKey, relayFor } from '../lib/landing'
+import { exportNames, hostPortKey, relayFor } from '../lib/landing'
 import { combineResources, mapResource } from '../lib/resource'
 import { useLandingCatalog } from '../lib/useLandingCatalog'
 import { useResource } from '../lib/useResource'
@@ -17,35 +17,41 @@ import { Button, Card, CopyText, Empty, IconCopy, Segmented, SensText, Tag, Text
      客户端连的就是节点自己的地址。
    - 中转：出口是落地节点的规则。客户端连的是规则的入口，所以地址取规则
      入口，链接取 relayFor 把落地节点链接的端点换成入口之后的结果。双栈
-     规则有两个入口，各算一条。 */
+     规则有两个入口，各算一条。
+
+   中转条目沿用落地节点的名称，所以列表里重名是常态。exportName 是导出成
+   Clash 配置时用的名称，由 exportNames 对整份列表（不是筛选后的）取，保证
+   互不相同：逐条复制与“复制全部”拿到的是同一个名称。 */
 function listProxies(rules, catalog) {
   const direct = catalog.direct.map((node) => {
     const address = hostPortKey(node.host, node.port)
-    return { key: `direct:${address}`, kind: 'direct', name: node.name, protocol: node.protocol, address, uri: node.uri, rule: null }
+    return { key: `direct:${address}`, kind: 'direct', name: node.name, qualifier: '', protocol: node.protocol, address, uri: node.uri, rule: null }
   })
   const relay = []
   for (const rule of rules) {
     const hit = relayFor(rule, catalog.landingByKey)
     if (!hit) continue
     const entries = [
-      { slot: 'entry', address: rule.entry, uri: hit.relay_uri },
-      { slot: 'entry_v6', address: rule.entry_v6, uri: hit.relay_uri_v6 },
+      { slot: 'entry', address: rule.entry, uri: hit.relay_uri, qualifier: `经 ${rule.name}` },
+      { slot: 'entry_v6', address: rule.entry_v6, uri: hit.relay_uri_v6, qualifier: `经 ${rule.name} v6` },
     ]
-    for (const { slot, address, uri } of entries) {
+    for (const { slot, address, uri, qualifier } of entries) {
       // relayFor 在入口不是可解析的地址（规则还没有入口）或链接无法改写时
       // 给出 null：这个入口没有可导入的链接。
       if (!uri) continue
-      relay.push({ key: `relay:${rule.id}:${slot}`, kind: 'relay', name: hit.node.name, protocol: hit.node.protocol, address, uri, rule })
+      relay.push({ key: `relay:${rule.id}:${slot}`, kind: 'relay', name: hit.node.name, qualifier, protocol: hit.node.protocol, address, uri, rule })
     }
   }
-  return [...direct, ...relay]
+  const list = [...direct, ...relay]
+  const names = exportNames(list)
+  return list.map((proxy, i) => ({ ...proxy, exportName: names[i] }))
 }
 
 /* 复制出去的内容：偏好是 YAML 且这条链接能转成 Clash 配置时给 YAML，否则
    给链接本身。按钮文字跟着实际给出的内容走，转不了的那几行不会写着
    “复制 YAML”却复制出链接。 */
 function copyPayload(proxy, copyFmt) {
-  const yaml = copyFmt === 'yaml' ? uriToClashYaml(proxy.uri) : null
+  const yaml = copyFmt === 'yaml' ? uriToClashYaml(proxy.uri, proxy.exportName) : null
   return yaml ? { text: yaml, label: '复制 YAML' } : { text: proxy.uri, label: '复制链接' }
 }
 

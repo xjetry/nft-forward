@@ -6,10 +6,10 @@ import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
 import { fmtSpeed, useSpeed } from '../../lib/useSpeed'
 import { NodeStackTags, NodeStatus } from '../../components/net'
-import { ListItem, Page, PageHeader, SearchInput, SortableTh, TableScroll, Toolbar, nextSort } from '../../components/page'
+import { ListItem, Page, PageHeader, ReorderHandle, SearchInput, SortableTh, TableScroll, Toolbar, nextSort } from '../../components/page'
 import { ResourceView } from '../../components/ResourceView'
 import {
-  Alert, Badge, Button, Card, Empty, Field, IconButton, IconGrip, IconPlus, IconRefresh, Input, Menu, Modal,
+  Alert, Badge, Button, Card, Empty, Field, IconButton, IconPlus, IconRefresh, Input, Menu, Modal,
   ModalActions, Segmented, Tag, TextLink, ToggleChip, cx, useAction, useConfirm, useToast,
 } from '../../components/ui'
 import {
@@ -183,7 +183,8 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
       throw err
     }
   })
-  const canReorder = !sort.col && !q && !roleMask && !reorder.pending
+  // 排序、搜索或筛选生效时，屏幕上的顺序不是保存的顺序，调序没有意义。
+  const canReorder = !sort.col && !q && !roleMask
   const moveTo = (id, to) => {
     const from = rows.findIndex(n => n.id === id)
     if (from < 0 || from === to) return
@@ -289,16 +290,15 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
                 <td className="font-mono text-small text-ink-mut">
                   <span className="inline-flex items-center gap-1.5">
                     {canReorder && (
-                      <span
-                        draggable
+                      <ReorderHandle
+                        name={n.name}
+                        index={i}
+                        count={rows.length}
+                        busy={reorder.pending}
+                        onMove={to => moveTo(n.id, to)}
                         onDragStart={() => setDragId(n.id)}
                         onDragEnd={() => setDragId(null)}
-                        onClick={e => e.stopPropagation()}
-                        className="flex cursor-grab items-center"
-                        title="拖动调整顺序"
-                      >
-                        <IconGrip size={14} />
-                      </span>
+                      />
                     )}
                     {n.id}
                   </span>

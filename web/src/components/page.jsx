@@ -1,8 +1,9 @@
+import { useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { cx, Input, IconArrowLeft, IconChevronDown, IconChevronUp, IconSearch } from './ui'
+import { cx, Input, IconArrowLeft, IconChevronDown, IconChevronUp, IconGrip, IconSearch } from './ui'
 
 /* 页面骨架：所有页面共用同一套“页头 → 卡片 → 工具栏 → 表格”的结构件，
-   管理端与用户端不再各有一套外观。
+   管理端与用户端用的是同一套。
 
    页面的纵向节奏固定为：页头与内容之间 20px，卡片与卡片之间 20px
    （PageStack 负责）。 */
@@ -149,6 +150,62 @@ export function nextSort(sort, col) {
   if (sort.col !== col) return { col, dir: 'desc' }
   if (sort.dir === 'desc') return { col, dir: 'asc' }
   return { col: null, dir: null }
+}
+
+/**
+ * 调序手柄，放在可以调整顺序的表格行行首。
+ *
+ * 拖动只有指针能用，所以键盘路径做在手柄自己身上，而不是另放一组按钮：
+ * 手柄可以聚焦，↑ / ↓ 把所在行移动一位。行的拖放目标（onDragOver / onDrop）
+ * 仍由调用方挂在行上，手柄只负责“从哪一行开始拖”。
+ *
+ * 行按 key 复用 DOM 节点，但调换位置时浏览器可能把被移动的那个节点摘下来
+ * 再插回去，焦点会跟着丢；所以每次键盘移动后把焦点放回这个手柄，才能连续
+ * 按方向键。出于同样的原因，写入在途时（busy）用 aria-disabled 而不是把
+ * 手柄卸载掉。
+ *
+ * @param {{
+ *   name: string,
+ *   index: number,
+ *   count: number,
+ *   busy?: boolean,
+ *   onMove: (to: number) => void,
+ *   onDragStart: () => void,
+ *   onDragEnd: () => void,
+ * }} props `name` 是这一行的名称，`index` / `count` 是它在当前列表里的位置与
+ * 列表长度；`onMove` 收到的是目标位置。
+ */
+export function ReorderHandle({ name, index, count, busy = false, onMove, onDragStart, onDragEnd }) {
+  const ref = useRef(/** @type {HTMLSpanElement | null} */ (null))
+  const step = (e, delta) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const to = index + delta
+    if (busy || to < 0 || to >= count) return
+    onMove(to)
+    requestAnimationFrame(() => ref.current?.focus())
+  }
+  return (
+    <span
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      draggable={!busy}
+      aria-disabled={busy || undefined}
+      aria-label={`调整「${name}」的顺序，现在是第 ${index + 1} 个，共 ${count} 个`}
+      title="拖动调整顺序；聚焦后按 ↑ ↓ 移动"
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowUp') step(e, -1)
+        else if (e.key === 'ArrowDown') step(e, 1)
+      }}
+      className="inline-flex flex-none cursor-grab items-center rounded-chip text-ink-mut hover:text-ink-soft aria-disabled:cursor-default aria-disabled:opacity-50"
+    >
+      <IconGrip size={14} />
+    </span>
+  )
 }
 
 /**

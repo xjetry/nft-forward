@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, hostPortKey, landingIndex, mergeLanding,
+  ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, exportNames, hostPortKey, landingIndex, mergeLanding,
   migrateSubCaches, nextSubCache, nodeKey, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
 } from './landing.js'
 
@@ -176,4 +176,30 @@ test('迁移可以重复执行：第二次不再改动', () => {
   const once = st.dump()
   migrateSubCaches(st)
   assert.deepEqual(st.dump(), once)
+})
+
+/* ---------- 导出名称 ---------- */
+
+test('导出名称：不重名的保持原名，重名的加上各自的限定', () => {
+  assert.deepEqual(
+    exportNames([
+      { name: 'solo', qualifier: '' },
+      { name: 'land-a', qualifier: '' },
+      { name: 'land-a', qualifier: '经 web' },
+      { name: 'land-a', qualifier: '经 web v6' },
+      { name: 'other', qualifier: '经 web' },
+    ]),
+    ['solo', 'land-a', 'land-a（经 web）', 'land-a（经 web v6）', 'other'],
+  )
+})
+
+test('导出名称：加了限定仍然撞名时用序号区分，结果里没有重复', () => {
+  const names = exportNames([
+    { name: 'n', qualifier: '经 r' },
+    { name: 'n', qualifier: '经 r' },          // 两条同名规则
+    { name: 'n（经 r）', qualifier: '' },       // 原名恰好等于别人的限定名
+    { name: 'x' }, { name: 'x' },              // 没有限定可用
+  ])
+  assert.deepEqual(names, ['n（经 r）', 'n（经 r） 2', 'n（经 r） 3', 'x', 'x 2'])
+  assert.equal(new Set(names).size, names.length)
 })

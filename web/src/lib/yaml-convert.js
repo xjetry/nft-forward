@@ -1,23 +1,27 @@
 /* Convert a proxy URI to Clash YAML proxy config. Returns null for
    unsupported/non-URI formats (snell config lines, etc.) so callers
-   can fall back to copying the raw URI. */
+   can fall back to copying the raw URI.
 
-export function uriToClashYaml(uri) {
+   `as` replaces the name carried by the URI. In a Clash config the name is
+   the proxy's identity, so a caller exporting several proxies together
+   passes names it has made distinct. */
+
+export function uriToClashYaml(uri, as) {
   const i = uri.indexOf('://')
   if (i <= 0) return null
   const scheme = uri.slice(0, i).toLowerCase()
   switch (scheme) {
-    case 'ss': return ssToYaml(uri)
-    case 'vmess': return vmessToYaml(uri)
-    case 'vless': return vlessToYaml(uri)
-    case 'trojan': return trojanToYaml(uri)
+    case 'ss': return ssToYaml(uri, as)
+    case 'vmess': return vmessToYaml(uri, as)
+    case 'vless': return vlessToYaml(uri, as)
+    case 'trojan': return trojanToYaml(uri, as)
     case 'hy2':
-    case 'hysteria2': return hy2ToYaml(uri)
+    case 'hysteria2': return hy2ToYaml(uri, as)
     default: return null
   }
 }
 
-function ssToYaml(uri) {
+function ssToYaml(uri, as) {
   let rest = uri.slice('ss://'.length)
   let name = ''
   const h = rest.indexOf('#')
@@ -56,7 +60,7 @@ function ssToYaml(uri) {
     host = hp[0]; port = hp[1]
   }
   const L = []
-  L.push(`- name: "${esc(name)}"`)
+  L.push(`- name: "${esc(as ?? name)}"`)
   L.push(`  type: ss`)
   L.push(`  server: ${host}`)
   L.push(`  port: ${port}`)
@@ -67,13 +71,13 @@ function ssToYaml(uri) {
   return L.join('\n')
 }
 
-function vmessToYaml(uri) {
+function vmessToYaml(uri, as) {
   const decoded = b64(uri.slice('vmess://'.length))
   if (!decoded) return null
   let m
   try { m = JSON.parse(decoded) } catch { return null }
   const L = []
-  L.push(`- name: "${esc(m.ps || '')}"`)
+  L.push(`- name: "${esc(as ?? (m.ps || ''))}"`)
   L.push(`  type: vmess`)
   L.push(`  server: ${m.add}`)
   L.push(`  port: ${m.port}`)
@@ -96,7 +100,7 @@ function vmessToYaml(uri) {
   return L.join('\n')
 }
 
-function vlessToYaml(uri) {
+function vlessToYaml(uri, as) {
   const i = uri.indexOf('://')
   let rest = uri.slice(i + 3)
   let name = ''
@@ -111,7 +115,7 @@ function vlessToYaml(uri) {
   const hp = hostport(rest.slice(at + 1))
   if (!hp) return null
   const L = []
-  L.push(`- name: "${esc(name)}"`)
+  L.push(`- name: "${esc(as ?? name)}"`)
   L.push(`  type: vless`)
   L.push(`  server: ${hp[0]}`)
   L.push(`  port: ${hp[1]}`)
@@ -132,7 +136,7 @@ function vlessToYaml(uri) {
   return L.join('\n')
 }
 
-function trojanToYaml(uri) {
+function trojanToYaml(uri, as) {
   const i = uri.indexOf('://')
   let rest = uri.slice(i + 3)
   let name = ''
@@ -147,7 +151,7 @@ function trojanToYaml(uri) {
   const hp = hostport(rest.slice(at + 1))
   if (!hp) return null
   const L = []
-  L.push(`- name: "${esc(name)}"`)
+  L.push(`- name: "${esc(as ?? name)}"`)
   L.push(`  type: trojan`)
   L.push(`  server: ${hp[0]}`)
   L.push(`  port: ${hp[1]}`)
@@ -161,7 +165,7 @@ function trojanToYaml(uri) {
   return L.join('\n')
 }
 
-function hy2ToYaml(uri) {
+function hy2ToYaml(uri, as) {
   const i = uri.indexOf('://')
   let rest = uri.slice(i + 3)
   let name = ''
@@ -176,7 +180,7 @@ function hy2ToYaml(uri) {
   const hp = hostport(rest)
   if (!hp) return null
   const L = []
-  L.push(`- name: "${esc(name)}"`)
+  L.push(`- name: "${esc(as ?? name)}"`)
   L.push(`  type: hysteria2`)
   L.push(`  server: ${hp[0]}`)
   L.push(`  port: ${hp[1]}`)
