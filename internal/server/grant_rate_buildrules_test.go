@@ -23,7 +23,10 @@ func TestGrantRateLimitPropagatesToRules(t *testing.T) {
 	orphan, _ := createStandaloneRuleHop(t, d, n.ID, "tcp", 0, "10.0.0.9", 9001, sql.NullInt64{})
 
 	ruleHops, _ := db.ActiveRuleHopsForPush(d, n.ID)
-	rules := buildRules(d, ruleHops)
+	rules, err := buildRules(d, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var foundOwned, foundOrphan bool
 	for _, r := range rules {
@@ -95,7 +98,10 @@ func TestGrantRateLimitPropagatesToCompositeChainHops(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rules := buildRules(d, ruleHops)
+		rules, err := buildRules(d, ruleHops)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var found bool
 		for _, r := range rules {
 			if r.RuleID != ruleID {

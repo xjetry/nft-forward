@@ -135,6 +135,52 @@ func TestResetCycleIfDue(t *testing.T) {
 	}
 }
 
+// 周期重置要么整体发生、要么整体不发生：各本账的归零与 last_traffic_reset_at 的记录
+// 在同一个事务里（ResetCycleIfDue）。两个方向各有后果：只清了前面几本账，规则上显示
+// 的流量就与用户的已用流量对不上；账清了而时间没记下，下一次调用仍判定“本周期还没
+// 重置过”，会把这之间新记的用量再清掉一次。
+func TestCycleResetIsAllOrNothing(t *testing.T) {
+	for name, trigger := range map[string]string{
+		"最后一本账写不进去": `CREATE TRIGGER refuse BEFORE UPDATE OF total_bytes ON rule_hops BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+		"重置时间写不进去":  `CREATE TRIGGER refuse BEFORE UPDATE OF last_traffic_reset_at ON users BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := openDB(t)
+			uid := newUser(t, d)
+			nid := newNode(t, d, "n", "10.0.0.1")
+			ruleID, hopID := userLedgers(t, d, uid, nid, "a.com", 5000)
+			if _, err := d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=? WHERE id=?`, time.Now().Unix()-31*86400, uid); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			u, err := db.GetUserByID(d, uid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reset, err := ResetCycleIfDue(d, u); err == nil || reset {
+				t.Fatalf("期望报错且未重置，实际 reset=%v err=%v", reset, err)
+			}
+			for _, c := range []struct {
+				what      string
+				got, want int64
+			}{
+				{"用户全局已用量", one(t, d, `SELECT traffic_used_bytes FROM users WHERE id=?`, uid), 9000},
+				{"授权已用量", one(t, d, `SELECT traffic_used_bytes FROM user_nodes WHERE user_id=? AND node_id=?`, uid, nid), 8000},
+				{"落地出口账本", one(t, d, `SELECT used_bytes+used_bytes_up+used_bytes_down FROM user_landing_exits WHERE user_id=?`, uid), 1400},
+				{"规则的加权流量", one(t, d, `SELECT weighted_bytes FROM rules WHERE id=?`, ruleID), 5000},
+				{"逐跳流量", one(t, d, `SELECT total_bytes FROM rule_hops WHERE id=?`, hopID), 5000},
+				{"记下的重置时间", one(t, d, `SELECT last_traffic_reset_at FROM users WHERE id=?`, uid), 0},
+			} {
+				if c.got != c.want {
+					t.Errorf("%s: 重置失败后应保持 %d，实际 %d", c.what, c.want, c.got)
+				}
+			}
+		})
+	}
+}
+
 // 重置一条授权只清这一条授权的已用量。
 func TestResetGrantClearsOnlyThatGrant(t *testing.T) {
 	d := openDB(t)

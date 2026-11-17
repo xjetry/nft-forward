@@ -58,7 +58,11 @@ func New(d *sql.DB) (*Server, error) {
 		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
-	hub.OnRelayHostChange = s.rewireRulesReferencingNode
+	hub.OnRelayHostChange = func(nodeID int64) {
+		if err := s.rewireRulesReferencingNode(nodeID); err != nil {
+			log.Printf("hub: node %d changed its relay host but the rules referencing it could not be listed for rewiring: %v", nodeID, err)
+		}
+	}
 	go s.expiryEnforcer()
 	go s.cycleResetEnforcer()
 	go s.landingSyncEnforcer()
@@ -121,7 +125,9 @@ func (s *Server) cycleResetEnforcer() {
 				if !reset {
 					continue
 				}
-				s.redispatchUser(u.ID, "流量周期重置")
+				if err := s.redispatchUser(u.ID, "流量周期重置"); err != nil {
+					log.Printf("cycle: user %d was reset but its nodes could not be listed for re-dispatch: %v", u.ID, err)
+				}
 			}
 		}
 	}
@@ -162,8 +168,9 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 		if !includeManualOnly && !hasDynamicSource(u) {
 			continue
 		}
-		nodes, ok := s.resolveLandingExits(u, false)
-		if !ok {
+		nodes, err := s.resolveLandingExits(u, false)
+		if err != nil {
+			log.Printf("landing: sync pass resolve user %d: %v", u.ID, err)
 			continue
 		}
 		s.syncLandingExits(u, nodes)
@@ -187,7 +194,9 @@ func (s *Server) enforceUserQuota(userID int64) {
 		return
 	}
 	log.Printf("user %d reached traffic quota (%d/%d bytes): withdrawing rules", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
-	s.redispatchUser(userID, "全局流量配额用尽")
+	if err := s.redispatchUser(userID, "全局流量配额用尽"); err != nil {
+		log.Printf("quota: user %d is over quota but its nodes could not be listed for re-dispatch: %v", userID, err)
+	}
 }
 
 // enforcePerNodeQuota 在一批计数入账后调用：对 userID 每条配额用尽的授权，重新下发
@@ -200,7 +209,9 @@ func (s *Server) enforcePerNodeQuota(userID int64) {
 		return
 	}
 	for _, grantNode := range exceeded {
-		s.redispatchUserGrant(userID, grantNode, "授权流量配额用尽")
+		if err := s.redispatchUserGrant(userID, grantNode, "授权流量配额用尽"); err != nil {
+			log.Printf("quota: user %d grant %d is used up but its nodes could not be listed for re-dispatch: %v", userID, grantNode, err)
+		}
 	}
 }
 
@@ -213,17 +224,23 @@ func (s *Server) enforceExitQuota(userID int64) {
 		return
 	}
 	for _, k := range exceeded {
-		s.redispatchUserExit(userID, k.Host, k.Port, "落地出口流量配额用尽")
+		if err := s.redispatchUserExit(userID, k.Host, k.Port, "落地出口流量配额用尽"); err != nil {
+			log.Printf("quota: user %d exit %s:%d is used up but its nodes could not be listed for re-dispatch: %v", userID, k.Host, k.Port, err)
+		}
 	}
 }
 
 // buildRules converts panel-side RuleHop rows into kernel-side nft.Rule
 // values. Lookup tables are preloaded in bulk so the conversion is
 // O(ruleHops) with no per-row queries.
-func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
-	ruleMap, _ := db.RulesByID(d)
-	if ruleMap == nil {
-		ruleMap = map[int64]*db.Rule{}
+//
+// 任何一张查找表读不出来，构建就失败。构建结果是节点被要求安装的东西，三张表各供
+// 其中一部分：规则表给一跳它的规则 id、规则名与属主，跳数表给 HopCount，授权表给
+// 限速分组与速率。缺了哪一张，规则集仍会列出每一跳，只是少了那一部分。
+func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
+	ruleMap, err := db.RulesByID(d)
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect distinct rule IDs for a single bulk hop-count query
@@ -235,11 +252,14 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	for id := range ruleIDSet {
 		ruleIDs = append(ruleIDs, id)
 	}
-	hopCounts, _ := db.RuleHopCounts(d, ruleIDs)
-	if hopCounts == nil {
-		hopCounts = map[int64]int{}
+	hopCounts, err := db.RuleHopCounts(d, ruleIDs)
+	if err != nil {
+		return nil, err
 	}
-	shapes, _ := db.GrantShapes(d)
+	shapes, err := db.GrantShapes(d)
+	if err != nil {
+		return nil, err
+	}
 
 	rules := make([]nft.Rule, 0, len(ruleHops))
 	for _, rh := range ruleHops {
@@ -274,7 +294,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 		}
 		rules = append(rules, rule)
 	}
-	return rules
+	return rules, nil
 }
 
 // computeRev 给一份下发的规则载荷算出版本号。rev 标识的是载荷本身：节点把收下的

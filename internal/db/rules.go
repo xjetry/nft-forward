@@ -535,6 +535,17 @@ func FillUserRuleCounts(d DBTX, users []*User) error {
 // should map it to 409 rather than 400.
 var ErrDuplicateChainNode = errors.New("同一节点不能在链路中重复")
 
+// nodeLabel names a node inside an error message. The caller is already
+// returning an error of its own, so a name that cannot be read is replaced by
+// the node's id: a second error here would only hide the first.
+func nodeLabel(tx DBTX, nodeID int64) string {
+	var name string
+	if err := tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, nodeID).Scan(&name); err != nil {
+		return fmt.Sprintf("#%d", nodeID)
+	}
+	return name
+}
+
 // RegenerateRule rewrites rule r's hops for the given ordered hops and returns
 // the copyable entry endpoint, the secondary v6 endpoint (non-empty only for
 // entry_family "both"), plus the set of nodes whose kernel state must be
@@ -590,9 +601,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	}
 
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
-		var name string
-		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, rs[len(rs)-1].nodeID).Scan(&name)
-		return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", name)
+		return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", nodeLabel(tx, rs[len(rs)-1].nodeID))
 	}
 
 	// The entry family is derived from what the entry node can serve, not chosen
@@ -650,13 +659,11 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		}
 		var p int
 		if h.desiredPort > 0 {
-			var name string
-			_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
 			if !PortInRange(h.desiredPort, h.portSegs) {
-				return "", "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, name)
+				return "", "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, nodeLabel(tx, h.nodeID))
 			}
 			if occ[h.desiredPort] {
-				return "", "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, name)
+				return "", "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, nodeLabel(tx, h.nodeID))
 			}
 			p = h.desiredPort
 		} else {
@@ -664,9 +671,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 			if !(PortInRange(p, h.portSegs) && !occ[p]) {
 				p = PickFreePortFromRange(h.portSegs, occ)
 				if p == 0 {
-					var name string
-					_ = tx.QueryRow(`SELECT name FROM nodes WHERE id=?`, h.nodeID).Scan(&name)
-					return "", "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", name)
+					return "", "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", nodeLabel(tx, h.nodeID))
 				}
 			}
 		}

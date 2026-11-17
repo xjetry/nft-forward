@@ -16,8 +16,9 @@ var migrations embed.FS
 
 func Open(path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		// best-effort; if MkdirAll fails the Open below surfaces a real error
-		_ = ensureDir(dir)
+		if err := ensureDir(dir); err != nil {
+			return nil, fmt.Errorf("create database directory: %w", err)
+		}
 	}
 	// synchronous=NORMAL is the recommended durability level under WAL: safe
 	// across application crashes, only the last transaction is at risk on OS

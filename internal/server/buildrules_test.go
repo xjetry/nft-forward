@@ -39,7 +39,10 @@ func TestBuildRulesStampsRuleMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := buildRules(d, ruleHops)
+	rules, err := buildRules(d, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(rules) == 0 {
 		t.Fatal("expected at least 1 rule")
@@ -122,8 +125,12 @@ func TestBuildRulesCarriesRuleIdentityForOwnedAndOwnerlessRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rules, err := buildRules(d, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
 	byRule := map[int64]nft.Rule{}
-	for _, r := range buildRules(d, ruleHops) {
+	for _, r := range rules {
 		byRule[r.RuleID] = r
 	}
 	for id, name := range map[int64]string{ownedID: "owned", ownerlessID: "no-owner"} {

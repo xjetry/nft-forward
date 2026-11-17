@@ -42,7 +42,11 @@ func TestReconcileOnConnect(t *testing.T) {
 
 	// Compute the current rev and feed it back — a synced agent is skipped.
 	ruleHops, _ := db.ActiveRuleHopsForPush(hub.DB, n.ID)
-	rev := computeRev(buildRules(hub.DB, ruleHops))
+	rules, err := buildRules(hub.DB, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := computeRev(rules)
 	hub.reconcileOnConnect(n.ID, rev)
 	expectDispatch(false, "matching rev")
 

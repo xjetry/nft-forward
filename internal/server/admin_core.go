@@ -58,12 +58,10 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	}
 	if _, err := db.GetUserByUsername(s.DB, username); err == nil {
 		return nil, &adminError{http.StatusConflict, codeConflict, "用户名已存在"}
-	}
-	hash, err := HashPassword(p.Password)
-	if err != nil {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	id, err := db.CreateUser(s.DB, username, hash, role)
+	hash, err := HashPassword(p.Password)
 	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
@@ -71,16 +69,38 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	if maxFwd <= 0 {
 		maxFwd = 100
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
-		maxFwd, p.TrafficQuotaBytes, id); err != nil {
+	// The row and its settings are written in one transaction: a user that
+	// exists without the expiry or quota it was created with could not be
+	// repaired by retrying, because the retry would hit the username conflict.
+	id, err := func() (int64, error) {
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback()
+		id, err := db.CreateUser(tx, username, hash, role)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
+			maxFwd, p.TrafficQuotaBytes, id); err != nil {
+			return 0, err
+		}
+		if p.ExpiresAtUnix != 0 {
+			if _, err := tx.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id); err != nil {
+				return 0, err
+			}
+		}
+		if p.LandingSubURL != "" || p.AdminNote != "" {
+			if _, err := tx.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`,
+				strings.TrimSpace(p.LandingSubURL), strings.TrimSpace(p.AdminNote), id); err != nil {
+				return 0, err
+			}
+		}
+		return id, tx.Commit()
+	}()
+	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-	}
-	if p.ExpiresAtUnix != 0 {
-		s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id)
-	}
-	if p.LandingSubURL != "" || p.AdminNote != "" {
-		s.DB.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`,
-			strings.TrimSpace(p.LandingSubURL), strings.TrimSpace(p.AdminNote), id)
 	}
 	db.WriteAudit(s.DB, adminID, "user.create", strconv.FormatInt(id, 10), username)
 	created, err := db.GetUserByID(s.DB, id)
@@ -102,8 +122,11 @@ func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
 	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, bytes, userID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUser(userID, "设置全局流量配额")
 	db.WriteAudit(s.DB, adminID, "user.set_quota_bytes", strconv.FormatInt(userID, 10), strconv.FormatInt(bytes, 10))
+	// 配额已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUser(userID, "设置全局流量配额"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "配额已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }
 
@@ -125,8 +148,11 @@ func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError
 	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUser(userID, "设置到期时间")
 	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
+	// 到期时间已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUser(userID, "设置到期时间"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "到期时间已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }
 
@@ -142,8 +168,11 @@ func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, q
 	if err := db.GrantNode(s.DB, userID, nodeID, maxForwards, quotaBytes); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUserGrant(userID, nodeID, "授权节点")
 	db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	// 授权已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUserGrant(userID, nodeID, "授权节点"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "授权已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }
 
@@ -174,9 +203,12 @@ func (s *Server) setPerNodeQuota(adminID, userID, nodeID, bytes int64) *adminErr
 		bytes, userID, nodeID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUserGrant(userID, nodeID, "设置授权流量配额")
 	db.WriteAudit(s.DB, adminID, "user.set_node_quota", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d bytes=%d", nodeID, bytes))
+	// 配额已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUserGrant(userID, nodeID, "设置授权流量配额"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "配额已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }
 
@@ -190,9 +222,12 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 		mbytes, userID, nodeID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUserGrant(userID, nodeID, "设置授权限速")
 	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
+	// 限速已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUserGrant(userID, nodeID, "设置授权限速"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "限速已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }
 
@@ -384,8 +419,13 @@ func (s *Server) setUserLandingSubURL(adminID, userID int64, subURL string) *adm
 	// source snapshot no longer matches the users row, so the freshly written
 	// values must flow into the sync. A failed resolve keeps the old snapshot on
 	// purpose.
-	target, _ := db.GetUserByID(s.DB, userID)
-	if nodes, ok := s.resolveLandingExits(target, true); ok {
+	target, err := db.GetUserByID(s.DB, userID)
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "订阅地址已保存，但没能读回用户以刷新落地节点: " + err.Error()}
+	}
+	if nodes, err := s.resolveLandingExits(target, true); err != nil {
+		log.Printf("landing: resolve exits for user %d after setting its subscription: %v", userID, err)
+	} else {
 		s.syncLandingExits(target, nodes)
 	}
 	return nil
@@ -405,7 +445,10 @@ func (s *Server) setUserEnabled(adminID, userID int64, enabled bool) *adminError
 	if err := db.SetUserDisabled(s.DB, userID, !enabled, reason); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.redispatchUser(userID, "启用/停用账号")
 	db.WriteAudit(s.DB, adminID, "user.toggle", strconv.FormatInt(userID, 10), fmt.Sprintf("disabled=%v", !enabled))
+	// 状态已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
+	if err := s.redispatchUser(userID, "启用/停用账号"); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, "状态已保存，但没能确定需要重新下发的节点: " + err.Error()}
+	}
 	return nil
 }

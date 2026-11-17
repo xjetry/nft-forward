@@ -93,20 +93,33 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 //
 // 结果记在 nodes 行上供页面显示同步状态：成功时记下应用时间并清掉上次的错误，
 // 失败时记下错误、保留上次成功的应用时间。
+//
+// 这一轮自己的结果是本函数的返回值，nodes 行上的标记只是页面看到的那一份。标记写不
+// 进去时记日志，免得那一行不声不响地与实际不符。
 func (s *Server) dispatchRound(nodeID int64) error {
-	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
-	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
+	fail := func(err error) error {
+		if merr := db.MarkNodeDispatchError(s.DB, nodeID, err.Error()); merr != nil {
+			log.Printf("dispatch node %d: record failure (%v): %v", nodeID, err, merr)
+		}
 		return err
 	}
-	rules := buildRules(s.DB, ruleHops)
+	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
+	if err != nil {
+		return fail(err)
+	}
+	// buildRules 的任何一张查找表读不出来，这一轮就什么都不发：见 buildRules 的说明。
+	rules, err := buildRules(s.DB, ruleHops)
+	if err != nil {
+		return fail(err)
+	}
 	rev := computeRev(rules)
 	warning, err := s.Hub.SendApplyRuleset(nodeID, rules, rev)
 	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
-		return err
+		return fail(err)
 	}
-	_ = db.MarkNodeApplied(s.DB, nodeID, warning)
+	if merr := db.MarkNodeApplied(s.DB, nodeID, warning); merr != nil {
+		log.Printf("dispatch node %d: record success: %v", nodeID, merr)
+	}
 	return nil
 }
 
@@ -128,47 +141,61 @@ func (s *Server) redispatchNodes(nodeIDs []int64) {
 	}
 }
 
+// 下面四个 redispatch* 的返回值只有一种含义：没能读出要通知哪些节点。这时调用方的
+// 改动已经落库，却没有任何节点知道——发起方必须被如实告知（“已保存，但没能确定需要
+// 重新下发的节点”），后台调用方则把它记进日志；不能在这里吞掉当作成功。对单个节点
+// 下发失败不在返回值里：那记在该节点的行上（dispatchRound）。四个调用都是声明式的，
+// 重复一次就是重试。
+
 // redispatchUser 重新下发承载 userID 规则跳的每一个节点。改了这个用户的账号级判定
 // 输入（停用标志、到期时间、全局配额、全局已用量）之后调用。
-func (s *Server) redispatchUser(userID int64, why string) {
+func (s *Server) redispatchUser(userID int64, why string) error {
 	nodes, err := db.DistinctUserNodes(s.DB, userID)
 	if err != nil {
-		log.Printf("redispatch user %d (%s): list nodes: %v", userID, why, err)
-		return
+		return err
 	}
 	s.dispatchNodes(why, nodes)
+	return nil
 }
 
 // redispatchUserGrant 重新下发 userID 经由授权节点 nodeID 的规则所在的每一个节点。
 // 改了这条授权的配额或已用量之后调用。
-func (s *Server) redispatchUserGrant(userID, nodeID int64, why string) {
+func (s *Server) redispatchUserGrant(userID, nodeID int64, why string) error {
 	nodes, err := db.RulesAffectedByNode(s.DB, userID, nodeID)
 	if err != nil {
-		log.Printf("redispatch user %d grant %d (%s): list nodes: %v", userID, nodeID, why, err)
-		return
+		return err
 	}
 	s.dispatchNodes(why, nodes)
+	return nil
 }
 
 // redispatchUserExit 重新下发 userID 指向落地出口 host:port 的规则所在的每一个节点。
 // 改了这个出口的配额、已用量或它是否仍在用户的落地集合里之后调用。
-func (s *Server) redispatchUserExit(userID int64, host string, port int, why string) {
+func (s *Server) redispatchUserExit(userID int64, host string, port int, why string) error {
 	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
 	if err != nil {
-		log.Printf("redispatch user %d exit %s:%d (%s): list nodes: %v", userID, host, port, why, err)
-		return
+		return err
 	}
 	s.dispatchNodes(why, nodes)
+	return nil
+}
+
+// redispatchUserExitLogged 是 redispatchUserExit 给后台调用方的形式：调用它的 goroutine
+// 没有可以回答的发起方，读不出要通知哪些节点时记进日志。
+func (s *Server) redispatchUserExitLogged(userID int64, host string, port int, why string) {
+	if err := s.redispatchUserExit(userID, host, port, why); err != nil {
+		log.Printf("landing: user %d exit %s:%d (%s): could not list the nodes to re-dispatch: %v", userID, host, port, why, err)
+	}
 }
 
 // redispatchThroughNode 重新下发“经过 nodeID 的规则”所在的每一个节点，nodeID 自己
 // 也在其中。改了节点的启停之后调用：规则经过被停用的节点就整条不转发，所以链上的
 // 其他节点也要跟着撤掉或恢复这条规则的跳。
-func (s *Server) redispatchThroughNode(nodeID int64, why string) {
+func (s *Server) redispatchThroughNode(nodeID int64, why string) error {
 	nodes, err := db.NodesCarryingRulesThrough(s.DB, nodeID)
 	if err != nil {
-		log.Printf("redispatch through node %d (%s): list nodes: %v", nodeID, why, err)
-		return
+		return err
 	}
 	s.dispatchNodes(why, nodes)
+	return nil
 }

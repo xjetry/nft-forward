@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html"
 	"io/fs"
+	"log"
 	"net/http"
 	"strings"
 
@@ -45,8 +46,14 @@ func (s *Server) spaHandler() http.Handler {
 // follow-up /branding fetch; window.__BRANDING__ gives the JS side the
 // same value without a flash of the default name. Reads the setting per
 // request so renames take effect without a restart.
+//
+// The shell is served either way: when the name cannot be read the page goes
+// out with the built-in title, and the failure is logged.
 func (s *Server) renderIndex(index []byte) []byte {
-	name, _ := db.GetSetting(s.DB, "panel_name")
+	name, err := db.GetSetting(s.DB, "panel_name")
+	if err != nil {
+		log.Printf("index: read panel name: %v", err)
+	}
 	if name == "" {
 		return index
 	}

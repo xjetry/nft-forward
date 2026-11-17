@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
 	"time"
 )
@@ -214,10 +215,12 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// tokenPrefix returns the first 8 chars of a token for display, or the whole
+// TokenPrefix returns the first 8 chars of a plaintext API token, or the whole
 // token if shorter. It lets the UI show a recognizable prefix without keeping
-// the full plaintext at rest.
-func tokenPrefix(token string) string {
+// the full plaintext at rest. Every write of api_tokens.token_prefix goes
+// through it, so a caller holding the plaintext can derive the stored prefix
+// without reading it back.
+func TokenPrefix(token string) string {
 	if len(token) < 8 {
 		return token
 	}
@@ -228,7 +231,7 @@ func now() int64 { return time.Now().Unix() }
 
 // Users
 
-func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
+func CreateUser(d DBTX, username, pwHash, role string) (int64, error) {
 	res, err := d.Exec(`INSERT INTO users(username, pw_hash, role, created_at) VALUES (?,?,?,?)`,
 		username, pwHash, role, now())
 	if err != nil {
@@ -335,6 +338,36 @@ func GetSessionUser(d *sql.DB, token string) (*User, error) {
 		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, HashToken(token)))
 }
 
+// SetPassword stores a new password hash and ends the user's sessions in one
+// transaction, keeping only the session whose plaintext token is keepSession
+// (the session making the change; "" keeps none). The two belong together: a
+// password is changed to lock out whoever holds the old one, and if the hash
+// were written but the sessions survived, the caller would be told the
+// password changed while the old sessions kept working.
+//
+// sessions.token holds HashToken of the plaintext (CreateSession), so the
+// session to keep is matched in that form; compared as plaintext it would
+// match no row and the caller's own session would be ended with the rest.
+func SetPassword(d *sql.DB, userID int64, pwHash, keepSession string) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET pw_hash=? WHERE id=?`, pwHash, userID); err != nil {
+		return err
+	}
+	if keepSession == "" {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
+	} else {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=? AND token<>?`, userID, HashToken(keepSession))
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func DeleteSession(d *sql.DB, token string) error {
 	_, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, HashToken(token))
 	return err
@@ -418,7 +451,10 @@ func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
 	return GetNode(d, id)
 }
 
@@ -438,7 +474,10 @@ func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) 
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
 	hops := make([]NodeHop, len(members))
 	for i, m := range members {
 		hops[i] = NodeHop{NodeID: id, Position: i, HopNodeID: m.HopNodeID, Mode: m.Mode}
@@ -729,16 +768,26 @@ func ListRuleHopsByCompositeNode(d *sql.DB, compositeNodeID int64) ([]*RuleHop, 
 
 // Audit
 
+// WriteAudit records an action in the audit log. It returns nothing on
+// purpose: every caller writes the row after the action it describes has
+// already taken effect, so there is nothing left to undo and no reason to fail
+// the request. A row that could not be written is reported in the server log
+// instead, so that a gap in the audit trail is not silent.
 func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
-	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
-		userID, action, target, payload, now())
+	if _, err := d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
+		userID, action, target, payload, now()); err != nil {
+		log.Printf("audit: record %s (user %d, target %q): %v", action, userID, target, err)
+	}
 }
 
 // WriteAuditNoUser 记一条不落在任何账号名下的审计：发起方是一台没有属主的节点。
 // user_id 写 NULL，不写 0——0 不是任何账号的 id，读的人无法区分“没有人”与“写错了”。
+// 与 WriteAudit 一样不返回错误、写不进去时记进服务日志，理由见 WriteAudit。
 func WriteAuditNoUser(d *sql.DB, action, target, payload string) {
-	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (NULL,?,?,?,?)`,
-		action, target, payload, now())
+	if _, err := d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (NULL,?,?,?,?)`,
+		action, target, payload, now()); err != nil {
+		log.Printf("audit: record %s (no user, target %q): %v", action, target, err)
+	}
 }
 
 // NodeIDsByNames resolves a slice of node names to their database IDs. Names
@@ -752,8 +801,11 @@ func NodeIDsByNames(d *sql.DB, names []string) (map[string]int64, error) {
 	for _, name := range names {
 		var id int64
 		err := d.QueryRow(`SELECT id FROM nodes WHERE name = ?`, name).Scan(&id)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		out[name] = id
 	}
@@ -779,9 +831,11 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 		return nil, err
 	}
 	// Set owner_id to first admin if not yet assigned.
-	_, _ = d.Exec(`UPDATE nodes SET owner_id = (
+	if _, err := d.Exec(`UPDATE nodes SET owner_id = (
 		SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1
-	) WHERE node_type = 'self' AND owner_id IS NULL`)
+	) WHERE node_type = 'self' AND owner_id IS NULL`); err != nil {
+		return nil, err
+	}
 	return GetSelfNode(d)
 }
 

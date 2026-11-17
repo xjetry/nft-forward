@@ -2,7 +2,6 @@ package server
 
 import (
 	"database/sql"
-	"log"
 	"net"
 	"strconv"
 
@@ -69,10 +68,13 @@ type ruleListItem struct {
 // rate_multiplier，计费读的是同一列（accounting.LoadBook）。relayURI 决定是否算出
 // 可复制的代理 URI：只在提供复制操作的面上算（管理员详情、用户的列表与详情），
 // 管理员列表只显示出口类型。
-func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool) []ruleListItem {
+//
+// 装配要读的任何一张表读不出来就返回错误，不给出缺了那一部分的形状：没有所有者名、
+// 没有链路、没有压制原因的规则项，读的人分不清是“这条规则没有”还是“没读到”。
+func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool) ([]ruleListItem, error) {
 	owners, err := db.UsersByID(s.DB)
 	if err != nil {
-		log.Printf("rules: load owners: %v", err)
+		return nil, err
 	}
 	landingByOwner := map[int64]map[string]landing.Node{}
 	ids := make([]int64, len(rules))
@@ -80,7 +82,9 @@ func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool)
 	for i, r := range rules {
 		ids[i] = r.ID
 		it := ruleListItem{Rule: r, BillingRate: 1, RateMultiplier: 1}
-		it.fillEndpoints(s.DB, cat)
+		if err := it.fillEndpoints(s.DB, cat); err != nil {
+			return nil, err
+		}
 		var idx map[string]landing.Node
 		if r.OwnerID.Valid {
 			if u := owners[r.OwnerID.Int64]; u != nil {
@@ -91,7 +95,9 @@ func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool)
 			}
 			var ok bool
 			if idx, ok = landingByOwner[r.OwnerID.Int64]; !ok {
-				idx = s.landingIndexFromDB(r.OwnerID.Int64)
+				if idx, err = s.landingIndexFromDB(r.OwnerID.Int64); err != nil {
+					return nil, err
+				}
 				landingByOwner[r.OwnerID.Int64] = idx
 			}
 		}
@@ -101,38 +107,43 @@ func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool)
 		}
 		items[i] = it
 	}
-	if chains, err := db.RuleChainNodeIDs(s.DB, ids); err != nil {
-		log.Printf("rules: load chains: %v", err)
-	} else {
-		for i := range items {
-			hopIDs := chains[items[i].ID]
-			path := make([]chainNode, 0, len(hopIDs))
-			for _, nid := range hopIDs {
-				if n := cat.Node(nid); n != nil {
-					path = append(path, chainNode{NodeID: nid, Name: n.Name, NodeType: n.NodeType})
-				}
-			}
-			items[i].Chain = path
-		}
+	chains, err := db.RuleChainNodeIDs(s.DB, ids)
+	if err != nil {
+		return nil, err
 	}
-	s.markSuppressed(items)
-	return items
+	for i := range items {
+		hopIDs := chains[items[i].ID]
+		path := make([]chainNode, 0, len(hopIDs))
+		for _, nid := range hopIDs {
+			if n := cat.Node(nid); n != nil {
+				path = append(path, chainNode{NodeID: nid, Name: n.Name, NodeType: n.NodeType})
+			}
+		}
+		items[i].Chain = path
+	}
+	if err := s.markSuppressed(items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // fillEndpoints 填入口地址与两端的转发模式，取自规则落库的物理跳。入口地址按入口
 // 那台机器此刻的中继地址拼出；规则还没生成过物理跳、或入口机器已没有对应地址族的
 // 中继地址时，入口保持占位符“—”。
-func (it *ruleListItem) fillEndpoints(d *sql.DB, cat *db.NodeCatalog) {
+func (it *ruleListItem) fillEndpoints(d *sql.DB, cat *db.NodeCatalog) error {
 	r := it.Rule
 	it.Exit = net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
 	it.Entry = "—"
 	hops, err := db.ListRuleHops(d, r.ID)
-	if err != nil || len(hops) == 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if len(hops) == 0 {
+		return nil
 	}
 	it.EntryMode, it.ExitMode = hops[0].Mode, hops[len(hops)-1].Mode
 	if r.EntryListenPort <= 0 {
-		return
+		return nil
 	}
 	it.EntryNodeID = hops[0].NodeID
 	if n := cat.Node(hops[0].NodeID); n != nil && n.RelayHost != "" {
@@ -140,20 +151,21 @@ func (it *ruleListItem) fillEndpoints(d *sql.DB, cat *db.NodeCatalog) {
 			it.Entry, it.EntryV6 = e, e6
 		}
 	}
+	return nil
 }
 
 // markSuppressed 给每个规则项填上它此刻不转发的原因；照常转发的规则留空。只由
 // ruleItems 调用，所以规则的每个对外面都带着它；TestEveryRuleSurfaceReportsTheSuppression
 // 逐面对照。
-func (s *Server) markSuppressed(items []ruleListItem) {
+func (s *Server) markSuppressed(items []ruleListItem) error {
 	reasons, err := db.RuleSuppressions(s.DB)
 	if err != nil {
-		log.Printf("rules: load suppressions: %v", err)
-		return
+		return err
 	}
 	for i := range items {
 		items[i].Suppressed = reasons[items[i].ID]
 	}
+	return nil
 }
 
 // chainNode 是规则展平后的物理链上的一跳，带着节点名与类型供展示。/api 的规则
