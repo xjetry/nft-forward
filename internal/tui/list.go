@@ -36,7 +36,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = viewConfirmDelete
 		m.err = ""
 	case "c":
-		if len(m.rules) > 0 {
+		if len(m.rows) > 0 {
 			m.mode = viewConfirmClear
 			m.err = ""
 		}
@@ -50,7 +50,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		r := m.rowAt(m.cursor)
-		if err := m.client.DeleteRule(ruleRef(r)); err != nil {
+		if err := m.client.DeleteRule(m.refAt(m.cursor)); err != nil {
 			m.err = err.Error()
 			m.mode = viewList
 			return m, nil
@@ -72,8 +72,8 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		for _, r := range m.rules {
-			if err := m.client.DeleteRule(ruleRef(r)); err != nil {
+		for _, row := range m.rows {
+			if err := m.client.DeleteRule(row.Ref); err != nil {
 				m.err = err.Error()
 				m.mode = viewList
 				return m, nil

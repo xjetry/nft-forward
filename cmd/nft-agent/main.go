@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -38,6 +39,39 @@ func validateConnectURL(raw string, allowInsecure bool) error {
 		return fmt.Errorf("--connect 必须使用 wss://（明文 ws:// 可被中间人注入升级帧实现 RCE）；如确为本地测试，请加 --insecure-connect")
 	default:
 		return fmt.Errorf("--connect 协议必须是 wss://（当前 %q）", u.Scheme)
+	}
+}
+
+// runModeFromFlags 把命令行参数换成 daemon 的运行形态（daemon.RunMode）。运行形态
+// 只在这里由参数决定一次，daemon 包里不再有任何代码去看“连接地址是否为空”或
+// “是否 --server-local”。
+//
+//   - --server-local：面板机本机，拨 panelSocket；
+//   - --connect：由远端面板托管，握手用 tokenFile 里的节点 token；
+//   - 都没给：单机。
+//
+// 两个都给是配置错误：一个 daemon 至多归一个面板管。
+func runModeFromFlags(connectURL, tokenFile string, allowInsecure, serverLocal bool, panelSocket string) (daemon.RunMode, error) {
+	switch {
+	case connectURL != "" && serverLocal:
+		return daemon.RunMode{}, errors.New("远程面板地址（--connect）与本机面板模式（--server-local）不能同时指定：一个 daemon 只归一个面板管")
+	case serverLocal:
+		return daemon.LocalPanel(panelSocket), nil
+	case connectURL != "":
+		if err := validateConnectURL(connectURL, allowInsecure); err != nil {
+			return daemon.RunMode{}, err
+		}
+		raw, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return daemon.RunMode{}, fmt.Errorf("读取 panel token: %w", err)
+		}
+		token := strings.TrimSpace(string(raw))
+		if token == "" {
+			return daemon.RunMode{}, errors.New("panel token 文件为空")
+		}
+		return daemon.RemotePanel(connectURL, token), nil
+	default:
+		return daemon.Standalone(), nil
 	}
 }
 
@@ -111,38 +145,22 @@ func runDaemon(args []string) int {
 		}
 	}
 
-	if connectURL != "" {
-		if err := validateConnectURL(connectURL, allowInsecure); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
+	mode, err := runModeFromFlags(connectURL, panelTokenFile, allowInsecure, serverLocal, panelSocket)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 
-	cfg := daemon.Config{
+	d, err := daemon.New(daemon.Config{
 		SocketPath:          socketPath,
 		StatePath:           statePath,
 		GroupName:           groupName,
 		Iface:               iface,
-		ConnectURL:          connectURL,
+		Mode:                mode,
 		PortRange:           portRange,
 		DeclaredRelayHost:   relayHost,
 		DeclaredRelayHostV6: relayHostV6,
-		ServerLocal:         serverLocal,
-		PanelSocketPath:     panelSocket,
-	}
-	if connectURL != "" {
-		tok, err := os.ReadFile(panelTokenFile)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "读取 panel token:", err)
-			return 1
-		}
-		cfg.ConnectToken = strings.TrimSpace(string(tok))
-		if cfg.ConnectToken == "" {
-			fmt.Fprintln(os.Stderr, "panel token 文件为空")
-			return 1
-		}
-	}
-	d, err := daemon.New(cfg)
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "daemon 构造失败:", err)
 		return 1

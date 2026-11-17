@@ -51,30 +51,42 @@ func TestRuleAddressLocalNamespaceIgnoresIDShape(t *testing.T) {
 // 反方向：panel 命名空间的请求永远走面板通道。同一串数字在 tui 段里存在同名的
 // 本地规则时，也不得落到本地规则上。
 func TestRuleAddressPanelNamespaceNeverTouchesLocalRules(t *testing.T) {
-	d, srv := newTestServer(t, &fakeDataplane{})
-	defer srv.Close()
-	d.owners = OwnerRuleset{"tui": {
-		{ID: "12345678", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80, Comment: "orig"},
-	}}
-	c, err := daemonclient.New(srv.URL)
-	if err != nil {
-		t.Fatal(err)
+	// 面板通道在两种情形下都用不了：单机形态没有面板，托管形态此刻没有会话。请求
+	// 必须各以自己的原因失败，而不是改到本地规则上。
+	cases := []struct {
+		name string
+		mode RunMode
+		want string
+	}{
+		{"单机形态", Standalone(), "没有面板规则"},
+		{"托管但离线", RemotePanel("wss://panel.example/v1/agents", "tok"), "面板不可达"},
 	}
+	for _, tc := range cases {
+		d, srv := newTestServer(t, &fakeDataplane{})
+		d.mode = tc.mode
+		d.owners = OwnerRuleset{"tui": {
+			{ID: "12345678", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80, Comment: "orig"},
+		}}
+		c, err := daemonclient.New(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	// 没有 dialer：面板通道不可用，请求必须以“未连接”失败，而不是改到本地规则。
-	err = c.UpdateRule(daemonclient.PanelRule(12345678), daemonclient.UpdateRuleReq{Comment: "x"})
-	if err == nil || !strings.Contains(err.Error(), "not connected") {
-		t.Fatalf("panel 命名空间在未连接时应报未连接，实际 %v", err)
-	}
-	err = c.DeleteRule(daemonclient.PanelRule(12345678))
-	if err == nil || !strings.Contains(err.Error(), "not connected") {
-		t.Fatalf("panel 命名空间在未连接时应报未连接，实际 %v", err)
-	}
-	d.mu.Lock()
-	rules := append([]nft.Rule(nil), d.owners["tui"]...)
-	d.mu.Unlock()
-	if len(rules) != 1 || rules[0].Comment != "orig" {
-		t.Fatalf("本地规则不应被 panel 命名空间的请求改动: %+v", rules)
+		err = c.UpdateRule(daemonclient.PanelRule(12345678), daemonclient.UpdateRuleReq{Comment: "x"})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s：改 panel 命名空间应报 %q，实际 %v", tc.name, tc.want, err)
+		}
+		err = c.DeleteRule(daemonclient.PanelRule(12345678))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s：删 panel 命名空间应报 %q，实际 %v", tc.name, tc.want, err)
+		}
+		d.mu.Lock()
+		rules := append([]nft.Rule(nil), d.owners["tui"]...)
+		d.mu.Unlock()
+		if len(rules) != 1 || rules[0].Comment != "orig" {
+			t.Fatalf("%s：本地规则不应被 panel 命名空间的请求改动: %+v", tc.name, rules)
+		}
+		srv.Close()
 	}
 }
 

@@ -34,8 +34,8 @@ var (
 // column reserves colGap trailing cells (content is truncated to width-colGap)
 // so adjacent columns never visually merge, even when content fills the width.
 const (
-	colGap    = 2
-	colProto  = 10 // tcp+udp / tcp (U)
+	colGap     = 2
+	colProto   = 10 // tcp+udp / tcp (U)
 	colSrcPort = 12 // 65535
 	colDest    = 24 // IPv4(15) 或常见域名 + gap
 	colDstPort = 12 // 65535
@@ -109,7 +109,7 @@ func (m model) View() string {
 		}
 	case viewConfirmClear:
 		inner = m.viewConfirm(
-			fmt.Sprintf("确认清空全部 %d 条转发规则？", len(m.rules)))
+			fmt.Sprintf("确认清空全部 %d 条转发规则？", len(m.rows)))
 	default:
 		inner = m.viewList()
 	}
@@ -120,13 +120,35 @@ func (m model) View() string {
 	return lipgloss.NewStyle().PaddingLeft(colMargin).PaddingRight(colMargin).Render(inner)
 }
 
+// panelOffline 报告快照里 daemon 是否处在“面板托管、但此刻没有与面板的会话”的
+// 状态。
+func (m model) panelOffline() bool {
+	return m.daemon.Mode.Managed() && !m.daemon.Connected
+}
+
+// titleSuffix 是标题里说明“这台机器归谁管、此刻连没连上”的那一段，三种情形各有
+// 各的说法。形态取自 daemon 的状态（m.daemon.Mode），不从“是否在线”反推：托管
+// 但离线的 daemon 不是本地模式——它的规则仍由面板管，只是暂时联系不上面板。
+func (m model) titleSuffix() string {
+	switch {
+	case !m.daemon.Mode.Managed():
+		return "本地模式"
+	case m.daemon.Connected:
+		return "已连接 " + m.daemon.NodeName
+	case m.daemon.NodeName != "":
+		return "面板托管 · 离线（" + m.daemon.NodeName + "）"
+	default:
+		return "面板托管 · 离线"
+	}
+}
+
 func (m model) viewList() string {
 	var b strings.Builder
-	suffix := "本地模式"
-	if m.connected {
-		suffix = "已连接 " + m.nodeName
+	b.WriteString(titleStyle.Render(fmt.Sprintf("nft-forward — %s", m.titleSuffix())) + "\n")
+	if m.panelOffline() {
+		b.WriteString(warnStyle.Render("面板不可达：已下发的规则照常转发；新增规则、修改或删除面板规则要等连接恢复。") + "\n")
 	}
-	b.WriteString(titleStyle.Render(fmt.Sprintf("nft-forward — %s", suffix)) + "\n\n")
+	b.WriteString("\n")
 
 	if m.totalRows() == 0 {
 		b.WriteString(helpStyle.Render("  （暂无规则 — 按 a 新增）") + "\n")
@@ -160,6 +182,16 @@ func (m model) viewList() string {
 				}
 			} else {
 				commentCell = r.Comment
+			}
+			// 托管形态下列表里可能混着面板不知道的本地规则（接入面板之前留下、
+			// 还没被面板接管的），标出来：它们不在面板的列表与账本里。单机形态
+			// 下每一行都是本地规则，不需要标。
+			if m.daemon.Mode.Managed() && m.refAt(i).Local() {
+				if commentCell == "" {
+					commentCell = "本地规则"
+				} else {
+					commentCell = "本地规则 · " + commentCell
+				}
 			}
 			line := renderTableRow(
 				protoCell,

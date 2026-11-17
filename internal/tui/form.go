@@ -208,8 +208,7 @@ func (m model) commitAdd(proto string, srcPort int, destInput string, destPort i
 }
 
 func (m model) commitEdit(proto string, srcPort int, destInput string, destPort int, comment string) (tea.Model, tea.Cmd) {
-	r := m.rowAt(m.cursor)
-	if err := m.client.UpdateRule(ruleRef(r), daemonclient.UpdateRuleReq{
+	if err := m.client.UpdateRule(m.refAt(m.cursor), daemonclient.UpdateRuleReq{
 		Proto:      proto,
 		ExitHost:   destInput,
 		ExitPort:   destPort,

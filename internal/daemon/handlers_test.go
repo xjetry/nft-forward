@@ -264,17 +264,6 @@ func TestHandler_UpdateRule_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_UpdateRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
-	d := newTestDaemon(t)
-	body := `{"listen_port":21000}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/rules/panel/5", strings.NewReader(body))
-	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d, want %d", w.Code, http.StatusServiceUnavailable)
-	}
-}
-
 func TestHandler_DeleteRule_LocalHexID(t *testing.T) {
 	d := newTestDaemon(t)
 	d.owners = OwnerRuleset{
@@ -298,16 +287,6 @@ func TestHandler_DeleteRule_NotFound(t *testing.T) {
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d, want 404", w.Code)
-	}
-}
-
-func TestHandler_DeleteRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
-	d := newTestDaemon(t)
-	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/panel/9", nil)
-	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 }
 
@@ -753,8 +732,10 @@ func TestUpdateRuleRoutesChainRowsToRuleHopEdit(t *testing.T) {
 
 	d, srv := newTestServer(t, &fakeDataplane{})
 	defer srv.Close()
+	panel := RemotePanel("ws"+strings.TrimPrefix(hubSrv.URL, "http")+"/", "tok")
+	d.mode = panel
 	dl := NewDialer(DialerConfig{
-		URL: "ws" + strings.TrimPrefix(hubSrv.URL, "http") + "/", Token: "tok", AgentVersion: "v1",
+		Panel: panel, AgentVersion: "v1",
 		GetState: func() (OwnerRuleset, AgentMeta) { return OwnerRuleset{}, AgentMeta{} },
 		OnApply:  func(_ context.Context, rev string, rules []nft.Rule) (string, error) { return "", nil },
 	})

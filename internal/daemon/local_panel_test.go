@@ -69,7 +69,7 @@ func runDaemon(t *testing.T, d *Daemon) {
 	})
 }
 
-// 面板宿主机上的 daemon（ServerLocal）经面板的本机入口 socket 拨号，走的是与远程
+// 面板机本机形态的 daemon（LocalPanel）经面板的本机入口 socket 拨号，走的是与远程
 // 节点相同的 agent 协议：握手不带 token，之后面板经这条连接下发的规则集落进 panel 段。
 func TestServerLocalDaemonDialsThePanelSocket(t *testing.T) {
 	dir := shortSockDir(t)
@@ -77,11 +77,10 @@ func TestServerLocalDaemonDialsThePanelSocket(t *testing.T) {
 	fh := serveFakePanelOnSocket(t, panelSock)
 
 	d, err := New(Config{
-		StatePath:       filepath.Join(t.TempDir(), "state.json"),
-		SocketPath:      filepath.Join(dir, "d.sock"),
-		Dataplane:       &fakeDataplane{},
-		ServerLocal:     true,
-		PanelSocketPath: panelSock,
+		StatePath:  filepath.Join(t.TempDir(), "state.json"),
+		SocketPath: filepath.Join(dir, "d.sock"),
+		Dataplane:  &fakeDataplane{},
+		Mode:       LocalPanel(panelSock),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,19 +122,16 @@ func TestServerLocalDaemonDialsThePanelSocket(t *testing.T) {
 	}
 }
 
-// 反方向：单机 daemon（既没有 --connect 也不是 ServerLocal）不拨任何面板，即使本机
-// 入口的 socket 就在那里。
-func TestStandaloneDaemonDoesNotDialThePanelSocket(t *testing.T) {
-	dir := shortSockDir(t)
-	panelSock := filepath.Join(dir, "panel.sock")
-	fh := serveFakePanelOnSocket(t, panelSock)
-	daemonSock := filepath.Join(dir, "d.sock")
+// 反方向：单机形态的 daemon 不拨任何面板——拨号器只为托管形态创建，单机形态下
+// 根本没有拨号器。
+func TestStandaloneDaemonHasNoDialer(t *testing.T) {
+	daemonSock := filepath.Join(shortSockDir(t), "d.sock")
 
 	d, err := New(Config{
-		StatePath:       filepath.Join(t.TempDir(), "state.json"),
-		SocketPath:      daemonSock,
-		Dataplane:       &fakeDataplane{},
-		PanelSocketPath: panelSock,
+		StatePath:  filepath.Join(t.TempDir(), "state.json"),
+		SocketPath: daemonSock,
+		Dataplane:  &fakeDataplane{},
+		Mode:       Standalone(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,9 +153,6 @@ func TestStandaloneDaemonDoesNotDialThePanelSocket(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if d.dialer.Load() != nil {
 		t.Fatal("单机 daemon 不应有拨号器")
-	}
-	if frames := fh.Frames(); len(frames) != 0 {
-		t.Fatalf("单机 daemon 不应向面板发任何帧，实际 %+v", frames)
 	}
 }
 
@@ -204,11 +197,10 @@ func TestLocalRulesAreAdoptedEvenWhenAPushArrivesFirst(t *testing.T) {
 	t.Cleanup(func() { srv.Close() })
 
 	d, err := New(Config{
-		StatePath:       statePath,
-		SocketPath:      filepath.Join(dir, "d.sock"),
-		Dataplane:       &fakeDataplane{},
-		ServerLocal:     true,
-		PanelSocketPath: panelSock,
+		StatePath:  statePath,
+		SocketPath: filepath.Join(dir, "d.sock"),
+		Dataplane:  &fakeDataplane{},
+		Mode:       LocalPanel(panelSock),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -281,11 +273,10 @@ func TestAdoptionConvergesWhenTheAdoptedRuleIsPushedBeforeTheAck(t *testing.T) {
 
 	dp := &fakeDataplane{}
 	d, err := New(Config{
-		StatePath:       statePath,
-		SocketPath:      filepath.Join(dir, "d.sock"),
-		Dataplane:       dp,
-		ServerLocal:     true,
-		PanelSocketPath: panelSock,
+		StatePath:  statePath,
+		SocketPath: filepath.Join(dir, "d.sock"),
+		Dataplane:  dp,
+		Mode:       LocalPanel(panelSock),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -413,21 +404,6 @@ func TestPanelPushSupersedesOnlyTheLocalRulesOnItsPorts(t *testing.T) {
 	}
 	if len(left) != 2 || left[0] != "t2" || left[1] != "t3" {
 		t.Fatalf("只有同协议同端口的 t1 该让位，本地段应剩 t2、t3，实际 %v", left)
-	}
-}
-
-// 一个 daemon 只归一个面板管：同时给远程面板地址和本机面板模式时 New 直接拒绝，
-// 不去猜该听谁的。
-func TestNewRejectsRemoteAndLocalPanelTogether(t *testing.T) {
-	_, err := New(Config{
-		StatePath:   filepath.Join(t.TempDir(), "state.json"),
-		SocketPath:  filepath.Join(shortSockDir(t), "d.sock"),
-		Dataplane:   &fakeDataplane{},
-		ConnectURL:  "wss://panel.example/v1/agents",
-		ServerLocal: true,
-	})
-	if err == nil {
-		t.Fatal("ConnectURL 与 ServerLocal 同时设置时 New 应返回错误")
 	}
 }
 

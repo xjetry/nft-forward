@@ -24,9 +24,14 @@ func stripANSI(s string) string {
 // fakeDaemonClient stubs the daemonClient interface for TUI tests so
 // they don't have to spin up a real daemon over unix sockets.
 type fakeDaemonClient struct {
-	rules     []nft.Rule // returned by ListRules
+	rules []nft.Rule // returned by ListRules, each with the address rowsOf gives it
+	// rows 非 nil 时 ListRules 原样返回它，用来给出 rowsOf 给不出的地址组合。
+	rows []daemonclient.Row
+	// mode 为空表示单机形态。
+	mode      daemonclient.Mode
 	connected bool
 	nodeName  string
+	statusErr error
 
 	// createResp is returned by CreateRule; createErr overrides with an error.
 	createResp daemonclient.CreateRuleResp
@@ -41,15 +46,38 @@ type fakeDaemonClient struct {
 	ruleErr     error
 }
 
-func (f *fakeDaemonClient) ListRules() ([]nft.Rule, error) {
-	if f.rules == nil {
-		return []nft.Rule{}, nil
+// rowsOf 给一组规则配上地址，配法与 daemon 的归属段一致：带面板规则 id 的算面板
+// 段，其余算本地段。只是测试夹具的简写——被测的 TUI 不这样推断，它用行自带的
+// 地址（TestRowAddressComesFromTheDaemonNotFromRuleFields 钉住这一点）。
+func rowsOf(rules []nft.Rule) []daemonclient.Row {
+	rows := make([]daemonclient.Row, len(rules))
+	for i, r := range rules {
+		ref := daemonclient.LocalRule(r.ID)
+		if r.RuleID != 0 {
+			ref = daemonclient.PanelRule(r.RuleID)
+		}
+		rows[i] = daemonclient.Row{Rule: r, Ref: ref}
 	}
-	return append([]nft.Rule(nil), f.rules...), nil
+	return rows
+}
+
+func (f *fakeDaemonClient) ListRules() ([]daemonclient.Row, error) {
+	if f.rows != nil {
+		return append([]daemonclient.Row(nil), f.rows...), nil
+	}
+	return rowsOf(f.rules), nil
 }
 
 func (f *fakeDaemonClient) Status() (daemonclient.StatusResp, error) {
+	if f.statusErr != nil {
+		return daemonclient.StatusResp{}, f.statusErr
+	}
+	mode := f.mode
+	if mode == "" {
+		mode = daemonclient.ModeStandalone
+	}
 	return daemonclient.StatusResp{
+		Mode:      mode,
 		Connected: f.connected,
 		NodeName:  f.nodeName,
 	}, nil
@@ -130,7 +158,8 @@ func newTestModel(fc *fakeDaemonClient, rules []nft.Rule) model {
 	if fc.rules == nil && rules != nil {
 		fc.rules = append([]nft.Rule(nil), rules...)
 	}
-	return initialModel(fc, rules, fc.connected, fc.nodeName)
+	st, _ := fc.Status()
+	return initialModel(fc, st, rowsOf(rules))
 }
 
 func TestRenderTableRow_ColumnAlignment(t *testing.T) {
@@ -413,10 +442,10 @@ func TestViewListRendersUnifiedRules(t *testing.T) {
 	m := model{
 		mode:  viewList,
 		width: 140,
-		rules: []nft.Rule{
+		rows: rowsOf([]nft.Rule{
 			{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
 			{Proto: "tcp", SrcPort: 17171, DestIP: "72.234.229.145", DestPort: 17171, Comment: "ss"},
-		},
+		}),
 	}
 	out := stripANSI(m.View())
 	if !strings.Contains(out, "10.0.0.1") || !strings.Contains(out, "72.234.229.145") {
@@ -428,55 +457,161 @@ func TestViewListClampsCommentWidthOnNarrowTerminal(t *testing.T) {
 	m := model{
 		mode:  viewList,
 		width: 40,
-		rules: []nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}},
+		rows:  rowsOf([]nft.Rule{{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443}}),
 	}
 	_ = m.View() // must not panic
 }
 
-func TestViewListShowsConnectionStatus(t *testing.T) {
-	m := model{
-		mode:      viewList,
-		width:     140,
-		connected: true,
-		nodeName:  "test-node",
-		rules:     []nft.Rule{},
-	}
-	out := stripANSI(m.View())
-	if !strings.Contains(out, "已连接 test-node") {
-		t.Fatalf("expected connection status in title, got:\n%s", out)
+// 标题说的是“这台机器归谁管、此刻连没连上”，三种情形各有各的说法。托管但离线
+// 不是本地模式：规则仍由面板管，列表里的面板规则照常显示，并说明哪些操作要等连接
+// 恢复。
+func TestViewListTitleTellsRunModeApartFromSessionState(t *testing.T) {
+	panelRule := nft.Rule{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443, RuleID: 7, RuleName: "r"}
+	view := func(st daemonclient.StatusResp) string {
+		m := model{mode: viewList, width: 140, daemon: st, rows: rowsOf([]nft.Rule{panelRule})}
+		return stripANSI(m.View())
 	}
 
-	m.connected = false
-	out = stripANSI(m.View())
-	if !strings.Contains(out, "本地模式") {
-		t.Fatalf("expected local mode in title, got:\n%s", out)
+	out := view(daemonclient.StatusResp{Mode: daemonclient.ModeStandalone})
+	if !strings.Contains(out, "本地模式") || strings.Contains(out, "面板") {
+		t.Errorf("单机形态应显示本地模式、不提面板:\n%s", out)
+	}
+
+	for _, mode := range []daemonclient.Mode{daemonclient.ModeRemotePanel, daemonclient.ModeLocalPanel} {
+		out = view(daemonclient.StatusResp{Mode: mode, Connected: true, NodeName: "test-node"})
+		if !strings.Contains(out, "已连接 test-node") || strings.Contains(out, "离线") || strings.Contains(out, "面板不可达") {
+			t.Errorf("%s 在线应显示已连接、不提离线:\n%s", mode, out)
+		}
+
+		out = view(daemonclient.StatusResp{Mode: mode, Connected: false, NodeName: "test-node"})
+		if !strings.Contains(out, "面板托管 · 离线（test-node）") || strings.Contains(out, "本地模式") {
+			t.Errorf("%s 离线应显示面板托管 · 离线并带上节点名，不能说成本地模式:\n%s", mode, out)
+		}
+		if !strings.Contains(out, "面板不可达") {
+			t.Errorf("%s 离线应说明面板不可达:\n%s", mode, out)
+		}
+		if !strings.Contains(out, "30000") || !strings.Contains(out, "10.0.0.9") {
+			t.Errorf("%s 离线时面板规则仍在转发，列表里必须还在:\n%s", mode, out)
+		}
+
+		// 从未握手成功过：没有节点名可带。
+		out = view(daemonclient.StatusResp{Mode: mode})
+		if !strings.Contains(out, "面板托管 · 离线") || strings.Contains(out, "（") {
+			t.Errorf("%s 从未连上过应显示面板托管 · 离线、不带空的节点名:\n%s", mode, out)
+		}
 	}
 }
 
-func TestLoadInitialRulesReturnsActiveRules(t *testing.T) {
+// 托管形态下，面板不知道的本地规则在列表里标出来；单机形态下每一行都是本地规则，
+// 不标。
+func TestViewListMarksLocalRulesOnlyWhenManaged(t *testing.T) {
+	rows := rowsOf([]nft.Rule{
+		{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443, RuleID: 7, Comment: "from-panel"},
+		{ID: "aabbccdd", Proto: "tcp", SrcPort: 30001, DestIP: "10.0.0.8", DestPort: 443, Comment: "leftover"},
+		{ID: "aabbccde", Proto: "tcp", SrcPort: 30002, DestIP: "10.0.0.7", DestPort: 443},
+	})
+	lineWith := func(out, needle string) string {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, needle) {
+				return line
+			}
+		}
+		t.Fatalf("没有找到含 %q 的行:\n%s", needle, out)
+		return ""
+	}
+
+	managed := stripANSI(model{mode: viewList, width: 140, rows: rows,
+		daemon: daemonclient.StatusResp{Mode: daemonclient.ModeRemotePanel, Connected: true, NodeName: "n"}}.View())
+	if l := lineWith(managed, "30000"); strings.Contains(l, "本地规则") {
+		t.Errorf("面板规则不应标成本地规则: %q", l)
+	}
+	if l := lineWith(managed, "30001"); !strings.Contains(l, "本地规则 · leftover") {
+		t.Errorf("托管形态下的本地规则应标出并保留备注: %q", l)
+	}
+	if l := lineWith(managed, "30002"); !strings.Contains(l, "本地规则") {
+		t.Errorf("托管形态下没有备注的本地规则也应标出: %q", l)
+	}
+
+	standalone := stripANSI(model{mode: viewList, width: 140, rows: rows,
+		daemon: daemonclient.StatusResp{Mode: daemonclient.ModeStandalone}}.View())
+	if strings.Contains(standalone, "本地规则") {
+		t.Errorf("单机形态下不应给行加本地规则的标记:\n%s", standalone)
+	}
+}
+
+func TestLoadSnapshotReturnsStatusAndRows(t *testing.T) {
 	fc := &fakeDaemonClient{
 		rules:     []nft.Rule{{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200, RuleID: 5, RuleName: "seednet-vless"}},
+		mode:      daemonclient.ModeRemotePanel,
 		connected: true,
 		nodeName:  "my-node",
 	}
-	rules, connected, nodeName, err := loadInitialRules(fc)
+	st, rows, err := loadSnapshot(fc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 1 || rules[0].SrcPort != 200 {
-		t.Fatalf("expected 1 rule on port 200, got %+v", rules)
+	if len(rows) != 1 || rows[0].SrcPort != 200 || rows[0].Ref != daemonclient.PanelRule(5) {
+		t.Fatalf("expected 1 panel rule on port 200, got %+v", rows)
 	}
-	if !connected || nodeName != "my-node" {
-		t.Fatalf("expected connected=true nodeName=my-node, got connected=%v nodeName=%q", connected, nodeName)
+	if st.Mode != daemonclient.ModeRemotePanel || !st.Connected || st.NodeName != "my-node" {
+		t.Fatalf("expected remote-panel, connected, my-node; got %+v", st)
+	}
+}
+
+// 状态读不到时不拿零值顶上：零值会被显示成“本地模式”，那是替 daemon 编了一个它
+// 没说过的形态。
+func TestLoadSnapshotFailsWhenStatusIsUnavailable(t *testing.T) {
+	fc := &fakeDaemonClient{
+		rules:     []nft.Rule{{Proto: "tcp", SrcPort: 200, DestIP: "10.0.0.2", DestPort: 200}},
+		statusErr: fmt.Errorf("daemon status: 无法识别的运行形态"),
+	}
+	if _, _, err := loadSnapshot(fc); err == nil || !strings.Contains(err.Error(), "读取 daemon 状态失败") {
+		t.Fatalf("状态读不到时应报错，实际 %v", err)
+	}
+}
+
+// 改与删用的是这一行自带的地址，不看规则的字段。这里故意给出与字段“长相”相反的
+// 地址：一条带面板规则 id 的行挂着本地地址，一条不带的行挂着面板地址。
+func TestRowAddressComesFromTheDaemonNotFromRuleFields(t *testing.T) {
+	rows := []daemonclient.Row{
+		{Rule: nft.Rule{ID: "aabbccdd", RuleID: 7, Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100}, Ref: daemonclient.LocalRule("aabbccdd")},
+		{Rule: nft.Rule{ID: "11223344", Proto: "tcp", SrcPort: 101, DestIP: "10.0.0.2", DestPort: 101}, Ref: daemonclient.PanelRule(9)},
+	}
+	for i, want := range []daemonclient.RuleRef{daemonclient.LocalRule("aabbccdd"), daemonclient.PanelRule(9)} {
+		fc := &fakeDaemonClient{rows: rows}
+		st, _ := fc.Status()
+		m := initialModel(fc, st, rows)
+		m.cursor = i
+
+		m.enterEditMode()
+		if _, _ = m.submitEdit(); len(fc.ruleEdits) != 1 || fc.ruleEdits[0].Ref != want {
+			t.Errorf("第 %d 行：编辑应发往 %v，实际 %+v", i, want, fc.ruleEdits)
+		}
+
+		m.mode = viewConfirmDelete
+		m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != want {
+			t.Errorf("第 %d 行：删除应发往 %v，实际 %v", i, want, fc.ruleDeletes)
+		}
+	}
+
+	// 清空逐行删除，用的同样是每一行自带的地址。
+	fc := &fakeDaemonClient{rows: rows}
+	st, _ := fc.Status()
+	m := initialModel(fc, st, rows)
+	m.mode = viewConfirmClear
+	m.updateConfirmClear(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if len(fc.ruleDeletes) != 2 || fc.ruleDeletes[0] != daemonclient.LocalRule("aabbccdd") || fc.ruleDeletes[1] != daemonclient.PanelRule(9) {
+		t.Errorf("清空应按每行的地址逐条删除，实际 %v", fc.ruleDeletes)
 	}
 }
 
 func TestRowAtReturnsRule(t *testing.T) {
 	m := model{
-		rules: []nft.Rule{
+		rows: rowsOf([]nft.Rule{
 			{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100},
 			{Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
-		},
+		}),
 	}
 	if m.totalRows() != 2 {
 		t.Fatalf("totalRows = %d, want 2", m.totalRows())
@@ -659,7 +794,7 @@ func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
 func TestLockedFieldsByHopCount(t *testing.T) {
 	// Single-hop or local: all fields editable.
 	m := model{
-		rules:  []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 1}},
+		rows:   rowsOf([]nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 1}}),
 		cursor: 0,
 	}
 	if len(m.lockedFields()) != 0 {
@@ -668,7 +803,7 @@ func TestLockedFieldsByHopCount(t *testing.T) {
 
 	// Multi-hop: lock proto/dest.
 	m = model{
-		rules:  []nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 3, RuleID: 7}},
+		rows:   rowsOf([]nft.Rule{{Proto: "tcp", SrcPort: 100, DestIP: "10.0.0.1", DestPort: 100, HopCount: 3, RuleID: 7}}),
 		cursor: 0,
 	}
 	lf := m.lockedFields()

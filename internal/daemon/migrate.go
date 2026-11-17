@@ -57,7 +57,7 @@ func migrateLegacyState(p LegacyMigrationPaths) (OwnerRuleset, error) {
 	}
 	if tuiRules != nil {
 		if len(tuiRules) > 0 {
-			out["tui"] = tuiRules
+			out[segLocal] = tuiRules
 		}
 		if err := os.Rename(p.TUI, p.TUI+".migrated"); err != nil {
 			return nil, fmt.Errorf("rename legacy tui state: %w", err)
@@ -70,7 +70,7 @@ func migrateLegacyState(p LegacyMigrationPaths) (OwnerRuleset, error) {
 	}
 	if agentRules != nil {
 		if len(agentRules) > 0 {
-			out["panel"] = agentRules
+			out[segPanel] = agentRules
 		}
 		if err := os.Rename(p.Agent, p.Agent+".migrated"); err != nil {
 			return nil, fmt.Errorf("rename legacy agent state: %w", err)
@@ -85,7 +85,7 @@ func migrateLegacyState(p LegacyMigrationPaths) (OwnerRuleset, error) {
 		// embedded-agent-state.json wins over agent-state.json — server is
 		// authoritative for the panel segment when both exist.
 		if len(embeddedRules) > 0 {
-			out["panel"] = embeddedRules
+			out[segPanel] = embeddedRules
 		}
 		if err := os.Rename(p.EmbeddedAgent, p.EmbeddedAgent+".migrated"); err != nil {
 			return nil, fmt.Errorf("rename legacy embedded state: %w", err)

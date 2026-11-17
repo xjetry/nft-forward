@@ -141,14 +141,40 @@ func (c *Client) Health() error {
 	return nil
 }
 
-// StatusResp holds the daemon's connection status.
+// Mode 是 daemon 的运行形态——它归谁管。取值是 daemon 在 GET /v1/status 里报的
+// 名字（internal/daemon 的 RunMode.Name）。
+type Mode string
+
+const (
+	// ModeStandalone：单机，不归任何面板管，规则全是本地规则。
+	ModeStandalone Mode = "standalone"
+	// ModeRemotePanel：由远端面板托管。
+	ModeRemotePanel Mode = "remote-panel"
+	// ModeLocalPanel：面板机本机，由同机的面板托管。
+	ModeLocalPanel Mode = "local-panel"
+)
+
+// Managed 报告 daemon 是否归某个面板管。
+func (m Mode) Managed() bool { return m == ModeRemotePanel || m == ModeLocalPanel }
+
+func (m Mode) known() bool { return m == ModeStandalone || m.Managed() }
+
+// StatusResp 是 daemon 的状态：形态，以及托管形态下与面板的会话状态。
+//
+// Mode 在 daemon 进程存续期间不变。Connected 只在托管形态下可能为真。NodeName /
+// NodeID 是最近一次握手时面板给的节点身份，断线后仍然保留；从未握手成功过时为空。
 type StatusResp struct {
+	Mode      Mode   `json:"mode"`
 	Connected bool   `json:"connected"`
 	NodeName  string `json:"node_name,omitempty"`
 	NodeID    int64  `json:"node_id,omitempty"`
 }
 
-// Status returns the daemon's connection status and node identity.
+// Status returns the daemon's run mode, session state and node identity.
+//
+// 认不出的形态按错误返回，不猜成某一种：调用方要靠形态决定显示“本地模式”还是
+// “面板托管”，猜错了就是把托管但离线的 daemon 说成单机。daemon 比本程序旧时（它的
+// 应答里没有 mode）走的也是这条路。
 func (c *Client) Status() (StatusResp, error) {
 	buf, code, err := c.do(http.MethodGet, "/v1/status", nil)
 	if err != nil {
@@ -161,13 +187,29 @@ func (c *Client) Status() (StatusResp, error) {
 	if err := json.Unmarshal(buf, &resp); err != nil {
 		return StatusResp{}, fmt.Errorf("daemon status: decode: %w", err)
 	}
+	if !resp.Mode.known() {
+		return StatusResp{}, fmt.Errorf("daemon status: 无法识别的运行形态 %q（daemon 与本程序版本不一致时会这样，重启 daemon 后再试）", string(resp.Mode))
+	}
 	return resp, nil
 }
 
-// ListRules returns every rule the daemon is forwarding: panel-managed rules
-// (non-zero RuleID) first, then local ones — regardless of whether the daemon
-// is currently connected to its panel.
-func (c *Client) ListRules() ([]nft.Rule, error) {
+// Row 是 daemon 规则列表里的一行：规则本身，加上 daemon 给它的地址。
+//
+// 改或删这一行时把 Ref 原样交回（UpdateRule / DeleteRule）。这一行是本地规则还是
+// 面板规则由 Ref 说了算——它是 daemon 按规则所在的归属段填的；不要从 Rule 的字段
+// （比如 RuleID 是否为零）去推断。
+type Row struct {
+	nft.Rule
+	Ref RuleRef `json:"ref"`
+}
+
+// ListRules returns every rule the daemon is forwarding, each with its address:
+// panel-managed rules first, then local ones — regardless of the daemon's run
+// mode and of whether it is currently connected to its panel.
+//
+// 没带地址的行按错误返回：没有地址就无从知道这一行归谁，也就不能改它、删它。
+// daemon 比本程序旧时（它的列表里没有 ref）走的是这条路。
+func (c *Client) ListRules() ([]Row, error) {
 	buf, code, err := c.do(http.MethodGet, "/v1/rules", nil)
 	if err != nil {
 		return nil, err
@@ -176,13 +218,18 @@ func (c *Client) ListRules() ([]nft.Rule, error) {
 		return nil, fmt.Errorf("daemon rules: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
 	}
 	var resp struct {
-		Rules []nft.Rule `json:"rules"`
+		Rules []Row `json:"rules"`
 	}
 	if err := json.Unmarshal(buf, &resp); err != nil {
 		return nil, fmt.Errorf("daemon rules: decode: %w", err)
 	}
 	if resp.Rules == nil {
-		resp.Rules = []nft.Rule{}
+		resp.Rules = []Row{}
+	}
+	for _, row := range resp.Rules {
+		if row.Ref == (RuleRef{}) {
+			return nil, errors.New("daemon rules: 列表里的规则没有带地址（daemon 与本程序版本不一致时会这样，重启 daemon 后再试）")
+		}
 	}
 	return resp.Rules, nil
 }
@@ -204,8 +251,8 @@ type CreateRuleResp struct {
 	ListenPort int    `json:"listen_port"`
 }
 
-// CreateRule creates a rule. When the daemon is connected to a server the
-// rule is created server-side; otherwise it is managed locally.
+// CreateRule creates a rule. 往哪建由 daemon 的形态决定：托管形态下由面板建（面板
+// 不可达时 daemon 拒绝，不退回去建本地规则），单机形态下建一条本地规则。
 func (c *Client) CreateRule(req CreateRuleReq) (CreateRuleResp, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -246,18 +293,45 @@ type UpdateRuleReq struct {
 // 恰好全是数字，两种 id 单看字符串分不开，所以地址必须带上命名空间；daemon 的
 // /v1/rules/{命名空间}/{id} 按它分发，不从 id 的长相推断。
 //
-// 只能经 LocalRule / PanelRule 构造；零值不指向任何规则，daemon 以 404 拒绝。
+// 地址的来源是 daemon：ListRules 的每一行带着 daemon 给的 Ref，改删时原样交回。
+// LocalRule / PanelRule 是给不经列表、已知规则归属的调用方用的。零值不指向任何
+// 规则，daemon 以 404 拒绝。
 type RuleRef struct {
 	ns string
 	id string
 }
 
-// LocalRule 指向 tui 段里 ID 等于 id 的本地规则。
-func LocalRule(id string) RuleRef { return RuleRef{ns: "local", id: id} }
+const (
+	nsLocal = "local"
+	nsPanel = "panel"
+)
+
+// LocalRule 指向本地段里 ID 等于 id 的本地规则。
+func LocalRule(id string) RuleRef { return RuleRef{ns: nsLocal, id: id} }
 
 // PanelRule 指向面板规则 ruleID。
 func PanelRule(ruleID int64) RuleRef {
-	return RuleRef{ns: "panel", id: strconv.FormatInt(ruleID, 10)}
+	return RuleRef{ns: nsPanel, id: strconv.FormatInt(ruleID, 10)}
+}
+
+// Local 报告这个地址是否指向本地规则。
+func (r RuleRef) Local() bool { return r.ns == nsLocal }
+
+// UnmarshalJSON 读 daemon 在列表里给出的地址 {"ns":…,"id":…}。命名空间认不出或
+// id 为空都是错误：这样的地址交回去只会被 daemon 拒绝，不如在读的时候就说清楚。
+func (r *RuleRef) UnmarshalJSON(b []byte) error {
+	var wire struct {
+		NS string `json:"ns"`
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	if (wire.NS != nsLocal && wire.NS != nsPanel) || wire.ID == "" {
+		return fmt.Errorf("规则地址非法：命名空间 %q，id %q", wire.NS, wire.ID)
+	}
+	*r = RuleRef{ns: wire.NS, id: wire.ID}
+	return nil
 }
 
 func (r RuleRef) path() string {
