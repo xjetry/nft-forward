@@ -2110,7 +2110,8 @@ func (s *Server) apiSetAdminNote(w http.ResponseWriter, r *http.Request) {
 
 // --- Helpers ---
 
-// withUser injects *db.User into ctx (same key as requireAuth).
+// withUser 把登录用户放进请求上下文，userFromCtx 用同一个键取。会话与 token 两种
+// 认证（requireAPIAuth、requireTokenAuth）都经它。
 func withUser(ctx context.Context, u *db.User) context.Context {
 	return context.WithValue(ctx, userKey, u)
 }
@@ -2150,22 +2151,6 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["admin_note"] = u.AdminNote
 	m["billing_rate"] = u.BillingRate
 	return m
-}
-
-// toInt64 converts various JSON number representations to int64.
-func toInt64(v any) (int64, error) {
-	switch n := v.(type) {
-	case float64:
-		return int64(n), nil
-	case json.Number:
-		return n.Int64()
-	case string:
-		return strconv.ParseInt(n, 10, 64)
-	case int64:
-		return n, nil
-	default:
-		return 0, fmt.Errorf("cannot convert %T to int64", v)
-	}
 }
 
 // isValidRelayHost checks that a string is a valid IPv4 literal or hostname.

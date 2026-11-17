@@ -394,7 +394,8 @@ func (l LineSpec) rate() float64 {
 
 const newLineRoles = NodeRoleEntry | NodeRoleVia
 
-// CreateNode 建一台机器，只给名字、连接地址初值与凭据，其余取默认值。
+// CreateNode 建一台机器，只给名字、连接地址初值与凭据，其余取默认值。面板建节点走
+// CreateMachineNode（要带属主与端口段）；这个包装是给测试造节点用的。
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return CreateMachineNode(d, name, MachineSpec{Address: address, Secret: secret}, LineSpec{})
 }

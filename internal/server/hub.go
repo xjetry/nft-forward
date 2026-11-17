@@ -93,6 +93,8 @@ func (a *agentConn) signalClose() {
 	a.closeOnce.Do(func() { close(a.closed) })
 }
 
+// IsOnline 报告节点此刻有没有登记着的连接。面板对外的在线状态读的是 nodes.online
+// 列（连接登记与注销时写），不读这里；这个方法是给测试观察 Hub 自己的登记表用的。
 func (h *Hub) IsOnline(nodeID int64) bool {
 	h.mu.RLock()
 	_, ok := h.conns[nodeID]

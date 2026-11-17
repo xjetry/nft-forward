@@ -34,6 +34,8 @@ func ListBindingsForDownstream(d *sql.DB, downstreamID int64) ([]*NodeBinding, e
 	return queryAll(d, `SELECT `+bindingCols+` FROM node_bindings WHERE downstream_node_id=? ORDER BY upstream_node_id`, scanNodeBinding, downstreamID)
 }
 
+// GetNodeBinding 取一条绑定边。面板自己按整张表读（链路推导的拓扑、节点详情的
+// 上下游列表），不单条取；这个函数是给测试核对写入结果用的。
 func GetNodeBinding(d DBTX, upstreamID, downstreamID int64) (*NodeBinding, error) {
 	return scanNodeBinding(d.QueryRow(`SELECT `+bindingCols+` FROM node_bindings WHERE upstream_node_id=? AND downstream_node_id=?`, upstreamID, downstreamID))
 }

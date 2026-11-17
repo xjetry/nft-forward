@@ -21,8 +21,6 @@ type adminError struct {
 	msg    string
 }
 
-func (e *adminError) Error() string { return e.msg }
-
 // writeAdminErrV1 renders an adminError in the /api/v1 envelope.
 func writeAdminErrV1(w http.ResponseWriter, e *adminError) {
 	v1Err(w, e.status, e.code, e.msg)

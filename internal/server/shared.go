@@ -2,11 +2,9 @@ package server
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
-	"strings"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
@@ -206,51 +204,3 @@ func splitEntry(entry string) (host string, port int, ok bool) {
 	}
 	return h, pp, true
 }
-
-func validateCIDRList(s string) error {
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if _, _, err := net.ParseCIDR(part); err != nil {
-			return fmt.Errorf("%q: %v", part, err)
-		}
-	}
-	return nil
-}
-
-func cidrAllowsAll(list string) bool {
-	list = strings.TrimSpace(list)
-	if list == "" {
-		return true
-	}
-	for _, part := range strings.Split(list, ",") {
-		if strings.TrimSpace(part) == "0.0.0.0/0" {
-			return true
-		}
-	}
-	return false
-}
-
-func targetIPInCIDR(ip net.IP, list string) bool {
-	if cidrAllowsAll(list) {
-		return true
-	}
-	for _, part := range strings.Split(list, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		_, ipnet, err := net.ParseCIDR(part)
-		if err != nil {
-			continue
-		}
-		if ipnet.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func nullInt64(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: true} }
