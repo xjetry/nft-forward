@@ -4,7 +4,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint:design": "node scripts/design-lint.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"scripts/**/*.test.mjs\" \"src/**/*.test.ts\"",
+    "check": "npm run lint:design && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -13,10 +17,12 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.8",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.5.2",
     "tailwindcss": "^4.1.8",
+    "typescript": "^7.0.2",
     "vite": "^6.3.5"
   }
 }
