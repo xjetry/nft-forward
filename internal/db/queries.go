@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -36,7 +35,9 @@ type User struct {
 	DisableReason     sql.NullString `json:"disable_reason"`
 	MaxForwards       int            `json:"max_forwards"`
 	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
-	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
+	// TrafficUsedBytes 是本周期的全局已用量，加权字节（accounting.Weighted），只在
+	// 规则的入口跳记账；配额 TrafficQuotaBytes 与它同一单位。
+	TrafficUsedBytes int64 `json:"traffic_used_bytes"`
 	// OverQuota 不是 users 表的列：scanUser 在读出这一行时用 QuotaReached 从上面两个
 	// 字段算出，供页面显示“已超额”。全局配额用尽只停转发（见 ActiveRuleHopsForPush），
 	// 与 Disabled 无关：超额的账号仍可登录。
@@ -143,9 +144,11 @@ type Rule struct {
 	// through (entry excluded). Persisted so node_id edits re-derive the same
 	// chain; empty for plain single/composite rules.
 	ViaNodeIDs []int64 `json:"via_node_ids"`
-	// TotalBytes is not a rules-table column; it is filled by FillRuleTraffic
-	// from the entry hop so list/detail responses can show per-rule traffic.
-	TotalBytes int64 `json:"total_bytes"`
+	// WeightedBytes 是规则的加权流量（rules.weighted_bytes）。它与属主的全局已用量
+	// 同一单位：每个入口跳样本的加权字节在同一个事务里同时记进这里和属主的
+	// users.traffic_used_bytes，两边也由同一个用户重置一起归零。只有计数入账与用户
+	// 重置写这一列；建规则、改表头、重建跳都不写它。
+	WeightedBytes int64 `json:"total_bytes"`
 }
 
 type RuleHop struct {
@@ -162,12 +165,13 @@ type RuleHop struct {
 	// from (entry segment = the rule's node_id; explicit-hops path = the
 	// hop's own node). Quota suppression, per-grant accounting and shaping
 	// group hops by it rather than by physical node.
-	ViaNodeID     int64  `json:"via_node_id"`
-	Comment       string `json:"comment"`
-	LastBytes     int64  `json:"last_bytes"`
-	LastBytesUp   int64  `json:"last_bytes_up"`
-	LastBytesDown int64  `json:"last_bytes_down"`
-	TotalBytes    int64  `json:"total_bytes"`
+	ViaNodeID int64  `json:"via_node_id"`
+	Comment   string `json:"comment"`
+	// FoldedBytes 是这一跳的折算流量（rule_hops.total_bytes）：按这一跳所在物理节点
+	// 的计费方向折算，双向节点取上下行之和，单向节点取较大的一侧；不乘倍率与费率。
+	// 每一跳都是这个单位，入口跳也一样。RegenerateRule 会把一条规则的跳整体删除重建，
+	// 所以它累计的是这一行建成或属主上次重置以来的流量。
+	FoldedBytes int64 `json:"total_bytes"`
 }
 
 func RandToken(n int) string {
@@ -534,23 +538,23 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,created_at,entry_family,via_node_ids`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,created_at,entry_family,via_node_ids,weighted_bytes`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
 	var viaJSON string
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &rl.CreatedAt, &rl.EntryFamily, &viaJSON, &rl.WeightedBytes); err != nil {
 		return nil, err
 	}
 	rl.ViaNodeIDs = decodeViaNodeIDs(viaJSON)
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,last_bytes,last_bytes_up,last_bytes_down,total_bytes,via_node_id`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,total_bytes,via_node_id`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.LastBytes, &h.LastBytesUp, &h.LastBytesDown, &h.TotalBytes, &h.ViaNodeID); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.FoldedBytes, &h.ViaNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -583,35 +587,15 @@ func ExpiredUserNodeIDs(d *sql.DB) ([]int64, error) {
 		WHERE u.disabled = 0 AND `+userExpiredSQL)
 }
 
-func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {
-	hops, err := queryAll(d, `SELECT `+ruleHopCols+` FROM rule_hops WHERE node_id=? ORDER BY listen_port`, scanRuleHop, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]*RuleHop, len(hops))
-	for _, h := range hops {
-		// A tcp+udp hop is reported by the daemon either as one tcp+udp sample
-		// (kernel mode) or as separate tcp and udp samples (userspace mode, where
-		// Partition splits it into a udp kernel DNAT + a tcp userspace relay).
-		// Register every key that can carry this hop's bytes so applyCounters
-		// sums them into the same row. Cross-proto port occupancy guarantees no
-		// two hops on a node share an overlapping (proto, port), so keys stay unique.
-		for _, key := range hopCounterKeys(h.Proto, h.ListenPort) {
-			m[key] = h
-		}
-	}
-	return m, nil
-}
-
-// hopCounterKeys returns the proto/port counter keys a hop may receive samples
-// under. The daemon reports a kernel aggregate sample under the literal proto
-// (e.g. "tcp+udp/port" via th dport) and, when forward.Partition splits the
-// hop, separate per-namespace samples (tcp userspace + udp kernel). So a
-// tcp+udp hop fans in to tcp+udp, tcp, and udp; anything else uses its own
-// proto only. Derived from protoNamespaces so its key set stays a subset of
-// overlappingProtos — cross-proto port occupancy then guarantees no two hops on
-// a node ever produce the same key.
-func hopCounterKeys(proto string, port int) []string {
+// CounterProtos returns the protos a hop of the given proto may report counter
+// samples under, on its own listen port. The daemon reports a kernel aggregate
+// sample under the literal proto (e.g. "tcp+udp" via th dport) and, when
+// forward.Partition splits the hop, separate per-namespace samples (tcp
+// userspace + udp kernel). So a tcp+udp hop fans in from tcp+udp, tcp and udp;
+// anything else uses its own proto only. Derived from protoNamespaces so the
+// set stays a subset of overlappingProtos — cross-proto port occupancy then
+// guarantees no two hops on a node ever share a (proto, port) counter key.
+func CounterProtos(proto string) []string {
 	seen := map[string]bool{}
 	var protos []string
 	add := func(p string) {
@@ -624,11 +608,7 @@ func hopCounterKeys(proto string, port int) []string {
 	for _, ns := range protoNamespaces(proto) {
 		add(ns)
 	}
-	out := make([]string, len(protos))
-	for i, p := range protos {
-		out[i] = fmt.Sprintf("%s/%d", p, port)
-	}
-	return out
+	return protos
 }
 
 func ListRuleHopsByNode(d *sql.DB, nodeID int64) ([]*RuleHop, error) {

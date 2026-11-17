@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
@@ -1529,7 +1530,6 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rules, _ = db.ListAllRules(s.DB)
 	}
-	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
 	db.ResolveCompositeHops(s.DB, nodes, nodes)
@@ -1595,7 +1595,6 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	hops, _ := db.ListRuleHops(s.DB, id)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
@@ -1654,7 +1653,6 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
 	allNodes, _ := db.ListNodes(s.DB)
 	rules, _ := db.ListRulesByUser(s.DB, id)
-	db.FillRuleTraffic(s.DB, rules)
 	// The landing_nodes preview doubles as a sync point: any successful
 	// resolution keeps the materialized set fresh without waiting for the
 	// background pass.
@@ -1945,7 +1943,7 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := db.ResetAllUserTraffic(s.DB, id); err != nil {
+	if err := accounting.ResetUser(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -2150,7 +2148,6 @@ func applyEffectiveRoles(nodes []*db.Node, grants []*db.UserNode) {
 func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
-	db.FillRuleTraffic(s.DB, rules)
 	idx := s.landingIndexFromDB(u.ID)
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
 	applyEffectiveRoles(grantedNodes, grants)
@@ -2222,7 +2219,6 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	db.FillRuleTraffic(s.DB, []*db.Rule{rl})
 	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
 	applyEffectiveRoles(grantedNodes, grants)
 	// A user is granted the composite itself, not its hop children, so the
@@ -2501,7 +2497,7 @@ func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusBadRequest, "bad node id")
 		return
 	}
-	if err := db.ResetUserNodeTraffic(s.DB, userID, nodeID); err != nil {
+	if err := accounting.ResetGrant(s.DB, userID, nodeID); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

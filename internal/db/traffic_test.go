@@ -5,161 +5,23 @@ import (
 	"testing"
 )
 
-func TestResetAllUserTraffic(t *testing.T) {
-	d := openTestDB(t)
-	uid := createTestUser(t, d)
-	n1 := createTestNode(t, d, "a")
-	n2 := createTestNode(t, d, "b")
-	grantNode(t, d, uid, n1)
-	grantNode(t, d, uid, n2)
-
-	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 5000, uid)
-	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 2000, uid, n1)
-	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 3000, uid, n2)
-
-	if err := ResetAllUserTraffic(d, uid); err != nil {
-		t.Fatal(err)
-	}
-	u, _ := GetUserByID(d, uid)
-	if u.TrafficUsedBytes != 0 {
-		t.Fatalf("global not reset: %d", u.TrafficUsedBytes)
-	}
-	g1, _ := GetNodeGrant(d, uid, n1)
-	g2, _ := GetNodeGrant(d, uid, n2)
-	if g1.TrafficUsedBytes != 0 || g2.TrafficUsedBytes != 0 {
-		t.Fatalf("per-node not reset: %d, %d", g1.TrafficUsedBytes, g2.TrafficUsedBytes)
-	}
-}
-
-// seedRuleWithTraffic creates one single-hop rule owned by uid with the given
-// accumulated display counter and a nonzero last_bytes snapshot.
+// seedRuleWithTraffic 建一条 uid 名下的单跳规则，规则的加权流量
+// （rules.weighted_bytes）与这一跳的逐跳流量（rule_hops.total_bytes）都记 totalBytes。
 func seedRuleWithTraffic(t *testing.T, d *sql.DB, uid, nodeID int64, listenPort int, totalBytes int64) (hopID int64) {
 	t.Helper()
-	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at) VALUES (?,?,?,?,?,?,0)`,
-		nodeID, uid, "r", "tcp", "8.8.8.8", 443)
+	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at, weighted_bytes) VALUES (?,?,?,?,?,?,0,?)`,
+		nodeID, uid, "r", "tcp", "8.8.8.8", 443, totalBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ruleID, _ := res.LastInsertId()
-	res, err = d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, last_bytes, total_bytes) VALUES (?,0,?,?,?,?,?,777,?)`,
+	res, err = d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, total_bytes) VALUES (?,0,?,?,?,?,?,?)`,
 		ruleID, nodeID, "tcp", listenPort, "8.8.8.8", 443, totalBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	hopID, _ = res.LastInsertId()
 	return hopID
-}
-
-func TestResetAllUserTrafficClearsRuleCounters(t *testing.T) {
-	d := openTestDB(t)
-	uid := createTestUser(t, d)
-	other := createTestUser(t, d)
-	n1 := createTestNode(t, d, "rc")
-	mine := seedRuleWithTraffic(t, d, uid, n1, 20001, 5000)
-	theirs := seedRuleWithTraffic(t, d, other, n1, 20002, 6000)
-
-	if err := ResetAllUserTraffic(d, uid); err != nil {
-		t.Fatal(err)
-	}
-
-	var total, last int64
-	if err := d.QueryRow(`SELECT total_bytes, last_bytes FROM rule_hops WHERE id=?`, mine).Scan(&total, &last); err != nil {
-		t.Fatal(err)
-	}
-	if total != 0 {
-		t.Fatalf("user's rule counter should reset with the user ledgers, got %d", total)
-	}
-	if last != 777 {
-		t.Fatalf("last_bytes is the latest counter sample, not a usage ledger, and a reset must leave it alone, got %d", last)
-	}
-	if err := d.QueryRow(`SELECT total_bytes FROM rule_hops WHERE id=?`, theirs).Scan(&total); err != nil {
-		t.Fatal(err)
-	}
-	if total != 6000 {
-		t.Fatalf("another user's rule counter must be untouched, got %d", total)
-	}
-}
-
-// SegmentFirstHops maps each logical segment's first hop position to the
-// segment's logical node. Per-grant accounting charges a segment once, at that
-// first hop; every hop of a segment carries the same bytes.
-func TestSegmentFirstHops(t *testing.T) {
-	d := openTestDB(t)
-	a, _ := CreateNode(d, "e", "", "")
-	b, _ := CreateNode(d, "m1", "", "")
-	c, _ := CreateNode(d, "m2", "", "")
-	_ = UpdateNodeRelayHost(d, a.ID, "1.1.1.1")
-	_ = UpdateNodeRelayHost(d, b.ID, "2.2.2.2")
-	_ = UpdateNodeRelayHost(d, c.ID, "3.3.3.3")
-	r := &Rule{NodeID: a.ID, Name: "x", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
-	tx, _ := d.Begin()
-	id, _ := CreateRule(tx, r)
-	r.ID = id
-	// entry segment a; a middle-layer segment carrying both b and c (both hops
-	// share the layer's logical node id b.ID as their via).
-	_, _, _, err := RegenerateRule(tx, r, []HopInput{
-		{NodeID: a.ID, Mode: "userspace", ViaNodeID: a.ID},
-		{NodeID: b.ID, Mode: "userspace", ViaNodeID: b.ID},
-		{NodeID: c.ID, Mode: "userspace", ViaNodeID: b.ID},
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = tx.Commit()
-	m, err := SegmentFirstHops(d, []int64{id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[int]int64{0: a.ID, 1: b.ID}
-	if len(m[id]) != 2 || m[id][0] != want[0] || m[id][1] != want[1] {
-		t.Fatalf("segment firsts want %v, got %v", want, m[id])
-	}
-}
-
-func TestCheckAndResetTrafficCycle(t *testing.T) {
-	d := openTestDB(t)
-	uid := createTestUser(t, d)
-	nid := createTestNode(t, d, "n")
-	grantNode(t, d, uid, nid)
-
-	// reset_days=0 means never reset
-	u, _ := GetUserByID(d, uid)
-	reset, _ := CheckAndResetTrafficCycle(d, u)
-	if reset {
-		t.Fatal("reset_days=0 should not trigger reset")
-	}
-
-	// set reset_days=30, created_at=31 days ago, add traffic
-	past := now() - 31*86400
-	d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=? WHERE id=?`, past, uid)
-	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 9999, uid)
-	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 8888, uid, nid)
-
-	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
-	if !reset {
-		t.Fatal("should have reset after 31 days with 30-day cycle")
-	}
-	u, _ = GetUserByID(d, uid)
-	if u.TrafficUsedBytes != 0 {
-		t.Fatalf("global not reset: %d", u.TrafficUsedBytes)
-	}
-	g, _ := GetNodeGrant(d, uid, nid)
-	if g.TrafficUsedBytes != 0 {
-		t.Fatalf("per-node not reset: %d", g.TrafficUsedBytes)
-	}
-
-	// calling again in the same cycle should not reset
-	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 100, uid)
-	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
-	if reset {
-		t.Fatal("should not reset again in same cycle")
-	}
-	u, _ = GetUserByID(d, uid)
-	if u.TrafficUsedBytes != 100 {
-		t.Fatalf("traffic should remain at 100, got %d", u.TrafficUsedBytes)
-	}
 }
 
 func TestNodesExceedingQuota(t *testing.T) {

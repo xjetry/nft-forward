@@ -130,11 +130,11 @@ func TestApplyCountersUnidirectionalMax(t *testing.T) {
 
 // The same bytes flow through every hop, so the global user quota is billed
 // exactly once — at the entry hop — with the entry node's own rate_multiplier
-// (2.0 here). Per-grant quota charges raw bytes once per logical segment: the
+// (2.0 here). Per-grant quota charges folded, unweighted bytes once per logical segment: the
 // entry grant and the middle-layer grant each accrue the real 1000 bytes, and
 // the layer's second physical hop bills no grant of its own. The layer node's
 // own 3.0 multiplier never enters billing — only the entry's factor does.
-func TestBillingEntryOnlyAndRawGrantBytes(t *testing.T) {
+func TestBillingEntryOnlyAndFoldedGrantBytes(t *testing.T) {
 	d := openDB(t)
 	entry, _ := db.CreateNode(d, "e", "", "")
 	m1, _ := db.CreateNode(d, "m1", "", "")
@@ -181,18 +181,23 @@ func TestBillingEntryOnlyAndRawGrantBytes(t *testing.T) {
 	ge, _ := db.GetNodeGrant(d, uid, entry.ID)
 	gm, _ := db.GetNodeGrant(d, uid, mid.ID)
 	if ge.TrafficUsedBytes != 1000 || gm.TrafficUsedBytes != 1000 {
-		t.Fatalf("grant raw bytes want 1000/1000, got %d/%d", ge.TrafficUsedBytes, gm.TrafficUsedBytes)
+		t.Fatalf("grant folded bytes want 1000/1000, got %d/%d", ge.TrafficUsedBytes, gm.TrafficUsedBytes)
 	}
-	// hop totals: entry hop stores the billed 2000; every other hop stores raw 1000
+	// 逐跳累计每一跳都是折算流量（这里三台都是双向节点，等于 1000）；乘过倍率的
+	// 2000 只记在规则账上。
 	hops, _ = db.ListRuleHops(d, id)
-	if hops[0].TotalBytes != 2000 || hops[1].TotalBytes != 1000 || hops[2].TotalBytes != 1000 {
-		t.Fatalf("hop totals: %d/%d/%d", hops[0].TotalBytes, hops[1].TotalBytes, hops[2].TotalBytes)
+	if hops[0].FoldedBytes != 1000 || hops[1].FoldedBytes != 1000 || hops[2].FoldedBytes != 1000 {
+		t.Fatalf("hop totals: %d/%d/%d", hops[0].FoldedBytes, hops[1].FoldedBytes, hops[2].FoldedBytes)
+	}
+	rl, _ := db.GetRule(d, id)
+	if rl.WeightedBytes != 2000 {
+		t.Fatalf("rule weighted traffic want 2000, got %d", rl.WeightedBytes)
 	}
 }
 
 // A composite entry's own rate_multiplier is the whole rule's billing factor,
 // applied once at the entry hop; the dormant per-hop node_hops multipliers no
-// longer enter billing. Per-grant quota charges raw bytes once per logical
+// longer enter billing. Per-grant quota charges folded, unweighted bytes once per logical
 // segment: a plain composite rule is one segment (via = the composite), so only
 // the composite grant accrues — its physical child nodes carry no grant.
 func TestApplyCountersMultiplier(t *testing.T) {
@@ -246,9 +251,9 @@ func TestApplyCountersMultiplier(t *testing.T) {
 	}
 
 	gc, _ := db.GetNodeGrant(d, uid, comp.ID)
-	// raw bytes, charged once for the composite's single logical segment
+	// folded, unweighted bytes, charged once for the composite's single logical segment
 	if gc.TrafficUsedBytes != 1000 {
-		t.Fatalf("composite grant want raw 1000, got %d", gc.TrafficUsedBytes)
+		t.Fatalf("composite grant want folded 1000, got %d", gc.TrafficUsedBytes)
 	}
 	g1, _ := db.GetNodeGrant(d, uid, n1.ID)
 	g2, _ := db.GetNodeGrant(d, uid, n2.ID)
@@ -259,8 +264,8 @@ func TestApplyCountersMultiplier(t *testing.T) {
 }
 
 // A rate_multiplier of 0 is a deliberate free marker: global usage accrues
-// nothing and the entry hop's billed total_bytes is 0, while the per-grant quota
-// still charges the raw bytes that actually flowed. Only a negative or absent
+// nothing and the rule's weighted traffic is 0, while the per-grant quota
+// still charges the folded bytes that actually flowed. Only a negative or absent
 // multiplier falls back to 1.0 (see TestApplyCountersNegativeMultiplierBillsAtUnit).
 func TestApplyCountersZeroMultiplierIsFree(t *testing.T) {
 	d := openDB(t)
@@ -302,14 +307,18 @@ func TestApplyCountersZeroMultiplierIsFree(t *testing.T) {
 		t.Fatalf("free entry multiplier must bill 0 global usage, got %d", u.TrafficUsedBytes)
 	}
 	gc, _ := db.GetNodeGrant(d, uid, comp.ID)
-	// per-grant quota still charges the raw bytes that flowed
+	// per-grant quota still charges the folded bytes that flowed
 	if gc.TrafficUsedBytes != 5000 {
-		t.Fatalf("free entry per-grant quota want raw 5000, got %d", gc.TrafficUsedBytes)
+		t.Fatalf("free entry per-grant quota want folded 5000, got %d", gc.TrafficUsedBytes)
+	}
+	// 免费入口只让加权的规则账为 0；逐跳的折算流量照记。
+	rl, _ = db.GetRule(d, ruleID)
+	if rl.WeightedBytes != 0 {
+		t.Fatalf("free entry rule weighted traffic want 0, got %d", rl.WeightedBytes)
 	}
 	hops, _ = db.ListRuleHops(d, ruleID)
-	// entry hop stores the billed amount, which is 0 under a free multiplier
-	if hops[0].TotalBytes != 0 {
-		t.Fatalf("free entry hop total_bytes (billed) want 0, got %d", hops[0].TotalBytes)
+	if hops[0].FoldedBytes != 5000 {
+		t.Fatalf("free entry hop folded total want 5000, got %d", hops[0].FoldedBytes)
 	}
 }
 
@@ -358,8 +367,8 @@ func TestApplyCountersNegativeMultiplierBillsAtUnit(t *testing.T) {
 		t.Fatalf("negative multiplier must bill at unit (5000), got %d", u.TrafficUsedBytes)
 	}
 	gc, _ := db.GetNodeGrant(d, uid, comp.ID)
-	// per-segment grant is raw bytes, independent of the billing multiplier
+	// per-segment grant is folded bytes, independent of the billing multiplier
 	if gc.TrafficUsedBytes != 5000 {
-		t.Fatalf("composite grant want raw 5000, got %d", gc.TrafficUsedBytes)
+		t.Fatalf("composite grant want folded 5000, got %d", gc.TrafficUsedBytes)
 	}
 }

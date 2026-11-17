@@ -17,8 +17,7 @@ func TestHopCounterKeysWithinOccupancy(t *testing.T) {
 		for _, p := range overlappingProtos(proto) {
 			occ[p] = true
 		}
-		for _, key := range hopCounterKeys(proto, 1) {
-			kp := strings.SplitN(key, "/", 2)[0]
+		for _, kp := range CounterProtos(proto) {
 			if !occ[kp] {
 				t.Errorf("proto %s: counter key proto %q is not in the occupancy set %v; keys could collide across hops", proto, kp, occ)
 			}

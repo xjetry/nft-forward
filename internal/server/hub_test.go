@@ -221,17 +221,18 @@ func TestHubCountersUpdatesRuleHopBytes(t *testing.T) {
 	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeCounters, Payload: cf2})
 	syncByPing(t, c)
 
-	hopMap, _ := db.RuleHopMapByNode(hub.DB, n.ID)
-	key := "tcp/" + strconv.Itoa(listenPort)
-	got := hopMap[key]
+	var got *db.RuleHop
+	hops, _ = db.ListRuleHopsByNode(hub.DB, n.ID)
+	for _, h := range hops {
+		if h.ID == hopID {
+			got = h
+		}
+	}
 	if got == nil {
-		t.Fatalf("rule hop not found for %s", key)
+		t.Fatalf("rule hop %d not found", hopID)
 	}
-	if got.TotalBytes != 1536 {
-		t.Fatalf("expected TotalBytes 1536 (1024 + 512), got %d", got.TotalBytes)
-	}
-	if got.LastBytes != 512 {
-		t.Fatalf("expected LastBytes 512 (most recent delta), got %d", got.LastBytes)
+	if got.FoldedBytes != 1536 {
+		t.Fatalf("expected FoldedBytes 1536 (1024 + 512), got %d", got.FoldedBytes)
 	}
 }
 
@@ -259,7 +260,7 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	// OnTrafficUpdate fires off-goroutine (so quota enforcement can't deadlock
 	// the reader loop), so collect via a channel rather than a shared slice.
 	notified := make(chan int64, 4)
-	hub.OnTrafficUpdate = func(userID int64, nodeID int64) { notified <- userID }
+	hub.OnTrafficUpdate = func(userID int64) { notified <- userID }
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{

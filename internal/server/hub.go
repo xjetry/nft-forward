@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"nft-forward/internal/accounting"
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/rulechange"
@@ -33,11 +33,11 @@ const (
 type Hub struct {
 	DB *sql.DB
 
-	// OnTrafficUpdate, when set, is invoked once per (user, node) pair whose
-	// usage was advanced by a counters batch. The Hub stays a pure transport:
-	// it knows how to accumulate bytes but delegates quota policy (and the
-	// re-dispatch it may trigger) to the owner that wires this callback.
-	OnTrafficUpdate func(userID int64, nodeID int64)
+	// OnTrafficUpdate 在一批计数入账后，对这一批向其授权已用量或落地出口账记过账的
+	// 每个属主各调用一次。全局已用量只在入口跳记账，入口跳总是一段的段首、同时记
+	// 授权账，所以全局配额的变化也在其中。配额判定与它可能引起的重推属于面板，由
+	// 接线的一方负责。
+	OnTrafficUpdate func(userID int64)
 
 	// Rules 执行节点发来的规则命令（见 handleRuleCommand）。Hub 自己不判定谁能改
 	// 什么、也不碰规则表。
@@ -632,329 +632,52 @@ func writeError(ctx context.Context, ws *websocket.Conn, code, msg string) {
 	_ = writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeError, Payload: p})
 }
 
-// applyCounters folds per-rule bytes_delta into the rule_hops table and the
-// owning user's usage. The (node_id, listen_port, proto) tuple identifies
-// the hop. Each sample is resolved to its rule_hop row so we learn the hop
-// id and the owning rule/user.
-//
-// The same bytes flow through every hop of a chain, so the global user quota is
-// billed exactly once — at the entry hop (position 0) — weighted by the entry
-// node's own rate_multiplier and the user's billing rate. Per-grant quota
-// charges raw bytes once per logical segment, at that segment's first hop, onto
-// the segment's logical node grant. Quota suppression keys on the same logical
-// node end to end.
-func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
-	hopMap, err := db.RuleHopMapByNode(h.DB, nodeID)
+// applyCounters 把节点上报的一批计数样本交给记账（accounting.Record），再把记账的
+// 结果分发出去：速度缓存按规则属主归属每个样本，周期翻转的属主重推节点，配额账有
+// 增长的属主交给 OnTrafficUpdate。账怎么记、记在哪里都在 accounting 里，Hub 只传递。
+func (h *Hub) applyCounters(nodeID int64, wire []wsproto.CounterSample) {
+	res, err := accounting.Record(h.DB, nodeID, accounting.SamplesFromWire(wire))
 	if err != nil {
-		log.Printf("hub: node %d load rule hop map for counters: %v", nodeID, err)
-		return
+		log.Printf("hub: node %d counters: %v", nodeID, err)
 	}
-	// Only the rules referenced by this node's hops are ever looked up, so load
-	// just those instead of scanning the whole rules table every counters batch.
-	ruleIDSet := map[int64]bool{}
-	for _, rh := range hopMap {
-		ruleIDSet[rh.RuleID] = true
-	}
-	ruleIDs := make([]int64, 0, len(ruleIDSet))
-	for id := range ruleIDSet {
-		ruleIDs = append(ruleIDs, id)
-	}
-	ruleMap, _ := db.RulesByIDs(h.DB, ruleIDs)
-	if ruleMap == nil {
-		ruleMap = map[int64]*db.Rule{}
-	}
-	multipliers, err := db.NodeRateMultipliers(h.DB)
-	if err != nil {
-		log.Printf("hub: node %d load node rate multipliers: %v", nodeID, err)
-		multipliers = map[int64]float64{}
-	}
-	// Segment-first hops drive per-grant accounting: each logical segment's
-	// grant is charged once, at the hop where the segment begins.
-	segFirst, err := db.SegmentFirstHops(h.DB, ruleIDs)
-	if err != nil {
-		log.Printf("hub: node %d load segment first hops: %v", nodeID, err)
-		segFirst = map[int64]map[int]int64{}
+	for _, s := range res.Unmatched {
+		log.Printf("hub: node %d counters sample for %s/%d matched no rule_hop row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
 	}
 
-	// Landing-exit ledger lookups for this batch: which (owner, host, port)
-	// triples are present landing exits, and each rule's final hop position —
-	// the only hop whose bytes reach the exit ledger, since middle hops target
-	// system relay addresses. On a load error the batch skips exit metering
-	// entirely (under-counting beats mis-counting).
-	ownerSet := map[int64]bool{}
-	for _, r := range ruleMap {
-		if r.OwnerID.Valid {
-			ownerSet[r.OwnerID.Int64] = true
-		}
-	}
-	ownerIDs := make([]int64, 0, len(ownerSet))
-	for id := range ownerSet {
-		ownerIDs = append(ownerIDs, id)
-	}
-	exitSet, err := db.PresentLandingExitSet(h.DB, ownerIDs)
-	if err != nil {
-		log.Printf("hub: node %d load landing exit set: %v", nodeID, err)
-		exitSet = nil
-	}
-	maxPos, err := db.MaxHopPositions(h.DB, ruleIDs)
-	if err != nil {
-		log.Printf("hub: node %d load hop positions: %v", nodeID, err)
-		exitSet = nil
-	}
-
-	node, err := db.GetNode(h.DB, nodeID)
-	if err != nil {
-		log.Printf("hub: node %d load for billing direction: %v", nodeID, err)
-		return
-	}
-
-	type userNode struct{ userID, nodeID int64 }
-	touched := map[userNode]bool{}
-	// userCache holds each owning user loaded once per batch (nil on load error),
-	// serving both the cycle-reset check and the billing-rate lookup so the same
-	// user isn't queried twice per sample.
-	userCache := map[int64]*db.User{}
-
-	// Accumulate all row mutations and flush them in one transaction after the
-	// loop. Reads, cycle resets and redispatch stay outside any tx: with
-	// MaxOpenConns(1) a tx holds the only connection, so a pool read or a
-	// redispatch goroutine inside it would deadlock.
-	type hopWrite struct{ lastBytes, lastUp, lastDown, addWeighted int64 }
-	hopWrites := map[int64]*hopWrite{}
-	userNodeAdds := map[userNode]int64{}
-	userAdds := map[int64]int64{}
-	type exitAdd struct{ up, down int64 }
-	exitAdds := map[db.UserExitKey]*exitAdd{}
-	// The reporting node's raw ledger: every sampled byte counts, both
-	// directions regardless of unidirectional billing, and before the rule_hop
-	// match below — a sample whose rule was deleted mid-batch is still real
-	// forwarded volume.
-	var rawAdd int64
-
-	for _, s := range samples {
-		// Pre-v0.33 agents send BytesDelta without direction; fall back to it
-		// so traffic accounting continues while the node upgrades.
-		if s.BytesUp == 0 && s.BytesDown == 0 && s.BytesDelta > 0 {
-			s.BytesUp = s.BytesDelta
-		}
-		totalDelta := s.BytesUp + s.BytesDown
-		rawAdd += totalDelta
-		billedDelta := totalDelta
-		if node.Unidirectional {
-			// Unidirectional billing charges the heavier direction only, not
-			// their sum: a flow is dominated by one side (download for most
-			// traffic, upload for backups) and max(up,down) prices that side
-			// without double-counting the light reverse channel.
-			billedDelta = max(s.BytesUp, s.BytesDown)
-		}
-		key := fmt.Sprintf("%s/%d", s.Proto, s.ListenPort)
-		rh, ok := hopMap[key]
-		if !ok {
-			log.Printf("hub: node %d counters sample for %s/%d matched no rule_hop row (rule may have been deleted)", nodeID, s.Proto, s.ListenPort)
-			continue
-		}
-		r := ruleMap[rh.RuleID]
-
-		// Exit ledger: final hop only, raw and unweighted — it records real
-		// traffic to the destination, independent of billing multipliers and
-		// the node's unidirectional setting. It marks the pair touched from its
-		// own totalDelta so the quota callback fires on real forwarded volume,
-		// independent of whatever the billing path below charges.
-		if r != nil && r.OwnerID.Valid && totalDelta > 0 && len(exitSet) > 0 && rh.Position == maxPos[rh.RuleID] {
-			key := db.UserExitKey{UserID: r.OwnerID.Int64, Host: r.ExitHost, Port: r.ExitPort}
-			if exitSet[key] {
-				ea := exitAdds[key]
-				if ea == nil {
-					ea = &exitAdd{}
-					exitAdds[key] = ea
-				}
-				ea.up += s.BytesUp
-				ea.down += s.BytesDown
-				touched[userNode{key.UserID, nodeID}] = true
-			}
-		}
-
-		// Global quota: the same bytes flow through every hop, so the user is
-		// billed exactly once — at the entry hop — with the entry node's own
-		// rate_multiplier (a composite entry carries the baked composite factor;
-		// middle-layer and child hops never stack their own).
-		weighted := billedDelta
-		var userID int64
-		hasOwner := r != nil && r.OwnerID.Valid && billedDelta > 0
-		if hasOwner {
-			userID = r.OwnerID.Int64
-
-			u, cached := userCache[userID]
-			if !cached {
-				u, _ = db.GetUserByID(h.DB, userID) // nil on error; cache either way
-				userCache[userID] = u
-				if u != nil {
-					if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
-						// Quota exclusions are evaluated at push time only; a
-						// fresh cycle must re-push or suppressed rules stay dead.
-						if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {
-							go h.Redispatch(nodes)
-						}
-					}
-				}
-			}
-
-			// Entry multiplier 0 marks a free node: global usage accrues nothing.
-			// Only a negative value or a map-miss (entry node vanished mid-batch)
-			// falls back to 1.0 — a miss must never silently make a rule free.
-			// Per-grant raw-byte quotas and the exit ledger still accrue regardless.
-			mult, ok := multipliers[r.NodeID]
-			if !ok || mult < 0 {
-				mult = 1.0
-			}
-			billingRate := 1.0
-			if u != nil && u.BillingRate > 0 {
-				billingRate = u.BillingRate
-			}
-			weighted = int64(math.Round(float64(billedDelta) * mult * billingRate))
-		}
-
-		// rule_hops: last_bytes stay raw for speed display. total_bytes carries
-		// the billed (weighted) amount on the entry hop — what per-rule traffic
-		// shows and the global quota consumes — and raw bytes on every other hop.
-		// A tcp+udp hop can fan in as two samples to the same row; last_* take
-		// the last sample and the total sums.
-		w := hopWrites[rh.ID]
-		if w == nil {
-			w = &hopWrite{}
-			hopWrites[rh.ID] = w
-		}
-		w.lastBytes = totalDelta
-		w.lastUp = s.BytesUp
-		w.lastDown = s.BytesDown
-		if rh.Position == 0 {
-			w.addWeighted += weighted
-		} else {
-			w.addWeighted += billedDelta
-		}
-
-		if !hasOwner {
-			continue
-		}
-
-		// Per-grant quota: raw bytes, charged once per logical segment at its
-		// first hop, onto the segment's logical node grant (the entry segment's
-		// via is rules.node_id, so its grant is included). Suppression marks the
-		// same logical node so RulesAffectedByNode and OnTrafficUpdate stay in
-		// step with this accounting.
-		if via, ok := segFirst[rh.RuleID][rh.Position]; ok {
-			userNodeAdds[userNode{userID, via}] += billedDelta
-			touched[userNode{userID, via}] = true
-		}
-		// Global usage is entry-only: bill the weighted amount once, at position 0.
-		if rh.Position == 0 && weighted > 0 {
-			userAdds[userID] += weighted
-		}
-	}
-
-	// Flush every accumulated mutation in a single transaction: one commit (one
-	// fsync) for the whole batch instead of 3-5 auto-commits per sample.
-	if len(hopWrites) > 0 || len(userNodeAdds) > 0 || len(userAdds) > 0 || len(exitAdds) > 0 || rawAdd > 0 {
-		if tx, err := h.DB.Begin(); err != nil {
-			log.Printf("hub: node %d counters tx begin: %v", nodeID, err)
-		} else {
-			ok := true
-			if rawAdd > 0 {
-				if err := db.AddNodeRawTraffic(tx, nodeID, rawAdd); err != nil {
-					log.Printf("hub: node %d raw traffic add: %v", nodeID, err)
-					ok = false
-				}
-			}
-			for id, w := range hopWrites {
-				if !ok {
-					break
-				}
-				if _, err := tx.Exec(`UPDATE rule_hops SET last_bytes=?, last_bytes_up=?, last_bytes_down=?, total_bytes=total_bytes+? WHERE id=?`,
-					w.lastBytes, w.lastUp, w.lastDown, w.addWeighted, id); err != nil {
-					log.Printf("hub: node %d counters rule_hop update: %v", nodeID, err)
-					ok = false
-					break
-				}
-			}
-			for un, delta := range userNodeAdds {
-				if !ok {
-					break
-				}
-				if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = traffic_used_bytes + ? WHERE user_id=? AND node_id=?`, delta, un.userID, un.nodeID); err != nil {
-					log.Printf("hub: user %d node %d per-node traffic add: %v", un.userID, un.nodeID, err)
-					ok = false
-					break
-				}
-			}
-			for uid, delta := range userAdds {
-				if !ok {
-					break
-				}
-				if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = traffic_used_bytes + ? WHERE id=?`, delta, uid); err != nil {
-					log.Printf("hub: user %d traffic add: %v", uid, err)
-					ok = false
-					break
-				}
-			}
-			for k, ea := range exitAdds {
-				if !ok {
-					break
-				}
-				// A zero-row hit means the row was flipped absent and deleted
-				// between load and flush; dropping one batch is the intent of
-				// that deletion.
-				if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = used_bytes + ?, used_bytes_up = used_bytes_up + ?, used_bytes_down = used_bytes_down + ?, updated_at = ? WHERE user_id=? AND host=? AND port=?`,
-					ea.up+ea.down, ea.up, ea.down, time.Now().Unix(), k.UserID, k.Host, k.Port); err != nil {
-					log.Printf("hub: user %d exit %s:%d ledger add: %v", k.UserID, k.Host, k.Port, err)
-					ok = false
-					break
-				}
-			}
-			if ok {
-				if err := tx.Commit(); err != nil {
-					log.Printf("hub: node %d counters tx commit: %v", nodeID, err)
-				}
-			} else {
-				_ = tx.Rollback()
-			}
-		}
-	}
-
-	deltas := make([]counterDelta, 0, len(samples))
-	for _, s := range samples {
-		// Attribute the hop's speed to its rule's owner so the per-user speed
-		// view can filter it. An unmatched hop (rule deleted mid-batch) or an
-		// ownerless admin rule leaves ownerID 0 — it still counts toward the
-		// node total, just not toward any user's share.
-		var ownerID int64
-		if rh, ok := hopMap[s.Proto+"/"+strconv.Itoa(s.ListenPort)]; ok {
-			if r := ruleMap[rh.RuleID]; r != nil && r.OwnerID.Valid {
-				ownerID = r.OwnerID.Int64
-			}
-		}
+	// 把每个样本的速度归属到规则属主，按用户看的速度视图据此筛选。匹配不到规则跳
+	// 或无属主的样本归属 0：仍算进节点总速度，只是不属于任何用户。
+	deltas := make([]counterDelta, 0, len(wire))
+	for _, s := range wire {
 		deltas = append(deltas, counterDelta{
 			proto:         s.Proto,
 			listenPortStr: strconv.Itoa(s.ListenPort),
 			bytesUp:       s.BytesUp,
 			bytesDown:     s.BytesDown,
-			ownerID:       ownerID,
+			ownerID:       res.OwnerOf(s.Proto, s.ListenPort),
 		})
 	}
 	h.speedCache.update(nodeID, deltas)
 
-	// Quota enforcement (the OnTrafficUpdate callback) can call back into the hub
-	// to re-dispatch a ruleset, which blocks on an apply_ack that this very
-	// readerLoop must deliver. Run it off-goroutine so the reader never waits on
-	// itself — otherwise every enforcement fires the 30s apply timeout and flaps
-	// the node. touched is loop-local, so snapshotting it here is race-free.
-	if h.OnTrafficUpdate != nil && len(touched) > 0 {
-		pairs := make([]userNode, 0, len(touched))
-		for un := range touched {
-			pairs = append(pairs, un)
+	// 配额条件只在下发时求值：周期翻转把账本清零之后不重推，因配额用尽被排除的规则
+	// 就一直不恢复。
+	if h.Redispatch != nil {
+		for _, uid := range res.RolledOver {
+			if nodes, err := db.DistinctUserNodes(h.DB, uid); err == nil {
+				go h.Redispatch(nodes)
+			} else {
+				log.Printf("hub: user %d nodes after cycle reset: %v", uid, err)
+			}
 		}
+	}
+
+	// 配额判定（OnTrafficUpdate）可能回头经 Hub 重推规则集，重推要等这个 readerLoop
+	// 自己去收的 apply_ack；放到另一个 goroutine 里，读循环才不会等自己——否则它要
+	// 一直等到下发超时（applyAckTimeout），期间收不到这条连接上的任何帧。
+	if h.OnTrafficUpdate != nil && len(res.QuotaOwners) > 0 {
+		owners := res.QuotaOwners
 		go func() {
-			for _, un := range pairs {
-				h.OnTrafficUpdate(un.userID, un.nodeID)
+			for _, uid := range owners {
+				h.OnTrafficUpdate(uid)
 			}
 		}()
 	}
