@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,11 +50,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		r := m.rowAt(m.cursor)
-		id := r.ID
-		if r.RuleID != 0 {
-			id = strconv.FormatInt(r.RuleID, 10)
-		}
-		if err := m.client.DeleteRule(id); err != nil {
+		if err := m.client.DeleteRule(ruleRef(r)); err != nil {
 			m.err = err.Error()
 			m.mode = viewList
 			return m, nil
@@ -78,11 +73,7 @@ func (m model) updateConfirmClear(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		for _, r := range m.rules {
-			id := r.ID
-			if r.RuleID != 0 {
-				id = strconv.FormatInt(r.RuleID, 10)
-			}
-			if err := m.client.DeleteRule(id); err != nil {
+			if err := m.client.DeleteRule(ruleRef(r)); err != nil {
 				m.err = err.Error()
 				m.mode = viewList
 				return m, nil

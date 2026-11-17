@@ -209,12 +209,7 @@ func (m model) commitAdd(proto string, srcPort int, destInput string, destPort i
 
 func (m model) commitEdit(proto string, srcPort int, destInput string, destPort int, comment string) (tea.Model, tea.Cmd) {
 	r := m.rowAt(m.cursor)
-	// Server rules use their numeric RuleID; local rules use their hex ID.
-	id := r.ID
-	if r.RuleID != 0 {
-		id = strconv.FormatInt(r.RuleID, 10)
-	}
-	if err := m.client.UpdateRule(id, daemonclient.UpdateRuleReq{
+	if err := m.client.UpdateRule(ruleRef(r), daemonclient.UpdateRuleReq{
 		Proto:      proto,
 		ExitHost:   destInput,
 		ExitPort:   destPort,

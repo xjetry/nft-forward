@@ -207,15 +207,37 @@ func TestUpdateRule_PutsWithID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = c.UpdateRule("abc123", UpdateRuleReq{Proto: "tcp", ExitHost: "1.2.3.4", ExitPort: 80})
+	err = c.UpdateRule(LocalRule("abc123"), UpdateRuleReq{Proto: "tcp", ExitHost: "1.2.3.4", ExitPort: 80})
 	if err != nil {
 		t.Fatalf("UpdateRule: %v", err)
 	}
 	if capturedMethod != http.MethodPut {
 		t.Errorf("method = %q, want PUT", capturedMethod)
 	}
-	if capturedPath != "/v1/rules/abc123" {
-		t.Errorf("path = %q, want /v1/rules/abc123", capturedPath)
+	if capturedPath != "/v1/rules/local/abc123" {
+		t.Errorf("path = %q, want /v1/rules/local/abc123", capturedPath)
+	}
+}
+
+// 地址里的命名空间只取决于用哪个构造函数，与 id 的长相无关：全是数字的本地 id
+// 仍落在 local 下，面板规则落在 panel 下。
+func TestRuleRefPathCarriesNamespace(t *testing.T) {
+	cases := []struct {
+		ref  RuleRef
+		want string
+	}{
+		{LocalRule("abcd1234"), "/v1/rules/local/abcd1234"},
+		{LocalRule("12345678"), "/v1/rules/local/12345678"},
+		{PanelRule(7), "/v1/rules/panel/7"},
+		{PanelRule(12345678), "/v1/rules/panel/12345678"},
+	}
+	for _, tc := range cases {
+		if got := tc.ref.path(); got != tc.want {
+			t.Errorf("%s: path = %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+	if LocalRule("12345678") == PanelRule(12345678) {
+		t.Error("同一串数字在两个命名空间里必须是两个不同的地址")
 	}
 }
 
@@ -227,7 +249,7 @@ func TestUpdateRule_SurfacesServerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = c.UpdateRule("5", UpdateRuleReq{ListenPort: 21000})
+	err = c.UpdateRule(PanelRule(5), UpdateRuleReq{ListenPort: 21000})
 	if err == nil || !strings.Contains(err.Error(), "端口被占用") {
 		t.Fatalf("expected server error surfaced verbatim, got %v", err)
 	}
@@ -245,14 +267,14 @@ func TestDeleteRule_DeletesWithID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := c.DeleteRule("9"); err != nil {
+	if err := c.DeleteRule(PanelRule(9)); err != nil {
 		t.Fatal(err)
 	}
 	if capturedMethod != http.MethodDelete {
 		t.Errorf("method = %q, want DELETE", capturedMethod)
 	}
-	if capturedPath != "/v1/rules/9" {
-		t.Errorf("path = %q, want /v1/rules/9", capturedPath)
+	if capturedPath != "/v1/rules/panel/9" {
+		t.Errorf("path = %q, want /v1/rules/panel/9", capturedPath)
 	}
 }
 
@@ -321,14 +343,14 @@ func TestClient_UnixTransport_StillWorks(t *testing.T) {
 
 func TestDeleteRule_SurfacesServerError(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/rules/9", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/rules/panel/9", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rule in use", http.StatusConflict)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	c, _ := New(srv.URL)
 
-	err := c.DeleteRule("9")
+	err := c.DeleteRule(PanelRule(9))
 	if err == nil || !strings.Contains(err.Error(), "rule in use") {
 		t.Fatalf("expected server error surfaced, got %v", err)
 	}

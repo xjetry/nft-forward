@@ -16,8 +16,20 @@ type daemonClient interface {
 	Status() (daemonclient.StatusResp, error)
 	ListRules() ([]nft.Rule, error)
 	CreateRule(daemonclient.CreateRuleReq) (daemonclient.CreateRuleResp, error)
-	UpdateRule(id string, req daemonclient.UpdateRuleReq) error
-	DeleteRule(id string) error
+	UpdateRule(ref daemonclient.RuleRef, req daemonclient.UpdateRuleReq) error
+	DeleteRule(ref daemonclient.RuleRef) error
+}
+
+// ruleRef 给出列表里一行规则在 daemon 上的地址，是改 / 删两条路径共用的唯一判定处。
+//
+// 归属由这一行自己的字段决定：面板下发的规则带着非零的 RuleID；本地规则的 RuleID
+// 为 0、以 ID 标识——daemon 里本地规则只来自 handleCreateRule（不设 RuleID）和
+// downgradePanelRule（把 RuleID 清零）。不看 ID 的长相：本地 ID 可能全是数字。
+func ruleRef(r nft.Rule) daemonclient.RuleRef {
+	if r.RuleID != 0 {
+		return daemonclient.PanelRule(r.RuleID)
+	}
+	return daemonclient.LocalRule(r.ID)
 }
 
 type viewMode int

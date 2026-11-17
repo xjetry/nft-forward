@@ -232,7 +232,7 @@ func TestHandler_UpdateRule_LocalHexID(t *testing.T) {
 		"tui": {{ID: "abcd1234", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
 	}
 	body := `{"comment":"updated","listen_port":90}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/rules/abcd1234", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/local/abcd1234", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -246,7 +246,7 @@ func TestHandler_UpdateRule_LocalHexID(t *testing.T) {
 func TestHandler_UpdateRule_NotFound(t *testing.T) {
 	d := newTestDaemon(t)
 	body := `{"comment":"x"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/rules/nope", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/local/nope", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -257,7 +257,7 @@ func TestHandler_UpdateRule_NotFound(t *testing.T) {
 func TestHandler_UpdateRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
 	d := newTestDaemon(t)
 	body := `{"listen_port":21000}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/rules/5", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/v1/rules/panel/5", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {
@@ -270,7 +270,7 @@ func TestHandler_DeleteRule_LocalHexID(t *testing.T) {
 	d.owners = OwnerRuleset{
 		"tui": {{ID: "abcd1234", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
 	}
-	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/abcd1234", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/local/abcd1234", nil)
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -283,7 +283,7 @@ func TestHandler_DeleteRule_LocalHexID(t *testing.T) {
 
 func TestHandler_DeleteRule_NotFound(t *testing.T) {
 	d := newTestDaemon(t)
-	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/nope", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/local/nope", nil)
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -293,7 +293,7 @@ func TestHandler_DeleteRule_NotFound(t *testing.T) {
 
 func TestHandler_DeleteRule_ServerIDReturns503WhenDisconnected(t *testing.T) {
 	d := newTestDaemon(t)
-	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/9", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rules/panel/9", nil)
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {
@@ -690,28 +690,6 @@ func TestCounterSamples_DeltasAndReset(t *testing.T) {
 	}
 }
 
-func TestParseRuleID(t *testing.T) {
-	cases := []struct {
-		in   string
-		id   int64
-		ok   bool
-	}{
-		{"5", 5, true},
-		{"123", 123, true},
-		{"0", 0, false},      // zero not valid
-		{"", 0, false},       // empty
-		{"abc", 0, false},    // hex
-		{"abcd1234", 0, false}, // hex
-		{"-1", 0, false},     // negative
-	}
-	for _, tc := range cases {
-		got, ok := parseRuleID(tc.in)
-		if ok != tc.ok || got != tc.id {
-			t.Errorf("parseRuleID(%q) = (%d, %v), want (%d, %v)", tc.in, got, ok, tc.id, tc.ok)
-		}
-	}
-}
-
 func TestPickLocalFreePort(t *testing.T) {
 	d := newTestDaemon(t)
 	d.owners = OwnerRuleset{
@@ -783,7 +761,7 @@ func TestUpdateRuleRoutesChainRowsToRuleHopEdit(t *testing.T) {
 	d.mu.Unlock()
 
 	put := func(id, body string) int {
-		req := httptest.NewRequest(http.MethodPut, "/v1/rules/"+id, strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPut, "/v1/rules/panel/"+id, strings.NewReader(body))
 		w := httptest.NewRecorder()
 		d.handleRulesWithID(w, req)
 		return w.Code

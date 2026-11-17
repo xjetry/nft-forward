@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -253,20 +254,48 @@ func (d *Daemon) handleRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRulesWithID dispatches PUT /v1/rules/{id} and DELETE /v1/rules/{id}.
+// 规则地址里的两个命名空间，对应 /v1/rules/{命名空间}/{id}。
+//
+// 本地规则（tui 段）的 id 由 nft.NewRuleID 生成，是 8 位十六进制串；面板规则的 id
+// 是面板数据库里的正整数。十六进制串可能恰好全是数字，两种 id 单看字符串分不开，
+// 所以由调用方在路径里写明命名空间：TUI 的每一行都知道自己是哪一种（面板规则的
+// nft.Rule.RuleID 非零）。这里不从 id 的长相推断归属。
+const (
+	ruleNSLocal = "local"
+	ruleNSPanel = "panel"
+)
+
+// handleRulesWithID 分发 PUT / DELETE /v1/rules/{命名空间}/{id}。
 func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/rules/")
+	ns, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/rules/"), "/")
 	if id == "" {
-		http.Error(w, "rule id required", http.StatusBadRequest)
+		http.Error(w, "rule address must be /v1/rules/{local|panel}/{id}", http.StatusNotFound)
 		return
 	}
-	switch r.Method {
-	case http.MethodPut:
-		d.handleUpdateRule(w, r, id)
-	case http.MethodDelete:
-		d.handleDeleteRule(w, r, id)
-	default:
+	if r.Method != http.MethodPut && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	switch ns {
+	case ruleNSLocal:
+		if r.Method == http.MethodPut {
+			d.handleUpdateLocalRule(w, r, id)
+		} else {
+			d.handleDeleteLocalRule(w, r, id)
+		}
+	case ruleNSPanel:
+		ruleID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || ruleID <= 0 {
+			http.Error(w, "invalid panel rule id: "+id, http.StatusBadRequest)
+			return
+		}
+		if r.Method == http.MethodPut {
+			d.handleUpdatePanelRule(w, r, ruleID)
+		} else {
+			d.handleDeletePanelRule(w, r, ruleID)
+		}
+	default:
+		http.Error(w, "unknown rule namespace: "+ns, http.StatusNotFound)
 	}
 }
 
@@ -385,59 +414,71 @@ func (d *Daemon) panelHopCount(ruleID int64) int {
 	return 0
 }
 
-// handleUpdateRule updates a rule: server-side rules (numeric RuleID) relay
-// through WS; local hex-ID rules update in the tui segment directly.
-func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Proto      string `json:"proto"`
-		ExitHost   string `json:"exit_host"`
-		ExitPort   int    `json:"exit_port"`
-		ListenPort int    `json:"listen_port"`
-		Mode       string `json:"mode"`
-		Comment    string `json:"comment"`
-	}
+// updateRuleReq 是 PUT /v1/rules/{命名空间}/{id} 的请求体，两个命名空间共用。
+type updateRuleReq struct {
+	Proto      string `json:"proto"`
+	ExitHost   string `json:"exit_host"`
+	ExitPort   int    `json:"exit_port"`
+	ListenPort int    `json:"listen_port"`
+	Mode       string `json:"mode"`
+	Comment    string `json:"comment"`
+}
+
+func decodeUpdateRuleReq(w http.ResponseWriter, r *http.Request) (updateRuleReq, bool) {
+	var req updateRuleReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return req, false
+	}
+	return req, true
+}
+
+// handleUpdatePanelRule 把对面板规则的修改经 WS 转给面板；规则的真值在面板数据库
+// 里，daemon 不在本地改 panel 段，等面板重新下发。
+func (d *Daemon) handleUpdatePanelRule(w http.ResponseWriter, r *http.Request, ruleID int64) {
+	req, ok := decodeUpdateRuleReq(w, r)
+	if !ok {
 		return
 	}
-
-	// If the id is a numeric RuleID, route through the dialer to the server.
-	if ruleID, ok := parseRuleID(id); ok {
-		dl := d.Dialer()
-		if dl == nil || !dl.IsConnected() {
-			http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
-			return
-		}
-		var ack wsproto.RuleCmdAck
-		var err error
-		// Multi-hop chain rules only expose port/mode/comment to the node side;
-		// the server owns the rest of the skeleton and rejects rule_update on
-		// them, so those edits go through the per-hop channel instead.
-		if d.panelHopCount(ruleID) > 1 {
-			ack, err = dl.EditRuleHop(r.Context(), wsproto.RuleHopEdit{
-				RuleID: ruleID, ListenPort: req.ListenPort, Mode: req.Mode, Comment: req.Comment,
-			})
-		} else {
-			ack, err = dl.UpdateRule(r.Context(), updateToWSProto(ruleID, req))
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		if !ack.OK {
-			http.Error(w, ack.Error, http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"entry": ack.Entry})
+	dl := d.Dialer()
+	if dl == nil || !dl.IsConnected() {
+		http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
 		return
 	}
+	var ack wsproto.RuleCmdAck
+	var err error
+	// Multi-hop chain rules only expose port/mode/comment to the node side;
+	// the server owns the rest of the skeleton and rejects rule_update on
+	// them, so those edits go through the per-hop channel instead.
+	if d.panelHopCount(ruleID) > 1 {
+		ack, err = dl.EditRuleHop(r.Context(), wsproto.RuleHopEdit{
+			RuleID: ruleID, ListenPort: req.ListenPort, Mode: req.Mode, Comment: req.Comment,
+		})
+	} else {
+		ack, err = dl.UpdateRule(r.Context(), updateToWSProto(ruleID, req))
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ack.OK {
+		http.Error(w, ack.Error, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"entry": ack.Entry})
+}
 
+// handleUpdateLocalRule 修改 tui 段里 ID 等于 id 的那条规则。
+func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, id string) {
+	req, ok := decodeUpdateRuleReq(w, r)
+	if !ok {
+		return
+	}
 	if req.ExitHost != "" && net.ParseIP(req.ExitHost) == nil && !resolver.PlausibleHostname(req.ExitHost) {
 		http.Error(w, "出口地址非法："+req.ExitHost+" 不是合法 IP 或域名", http.StatusBadRequest)
 		return
 	}
 
-	// Local hex ID: update in "tui" segment.
 	found := false
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
@@ -482,30 +523,27 @@ func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id str
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleDeleteRule deletes a rule: numeric RuleID routes through WS to the
-// server; hex ID removes from local "tui" segment.
-func (d *Daemon) handleDeleteRule(w http.ResponseWriter, r *http.Request, id string) {
-	// Numeric RuleID: relay to server.
-	if ruleID, ok := parseRuleID(id); ok {
-		dl := d.Dialer()
-		if dl == nil || !dl.IsConnected() {
-			http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
-			return
-		}
-		ack, err := dl.DeleteRule(r.Context(), ruleID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		if !ack.OK {
-			http.Error(w, ack.Error, http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+// handleDeletePanelRule 把删除面板规则的请求经 WS 转给面板。
+func (d *Daemon) handleDeletePanelRule(w http.ResponseWriter, r *http.Request, ruleID int64) {
+	dl := d.Dialer()
+	if dl == nil || !dl.IsConnected() {
+		http.Error(w, "daemon not connected to server", http.StatusServiceUnavailable)
 		return
 	}
+	ack, err := dl.DeleteRule(r.Context(), ruleID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ack.OK {
+		http.Error(w, ack.Error, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
 
-	// Local hex ID: remove from "tui" segment.
+// handleDeleteLocalRule 从 tui 段删除 ID 等于 id 的那条规则。
+func (d *Daemon) handleDeleteLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	found := false
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
@@ -594,23 +632,6 @@ func cloneOwners(src OwnerRuleset) OwnerRuleset {
 	return out
 }
 
-// parseRuleID tries to parse a string as a server-side int64 RuleID.
-// Returns (id, true) on success, (0, false) on failure.
-func parseRuleID(s string) (int64, bool) {
-	// Server rule IDs are positive integers; local IDs are hex strings.
-	var id int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, false
-		}
-		id = id*10 + int64(c-'0')
-	}
-	if len(s) == 0 || id <= 0 {
-		return 0, false
-	}
-	return id, true
-}
-
 // createToWSProto converts a local create request to the WS protocol struct.
 func createToWSProto(req createRuleReq) wsproto.RuleCreate {
 	return wsproto.RuleCreate{
@@ -625,14 +646,7 @@ func createToWSProto(req createRuleReq) wsproto.RuleCreate {
 }
 
 // updateToWSProto converts a local update request to the WS protocol struct.
-func updateToWSProto(ruleID int64, req struct {
-	Proto      string `json:"proto"`
-	ExitHost   string `json:"exit_host"`
-	ExitPort   int    `json:"exit_port"`
-	ListenPort int    `json:"listen_port"`
-	Mode       string `json:"mode"`
-	Comment    string `json:"comment"`
-}) wsproto.RuleUpdate {
+func updateToWSProto(ruleID int64, req updateRuleReq) wsproto.RuleUpdate {
 	return wsproto.RuleUpdate{
 		RuleID:     ruleID,
 		Proto:      req.Proto,

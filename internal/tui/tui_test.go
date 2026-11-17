@@ -34,10 +34,10 @@ type fakeDaemonClient struct {
 	creates    []daemonclient.CreateRuleReq
 
 	ruleEdits []struct {
-		ID  string
+		Ref daemonclient.RuleRef
 		Req daemonclient.UpdateRuleReq
 	}
-	ruleDeletes []string
+	ruleDeletes []daemonclient.RuleRef
 	ruleErr     error
 }
 
@@ -81,26 +81,27 @@ func (f *fakeDaemonClient) CreateRule(req daemonclient.CreateRuleReq) (daemoncli
 	return resp, nil
 }
 
-func (f *fakeDaemonClient) UpdateRule(id string, req daemonclient.UpdateRuleReq) error {
+func (f *fakeDaemonClient) UpdateRule(ref daemonclient.RuleRef, req daemonclient.UpdateRuleReq) error {
 	f.ruleEdits = append(f.ruleEdits, struct {
-		ID  string
+		Ref daemonclient.RuleRef
 		Req daemonclient.UpdateRuleReq
-	}{id, req})
+	}{ref, req})
 	return f.ruleErr
 }
 
-func (f *fakeDaemonClient) DeleteRule(id string) error {
-	f.ruleDeletes = append(f.ruleDeletes, id)
+func (f *fakeDaemonClient) DeleteRule(ref daemonclient.RuleRef) error {
+	f.ruleDeletes = append(f.ruleDeletes, ref)
 	if f.ruleErr != nil {
 		return f.ruleErr
 	}
-	// Remove the rule from the local store so refresh sees the change.
+	// Remove the rule from the local store so refresh sees the change. The
+	// fake resolves the address the way the daemon does: by namespace.
 	for i := range f.rules {
-		rid := f.rules[i].ID
+		stored := daemonclient.LocalRule(f.rules[i].ID)
 		if f.rules[i].RuleID != 0 {
-			rid = strconv.FormatInt(f.rules[i].RuleID, 10)
+			stored = daemonclient.PanelRule(f.rules[i].RuleID)
 		}
-		if rid == id {
+		if stored == ref {
 			f.rules = append(f.rules[:i], f.rules[i+1:]...)
 			break
 		}
@@ -532,8 +533,8 @@ func TestSubmitEditCallsUpdateRule(t *testing.T) {
 		t.Fatalf("expected 1 UpdateRule call, got %d", len(fc.ruleEdits))
 	}
 	e := fc.ruleEdits[0]
-	if e.ID != "aabb" {
-		t.Fatalf("expected hex ID 'aabb', got %q", e.ID)
+	if e.Ref != daemonclient.LocalRule("aabb") {
+		t.Fatalf("expected local rule aabb, got %s", e.Ref)
 	}
 	if e.Req.ExitHost != "10.9.9.9" || e.Req.ExitPort != 8443 || e.Req.Comment != "new" {
 		t.Fatalf("UpdateRule args wrong: %+v", e)
@@ -559,9 +560,9 @@ func TestSubmitEditServerRule(t *testing.T) {
 		t.Fatalf("expected one UpdateRule call, got %d", len(fc.ruleEdits))
 	}
 	e := fc.ruleEdits[0]
-	// Server rule uses numeric RuleID.
-	if e.ID != "7" {
-		t.Fatalf("expected numeric ID '7', got %q", e.ID)
+	// A panel rule is addressed by its RuleID, not by the row's local ID.
+	if e.Ref != daemonclient.PanelRule(7) {
+		t.Fatalf("expected panel rule 7, got %s", e.Ref)
 	}
 	if e.Req.ListenPort != 21555 || e.Req.Mode != nft.ModeUserspace || e.Req.Comment != "new note" {
 		t.Fatalf("UpdateRule args wrong: %+v", e)
@@ -594,8 +595,8 @@ func TestDeleteRuleCallsDeleteRule(t *testing.T) {
 		t.Fatal("d should enter confirm-delete")
 	}
 	nm, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != "cc11" {
-		t.Fatalf("expected DeleteRule(\"cc11\"), got %v", fc.ruleDeletes)
+	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != daemonclient.LocalRule("cc11") {
+		t.Fatalf("expected DeleteRule(local/cc11), got %v", fc.ruleDeletes)
 	}
 }
 
@@ -608,10 +609,38 @@ func TestDeleteServerRuleUsesRuleID(t *testing.T) {
 	nm, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	m = nm.(model)
 	nm, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != "7" {
-		t.Fatalf("expected DeleteRule(\"7\"), got %v", fc.ruleDeletes)
+	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != daemonclient.PanelRule(7) {
+		t.Fatalf("expected DeleteRule(panel/7), got %v", fc.ruleDeletes)
 	}
 	_ = nm
+}
+
+// 本地规则的 ID 是 8 位十六进制串，可能恰好全是数字。这样的行仍是本地规则：
+// 改和删都必须发往本地命名空间，不能因为 ID 长得像整数就当成面板规则。
+func TestAllDigitLocalIDStaysLocal(t *testing.T) {
+	fc := &fakeDaemonClient{}
+	m := newTestModel(fc, []nft.Rule{
+		{ID: "12345678", Proto: "tcp", SrcPort: 30000, DestIP: "10.0.0.9", DestPort: 443},
+	})
+	m.cursor = 0
+	m.enterEditMode()
+	m.inputs[fComment].SetValue("new")
+	nm, _ := m.submitEdit()
+	if e := nm.(model).err; e != "" {
+		t.Fatalf("unexpected err: %s", e)
+	}
+	if len(fc.ruleEdits) != 1 || fc.ruleEdits[0].Ref != daemonclient.LocalRule("12345678") {
+		t.Fatalf("edit must target local/12345678, got %+v", fc.ruleEdits)
+	}
+
+	m = nm.(model)
+	m.cursor = 0
+	nm, _ = m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = nm.(model)
+	_, _ = m.updateConfirmDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if len(fc.ruleDeletes) != 1 || fc.ruleDeletes[0] != daemonclient.LocalRule("12345678") {
+		t.Fatalf("delete must target local/12345678, got %v", fc.ruleDeletes)
+	}
 }
 
 func TestRenderTableRow_ColumnsHaveTrailingGap(t *testing.T) {
@@ -714,11 +743,11 @@ func TestClearAllDeletesEachRule(t *testing.T) {
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
 	}
-	// Should have 3 delete calls: two hex IDs and one numeric RuleID.
+	// Should have 3 delete calls: two local rules and one panel rule.
 	if len(fc.ruleDeletes) != 3 {
 		t.Fatalf("expected 3 DeleteRule calls, got %d: %v", len(fc.ruleDeletes), fc.ruleDeletes)
 	}
-	if fc.ruleDeletes[0] != "aa" || fc.ruleDeletes[1] != "bb" || fc.ruleDeletes[2] != "5" {
-		t.Fatalf("wrong delete IDs: %v", fc.ruleDeletes)
+	if fc.ruleDeletes[0] != daemonclient.LocalRule("aa") || fc.ruleDeletes[1] != daemonclient.LocalRule("bb") || fc.ruleDeletes[2] != daemonclient.PanelRule(5) {
+		t.Fatalf("wrong delete targets: %v", fc.ruleDeletes)
 	}
 }

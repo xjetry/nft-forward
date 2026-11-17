@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -237,14 +238,41 @@ type UpdateRuleReq struct {
 	Comment    string `json:"comment"`
 }
 
-// UpdateRule updates an existing rule identified by id. Server rules use
-// numeric IDs; local rules use hex IDs.
-func (c *Client) UpdateRule(id string, req UpdateRuleReq) error {
+// RuleRef 是一条规则在 daemon 上的地址：命名空间加上该命名空间内的 id。
+//
+// 规则有两个互不相干的 id 命名空间：本地规则用 daemon 生成的字符串 id（nft.Rule.ID，
+// 8 位十六进制），面板规则用面板数据库里的整数 id（nft.Rule.RuleID）。十六进制串可能
+// 恰好全是数字，两种 id 单看字符串分不开，所以地址必须带上命名空间；daemon 的
+// /v1/rules/{命名空间}/{id} 按它分发，不从 id 的长相推断。
+//
+// 只能经 LocalRule / PanelRule 构造；零值不指向任何规则，daemon 以 404 拒绝。
+type RuleRef struct {
+	ns string
+	id string
+}
+
+// LocalRule 指向 tui 段里 ID 等于 id 的本地规则。
+func LocalRule(id string) RuleRef { return RuleRef{ns: "local", id: id} }
+
+// PanelRule 指向面板规则 ruleID。
+func PanelRule(ruleID int64) RuleRef {
+	return RuleRef{ns: "panel", id: strconv.FormatInt(ruleID, 10)}
+}
+
+func (r RuleRef) path() string {
+	return "/v1/rules/" + r.ns + "/" + url.PathEscape(r.id)
+}
+
+// String 便于在测试失败信息与日志里辨认，例如 "panel/7"。
+func (r RuleRef) String() string { return r.ns + "/" + r.id }
+
+// UpdateRule updates the rule ref points at.
+func (c *Client) UpdateRule(ref RuleRef, req UpdateRuleReq) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	buf, code, err := c.do(http.MethodPut, "/v1/rules/"+url.PathEscape(id), body)
+	buf, code, err := c.do(http.MethodPut, ref.path(), body)
 	if err != nil {
 		return err
 	}
@@ -258,9 +286,9 @@ func (c *Client) UpdateRule(id string, req UpdateRuleReq) error {
 	return nil
 }
 
-// DeleteRule deletes a rule identified by id.
-func (c *Client) DeleteRule(id string) error {
-	buf, code, err := c.do(http.MethodDelete, "/v1/rules/"+url.PathEscape(id), nil)
+// DeleteRule deletes the rule ref points at.
+func (c *Client) DeleteRule(ref RuleRef) error {
+	buf, code, err := c.do(http.MethodDelete, ref.path(), nil)
 	if err != nil {
 		return err
 	}
