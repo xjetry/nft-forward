@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -160,11 +161,12 @@ type Fields struct {
 //   - 点名逻辑节点：Entry 是入口，Vias 是其后的中转层，物理链由 chain.Topology.Derive
 //     按当前拓扑推导；
 //   - Hops：直接给出物理跳序列，只有面板上的管理员可以，不校验角色与绑定边（仍检查
-//     链尾能否直接转发）；
+//     链尾能否直接转发）。表头里的入口与中转层由这些跳算出（见 explicitChain）；
+//     这时 Entry、Vias 不是另一种给法，只能是同一条路径的复述，与算出的不一致就拒绝；
 //   - 都不给：只在改规则时有意义，沿用规则落库的链。已存规则认的是落库的链，组合的
 //     成员后来变了也不会自动跟着变；只有点名了入口或中转层的编辑才重新推导。
 //
-// 几种给法同时出现时取哪一种，建规则与改规则不同，见 Create 与 Update。
+// 建规则与改规则取链的次序相同，见 Create 与 Update。
 type Path struct {
 	Entry int64
 	// Vias 为 nil 表示请求没有提到中转层（改规则时沿用已存的）；非 nil 的空列表表示
@@ -203,8 +205,8 @@ type Result struct {
 // 端口分配都是真的）但不提交、不记审计：Result 里的入口地址与物理链是这条规则会得
 // 到的结果，Rule 为 nil。
 //
-// p.Hops 非空时用它作物理链（p.Entry 此时只用来写表头的入口节点，省略则取第一跳），
-// 否则按 p.Entry 与 p.Vias 推导。
+// p.Hops 非空时用它作物理链，表头的入口与中转层由它算出；否则按 p.Entry 与 p.Vias
+// 推导。
 func (c *Changes) Create(actor Actor, f Fields, p Path, dryRun bool) (Result, *Error) {
 	results, cerr := c.create(actor, []creation{{f, p}}, "create", dryRun)
 	if cerr != nil {
@@ -323,11 +325,8 @@ func (c *Changes) create(actor Actor, items []creation, op string, dryRun bool) 
 		}
 		var hops []db.HopInput
 		if explicit {
-			if hops, cerr = explicitChain(topo, p.Hops); cerr != nil {
+			if hops, rl.NodeID, rl.ViaNodeIDs, cerr = explicitChain(topo, p); cerr != nil {
 				return nil, cerr
-			}
-			if rl.NodeID == 0 {
-				rl.NodeID = hops[0].NodeID
 			}
 		} else {
 			derived, err := topo.Derive(chain.Request{
@@ -386,10 +385,11 @@ func (c *Changes) create(actor Actor, items []creation, op string, dryRun bool) 
 
 // Update 以 actor 的名义改规则 ruleID 的表头与链。
 //
-// 链的取法依次是：p.Entry 大于 0 或 p.Vias 非 nil，按它们重新推导（没提到的那一项沿
-// 用规则已存的）；否则 p.Hops 非空，用它作物理链；都没有，沿用规则落库的链。出口模式
-// 的指定（p.ExitMode / p.LegacyMode）对三种取法都生效，没有指定时保持现状——除非换了
-// 入口，那时回到默认值。
+// 链的取法依次是：p.Hops 非空，用它作物理链，表头的入口与中转层由它算出；否则
+// p.Entry 大于 0 或 p.Vias 非 nil，按它们重新推导（没提到的那一项沿用规则已存的）；
+// 都没有，沿用规则落库的链。出口模式的指定（p.ExitMode / p.LegacyMode）对后两种取法
+// 生效（显式链里每一跳的模式都是请求写明的），没有指定时保持现状——除非换了入口，
+// 那时回到默认值。
 func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *Error) {
 	if cerr := actor.mayChange(); cerr != nil {
 		return Result{}, cerr
@@ -409,13 +409,24 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 		return Result{}, cerr
 	}
 
-	entry := rl.NodeID
-	if p.Entry > 0 {
-		entry = p.Entry
-	}
-	vias := rl.ViaNodeIDs
-	if p.Vias != nil {
-		vias = *p.Vias
+	explicit := len(p.Hops) > 0
+	entry, vias := rl.NodeID, rl.ViaNodeIDs
+	var hops []db.HopInput
+	if explicit {
+		topo, err := db.LoadTopology(c.DB)
+		if err != nil {
+			return Result{}, internal(err)
+		}
+		if hops, entry, vias, cerr = explicitChain(topo, p); cerr != nil {
+			return Result{}, cerr
+		}
+	} else {
+		if p.Entry > 0 {
+			entry = p.Entry
+		}
+		if p.Vias != nil {
+			vias = *p.Vias
+		}
 	}
 	// 发起方必须仍然能用规则的入口与中转层，哪怕这次只改表头：换目标、换协议都是在
 	// 这些节点上重新安排转发。
@@ -425,8 +436,9 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 	}
 	moved := entry != rl.NodeID
 
-	var hops []db.HopInput
 	switch {
+	case explicit:
+		// 链与表头的逻辑路径上面已经由 explicitChain 给出。
 	case p.Entry > 0 || p.Vias != nil:
 		topo, err := db.LoadTopology(c.DB)
 		if err != nil {
@@ -445,15 +457,6 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 			return Result{}, invalid("%s", err.Error())
 		}
 		hops = hopInputs(derived)
-		rl.NodeID, rl.ViaNodeIDs = entry, vias
-	case len(p.Hops) > 0:
-		topo, err := db.LoadTopology(c.DB)
-		if err != nil {
-			return Result{}, internal(err)
-		}
-		if hops, cerr = explicitChain(topo, p.Hops); cerr != nil {
-			return Result{}, cerr
-		}
 	default:
 		if len(stored) == 0 {
 			return Result{}, invalid("至少添加一个节点")
@@ -468,6 +471,8 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 	if p.EntryPort > 0 {
 		hops[0].DesiredPort = p.EntryPort
 	}
+	// 表头里的入口与中转层不在这里改：下面的 RegenerateRule 按 hops 写它们，并把 rl
+	// 上的两个字段同步过去。entry、vias 在本函数里只用来查权限与名额。
 	rl.Name, rl.Proto, rl.ExitHost, rl.ExitPort, rl.Comment = h.name, h.proto, h.host, h.port, h.comment
 
 	tx, err := c.DB.Begin()
@@ -862,23 +867,48 @@ func (c *Changes) ruleOwnerSeats(rl *db.Rule) (map[int64]chain.Seat, *Error) {
 	return c.ownerSeats(owner)
 }
 
-// explicitChain 把管理员直接给出的物理跳序列变成链。这是搭任意链的通道，有意不校验
-// 角色与绑定边；链尾能否直接转发仍然检查（chain.CheckExit）。没写 ViaNodeID 的跳自成
-// 一段：按授权计流量时一个逻辑段只在段首记一次、记到 ViaNodeID 指的逻辑节点上
-// （accounting.Place 的 SegmentStart 与 Segment），把组合展开写成显式链时各跳要带
-// 组合的 id。
-func explicitChain(topo chain.Topology, given []chain.Hop) ([]db.HopInput, *Error) {
-	hops := make([]chain.Hop, len(given))
-	for i, h := range given {
+// explicitChain 把管理员直接给出的物理跳序列（p.Hops）变成链，并算出这条链在表头里
+// 的逻辑路径：入口节点与中转层。这是搭任意链的通道，有意不校验角色与绑定边；链尾
+// 能否直接转发仍然检查（chain.CheckExit）。
+//
+// 没写 ViaNodeID 的跳自成一段：按授权计流量时一个逻辑段只在段首记一次、记到
+// ViaNodeID 指的逻辑节点上（accounting.Place 的 SegmentStart 与 Segment），把组合
+// 展开写成显式链时各跳要带组合的 id。
+//
+// 逻辑路径由跳算出（db.LogicalPath），不由请求另给。表头的入口与中转层有三处读者：
+// 页面保存规则时把它们原样发回来，Update 据此重新推导整条链；Update 用它们查发起方
+// 的授权；记账取入口节点的倍率（accounting 的 bookSQL）。表头与跳各说各的时，下一次
+// 页面保存就会把链换成表头说的那一条。所以：
+//
+//   - 每一跳所属的逻辑节点必须存在（入口要写进 rules.node_id）；
+//   - p.Entry、p.Vias 给了，就必须与算出的一致。它们不一致时没有哪一边是“对的”，
+//     请求自相矛盾，拒绝。
+func explicitChain(topo chain.Topology, p Path) (inputs []db.HopInput, entry int64, vias []int64, cerr *Error) {
+	hops := make([]chain.Hop, len(p.Hops))
+	segments := make([]int64, len(p.Hops))
+	for i, h := range p.Hops {
 		if h.ViaNodeID == 0 {
 			h.ViaNodeID = h.NodeID
 		}
-		hops[i] = h
+		if _, ok := topo.Nodes[h.ViaNodeID]; !ok {
+			return nil, 0, nil, invalid("节点 %d 不存在", h.ViaNodeID)
+		}
+		hops[i], segments[i] = h, h.ViaNodeID
+	}
+	entry, vias, err := db.LogicalPath(segments)
+	if err != nil {
+		return nil, 0, nil, invalid("%s", err.Error())
+	}
+	if p.Entry != 0 && p.Entry != entry {
+		return nil, 0, nil, invalid("node_id 与 hops 不一致：按 hops，入口节点是 %d", entry)
+	}
+	if p.Vias != nil && !slices.Equal(*p.Vias, vias) {
+		return nil, 0, nil, invalid("via_node_ids 与 hops 不一致：按 hops，中转层是 %v", append([]int64{}, vias...))
 	}
 	if err := topo.CheckExit(hops); err != nil {
-		return nil, invalid("%s", err.Error())
+		return nil, 0, nil, invalid("%s", err.Error())
 	}
-	return hopInputs(hops), nil
+	return hopInputs(hops), entry, vias, nil
 }
 
 func hopInputs(hops []chain.Hop) []db.HopInput {

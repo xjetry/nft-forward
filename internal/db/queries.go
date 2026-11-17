@@ -197,10 +197,11 @@ type RuleHop struct {
 	TargetHost string `json:"target_host"`
 	TargetPort int    `json:"target_port"`
 	Mode       string `json:"mode"`
-	// ViaNodeID is the logical-segment node this physical hop was expanded
-	// from (entry segment = the rule's node_id; explicit-hops path = the
-	// hop's own node). Quota suppression, per-grant accounting and shaping
-	// group hops by it rather than by physical node.
+	// ViaNodeID 是这一跳所属的逻辑节点：按入口与中转层推导的链里，是展开出这一跳的
+	// 那个入口或中转层（组合展开出的各跳都记组合的 id）；管理员直接给物理跳时由请求
+	// 写明，省略则是这一跳自己的节点。配额压制、按授权计流量、限速都按它分组，不按
+	// 物理节点。规则表头里的入口与中转层由各跳的这个值算出（LogicalPath），由
+	// RegenerateRule 与跳行一起写。
 	ViaNodeID int64  `json:"via_node_id"`
 	Comment   string `json:"comment"`
 	// FoldedBytes 是这一跳的折算流量（rule_hops.total_bytes）：按这一跳所在物理节点

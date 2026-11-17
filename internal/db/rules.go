@@ -303,16 +303,18 @@ func GetRule(d DBTX, id int64) (*Rule, error) {
 	return scanRule(d.QueryRow(`SELECT `+ruleCols+` FROM rules WHERE id=?`, id))
 }
 
-// UpdateRuleHeader persists editable header fields (node/name/proto/exit).
-// node_id is the logical entry node the rule belongs to; switching it goes
-// hand in hand with RegenerateRule rebuilding the hops for the new node.
-// entry_listen_port is owned by RegenerateRule and not touched here.
+// UpdateRuleHeader 写规则表头里由发起方填写的字段：名称、协议、目标、备注。
+//
+// 表头里由链决定的字段不在这里写：逻辑路径（node_id、via_node_ids）与入口监听端口
+// （entry_listen_port）都由 RegenerateRule 随跳行一起写。换入口、换中转层是换一条
+// 链，做法是用新的跳调 RegenerateRule，而不是改这两列——只改列不改跳，表头就与
+// 实际在转发的那条链说的不是一回事了。
 func UpdateRuleHeader(d DBTX, r *Rule) error {
 	if r.EntryFamily == "" {
 		r.EntryFamily = "v4"
 	}
-	_, err := d.Exec(`UPDATE rules SET node_id=?,name=?,proto=?,exit_host=?,exit_port=?,comment=?,entry_family=?,via_node_ids=? WHERE id=?`,
-		r.NodeID, r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.EntryFamily, encodeViaNodeIDs(r.ViaNodeIDs), r.ID)
+	_, err := d.Exec(`UPDATE rules SET name=?,proto=?,exit_host=?,exit_port=?,comment=?,entry_family=? WHERE id=?`,
+		r.Name, r.Proto, r.ExitHost, r.ExitPort, r.Comment, r.EntryFamily, r.ID)
 	return err
 }
 
@@ -567,6 +569,36 @@ func nodeLabel(tx DBTX, nodeID int64) string {
 	return name
 }
 
+// LogicalPath 从一条物理链各跳所属的逻辑节点（segments[i] 是第 i 跳的，与
+// rule_hops.via_node_id 同义）算出规则表头里的逻辑路径：相邻且属于同一个逻辑节点的
+// 跳是一段，第一段的逻辑节点是入口（rules.node_id），其余各段依次是中转层
+// （rules.via_node_ids）。
+//
+// 一个逻辑节点只能占一段。它的跳被别的段隔开时，表头里它会出现两次，“这个逻辑节点
+// 的段首”——按授权计流量只在段首记一次（accounting 的 bookSQL 取同一逻辑节点里
+// 位置最小的那一跳）——也不再对应一段的开头。这样的链返回 ChainError。
+func LogicalPath(segments []int64) (entry int64, vias []int64, err error) {
+	if len(segments) == 0 {
+		return 0, nil, ChainErrorf("链路至少需要一跳")
+	}
+	seen := map[int64]bool{}
+	for i, id := range segments {
+		if i > 0 && id == segments[i-1] {
+			continue
+		}
+		if seen[id] {
+			return 0, nil, ChainErrorf("节点 %d 的各跳必须相邻：同一个逻辑节点在链上只能占一段", id)
+		}
+		seen[id] = true
+		if i == 0 {
+			entry = id
+		} else {
+			vias = append(vias, id)
+		}
+	}
+	return entry, vias, nil
+}
+
 // RegenerateRule rewrites rule r's hops for the given ordered hops and returns
 // the copyable entry endpoint, the secondary v6 endpoint (non-empty only for
 // entry_family "both"), plus the set of nodes whose kernel state must be
@@ -577,6 +609,14 @@ func nodeLabel(tx DBTX, nodeID int64) string {
 // Structural validation only: relay_host present, no repeated node,
 // port-range exhaustion, udp=>kernel. Policy (grant ownership, exit CIDR,
 // quota) is the caller's responsibility.
+//
+// 表头里的逻辑路径（rules.node_id、rules.via_node_ids）也在这里写，由这次的跳算出
+// （LogicalPath），r 上的两个字段同步成写进去的值。跳行只在本函数里插入，这两列在
+// 规则建成之后也只在这里写（UpdateRuleHeader 不写它们），所以经本函数生成过的规则
+// 都满足“表头的逻辑路径 = 跳行按 via_node_id 分成的段”，不依赖调用方记得去改表头：
+// 按入口与中转层推导的链、管理员直接给的物理链、删掉一台节点后在剩下的跳上重接
+// （rewireRules），走的都是这一处。此前留下的规则由迁移 0053 按同一算法重算一次，
+// 第一跳的逻辑节点已经不存在的除外。
 func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (string, string, []int64, error) {
 	if len(hops) == 0 {
 		return "", "", nil, ChainErrorf("链路至少需要一跳")
@@ -615,14 +655,39 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if err != nil {
 			return "", "", nil, ChainErrorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
-		// A caller that leaves ViaNodeID unset (older call sites, or a hop
-		// that has no explicit segment of its own) inherits the rule's entry
-		// node so rule_hops.via_node_id is never left at the zero value.
+		// 没写 ViaNodeID 的跳归到规则现有的入口节点（r.NodeID）那一段。这是缺省，不是
+		// 另一种含义：一条全不写 ViaNodeID 的链算出的入口仍是 r.NodeID、没有中转层。
+		// r.NodeID 也是 0 时这一跳没有归属，下面的存在性检查会以“节点 0 不存在”拒绝。
 		viaNodeID := hop.ViaNodeID
 		if viaNodeID == 0 {
 			viaNodeID = r.NodeID
 		}
 		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, viaNodeID: viaNodeID}
+	}
+
+	segments := make([]int64, len(rs))
+	for i, h := range rs {
+		segments[i] = h.viaNodeID
+	}
+	entryNode, viaNodes, err := LogicalPath(segments)
+	if err != nil {
+		return "", "", nil, err
+	}
+	// 逻辑节点要真的存在：入口会写进 rules.node_id。物理跳自己的节点上面已经查过，
+	// 这里只需再查与它不同的那些（跳属于一个组合时）。rules.node_id 上有外键，但那
+	// 只会把这种请求变成一条语句失败；这里把它作为“搭不成的链”说清楚。
+	for _, id := range append([]int64{entryNode}, viaNodes...) {
+		if seen[id] {
+			continue
+		}
+		var one int
+		err := tx.QueryRow(`SELECT 1 FROM nodes WHERE id=?`, id).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", nil, ChainErrorf("节点 %d 不存在", id)
+		}
+		if err != nil {
+			return "", "", nil, err
+		}
 	}
 
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
@@ -746,9 +811,12 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 
 	// Persist the derived entry_family alongside the port so list/detail reads
 	// reflect the family this rule actually serves, not whatever the caller sent.
-	if _, err := tx.Exec(`UPDATE rules SET entry_listen_port=?, entry_family=? WHERE id=?`, ports[0], r.EntryFamily, r.ID); err != nil {
+	// 逻辑路径与它们一起写：见本函数文档。
+	if _, err := tx.Exec(`UPDATE rules SET node_id=?, via_node_ids=?, entry_listen_port=?, entry_family=? WHERE id=?`,
+		entryNode, encodeViaNodeIDs(viaNodes), ports[0], r.EntryFamily, r.ID); err != nil {
 		return "", "", nil, err
 	}
+	r.NodeID, r.ViaNodeIDs = entryNode, viaNodes
 	r.EntryListenPort = ports[0]
 
 	nodes := make([]int64, 0, len(affected))
