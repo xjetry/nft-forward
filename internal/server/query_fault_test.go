@@ -108,7 +108,7 @@ func seedFaultDB(t *testing.T) faultSeed {
 	exec(`UPDATE user_landing_exits SET present=0 WHERE user_id=? AND host=?`, seed.userID, faultGoneExitHost)
 	for k, v := range map[string]string{
 		"panel_name": "fault-panel", "panel_url": "https://panel.example.com", "show_rate_to_user": "1", "pool_size": "6",
-		"node_roles": `{"vless:198.51.100.10:443":1}`,
+		proxyMarksSetting: `{"vless:198.51.100.10:443":1}`,
 	} {
 		must(db.SetSetting(d, k, v))
 	}

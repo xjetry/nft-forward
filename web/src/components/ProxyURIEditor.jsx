@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import {
-  ROLE_DIRECT, ROLE_LANDING, hostPortKey, loadLocalNodes, loadLocalURIs, loadSubCache, loadSubURLs, nextSubCache,
-  nodeHasRole, rolesFirstOrder, saveLocalRoles, saveLocalURIs, saveSubCache, saveSubURLs, setLocalRoleBatch,
-  subscriptionURLs, toggleLocalRole, tryParseURI,
+  MARK_DIRECT, MARK_LANDING, PROXY_MARKS, hostPortKey, loadLocalNodes, loadLocalURIs, loadSubCache, loadSubURLs,
+  markedFirstOrder, nextSubCache, proxyHasMark, saveLocalMarks, saveLocalURIs, saveSubCache, saveSubURLs,
+  setLocalMarkBatch, subscriptionURLs, toggleLocalMark, tryParseURI,
 } from '../lib/landing'
 import { useLandingCatalog, useLocalLandingVersion } from '../lib/useLandingCatalog'
 import { browserStore, readSlot, writeSlot } from '../lib/userStore'
@@ -16,7 +16,7 @@ import {
 } from './ui'
 
 /* 用户自己的代理节点的编辑器：两类来源（订阅地址、手动填写的链接），以及
-   每个节点的用途（落地 / 直连）。
+   每个节点的标记（落地 / 直连）。
 
    这些数据都在本浏览器里（lib/landing.js 的 load* / save*），组件不保留它们
    的副本：
@@ -24,12 +24,7 @@ import {
    - 文本框只有在用户动过之后才有自己的草稿，没动过时直接显示已保存的内容：
      另一个标签页保存的修改会立刻显示在这里，而不是留着一份旧副本、等下次
      保存时把它盖回去；
-   - 节点与角色取自 useLandingCatalog，与落地节点页、我的代理页是同一份目录。 */
-
-const ROLES = [
-  { bit: ROLE_LANDING, label: '落地' },
-  { bit: ROLE_DIRECT, label: '直连' },
-]
+   - 节点与标记取自 useLandingCatalog，与落地节点页、我的代理页是同一份目录。 */
 
 /* 目录按地址（hostPortKey）去重，所以这个键在目录里唯一，用它标识一行。 */
 const rowKey = n => hostPortKey(n.host, n.port)
@@ -190,16 +185,16 @@ function Editor({ user, fill }) {
     else toast(`订阅已更新，共 ${total} 个节点`)
   })
 
-  /* 一张来源表的节点与角色。角色依赖服务端的角色表（目录的一部分）：它没有
-     加载出来时不显示节点、也就无从编辑角色，上面的文本框与保存不受影响。
+  /* 一张来源表的节点与标记。标记依赖服务端的标记表（目录的一部分）：它没有
+     加载出来时不显示节点、也就无从编辑标记，上面的文本框与保存不受影响。
 
-     角色写进本地覆盖表。新表由目录给出的“服务端表 + 当前覆盖表”算出
-     （toggleLocalRole / setLocalRoleBatch 从生效值出发），saveLocalRoles 写入
+     标记写进本地覆盖表。新表由目录给出的“服务端表 + 当前覆盖表”算出
+     （toggleLocalMark / setLocalMarkBatch 从生效值出发），saveLocalMarks 写入
      后发出变更事件，目录随之重新推导，下一次点击拿到的就是新的覆盖表。
      写不进去时开关不会变（显示的始终是存储里的值），所以要说明原因。 */
-  const writeRoles = (next) => {
+  const writeMarks = (next) => {
     try {
-      saveLocalRoles(userId, next)
+      saveLocalMarks(userId, next)
     } catch (err) {
       toast(err instanceof Error ? err.message : '没能保存到本浏览器', 'error')
     }
@@ -208,17 +203,17 @@ function Editor({ user, fill }) {
     if (saved[section].length === 0) return null
     return (
       <div className="flex flex-col gap-2">
-        <h3 className="text-small font-medium text-ink-soft">节点与用途</h3>
+        <h3 className="text-small font-medium text-ink-soft">节点与标记</h3>
         <ResourceView resource={catalog}>
           {data => (
-            <NodeRoleList
+            <ProxyMarkList
               nodes={rows ? rows[section] : []}
               total={saved[section].length}
               foldedNote={foldedNote}
-              roles={data.roles}
+              marks={data.marks}
               blurred={blurred}
-              onToggle={(node, bit) => writeRoles(toggleLocalRole(data.serverRoles, data.localRoles, node, bit))}
-              onBatch={(nodes, bit, on) => writeRoles(setLocalRoleBatch(data.serverRoles, data.localRoles, nodes, bit, on))}
+              onToggle={(node, bit) => writeMarks(toggleLocalMark(data.serverMarks, data.localMarks, node, bit))}
+              onBatch={(nodes, bit, on) => writeMarks(setLocalMarkBatch(data.serverMarks, data.localMarks, nodes, bit, on))}
             />
           )}
         </ResourceView>
@@ -238,7 +233,7 @@ function Editor({ user, fill }) {
       <div className={fill ? 'min-h-0 flex-1 overflow-y-auto' : undefined}>
         <CardSection>
           <p className="text-small text-ink-soft">
-            在这里添加你自己的代理节点，并标记每个节点的用途：“落地”可以选作规则的出口，“直连”会出现在“我的代理”里，两者可以同时标记。与管理员分配的节点地址相同时，以你添加的为准。
+            在这里添加你自己的代理节点，并给每个节点打上标记：“落地”可以选作规则的出口，“直连”会出现在“我的代理”里，两者可以同时标记。与管理员分配的节点地址相同时，以你添加的为准。
           </p>
         </CardSection>
 
@@ -320,13 +315,13 @@ function Editor({ user, fill }) {
   )
 }
 
-/* 一组用途开关。落地与直连互相独立：一个节点可以既作规则出口，又出现在
+/* 一组标记开关。落地与直连互相独立：一个节点可以既作规则出口，又出现在
    “我的代理”里。subject 说明这组开关作用于谁（某个节点，或选中的若干个），
    进入每个开关的无障碍名称。 */
-function RoleChips({ subject, has, onChange }) {
+function MarkChips({ subject, has, onChange }) {
   return (
     <span className="flex flex-none items-center gap-1.5">
-      {ROLES.map(({ bit, label }) => (
+      {PROXY_MARKS.map(({ bit, label }) => (
         <ToggleChip key={bit} label={`${subject}：${label}`} pressed={has(bit)} onChange={on => onChange(bit, on)}>{label}</ToggleChip>
       ))}
     </span>
@@ -334,27 +329,27 @@ function RoleChips({ subject, has, onChange }) {
 }
 
 /**
- * 一张来源表里的节点，每行可以标记用途；勾选多行后可以一起标记。
+ * 一张来源表里的节点，每行可以打标记；勾选多行后可以一起标记。
  *
- * 勾选记的是行的地址键而不是行的位置：标记用途会让行重新排序（有用途的
+ * 勾选记的是行的地址键而不是行的位置：打标记会让行重新排序（有标记的
  * 排在前面），按键记录时重排不会改变被勾选的是哪些节点。
  *
  * @param {{
  *   nodes: any[],
  *   total: number,
  *   foldedNote: string,
- *   roles: Record<string, number>,
+ *   marks: Record<string, number>,
  *   blurred: boolean,
  *   onToggle: (node: any, bit: number) => void,
  *   onBatch: (nodes: any[], bit: number, on: boolean) => void,
  * }} props `total` 是这个来源里解析出的节点数；比 `nodes` 多出来的是因为地址
  * 重复而没有进入目录的，`foldedNote` 说明它们去了哪里。
  */
-function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBatch }) {
+function ProxyMarkList({ nodes, total, foldedNote, marks, blurred, onToggle, onBatch }) {
   const [selected, setSelected] = useState(() => new Set())
   const ordered = useMemo(
-    () => rolesFirstOrder(nodes, n => nodeHasRole(roles, n, ROLE_LANDING | ROLE_DIRECT)).map(i => nodes[i]),
-    [nodes, roles],
+    () => markedFirstOrder(nodes, n => proxyHasMark(marks, n, MARK_LANDING | MARK_DIRECT)).map(i => nodes[i]),
+    [nodes, marks],
   )
   // 列表内容变化后，已经不在列表里的键不算数。
   const chosen = nodes.filter(n => selected.has(rowKey(n)))
@@ -367,8 +362,8 @@ function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBa
     else next.add(key)
     return next
   })
-  const countWith = bit => nodes.filter(n => nodeHasRole(roles, n, bit)).length
-  const unmarked = nodes.filter(n => !nodeHasRole(roles, n, ROLE_LANDING | ROLE_DIRECT)).length
+  const countWith = bit => nodes.filter(n => proxyHasMark(marks, n, bit)).length
+  const unmarked = nodes.filter(n => !proxyHasMark(marks, n, MARK_LANDING | MARK_DIRECT)).length
 
   return (
     <div className="flex flex-col gap-2">
@@ -376,14 +371,14 @@ function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBa
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Checkbox checked={allChosen} onChange={on => setSelected(on ? new Set(nodes.map(rowKey)) : new Set())}>全选</Checkbox>
           <span className="text-caption text-ink-mut">
-            {nodes.length} 个节点 · {countWith(ROLE_LANDING)} 落地 · {countWith(ROLE_DIRECT)} 直连 · {unmarked} 未标记
+            {nodes.length} 个节点 · {countWith(MARK_LANDING)} 落地 · {countWith(MARK_DIRECT)} 直连 · {unmarked} 未标记
           </span>
           {chosen.length > 0 && (
             <span className="ml-auto flex items-center gap-2">
               <span className="text-caption text-ink-mut">已选 {chosen.length} 个</span>
-              <RoleChips
+              <MarkChips
                 subject={`选中的 ${chosen.length} 个节点`}
-                has={bit => chosen.every(n => nodeHasRole(roles, n, bit))}
+                has={bit => chosen.every(n => proxyHasMark(marks, n, bit))}
                 onChange={(bit, on) => onBatch(chosen, bit, on)}
               />
             </span>
@@ -405,7 +400,7 @@ function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBa
                     <span className="break-all font-mono"><SensText blurred={blurred}>{key}</SensText></span>
                   </div>
                 </div>
-                <RoleChips subject={n.name || rowKey(n)} has={bit => nodeHasRole(roles, n, bit)} onChange={bit => onToggle(n, bit)} />
+                <MarkChips subject={n.name || rowKey(n)} has={bit => proxyHasMark(marks, n, bit)} onChange={bit => onToggle(n, bit)} />
               </li>
             )
           })}

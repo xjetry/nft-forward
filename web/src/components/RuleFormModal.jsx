@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { ROLE_LANDING, addLocalURI, hostPortKey, saveLocalRoles, setLocalRoleBatch, tryParseURI } from '../lib/landing'
+import { MARK_LANDING, addLocalURI, hostPortKey, saveLocalMarks, setLocalMarkBatch, tryParseURI } from '../lib/landing'
 import { nodeStack } from '../lib/nodeHealth'
 import { SEAT_ENTRY, SEAT_VIA } from '../lib/seats'
 import { NodeTypeIcon } from './net'
@@ -266,7 +266,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
 
   /* 出口地址框里填的若是代理链接而不是 host:port，就把它收为本浏览器的落地
      节点，并让出口指向它。收为落地节点要做两件事：把链接存进手动 URI 列表、
-     在本地角色里给它标上“落地”。目录的口径是“节点来源里有它，且生效角色含
+     在本地标记里给它打上“落地”。目录的口径是“节点来源里有它，且生效标记含
      落地”（lib/landing.js 的 buildCatalog），一个此前不在任何来源里的节点，
      两步缺一步都进不了目录。
      返回采用后的表单；不是代理链接时原样返回。 */
@@ -277,7 +277,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
     if (!node) return current
     try {
       addLocalURI(userId, uri)
-      saveLocalRoles(userId, setLocalRoleBatch(catalog.serverRoles, catalog.localRoles, [node], ROLE_LANDING, true))
+      saveLocalMarks(userId, setLocalMarkBatch(catalog.serverMarks, catalog.localMarks, [node], MARK_LANDING, true))
     } catch (err) {
       // 存不进本浏览器就没有这个落地节点可指：出口保持原样，由校验去提示。
       toast(err instanceof Error ? err.message : '没能保存到本浏览器', 'error')

@@ -39,9 +39,8 @@ type Server struct {
 	stopExpiry      chan struct{}
 	stopCycle       chan struct{}
 	stopLandingSync chan struct{}
-	// nodeRolesMu serializes apiSetNodeRoles' read-modify-write of the
-	// "node_roles" settings row.
-	nodeRolesMu sync.Mutex
+	// proxyMarksMu 让 apiSetProxyMarks 对标记表那一行设置的“读、改、写回”串行。
+	proxyMarksMu sync.Mutex
 	// pushInline 让下发在调用方的 goroutine 上进行：redispatchNodes 不另起 goroutine，
 	// dispatchToNode 不经 nodeDispatchQueue、直接跑一轮。只有测试设置它，为的是让
 	// 一轮下发发出的语句与调用方自己的语句落在同一个 goroutine 上，可以逐条计数、
@@ -375,7 +374,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/probe", s.probeEndpoint)
 			r.Get("/probe-chain", s.probeChainEndpoint)
 			r.Post("/sub-fetch", s.apiSubFetch)
-			r.Get("/node-roles", s.apiGetNodeRoles)
+			r.Get("/node-roles", s.apiGetProxyMarks)
 		})
 
 		// Admin routes
@@ -413,7 +412,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/settings", s.apiGetSettings)
 			r.Post("/settings", s.apiSaveSettings)
-			r.Post("/node-roles", s.apiSetNodeRoles)
+			r.Post("/node-roles", s.apiSetProxyMarks)
 
 			r.Get("/rules", s.apiListRules)
 			r.Post("/rules", s.apiCreateRule)

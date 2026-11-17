@@ -1685,37 +1685,41 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-// Node role is a bitmask so a node can be both a rule exit ("落地") and appear
-// in the user's own proxy list ("直连") at the same time.
+// 落地代理上可以打的两种标记，各占一位，可以同时打：markLanding（“落地”）表示这个
+// 代理可以选作规则的出口，markDirect（“直连”）表示它出现在用户自己的代理列表里。
+// 标记记在代理的地址键（"协议:主机:端口"）上，不是 nodes 表的行；它与节点可以占的
+// 位置（nodes.seats，入口/中转）是两回事。
 const (
-	roleLanding = 1
-	roleDirect  = 2
-	roleMask    = roleLanding | roleDirect
+	markLanding = 1
+	markDirect  = 2
+	markMask    = markLanding | markDirect
 )
 
-// loadNodeRoles reads the global node-role table (the "node_roles" settings
-// row). Values stored before the role became a bitmask — the strings
-// "landing" / "direct" — are read as their bit; a row that is not valid JSON
-// is an error rather than an empty table, because the caller of a write would
-// otherwise replace the whole table with its own change.
-func (s *Server) loadNodeRoles() (map[string]int, error) {
-	val, err := db.GetSetting(s.DB, "node_roles")
+// proxyMarksSetting 是存标记表的那一行设置的键。整张表是一个 JSON 对象：代理的
+// 地址键 → 标记位。
+const proxyMarksSetting = "proxy_marks"
+
+// loadProxyMarks 读出全局的标记表。标记改成按位存之前写下的值——字符串 "landing" /
+// "direct"——读成对应的那一位。这一行不是合法 JSON 时返回错误而不是空表：写入方是
+// 读出整张表、改、再整张写回，把读不出来当成空表会让它用自己的一次改动盖掉整张表。
+func (s *Server) loadProxyMarks() (map[string]int, error) {
+	val, err := db.GetSetting(s.DB, proxyMarksSetting)
 	if err != nil {
 		return nil, err
 	}
-	roles := map[string]int{}
+	marks := map[string]int{}
 	if val == "" {
-		return roles, nil
+		return marks, nil
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(val), &raw); err != nil {
-		return nil, fmt.Errorf("node_roles setting: %w", err)
+		return nil, fmt.Errorf("%s setting: %w", proxyMarksSetting, err)
 	}
 	for k, v := range raw {
 		var n int
 		if err := json.Unmarshal(v, &n); err == nil {
-			if n &= roleMask; n != 0 {
-				roles[k] = n
+			if n &= markMask; n != 0 {
+				marks[k] = n
 			}
 			continue
 		}
@@ -1723,37 +1727,37 @@ func (s *Server) loadNodeRoles() (map[string]int, error) {
 		if err := json.Unmarshal(v, &str); err == nil {
 			switch str {
 			case "landing":
-				roles[k] = roleLanding
+				marks[k] = markLanding
 			case "direct":
-				roles[k] = roleDirect
+				marks[k] = markDirect
 			}
 		}
 	}
-	return roles, nil
+	return marks, nil
 }
 
-func (s *Server) apiGetNodeRoles(w http.ResponseWriter, r *http.Request) {
-	roles, err := s.loadNodeRoles()
+// apiGetProxyMarks 给出标记表（GET /api/node-roles，应答里的键是 roles：路径与键是
+// 接口给出去的名字，不随 Go 名与设置键改）。
+func (s *Server) apiGetProxyMarks(w http.ResponseWriter, r *http.Request) {
+	marks, err := s.loadProxyMarks()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"roles": roles})
+	jsonOK(w, map[string]any{"roles": marks})
 }
 
-// apiSetNodeRoles turns role bits on or off for a set of node keys and
-// returns the resulting table.
+// apiSetProxyMarks 对一组代理打上或去掉某些标记位，返回改完之后的整张表
+// （POST /api/node-roles，请求体的键是 keys、role、on）。
 //
-// The table is one settings row shared by every admin, so a write is a
-// read-modify-write of the whole row. It is expressed as a change (these
-// keys, these bits, on or off) and applied here under nodeRolesMu: two admins
-// editing different nodes, or the same node's two roles, both take effect
-// whatever order their requests arrive in. This handler is the row's only
-// writer.
-func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
+// 标记表是所有管理员共用的一行设置，所以一次写入是对整行的读、改、写回。请求表达的
+// 是一次改动（这些代理、这些位、打上还是去掉），在 proxyMarksMu 之内应用：两个管理员
+// 同时改不同的代理，或者同一个代理的两种标记，不论请求以什么次序到达都各自生效。
+// 这一行只由这个处理函数写。
+func (s *Server) apiSetProxyMarks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Keys []string `json:"keys"`
-		Role int      `json:"role"`
+		Mark int      `json:"role"`
 		On   bool     `json:"on"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -1764,13 +1768,13 @@ func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
-	if body.Role == 0 || body.Role&^roleMask != 0 {
-		jsonErr(w, http.StatusBadRequest, "无效的用途")
+	if body.Mark == 0 || body.Mark&^markMask != 0 {
+		jsonErr(w, http.StatusBadRequest, "无效的标记")
 		return
 	}
-	s.nodeRolesMu.Lock()
-	defer s.nodeRolesMu.Unlock()
-	roles, err := s.loadNodeRoles()
+	s.proxyMarksMu.Lock()
+	defer s.proxyMarksMu.Unlock()
+	marks, err := s.loadProxyMarks()
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1779,26 +1783,26 @@ func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
 		if k == "" {
 			continue
 		}
-		next := roles[k] &^ body.Role
+		next := marks[k] &^ body.Mark
 		if body.On {
-			next = roles[k] | body.Role
+			next = marks[k] | body.Mark
 		}
 		if next == 0 {
-			delete(roles, k)
+			delete(marks, k)
 		} else {
-			roles[k] = next
+			marks[k] = next
 		}
 	}
-	b, err := json.Marshal(roles)
+	b, err := json.Marshal(marks)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := db.SetSetting(s.DB, "node_roles", string(b)); err != nil {
+	if err := db.SetSetting(s.DB, proxyMarksSetting, string(b)); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"ok": true, "roles": roles})
+	jsonOK(w, map[string]any{"ok": true, "roles": marks})
 }
 
 // --- Rules ---

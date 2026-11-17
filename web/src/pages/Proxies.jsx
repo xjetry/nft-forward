@@ -13,7 +13,7 @@ import { useUser } from '../components/session'
 import { Button, Card, CopyText, Empty, IconCopy, Segmented, SensText, Tag, TextLink, useAction, useToast } from '../components/ui'
 
 /* 把规则与目录推导成“可以导入客户端的代理”。
-   - 直连：目录的 direct（生效角色含“直连”的节点，目录已按地址去重），
+   - 直连：目录的 direct（生效标记含“直连”的节点，目录已按地址去重），
      客户端连的就是节点自己的地址。
    - 中转：出口是落地节点的规则。客户端连的是规则的入口，所以地址取规则
      入口，链接取 relayFor 把落地节点链接的端点换成入口之后的结果。双栈

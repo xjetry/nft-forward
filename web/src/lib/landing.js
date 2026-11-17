@@ -11,7 +11,7 @@
 import { api } from './api.js'
 import { adoptUserData, browserStore, readSlot, writeSlot } from './userStore.ts'
 
-/* 本地数据（URI、订阅、订阅缓存、本地角色）任何一项变化都发同一个事件。
+/* 本地数据（URI、订阅、订阅缓存、本地标记）任何一项变化都发同一个事件。
    同一个标签页里的其它组件收不到原生的 storage 事件，靠它得知变化；
    useLandingCatalog 同时监听两者，所以所有读取方只有这一种同步方式。 */
 function notifyChanged() {
@@ -146,174 +146,180 @@ export function adoptLocalData(user) {
   } catch { /* 见上：留在原处，下次再试 */ }
 }
 
-export function nodeRoleKey(n) {
+export function proxyKey(n) {
   return n.protocol && n.host && n.port ? `${n.protocol}:${n.host}:${n.port}` : null
 }
 
-/* Node role is a bitmask so a node can be both a rule exit ("落地") and
-   appear in the user's own proxy list ("直连") at the same time. */
-export const ROLE_LANDING = 1
-export const ROLE_DIRECT = 2
-const ROLE_MASK = ROLE_LANDING | ROLE_DIRECT
+/* 一个代理节点上可以打的两种标记，各占一位，可以同时打：
+   “落地”——可以选作规则的出口；“直连”——出现在用户自己的代理列表里。
+   标记按代理的地址键（proxyKey）记，管理员打的存在服务端的一行设置里，用户自己
+   打的存在本浏览器里（见下面的本地覆盖）。它与转发节点的用途（入口/中转，
+   lib/seats.js）是两回事：那是节点行上的设置，这是代理条目上的标记。 */
+export const MARK_LANDING = 1
+export const MARK_DIRECT = 2
+const MARK_MASK = MARK_LANDING | MARK_DIRECT
 
-// Pre-bitmask data (server settings row, browser localStorage) stored the
-// role as the string 'landing'/'direct' — accept both on read so existing
-// assignments survive the format change.
-function roleBits(v) {
-  if (typeof v === 'number') return v & ROLE_MASK
-  if (v === 'landing') return ROLE_LANDING
-  if (v === 'direct') return ROLE_DIRECT
+/* 界面上列出两种标记时用的次序与文字。 */
+export const PROXY_MARKS = Object.freeze([
+  { bit: MARK_LANDING, label: '落地' },
+  { bit: MARK_DIRECT, label: '直连' },
+])
+
+// 标记改成按位存之前，服务端的设置行与浏览器的 localStorage 里存的是字符串
+// 'landing' / 'direct'。读的时候两种都认，已有的标记不因存法变了而丢。
+function markBits(v) {
+  if (typeof v === 'number') return v & MARK_MASK
+  if (v === 'landing') return MARK_LANDING
+  if (v === 'direct') return MARK_DIRECT
   return 0
 }
 
-export function nodeHasRole(roles, n, bit) {
-  const key = nodeRoleKey(n)
-  return !!(key && (roleBits(roles[key]) & bit))
+export function proxyHasMark(marks, n, bit) {
+  const key = proxyKey(n)
+  return !!(key && (markBits(marks[key]) & bit))
 }
 
-function cleanRoles(roles) {
+function cleanMarks(marks) {
   const out = {}
-  for (const [k, v] of Object.entries(roles || {})) {
-    const bits = roleBits(v)
+  for (const [k, v] of Object.entries(marks || {})) {
+    const bits = markBits(v)
     if (bits) out[k] = bits
   }
   return out
 }
 
-/* 读取服务端的角色表。失败时抛出，而不是返回空表：空表与“确实没有任何
-   角色”无法区分，调用方会据此把所有节点当成未配置，写入方更会用这张
+/* 读取服务端的标记表。失败时抛出，而不是返回空表：空表与“确实没有任何
+   标记”无法区分，调用方会据此把所有节点当成未配置，写入方更会用这张
    空表覆盖掉服务端的整张表。 */
-export async function fetchNodeRoles() {
+export async function fetchProxyMarks() {
   const d = await api.get('/node-roles')
-  return cleanRoles(d?.roles)
+  return cleanMarks(d?.roles)
 }
 
-/* 服务端角色表的写入口。
+/* 服务端标记表的写入口。
 
    这张表是全局的一行设置，所有管理员共用。写入表达的是一次改动（这些
    节点、这一位、开或关），由服务端在锁内读表、应用、写回（internal/server
-   的 apiSetNodeRoles），所以两个人同时改不同的节点、或同一个节点的两个
-   角色，都会生效，谁也不会用自己页面上的旧表盖掉别人的改动。
+   的 apiSetProxyMarks），所以两个人同时改不同的节点、或同一个节点的两个
+   标记，都会生效，谁也不会用自己页面上的旧表盖掉别人的改动。
 
    同一个页面的写入排成一条串行队列：对同一个节点的同一位先开后关，两次
    请求必须按点击的顺序到达服务端，而并发的请求之间顺序没有保证。
 
    返回写入后的整表。 */
-let roleWriteQueue = Promise.resolve()
-export function setNodeRoleBit(nodes, bit, on) {
-  const keys = nodes.map(nodeRoleKey).filter(Boolean)
-  const task = roleWriteQueue.then(async () => {
+let markWriteQueue = Promise.resolve()
+export function setProxyMarkBit(nodes, bit, on) {
+  const keys = nodes.map(proxyKey).filter(Boolean)
+  const task = markWriteQueue.then(async () => {
     // 没有可写的节点时不发请求（服务端会拒绝空的改动），结果就是当前的表。
-    if (keys.length === 0) return fetchNodeRoles()
+    if (keys.length === 0) return fetchProxyMarks()
     const d = await api.post('/node-roles', { keys, role: bit, on })
-    return cleanRoles(d?.roles)
+    return cleanMarks(d?.roles)
   })
   // 队列本身不能因某次失败而中断；失败由 task 的调用方处理。
-  roleWriteQueue = task.catch(() => {})
+  markWriteQueue = task.catch(() => {})
   return task
 }
 
-/* 本地角色是对服务端角色表的“逐节点覆盖”：某个 key 在本地有值，就以本地
+/* 本地标记是对服务端标记表的“逐节点覆盖”：某个 key 在本地有值，就以本地
    为准，否则沿用服务端的值。本地值可以是 0 —— 它表示“我明确不要这个节点
-   的任何角色”，用来盖掉服务端给它标的角色，所以读写都必须保留 0，不能把
+   的任何标记”，用来盖掉服务端给它打的标记，所以读写都必须保留 0，不能把
    它当成“没有这一项”清理掉。 */
-function normalizeOverrides(roles) {
+function normalizeOverrides(marks) {
   const out = {}
-  for (const [k, v] of Object.entries(roles || {})) out[k] = roleBits(v)
+  for (const [k, v] of Object.entries(marks || {})) out[k] = markBits(v)
   return out
 }
 
-export function loadLocalRoles(userId) {
+export function loadLocalMarks(userId) {
   return normalizeOverrides(readJSON(userId, 'local-roles') || {})
 }
 
-export function saveLocalRoles(userId, roles) {
-  const clean = normalizeOverrides(roles)
+export function saveLocalMarks(userId, marks) {
+  const clean = normalizeOverrides(marks)
   write(userId, 'local-roles', Object.keys(clean).length ? JSON.stringify(clean) : null)
 }
 
-/* 生效角色 = 本地覆盖优先，否则服务端值。返回的表里只有非 0 的项。 */
-export function effectiveRoles(serverRoles, localRoles) {
-  const out = { ...(serverRoles || {}) }
-  for (const [k, v] of Object.entries(localRoles || {})) {
+/* 生效标记 = 本地覆盖优先，否则服务端值。返回的表里只有非 0 的项。 */
+export function effectiveMarks(serverMarks, localMarks) {
+  const out = { ...(serverMarks || {}) }
+  for (const [k, v] of Object.entries(localMarks || {})) {
     if (v) out[k] = v
     else delete out[k]
   }
   return out
 }
 
-/* 把某个节点的生效角色设为 value，返回新的本地覆盖表。覆盖值与服务端值
+/* 把某个节点的生效标记设为 value，返回新的本地覆盖表。覆盖值与服务端值
    相同时删掉这一项：它不再表达任何差异，留着只会在服务端值以后变化时
    继续把它盖住。 */
-function withOverride(serverRoles, localRoles, key, value) {
-  const next = { ...localRoles }
-  if (value === roleBits(serverRoles?.[key])) delete next[key]
+function withOverride(serverMarks, localMarks, key, value) {
+  const next = { ...localMarks }
+  if (value === markBits(serverMarks?.[key])) delete next[key]
   else next[key] = value
   return next
 }
 
-function effectiveBits(serverRoles, localRoles, key) {
-  return key in (localRoles || {}) ? roleBits(localRoles[key]) : roleBits(serverRoles?.[key])
+function effectiveBits(serverMarks, localMarks, key) {
+  return key in (localMarks || {}) ? markBits(localMarks[key]) : markBits(serverMarks?.[key])
 }
 
-/* 在“生效角色”上翻转一个角色位，结果记为本地覆盖。必须从生效值出发计算：
+/* 在“生效标记”上翻转一个标记位，结果记为本地覆盖。必须从生效值出发计算：
    只在本地表上翻转的话，服务端已经标了的位永远关不掉（本地表里没有它，
    翻转等于把它再打开一次）。 */
-export function toggleLocalRole(serverRoles, localRoles, n, bit) {
-  const key = nodeRoleKey(n)
-  if (!key) return localRoles
-  return withOverride(serverRoles, localRoles, key, effectiveBits(serverRoles, localRoles, key) ^ bit)
+export function toggleLocalMark(serverMarks, localMarks, n, bit) {
+  const key = proxyKey(n)
+  if (!key) return localMarks
+  return withOverride(serverMarks, localMarks, key, effectiveBits(serverMarks, localMarks, key) ^ bit)
 }
 
-/* 对一批节点统一打开（on=true）或关闭某个角色位，语义同 toggleLocalRole。 */
-export function setLocalRoleBatch(serverRoles, localRoles, nodes, bit, on) {
-  let next = localRoles
+/* 对一批节点统一打开（on=true）或关闭某个标记位，语义同 toggleLocalMark。 */
+export function setLocalMarkBatch(serverMarks, localMarks, nodes, bit, on) {
+  let next = localMarks
   for (const n of nodes) {
-    const key = nodeRoleKey(n)
+    const key = proxyKey(n)
     if (!key) continue
-    const cur = effectiveBits(serverRoles, next, key)
-    next = withOverride(serverRoles, next, key, on ? (cur | bit) : (cur & ~bit))
+    const cur = effectiveBits(serverMarks, next, key)
+    next = withOverride(serverMarks, next, key, on ? (cur | bit) : (cur & ~bit))
   }
   return next
 }
 
-/* 下面两个函数在一张角色表上算出改动后的样子，不写任何地方。管理员侧用它
-   在请求落定前把改动先显示出来，真正的写入走 setNodeRoleBit，由服务端把
+/* 下面两个函数在一张标记表上算出改动后的样子，不写任何地方。管理员侧用它
+   在请求落定前把改动先显示出来，真正的写入走 setProxyMarkBit，由服务端把
    同样的改动应用到它自己的表上。用户侧编辑的是本地覆盖，用上面的
-   toggleLocalRole / setLocalRoleBatch。 */
+   toggleLocalMark / setLocalMarkBatch。 */
 
-// Toggle a single role bit for one node, leaving its other bit untouched.
-export function applyNodeRole(roles, n, bit) {
-  const next = { ...roles }
-  const key = nodeRoleKey(n)
+// 翻转一个节点的某一位标记，另一位不动。
+export function applyProxyMark(marks, n, bit) {
+  const next = { ...marks }
+  const key = proxyKey(n)
   if (!key) return next
-  const nv = roleBits(next[key]) ^ bit
+  const nv = markBits(next[key]) ^ bit
   if (nv) next[key] = nv; else delete next[key]
   return next
 }
 
-// Set (on=true) or clear (on=false) a role bit across many nodes at once.
-export function applyNodeRoleBatch(roles, nodes, bit, on) {
-  const next = { ...roles }
+// 对一批节点统一打上（on=true）或去掉（on=false）某一位标记。
+export function applyProxyMarkBatch(marks, nodes, bit, on) {
+  const next = { ...marks }
   for (const n of nodes) {
-    const key = nodeRoleKey(n)
+    const key = proxyKey(n)
     if (!key) continue
-    const cur = roleBits(next[key])
+    const cur = markBits(next[key])
     const nv = on ? (cur | bit) : (cur & ~bit)
     if (nv) next[key] = nv; else delete next[key]
   }
   return next
 }
 
-/* Display order for node tables: nodes with any role (落地/直连) keep their
-   original relative order up top, unconfigured ones sink to the bottom.
-   Returns original indices instead of a reordered array so callers'
-   index-keyed state (row selection, React keys) stays stable across
-   re-sorts. */
-export function rolesFirstOrder(nodes, roleOf) {
+/* 节点表的显示次序：有标记（落地/直连任一）的排在前面、彼此保持原来的先后，
+   没有标记的沉底。返回的是原数组的下标而不是重排后的数组，调用方按下标记的状态
+   （勾选的行、React 的 key）在重新排序后仍然对得上。 */
+export function markedFirstOrder(nodes, markOf) {
   const configured = []
   const unconfigured = []
-  nodes.forEach((n, i) => (roleOf(n) ? configured : unconfigured).push(i))
+  nodes.forEach((n, i) => (markOf(n) ? configured : unconfigured).push(i))
   return configured.concat(unconfigured)
 }
 
@@ -395,8 +401,8 @@ export function tryParseURI(uri) {
    口径：
      全部节点 = 手动 URI ∪ 订阅缓存 ∪ 服务端分配；按 hostPortKey 去重，
                先出现的保留，所以用户自己的节点优先于分配的。
-     落地节点 = 全部节点里生效角色含 ROLE_LANDING 的（可作规则出口）。
-     直连节点 = 全部节点里生效角色含 ROLE_DIRECT 的（直接出现在代理列表）。
+     落地节点 = 全部节点里生效标记含 MARK_LANDING 的（可作规则出口）。
+     直连节点 = 全部节点里生效标记含 MARK_DIRECT 的（直接出现在代理列表）。
    每个节点带 source：'local'（来自本浏览器）或 'admin'（服务端分配）。 */
 
 /* 读出本浏览器里的两类节点。订阅节点按名单顺序把各条订阅的节点接在一起。 */
@@ -405,14 +411,14 @@ export function loadLocalNodes(userId) {
 }
 
 /**
- * 纯函数：由三路来源与生效角色表推导目录。
- * @param {{ manual?: any[], sub?: any[], server?: any[], roles?: Record<string, number> }} sources
+ * 纯函数：由三路来源与生效标记表推导目录。
+ * @param {{ manual?: any[], sub?: any[], server?: any[], marks?: Record<string, number> }} sources
  */
-export function buildCatalog({ manual = [], sub = [], server = [], roles = {} }) {
+export function buildCatalog({ manual = [], sub = [], server = [], marks = {} }) {
   const tag = (list, source) => (list || []).map(n => ({ ...n, source }))
   const all = mergeLanding(tag(manual, 'local'), tag(sub, 'local'), tag(server, 'admin'))
-  const landing = all.filter(n => nodeHasRole(roles, n, ROLE_LANDING))
-  const direct = all.filter(n => nodeHasRole(roles, n, ROLE_DIRECT))
+  const landing = all.filter(n => proxyHasMark(marks, n, MARK_LANDING))
+  const direct = all.filter(n => proxyHasMark(marks, n, MARK_DIRECT))
   return { all, landing, direct, landingByKey: landingIndex(landing) }
 }
 

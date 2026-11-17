@@ -2,13 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, exportNames, hostPortKey, landingIndex, mergeLanding,
-  migrateSubCache, nextSubCache, nodeKey, parseURIs, relayExportName, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
+  MARK_DIRECT, MARK_LANDING, buildCatalog, effectiveMarks, enrichRule, exportNames, hostPortKey, landingIndex, mergeLanding,
+  migrateSubCache, nextSubCache, nodeKey, parseURIs, relayExportName, relayFor, setLocalMarkBatch, subscriptionURLs, toggleLocalMark,
 } from './landing.js'
 
 const node = (host: string, port: number, extra: Record<string, unknown> = {}) =>
   ({ name: `${host}`, protocol: 'vless', host, port, uri: `vless://uuid@${host.includes(':') ? `[${host}]` : host}:${port}?x=1#n`, ...extra })
-const roleKey = (n: { protocol: string; host: string; port: number }) => `${n.protocol}:${n.host}:${n.port}`
+const keyOf = (n: { protocol: string; host: string; port: number }) => `${n.protocol}:${n.host}:${n.port}`
 
 /* 样例文件同时被服务端解析器的测试读取（internal/landing/parse_test.go），
    所以同一条 URI 在两边解析出的名字被钉成同一个。 */
@@ -32,38 +32,38 @@ test('规范键：IPv6 带方括号，且与索引 / 合并用的是同一个键
   assert.equal(mergeLanding([v6], [node('2001:db8::1', 443, { name: 'dup' })]).length, 1)
 })
 
-test('生效角色：本地覆盖优先，本地的 0 盖掉服务端的角色', () => {
-  const server = { a: ROLE_LANDING, b: ROLE_DIRECT, c: ROLE_LANDING }
-  const local = { b: ROLE_LANDING | ROLE_DIRECT, c: 0, d: ROLE_DIRECT }
-  assert.deepEqual(effectiveRoles(server, local), { a: ROLE_LANDING, b: ROLE_LANDING | ROLE_DIRECT, d: ROLE_DIRECT })
+test('生效标记：本地覆盖优先，本地的 0 盖掉服务端的标记', () => {
+  const server = { a: MARK_LANDING, b: MARK_DIRECT, c: MARK_LANDING }
+  const local = { b: MARK_LANDING | MARK_DIRECT, c: 0, d: MARK_DIRECT }
+  assert.deepEqual(effectiveMarks(server, local), { a: MARK_LANDING, b: MARK_LANDING | MARK_DIRECT, d: MARK_DIRECT })
 })
 
-test('翻转角色：服务端已标的位可以在本地关掉，再点一次回到服务端值且不留覆盖', () => {
+test('翻转标记：服务端已标的位可以在本地关掉，再点一次回到服务端值且不留覆盖', () => {
   const n = node('1.2.3.4', 443)
-  const server = { [roleKey(n)]: ROLE_LANDING }
-  const off = toggleLocalRole(server, {}, n, ROLE_LANDING)
-  assert.deepEqual(off, { [roleKey(n)]: 0 })
-  assert.deepEqual(effectiveRoles(server, off), {})
-  const back = toggleLocalRole(server, off, n, ROLE_LANDING)
+  const server = { [keyOf(n)]: MARK_LANDING }
+  const off = toggleLocalMark(server, {}, n, MARK_LANDING)
+  assert.deepEqual(off, { [keyOf(n)]: 0 })
+  assert.deepEqual(effectiveMarks(server, off), {})
+  const back = toggleLocalMark(server, off, n, MARK_LANDING)
   assert.deepEqual(back, {})
-  assert.deepEqual(effectiveRoles(server, back), server)
+  assert.deepEqual(effectiveMarks(server, back), server)
 })
 
-test('翻转角色：只动被点的那一位，另一位保持生效值', () => {
+test('翻转标记：只动被点的那一位，另一位保持生效值', () => {
   const n = node('1.2.3.4', 443)
-  const server = { [roleKey(n)]: ROLE_LANDING }
-  const local = toggleLocalRole(server, {}, n, ROLE_DIRECT)
-  assert.deepEqual(effectiveRoles(server, local), { [roleKey(n)]: ROLE_LANDING | ROLE_DIRECT })
+  const server = { [keyOf(n)]: MARK_LANDING }
+  const local = toggleLocalMark(server, {}, n, MARK_DIRECT)
+  assert.deepEqual(effectiveMarks(server, local), { [keyOf(n)]: MARK_LANDING | MARK_DIRECT })
 })
 
 test('批量设置：对生效值打开 / 关闭，结果与服务端一致的项不留覆盖', () => {
   const a = node('1.1.1.1', 1), b = node('2.2.2.2', 2)
-  const server = { [roleKey(a)]: ROLE_LANDING }
-  const on = setLocalRoleBatch(server, {}, [a, b], ROLE_LANDING, true)
-  assert.deepEqual(on, { [roleKey(b)]: ROLE_LANDING })
-  const off = setLocalRoleBatch(server, on, [a, b], ROLE_LANDING, false)
-  assert.deepEqual(off, { [roleKey(a)]: 0 })
-  assert.deepEqual(effectiveRoles(server, off), {})
+  const server = { [keyOf(a)]: MARK_LANDING }
+  const on = setLocalMarkBatch(server, {}, [a, b], MARK_LANDING, true)
+  assert.deepEqual(on, { [keyOf(b)]: MARK_LANDING })
+  const off = setLocalMarkBatch(server, on, [a, b], MARK_LANDING, false)
+  assert.deepEqual(off, { [keyOf(a)]: 0 })
+  assert.deepEqual(effectiveMarks(server, off), {})
 })
 
 test('目录：三路来源按规范键去重，用户自己的优先，并标出来源', () => {
@@ -71,16 +71,16 @@ test('目录：三路来源按规范键去重，用户自己的优先，并标�
   const sub = node('2.2.2.2', 443, { name: 'sub' })
   const assigned = node('1.1.1.1', 443, { name: 'assigned' })
   const assignedOnly = node('3.3.3.3', 443, { name: 'assigned-only' })
-  const roles = { [roleKey(mine)]: ROLE_LANDING, [roleKey(sub)]: ROLE_DIRECT, [roleKey(assignedOnly)]: ROLE_LANDING | ROLE_DIRECT }
-  const c = buildCatalog({ manual: [mine], sub: [sub], server: [assigned, assignedOnly], roles })
+  const marks = { [keyOf(mine)]: MARK_LANDING, [keyOf(sub)]: MARK_DIRECT, [keyOf(assignedOnly)]: MARK_LANDING | MARK_DIRECT }
+  const c = buildCatalog({ manual: [mine], sub: [sub], server: [assigned, assignedOnly], marks })
   assert.deepEqual(c.all.map((n: any) => [n.name, n.source]), [['mine', 'local'], ['sub', 'local'], ['assigned-only', 'admin']])
   assert.deepEqual(c.landing.map((n: any) => n.name), ['mine', 'assigned-only'])
   assert.deepEqual(c.direct.map((n: any) => n.name), ['sub', 'assigned-only'])
   assert.ok(c.landingByKey.has('3.3.3.3:443'))
 })
 
-test('目录：没有角色的节点既不是落地也不是直连', () => {
-  const c = buildCatalog({ manual: [node('1.1.1.1', 443)], roles: {} })
+test('目录：没有标记的节点既不是落地也不是直连', () => {
+  const c = buildCatalog({ manual: [node('1.1.1.1', 443)], marks: {} })
   assert.equal(c.all.length, 1)
   assert.deepEqual([c.landing.length, c.direct.length], [0, 0])
 })

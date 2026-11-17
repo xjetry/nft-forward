@@ -9,7 +9,7 @@ import { useUser } from '../../components/session'
 import { Alert, Badge, Button, Card, CopyText, Empty, IconRefresh, SensText, Tag, useAction, useToast } from '../../components/ui'
 
 /* 落地节点页：当前用户可以选作规则出口的节点 —— 目录里的 landing，即生效
-   角色含“落地”的节点。来源可以是管理员分配，也可以是用户自己添加（手动
+   标记含“落地”的节点。来源可以是管理员分配，也可以是用户自己添加（手动
    填写或订阅）；同一个地址两边都有时，目录保留用户自己的那份。 */
 export default function MyLandingNodes() {
   const { user } = useUser()

@@ -5,8 +5,8 @@ import { copyToClipboard } from '../../lib/clipboard'
 import { GB, bytesToGBText, fmtBytes, fmtDate, fmtDateInput, fmtGrantTraffic, fmtTrafficGB, pct } from '../../lib/fmt'
 import { formatGrantLine } from '../../lib/grantText'
 import {
-  ROLE_DIRECT, ROLE_LANDING, applyNodeRoleBatch, fetchNodeRoles, hostPortKey, mergeLanding, setNodeRoleBit,
-  nodeRoleKey, rolesFirstOrder,
+  MARK_DIRECT, MARK_LANDING, PROXY_MARKS, applyProxyMarkBatch, fetchProxyMarks, hostPortKey, markedFirstOrder,
+  mergeLanding, proxyKey, setProxyMarkBit,
 } from '../../lib/landing'
 import { combineResources } from '../../lib/resource'
 import { GRANT_SEAT_OPTIONS, SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
@@ -642,14 +642,12 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
 
 /* ---------- 落地节点 ---------- */
 
-const MARKS = [[ROLE_LANDING, '落地'], [ROLE_DIRECT, '直连']]
-
 function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
   const blurred = useBlur()
   const toast = useToast()
   // 落地 / 直连标记表。读取失败就是失败：把它当成空表的话，所有节点都会
   // 显示成未标记，而在一张读不出来的表上也不应该允许编辑。
-  const roles = useResource(fetchNodeRoles, [])
+  const marks = useResource(fetchProxyMarks, [])
   const [url, setUrl] = useState(user.landing_sub_url || '')
   const [uris, setUris] = useState(user.landing_uris || '')
   const [urlError, setUrlError] = useState(null)
@@ -679,8 +677,8 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
 
   // 节点表同时需要出口台账与标记表，缺一个就不渲染。
   const table = {
-    state: combineResources(exits.state, roles.state),
-    reload: () => Promise.all([exits.reload(), roles.reload()]),
+    state: combineResources(exits.state, marks.state),
+    reload: () => Promise.all([exits.reload(), marks.reload()]),
   }
 
   return (
@@ -707,15 +705,15 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
       </CardSection>
       <div className="border-t border-line-soft">
         <ResourceView resource={table}>
-          {([exitList, roleTable]) => (
+          {([exitList, markTable]) => (
             <LandingNodes
               userId={userId}
               username={user.username}
               nodes={nodes}
               exits={exitList}
-              roles={roleTable}
-              onRoles={next => roles.patch(() => next)}
-              reloadRoles={roles.reload}
+              marks={markTable}
+              onMarks={next => marks.patch(() => next)}
+              reloadMarks={marks.reload}
               reloadExits={exits.reload}
             />
           )}
@@ -725,7 +723,7 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
   )
 }
 
-function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRoles, reloadExits }) {
+function LandingNodes({ userId, username, nodes, exits, marks, onMarks, reloadMarks, reloadExits }) {
   const blurred = useBlur()
   const toast = useToast()
   const confirm = useConfirm()
@@ -734,7 +732,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
   /* 标记的写入。
 
      标记表是全局的一行设置。这里提交的是一次改动（打开 / 关闭某一位），由
-     服务端应用到它当时的表上（见 lib/landing.js 的 setNodeRoleBit），同一改动
+     服务端应用到它当时的表上（见 lib/landing.js 的 setProxyMarkBit），同一改动
      重复提交结果不变；写入口自己按点击顺序排队，所以连续点击不需要互相
      等待，每一次都入队。
 
@@ -744,22 +742,22 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
      - 写入失败，改动移出 pendingOps，显示随之回到服务端的表。 */
   const [pendingOps, setPendingOps] = useState([])
   const writesInFlight = useRef(0)
-  const shownRoles = useMemo(
-    () => pendingOps.reduce((table, op) => applyNodeRoleBatch(table, op.nodes, op.bit, op.on), roles),
-    [roles, pendingOps],
+  const shownMarks = useMemo(
+    () => pendingOps.reduce((table, op) => applyProxyMarkBatch(table, op.nodes, op.bit, op.on), marks),
+    [marks, pendingOps],
   )
   const setMark = (targets, bit, on) => {
     const op = { nodes: targets, bit, on }
     writesInFlight.current += 1
     setPendingOps(ops => [...ops, op])
-    setNodeRoleBit(targets, bit, on).then(
-      onRoles,
+    setProxyMarkBit(targets, bit, on).then(
+      onMarks,
       (err) => {
         toast(`标记没有保存：${err instanceof Error ? err.message : '请求失败'}`, 'error')
         // 失败时服务端的表有没有变并不确定（响应可能丢在半路）。后面还有写入
         // 在排队时，它们各自会带回写入后的整表；只有这是最后一笔时才需要主动
         // 重读，而且此时没有别的写入会与这次重读交错。
-        if (writesInFlight.current === 1) void reloadRoles()
+        if (writesInFlight.current === 1) void reloadMarks()
       },
     ).finally(() => {
       writesInFlight.current -= 1
@@ -768,11 +766,11 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
   }
 
   const markOf = (n) => {
-    const key = nodeRoleKey(n)
-    return (key && shownRoles[key]) || 0
+    const key = proxyKey(n)
+    return (key && shownMarks[key]) || 0
   }
   // 有标记的排在前面、未标记的沉底，组内保持来源里的顺序。
-  const order = useMemo(() => rolesFirstOrder(nodes, markOf), [nodes, shownRoles])
+  const order = useMemo(() => markedFirstOrder(nodes, markOf), [nodes, shownMarks])
   const exitByKey = new Map(exits.map(e => [hostPortKey(e.host, e.port), e]))
   const residual = exits.filter(e => !e.present)
   const chosen = nodes.filter(n => selected.has(hostPortKey(n.host, n.port)))
@@ -784,7 +782,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
   const ledgerOf = (n, mark) => {
     const exit = exitByKey.get(hostPortKey(n.host, n.port))
     if (!exit) return null
-    return (mark & ROLE_LANDING) || exit.quota_bytes > 0 || exit.used_bytes > 0 ? exit : null
+    return (mark & MARK_LANDING) || exit.quota_bytes > 0 || exit.used_bytes > 0 ? exit : null
   }
 
   const toggleOne = (key, on) => setSelected(s => {
@@ -837,7 +835,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
     <>
       <Toolbar>
         <span className="text-small text-ink-soft">
-          {countWith(ROLE_LANDING)} 落地 · {countWith(ROLE_DIRECT)} 直连 · {nodes.filter(n => !markOf(n)).length} 未标记
+          {countWith(MARK_LANDING)} 落地 · {countWith(MARK_DIRECT)} 直连 · {nodes.filter(n => !markOf(n)).length} 未标记
         </span>
         <span className="text-caption text-ink-mut">
           落地：可作该用户规则的出口；直连：出现在该用户的“我的代理”里。标记记在节点上（协议 + 地址），同一节点出现在别的用户的来源里时共用同一标记。
@@ -845,7 +843,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
         {chosen.length > 0 && (
           <div className="ml-auto flex items-center gap-1.5">
             <span className="text-small text-ink-mut">选中的 {chosen.length} 个</span>
-            {MARKS.map(([bit, label]) => (
+            {PROXY_MARKS.map(({ bit, label }) => (
               <ToggleChip key={bit} label={`选中的 ${chosen.length} 个节点：${label}`} pressed={chosen.every(n => markOf(n) & bit)} onChange={on => setMark(chosen, bit, on)}>{label}</ToggleChip>
             ))}
           </div>
@@ -893,7 +891,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
                   <td>{ledger ? usageCell(key, ledger) : <Dash />}</td>
                   <td className="num">
                     <span className="inline-flex gap-1.5">
-                      {MARKS.map(([bit, label]) => (
+                      {PROXY_MARKS.map(({ bit, label }) => (
                         <ToggleChip key={bit} label={`${n.name || hostPortKey(n.host, n.port)}：${label}`} pressed={(mark & bit) !== 0} onChange={on => setMark([n], bit, on)}>{label}</ToggleChip>
                       ))}
                     </span>
