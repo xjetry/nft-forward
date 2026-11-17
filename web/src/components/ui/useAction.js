@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { createSingleFlight } from '../../lib/singleFlight'
 import { useToast } from './Feedback'
 
 /**
@@ -30,29 +31,26 @@ import { useToast } from './Feedback'
 export function useAction(fn, { onError } = {}) {
   const toast = useToast()
   // idle | pending(key)。用一个对象而不是两个变量，“在途”与“在途的是谁”
-  // 不可能不一致。
+  // 不可能不一致。它只用于渲染；是否放行由下面的闸门同步判定。
   const [flight, setFlight] = useState(/** @type {{ key: unknown } | null} */ (null))
-  // 重入判断必须同步生效：state 要到下一次渲染才更新，同一个事件循环里的
-  // 第二次调用读到的还是旧值，所以另用 ref 记“是否在途”。
-  const inFlight = useRef(false)
+  const [gate] = useState(createSingleFlight)
   const latest = useRef({ fn, onError, toast })
   latest.current = { fn, onError, toast }
 
   const run = useCallback(async (...args) => {
-    if (inFlight.current) return
-    inFlight.current = true
-    setFlight({ key: args[0] })
-    try {
-      await latest.current.fn(...args)
-    } catch (err) {
-      const { onError: handle, toast: notify } = latest.current
-      if (handle) handle(err)
-      else notify(err instanceof Error ? err.message : '操作失败', 'error')
-    } finally {
-      inFlight.current = false
-      setFlight(null)
-    }
-  }, [])
+    await gate.run(async () => {
+      setFlight({ key: args[0] })
+      try {
+        await latest.current.fn(...args)
+      } catch (err) {
+        const { onError: handle, toast: notify } = latest.current
+        if (handle) handle(err)
+        else notify(err instanceof Error ? err.message : '操作失败', 'error')
+      } finally {
+        setFlight(null)
+      }
+    })
+  }, [gate])
 
   return { run, pending: flight !== null, pendingKey: flight ? flight.key : undefined }
 }

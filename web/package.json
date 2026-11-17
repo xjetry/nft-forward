@@ -8,7 +8,8 @@
     "lint:design": "node scripts/design-lint.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"scripts/**/*.test.mjs\" \"src/**/*.test.ts\"",
-    "check": "npm run lint:design && npm run typecheck && npm test && npm run build"
+    "check": "npm run lint:design && npm run typecheck && npm run check:refs && npm test && npm run build",
+    "check:refs": "node scripts/check-refs.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
