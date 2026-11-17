@@ -132,26 +132,36 @@ func TestHandler_ListRules_EmptyReturnsEmptyArray(t *testing.T) {
 	}
 }
 
-func TestHandler_ListRules_ReturnsTuiSegmentWhenDisconnected(t *testing.T) {
-	d := newTestDaemon(t)
-	d.owners = OwnerRuleset{
-		"tui":   {{ID: "t1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
-		"panel": {{ID: "p1", Proto: "tcp", SrcPort: 90, DestIP: "2.0.0.0", DestPort: 90}},
-	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/rules", nil)
-	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d", w.Code)
-	}
-	var got struct {
-		Rules []nft.Rule `json:"rules"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Rules) != 1 || got.Rules[0].ID != "t1" {
-		t.Fatalf("expected tui rules, got %+v", got.Rules)
+// 规则列表覆盖数据面里的每一条规则，与此刻连没连着面板无关：面板下发的在前，本地的
+// 在后。两段同时非空的情形是真实存在的——接入面板时本地规则交给面板接管，被面板
+// 拒绝的那一批留在本地段继续转发；面板不可达时面板段也照常在转发。
+func TestHandler_ListRules_CoversBothSegmentsWhateverTheConnectionState(t *testing.T) {
+	for _, connected := range []bool{false, true} {
+		d := newTestDaemon(t)
+		d.owners = OwnerRuleset{
+			"tui":   {{ID: "t1", Proto: "tcp", SrcPort: 80, DestIP: "1.0.0.0", DestPort: 80}},
+			"panel": {{ID: "p1", RuleID: 7, Proto: "tcp", SrcPort: 90, DestIP: "2.0.0.0", DestPort: 90}},
+		}
+		if connected {
+			dl := NewDialer(DialerConfig{})
+			dl.connected.Store(true)
+			d.dialer.Store(dl)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/v1/rules", nil)
+		w := httptest.NewRecorder()
+		d.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("connected=%v status=%d", connected, w.Code)
+		}
+		var got struct {
+			Rules []nft.Rule `json:"rules"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Rules) != 2 || got.Rules[0].ID != "p1" || got.Rules[1].ID != "t1" {
+			t.Fatalf("connected=%v：应列出面板规则 p1 与本地规则 t1，实际 %+v", connected, got.Rules)
+		}
 	}
 }
 

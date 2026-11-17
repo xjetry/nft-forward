@@ -55,6 +55,18 @@ WantedBy=multi-user.target
 EOF
 }
 
+# 让正在运行的 daemon 用上刚写入的单元：重新加载单元、设为开机自启、重启进程。
+#
+# daemon 是单机、归远程面板（--connect）还是归本机面板（--server-local），完全由
+# 单元里 ExecStart 的参数决定，而进程只在启动时读一次参数。`systemctl enable --now`
+# 对已经在运行的单元什么都不做，所以每次改写单元之后都要 restart；不重启的话旧进程
+# 继续按旧参数运行——该去连面板的不连，该脱离面板的还连着。
+restart_daemon() {
+  systemctl daemon-reload
+  systemctl enable nft-forward-daemon.service
+  systemctl restart nft-forward-daemon.service
+}
+
 write_server_unit() {
   local addr="${1:-:7788}"
   cat >"$SYSTEMD_DIR/nft-forward-server.service" <<EOF
@@ -144,14 +156,13 @@ switch_role_cleanup() {
 
 # 清空 daemon 的 panel 段（面板下发的规则）。成功返回 0。
 #
-# 走的是面板向本机 daemon 下发规则集的同一入口：POST /v1/apply（internal/daemon/
-# handlers.go 的 handleApplyRuleset → SetPanelRuleset）。它把 panel 段整体替换为
-# 请求体里的规则集，所以提交空集就是清空；daemon 随即把这些规则撤出数据面并落盘。
+# 用的是 daemon 本机控制口上的 DELETE /v1/rules/panel（internal/daemon/handlers.go
+# 的 handleClearPanelSegment）：daemon 把这些规则撤出数据面并落盘。它清不掉一个仍
+# 连着 daemon 的面板的规则——面板下次下发会填回来——所以只在面板已停、或 daemon
+# 马上要脱离面板时调用。
 clear_panel_segment() {
   curl -sf --unix-socket /var/run/nft-forward.sock \
-       -X POST -H 'Content-Type: application/json' \
-       http://daemon/v1/apply \
-       -d '{"rules":[]}' >/dev/null 2>&1
+       -X DELETE http://daemon/v1/rules/panel >/dev/null 2>&1
 }
 
 # Inline uninstall implementation: target is server/agent/daemon, purge is 0/1.
@@ -175,14 +186,22 @@ do_uninstall() {
         if clear_panel_segment; then
           seg_note="daemon 的 panel 段已清空"
         else
-          seg_note="daemon 的 panel 段未能清空"
-          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则若还在，会继续转发" >&2
+          seg_note="daemon 的 panel 段未能清空，其中的规则已转为本地规则"
+          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
         fi
+        # 面板连同数据库一起清掉了，不会再回来：daemon 改回单机模式。留着
+        # --server-local 的话它会一直去连面板的本机入口 socket。改回单机后，
+        # panel 段若没清掉，daemon 启动时会把里面的规则转成本地规则（同下面
+        # agent 分支的说明）。
+        write_daemon_unit ""
+        restart_daemon
         rm -f /var/lib/nft-forward/panel.db \
               /var/lib/nft-forward/panel.db-wal \
               /var/lib/nft-forward/panel.db-shm
-        ok "已卸载 server 角色 + 清 panel.db；${seg_note}"
+        ok "已卸载 server 角色 + 清 panel.db，daemon 改回单机模式；${seg_note}"
       else
+        # daemon 保持 --server-local：它留着面板下发的规则继续转发，并等面板装回
+        # 来之后重新接入（期间会周期性地尝试连接面板的本机入口并在日志里记失败）。
         ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
       fi
       ;;
@@ -206,8 +225,7 @@ do_uninstall() {
       fi
       write_daemon_unit ""
       rm -f /etc/nft-forward/panel.token
-      systemctl daemon-reload
-      systemctl restart nft-forward-daemon.service
+      restart_daemon
       if [[ "$purge" -eq 1 ]]; then
         rm -rf /etc/nft-forward/
         ok "已卸载 agent 角色 + 清 /etc/nft-forward/；${seg_note}"
@@ -498,10 +516,12 @@ do_update() {
   # Record the freshly-installed nft-agent identity on this upgrade path too.
   write_agent_identity "$tag" "$agent_sha"
 
-  # A server host's daemon unit must carry --server-local so its "panel" segment
-  # survives restarts (the co-located panel re-pushes it over the unix socket).
-  # do_update leaves units untouched otherwise — it lacks the agent's --connect
-  # config — but the server daemon unit has no such install-time args to lose.
+  # A server host's daemon unit must carry --server-local: that is what makes
+  # the daemon connect to the co-located panel (through the panel's local
+  # socket) and keep its "panel" segment across restarts instead of converting
+  # it to local rules. do_update leaves units untouched otherwise — it lacks the
+  # agent's --connect config — but the server daemon unit has no such
+  # install-time args to lose.
   if [[ "$want_server" -eq 1 ]]; then
     write_daemon_unit " --server-local"
   fi
@@ -830,8 +850,7 @@ case "$mode" in
   tui)
     switch_role_cleanup tui
     write_daemon_unit ""
-    systemctl daemon-reload
-    systemctl enable --now nft-forward-daemon.service
+    restart_daemon
     cat <<EOF
 
 $(ok "===== TUI 安装完成 =====")
@@ -847,9 +866,12 @@ EOF
     switch_role_cleanup server
     write_daemon_unit " --server-local"
     write_server_unit "$addr"
-    systemctl daemon-reload
-    systemctl enable --now nft-forward-daemon.service
-    systemctl enable --now nft-forward-server.service
+    restart_daemon
+    # 面板与 daemon 是配对的：daemon 带着 --server-local 重启后去连面板的本机入口，
+    # 所以面板也必须是刚装上的这一份在运行。重装时面板进程可能还是替换前的旧二进制，
+    # 同样只有 restart 才换得掉。
+    systemctl enable nft-forward-server.service
+    systemctl restart nft-forward-server.service
     sleep 2
     _admin_pw="$(journalctl -u nft-forward-server.service --since '30 seconds ago' --no-pager -o cat 2>/dev/null \
                  | sed -n 's/.*密  码: *//p' | head -1)"
@@ -913,12 +935,7 @@ EOF
     [[ -n "$relay_host" ]] && relay_arg+=" --relay-host $relay_host"
     [[ -n "$relay_host_v6" ]] && relay_arg+=" --relay-host-v6 $relay_host_v6"
     write_daemon_unit " --connect $panel_url --panel-token-file /etc/nft-forward/panel.token${range_arg}${relay_arg}${connect_insecure_arg}"
-    systemctl daemon-reload
-    # enable --now 对已运行的 daemon 是 no-op，不会重启；装 agent 时 daemon 往往
-    # 已在运行（纯 daemon 段或先前角色），必须 restart 才能让新写入的 --connect
-    # 参数真正生效，否则旧进程继续以无 --connect 的纯 daemon 模式运行、永不上线。
-    systemctl enable nft-forward-daemon.service
-    systemctl restart nft-forward-daemon.service
+    restart_daemon
     cat <<EOF
 
 $(ok "===== Agent 安装完成 =====")

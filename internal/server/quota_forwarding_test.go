@@ -2,73 +2,21 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
-	"sync"
 	"testing"
-	"time"
-
-	"github.com/coder/websocket"
 
 	"nft-forward/internal/db"
-	"nft-forward/internal/nft"
 	"nft-forward/internal/wsproto"
 )
-
-// pushLog 记录一个模拟节点收到的每一次规则下发。节点是先记录、再回 apply_ack，
-// 而面板的下发要等到 ack 才返回，所以一次同步下发返回时它必然已经记在这里。
-type pushLog struct {
-	mu     sync.Mutex
-	pushes [][]nft.Rule
-}
-
-func (p *pushLog) record(rules []nft.Rule) {
-	p.mu.Lock()
-	p.pushes = append(p.pushes, rules)
-	p.mu.Unlock()
-}
-
-// forwards 报告最近一次下发里是否有监听 port 的规则；ok=false 表示还没有收到过下发。
-func (p *pushLog) forwards(port int) (has, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.pushes) == 0 {
-		return false, false
-	}
-	for _, r := range p.pushes[len(p.pushes)-1] {
-		if r.SrcPort == port {
-			return true, true
-		}
-	}
-	return false, true
-}
-
-// waitForwarding 等到最近一次下发里“是否转发 port”等于 want。下发可能由计数入账或
-// 节点上线触发，是异步的，所以轮询；超时即失败。
-func (p *pushLog) waitForwarding(t *testing.T, port int, want bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		has, ok := p.forwards(port)
-		if ok && has == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s：期望端口 %d 转发=%v，最近一次下发里转发=%v（收到过下发=%v）", what, port, want, has, ok)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
 
 type quotaEnv struct {
 	*upgradeTestEnv
 	node  *db.Node
-	agent *websocket.Conn
+	agent *fakeAgent
 	log   *pushLog
 	uid   int64
 	user  *http.Cookie
@@ -80,7 +28,7 @@ const quotaRulePort = 12001
 // 的普通用户。返回时节点已经收到包含这条规则的下发。
 func newQuotaEnv(t *testing.T) *quotaEnv {
 	t.Helper()
-	e := &quotaEnv{upgradeTestEnv: newUpgradeTestEnv(t), log: &pushLog{}}
+	e := &quotaEnv{upgradeTestEnv: newUpgradeTestEnv(t)}
 	n, err := db.CreateNode(e.d, "edge", "https://panel.example.com", "tok-edge")
 	if err != nil {
 		t.Fatal(err)
@@ -92,39 +40,8 @@ func newQuotaEnv(t *testing.T) *quotaEnv {
 	}
 	createStandaloneRuleHop(t, e.d, n.ID, "tcp", quotaRulePort, "10.0.0.30", 9200, sql.NullInt64{Int64: e.uid, Valid: true})
 
-	c, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(e.srv.URL, "http")+"/v1/agents", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { c.Close(websocket.StatusNormalClosure, "") })
-	e.agent = c
-	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-edge", AgentVersion: "v0.0.1", OS: "linux", Arch: "amd64"})
-	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
-	var ack wsproto.HelloAck
-	if env := recvEnvelope(t, c); json.Unmarshal(env.Payload, &ack) != nil || ack.Error != "" {
-		t.Fatalf("hello 被拒绝: %+v", ack)
-	}
-	go func() {
-		for {
-			_, b, err := c.Read(context.Background())
-			if err != nil {
-				return
-			}
-			var env wsproto.Envelope
-			if json.Unmarshal(b, &env) != nil {
-				return
-			}
-			if env.Type != wsproto.TypeApplyRuleset {
-				continue
-			}
-			var a wsproto.ApplyRuleset
-			_ = json.Unmarshal(env.Payload, &a)
-			e.log.record(a.Rules)
-			p, _ := json.Marshal(wsproto.ApplyAck{Rev: a.Rev, OK: true})
-			out, _ := json.Marshal(wsproto.Envelope{Type: wsproto.TypeApplyAck, ID: env.ID, Payload: p})
-			_ = c.Write(context.Background(), websocket.MessageText, out)
-		}
-	}()
+	e.agent = connectFakeAgent(t, wsURL(e.srv), wsproto.Hello{NodeToken: "tok-edge", AgentVersion: "v0.0.1", OS: "linux", Arch: "amd64"}, nil)
+	e.log = e.agent.pushes
 	e.log.waitForwarding(t, quotaRulePort, true, "前置条件：节点上线后应收到这条规则")
 	return e
 }
@@ -132,8 +49,7 @@ func newQuotaEnv(t *testing.T) *quotaEnv {
 // reportTraffic 让节点上报这条规则的一批计数。
 func (e *quotaEnv) reportTraffic(t *testing.T, up, down int64) {
 	t.Helper()
-	p, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{{ListenPort: quotaRulePort, Proto: "tcp", BytesUp: up, BytesDown: down}}})
-	sendJSON(t, e.agent, wsproto.Envelope{Type: wsproto.TypeCounters, ID: "c", Payload: p})
+	e.agent.reportTraffic(t, quotaRulePort, up, down)
 }
 
 func (e *quotaEnv) call(t *testing.T, cookie *http.Cookie, method, path string, body any) (int, string) {

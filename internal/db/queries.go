@@ -948,16 +948,19 @@ func NodeIDsByNames(d *sql.DB, names []string) (map[string]int64, error) {
 
 // Agent-dialer helpers
 
-// UpsertSelfNode ensures the panel's built-in self-node exists and is marked
-// online. The partial unique index idx_nodes_self guarantees there is at most
-// one row with node_type='self', so re-running on every boot is safe.
+// UpsertSelfNode ensures the panel's built-in self-node row exists. The partial
+// unique index idx_nodes_self guarantees there is at most one row with
+// node_type='self', so re-running on every boot is safe.
+//
+// self 节点没有 token（secret 为空）：它不从对外入口接入，而是由本机 daemon 经面板的
+// 本机入口接入，在那里按入口认定。它的在线状态与别的节点一样来自连接
+// （MarkNodeOnline / MarkNodeOffline），这里不写。
 func UpsertSelfNode(d *sql.DB) (*Node, error) {
 	_, err := d.Exec(`
 		INSERT INTO nodes (name, address, secret, node_type, online, last_seen, created_at)
-		VALUES ('self', 'unix:///var/run/nft-forward.sock', '', 'self', 1, ?, ?)
-		ON CONFLICT(node_type) WHERE node_type='self'
-		DO UPDATE SET last_seen=excluded.last_seen, online=1`,
-		now(), now())
+		VALUES ('self', '', '', 'self', 0, 0, ?)
+		ON CONFLICT(node_type) WHERE node_type='self' DO NOTHING`,
+		now())
 	if err != nil {
 		return nil, err
 	}
@@ -965,8 +968,22 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 	_, _ = d.Exec(`UPDATE nodes SET owner_id = (
 		SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1
 	) WHERE node_type = 'self' AND owner_id IS NULL`)
-	row := d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_type='self'`)
-	return scanNode(row)
+	return GetSelfNode(d)
+}
+
+// GetSelfNode returns the panel's built-in self-node row.
+func GetSelfNode(d *sql.DB) (*Node, error) {
+	return scanNode(d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_type='self'`))
+}
+
+// MarkAllNodesOffline 把每个节点的 online 置 0。nodes.online 是面板进程里连接表的
+// 镜像（连接登记时置 1，注销时置 0），而连接表在进程启动时是空的；上一个进程若没
+// 走到注销就退出（崩溃、被杀），它留下的 online=1 在新进程里就是假的，所以启动时
+// 整体清一次。组合节点没有自己的连接，MarkNodeOnline 不会对它们调用；列表里它们的
+// 在线状态由 ResolveCompositeOnline 按成员聚合后覆盖这一列的值，清零对它们没有影响。
+func MarkAllNodesOffline(d *sql.DB) error {
+	_, err := d.Exec(`UPDATE nodes SET online=0 WHERE online<>0`)
+	return err
 }
 
 // MarkNodeOnline records a successful hello/heartbeat from an agent and

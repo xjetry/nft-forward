@@ -164,8 +164,9 @@ func (c *Client) Status() (StatusResp, error) {
 	return resp, nil
 }
 
-// ListRules returns the active rule list from the daemon. When connected
-// to a server, these are the server-managed rules; otherwise local rules.
+// ListRules returns every rule the daemon is forwarding: panel-managed rules
+// (non-zero RuleID) first, then local ones — regardless of whether the daemon
+// is currently connected to its panel.
 func (c *Client) ListRules() ([]nft.Rule, error) {
 	buf, code, err := c.do(http.MethodGet, "/v1/rules", nil)
 	if err != nil {
@@ -300,32 +301,4 @@ func (c *Client) DeleteRule(ref RuleRef) error {
 		return errors.New(msg)
 	}
 	return nil
-}
-
-// ApplyRuleset pushes a complete ruleset for the "panel" owner segment to the
-// daemon. Used by the server's self-node dispatch path to replicate what the
-// WS apply_ruleset frame does for remote nodes. The daemon replaces its panel
-// segment atomically and applies to the kernel.
-func (c *Client) ApplyRuleset(rules []nft.Rule) (string, error) {
-	if rules == nil {
-		rules = []nft.Rule{}
-	}
-	body, err := json.Marshal(struct {
-		Rules []nft.Rule `json:"rules"`
-	}{Rules: rules})
-	if err != nil {
-		return "", err
-	}
-	buf, code, err := c.do(http.MethodPost, "/v1/apply", body)
-	if err != nil {
-		return "", err
-	}
-	if code/100 != 2 {
-		return "", fmt.Errorf("daemon apply: HTTP %d: %s", code, strings.TrimSpace(string(buf)))
-	}
-	var resp struct {
-		Warning string `json:"warning"`
-	}
-	_ = json.Unmarshal(buf, &resp)
-	return resp.Warning, nil
 }

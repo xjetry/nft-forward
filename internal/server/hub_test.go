@@ -287,94 +287,63 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	}
 }
 
+// quotaEnforceEnv 备好 enforceUserQuota 的现场：一个在 self 节点上有一条规则的用户，
+// 节点已连接并收到了这条规则。
+func quotaEnforceEnv(t *testing.T) (e *localAgentEnv, a *fakeAgent, uid int64) {
+	t.Helper()
+	e = newLocalAgentEnv(t)
+	hash, _ := HashPassword("pw")
+	uid, err := db.CreateUser(e.d, "quota-user", hash, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	createStandaloneRuleHop(t, e.d, e.self.ID, "tcp", selfRulePort, "10.0.0.30", 9200, sql.NullInt64{Int64: uid, Valid: true})
+	a = connectFakeAgent(t, wsURL(e.local), wsproto.Hello{OS: "linux", Arch: "amd64"}, nil)
+	a.pushes.waitForwarding(t, selfRulePort, true, "前置条件：节点上线后应收到这条规则")
+	return e, a, uid
+}
+
 // 全局配额用尽时 enforceUserQuota 只重推节点（下发判定把该用户的规则排除出去），
 // 不停用账号。
 func TestEnforceUserQuotaWithdrawsRulesWithoutDisabling(t *testing.T) {
-	d := openDB(t)
-	s, err := New(d)
-	if err != nil {
+	e, a, uid := quotaEnforceEnv(t)
+	if _, err := e.d.Exec(`UPDATE users SET traffic_quota_bytes=1000, traffic_used_bytes=1500 WHERE id=?`, uid); err != nil {
 		t.Fatal(err)
-	}
-	self, err := EnsureSelfNode(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var dispatched bool
-	var pushed []nft.Rule
-	s.Dispatcher.SendLocal = func(rules []nft.Rule) (string, error) {
-		dispatched = true
-		pushed = rules
-		return "", nil
 	}
 
-	hash, _ := HashPassword("pw")
-	uid, err := db.CreateUser(d, "over", hash, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 1500, uid); err != nil {
-		t.Fatal(err)
-	}
-	createStandaloneRuleHop(t, d, self.ID, "tcp", 0, "10.0.0.30", 9200, sql.NullInt64{Int64: uid, Valid: true})
+	e.s.enforceUserQuota(uid) // 同步下发：返回时节点已收到新的规则集
 
-	s.enforceUserQuota(uid)
-
-	got, err := db.GetUserByID(d, uid)
+	got, err := db.GetUserByID(e.d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Disabled {
 		t.Fatalf("user %d must stay enabled after exceeding quota (reason=%q)", uid, got.DisableReason.String)
 	}
-	if !dispatched {
-		t.Fatalf("expected re-dispatch to the user's node once the quota is reached")
-	}
-	if len(pushed) != 0 {
-		t.Fatalf("the over-quota user's only rule must be left out of the push, got %+v", pushed)
+	if has, _ := a.pushes.forwards(selfRulePort); has {
+		t.Fatalf("the over-quota user's rule must be left out of the push after the quota is reached")
 	}
 }
 
 // 反方向：配额没用尽时 enforceUserQuota 什么都不做——不重推、不动账号。
 func TestEnforceUserQuotaLeavesUnderQuotaUserAlone(t *testing.T) {
-	d := openDB(t)
-	s, err := New(d)
-	if err != nil {
+	e, a, uid := quotaEnforceEnv(t)
+	if _, err := e.d.Exec(`UPDATE users SET traffic_quota_bytes=1000, traffic_used_bytes=200 WHERE id=?`, uid); err != nil {
 		t.Fatal(err)
 	}
-	self, err := EnsureSelfNode(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var dispatched bool
-	s.Dispatcher.SendLocal = func(rules []nft.Rule) (string, error) {
-		dispatched = true
-		return "", nil
-	}
-	hash, _ := HashPassword("pw")
-	uid, err := db.CreateUser(d, "under", hash, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, 1000, uid); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 200, uid); err != nil {
-		t.Fatal(err)
-	}
-	createStandaloneRuleHop(t, d, self.ID, "tcp", 0, "10.0.0.31", 9201, sql.NullInt64{Int64: uid, Valid: true})
-	s.enforceUserQuota(uid)
-	got, err := db.GetUserByID(d, uid)
+	before := a.pushes.count()
+
+	e.s.enforceUserQuota(uid)
+
+	got, err := db.GetUserByID(e.d, uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Disabled {
 		t.Fatalf("user under quota should stay enabled, got disabled")
 	}
-	if dispatched {
-		t.Fatalf("a user under quota must not trigger a re-dispatch")
+	if after := a.pushes.count(); after != before {
+		t.Fatalf("a user under quota must not trigger a re-dispatch (pushes %d -> %d)", before, after)
 	}
 }
 

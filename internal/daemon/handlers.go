@@ -37,33 +37,41 @@ type Daemon struct {
 	countersMu   sync.Mutex
 	lastCounters map[string][2]int64
 
-	// connectURL/connectTok configure the outbound WebSocket dialer to
-	// the panel. Empty connectURL = tui/server-local mode (no dialer).
+	// 这个 daemon 归哪个面板管，由下面三项决定（New 保证 connectURL 与 serverLocal
+	// 不同时出现）：
+	//   - connectURL 非空：远程面板，拨它的 WebSocket 地址，握手带 connectTok；
+	//   - serverLocal：本机面板，拨它的本机入口 socket panelSocket，握手不带 token；
+	//   - 都没有：单机，不拨任何面板，没有拨号器。
+	// managedByPanel 是“前两种之一”的判定，Bootstrap 的降级与 Run 里是否起拨号器
+	// 都只问它。
+	//
 	// dialer is atomic so unix-socket handlers running on their own
 	// goroutines can safely read it (e.g. to push tui_segment_changed)
 	// without coordinating with Run's lifecycle code.
-	connectURL string
-	connectTok string
-	// serverLocal marks the panel host's own node daemon: connectURL is empty
-	// (the co-located panel pushes rules over the unix socket, not via --connect)
-	// yet its "panel" segment must survive restarts instead of being downgraded
-	// to "tui" like a standalone daemon's — the panel re-pushes those rules and
-	// the two segments would otherwise fight over the same port. Gates the
-	// downgrade in Bootstrap.
+	connectURL          string
+	connectTok          string
 	serverLocal         bool
+	panelSocket         string
 	portRange           string
 	declaredRelayHost   string
 	declaredRelayHostV6 string
 	dialer              atomic.Pointer[Dialer]
 
-	// reconcileMu serializes the data-plane reconcile/close calls against the
-	// DNS refresh and write paths. setOwnerRuleset reconciles while holding
-	// d.mu; refreshOnce reconciles without it. Without this lock those paths
-	// could mutate the data plane concurrently. Lock order is always
-	// d.mu -> reconcileMu (never the reverse), so the two write paths that
-	// nest both locks can't deadlock against refreshOnce which takes only
-	// reconcileMu.
+	// reconcileMu 让对数据面的两种操作互斥：dp.Reconcile（applySerialized）与关停时的
+	// dp.Close（closeSerialized）。后者不经过 reconcileOwners，所以 writeMu 管不到它：
+	// 收到退出信号时可能正有一次写入停在 dp.Reconcile 里。取 reconcileMu 时不持有 mu。
 	reconcileMu sync.Mutex
+
+	// writeMu 让 reconcileOwners 的一次调用——取当前归属段、改、解析、下数据面、
+	// 提交——整体串行。每次调用都是在当前内容的一份拷贝上改完再整体写回；两次调用
+	// 交叠时后提交的会把先提交的改动原样冲掉（它的拷贝是在对方提交之前取的）。
+	// 调用方互相是并发的：本机控制口的各个 HTTP 处理、拨号器主循环里的面板下发、
+	// 拨号器的接管协程、DNS 刷新循环。
+	//
+	// 它与 mu 分开，是为了让只读路径（列规则、查状态、握手时取快照）不必等一次
+	// 可能长达数秒的解析。加锁顺序：writeMu → mu；writeMu → reconcileMu。持有 mu
+	// 或 reconcileMu 时不得再取 writeMu。
+	writeMu sync.Mutex
 
 	mu           sync.Mutex
 	owners       OwnerRuleset
@@ -71,11 +79,8 @@ type Daemon struct {
 	lastResolved []nft.Rule
 }
 
-// applySerialized runs dp.Reconcile under reconcileMu so concurrent callers
-// (the DNS refresh loop and the unix-socket / dialer write paths) never
-// mutate the data plane at the same time. Callers may or may not hold d.mu;
-// this method never takes d.mu, so the d.mu -> reconcileMu lock order is
-// preserved.
+// applySerialized 在 reconcileMu 下调用 dp.Reconcile，与关停时的 closeSerialized 互斥。
+// 它不取 mu。
 func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error {
 	d.reconcileMu.Lock()
 	defer d.reconcileMu.Unlock()
@@ -85,11 +90,11 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 // reconcileOwners is the shared merge->resolve->apply pipeline used by
 // every path that writes the owner-segmented ruleset.
 //
-// The caller must NOT hold d.mu -- reconcileOwners acquires it to snapshot
-// owners, then releases it before the heavy work (DNS, kernel apply), and
-// re-acquires it for the final commit. mutate receives a deep clone of
-// d.owners; it may modify the map freely. A nil mutate means re-resolve
-// with the current owners unchanged (used by the DNS refresh loop).
+// 整个调用在 writeMu 下串行（理由见该字段），所以 mutate 看到的总是上一次写入提交后
+// 的内容。调用方不得持有 d.mu：这里取它拿当前内容的拷贝，在慢操作（解析、下数据面）
+// 期间放开，提交时再取。mutate receives a deep clone of d.owners; it may modify
+// the map freely. A nil mutate means re-resolve with the current owners
+// unchanged (used by the DNS refresh loop).
 //
 // DNS resolution is best-effort: a host whose lookup fails keeps the address
 // it currently has in the data plane; a rule whose host fails to resolve and
@@ -114,6 +119,9 @@ func (d *Daemon) reconcileOwners(
 	metaFn func(*AgentMeta),
 	saveToDisk bool,
 ) (resolved []nft.Rule, unresolved []nft.Rule, committed bool, err error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
 	d.mu.Lock()
 	candidate := cloneOwners(d.owners)
 	prev := append([]nft.Rule(nil), d.lastResolved...)
@@ -188,7 +196,25 @@ func (d *Daemon) closeSerialized(ctx context.Context) error {
 	return d.dp.Close(ctx)
 }
 
+// managedByPanel 报告这个 daemon 是否归某个面板管（远程面板或本机面板）。
+func (d *Daemon) managedByPanel() bool {
+	return d.connectURL != "" || d.serverLocal
+}
+
+// localPanelSocket 返回要拨的本机入口 socket；不是 serverLocal 模式时为空，拨号器
+// 据此走 connectURL。
+func (d *Daemon) localPanelSocket() string {
+	if d.serverLocal {
+		return d.panelSocket
+	}
+	return ""
+}
+
 // Handler returns the HTTP mux serving all daemon endpoints.
+//
+// 这些都是本机控制口（TUI、安装脚本）。其中没有“整段替换 panel 段”的入口：panel
+// 段的内容只由面板经 agent 连接下发（Dialer 的 OnApply → SetPanelRuleset），本机
+// 能对它做的只有逐条的受限编辑（转给面板裁决）和整段清空。
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", d.handleHealth)
@@ -196,7 +222,6 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/v1/status", d.handleStatus)
 	mux.HandleFunc("/v1/rules", d.handleRules)
 	mux.HandleFunc("/v1/rules/", d.handleRulesWithID)
-	mux.HandleFunc("/v1/apply", d.handleApplyRuleset)
 	return mux
 }
 
@@ -204,27 +229,20 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleApplyRuleset accepts a full ruleset push from the server's self-node
-// dispatch path. This replicates the WS apply_ruleset for the co-located
-// daemon: the server replaces the "panel" segment atomically.
-func (d *Daemon) handleApplyRuleset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Rules []nft.Rule `json:"rules"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	warning, err := d.SetPanelRuleset(r.Context(), "", body.Rules)
-	if err != nil {
+// handleClearPanelSegment 清空 panel 段（DELETE /v1/rules/panel）：面板下发过的规则
+// 全部撤出数据面并从状态文件里去掉。给安装脚本在带 --purge 卸载时用：卸载面板角色
+// 时面板已停，卸载 agent 角色时 daemon 即将脱离面板，两种情况下都不会再有人来撤
+// 这些规则。
+//
+// 已应用的 rev 一并作废（传空 rev）：daemon 若之后又连上面板，握手里报的 rev 对
+// 不上，面板会把规则集重新下发。所以这个操作清不掉一个仍在管着本 daemon 的面板的
+// 规则，只对“面板已停或即将脱离”的 daemon 有持久效果。
+func (d *Daemon) handleClearPanelSegment(w http.ResponseWriter, r *http.Request) {
+	if _, err := d.SetPanelRuleset(r.Context(), "", nil); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": warning})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // statusResp is returned by GET /v1/status.
@@ -274,6 +292,11 @@ const (
 // handleRulesWithID 分发 PUT / DELETE /v1/rules/{命名空间}/{id}。
 func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
 	ns, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/rules/"), "/")
+	// 不带 id 的地址指整个命名空间，只支持一个操作：清空 panel 段。
+	if id == "" && ns == ruleNSPanel && r.Method == http.MethodDelete {
+		d.handleClearPanelSegment(w, r)
+		return
+	}
 	if id == "" {
 		http.Error(w, "rule address must be /v1/rules/{local|panel}/{id}", http.StatusNotFound)
 		return
@@ -307,17 +330,19 @@ func (d *Daemon) handleRulesWithID(w http.ResponseWriter, r *http.Request) {
 
 // handleListRules returns the active rule set: "panel" segment when connected
 // to the server, "tui" segment when running standalone.
+// handleListRules 返回数据面里的全部规则：面板下发的（panel 段）在前，本地的（tui
+// 段）在后。每一行自带归属——面板规则的 RuleID 非零——调用方据此决定改/删走哪个
+// 地址（见 ruleNSLocal / ruleNSPanel），列表本身不按连接状态取舍。
+//
+// 两段同时非空是会发生的：接入面板时本地规则交给面板接管（Dialer.adoptLocalRules），
+// 被面板拒绝的那一批留在 tui 段继续转发；面板不可达时 panel 段也照常在转发。只列
+// 其中一段，另一段的规则就在转发却没有任何界面能看到、改掉或删除。
 func (d *Daemon) handleListRules(w http.ResponseWriter, _ *http.Request) {
-	segment := "tui"
-	if dl := d.Dialer(); dl != nil && dl.IsConnected() {
-		segment = "panel"
-	}
 	d.mu.Lock()
-	rules := append([]nft.Rule(nil), d.owners[segment]...)
+	rules := make([]nft.Rule, 0, len(d.owners["panel"])+len(d.owners["tui"]))
+	rules = append(rules, d.owners["panel"]...)
+	rules = append(rules, d.owners["tui"]...)
 	d.mu.Unlock()
-	if rules == nil {
-		rules = []nft.Rule{}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
 }
 

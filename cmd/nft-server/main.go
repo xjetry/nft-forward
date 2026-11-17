@@ -17,6 +17,7 @@ import (
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/server"
+	"nft-forward/internal/wsproto"
 )
 
 func main() {
@@ -33,11 +34,13 @@ func runServer(args []string) int {
 	var (
 		addr, dbPath, bootstrapPw    string
 		resetAdminPw, resetAdminUser string
+		agentSocket                  string
 		backupInterval               time.Duration
 		backupKeep                   int
 	)
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	fs.StringVar(&addr, "addr", ":8080", "panel HTTP address")
+	fs.StringVar(&agentSocket, "agent-socket", wsproto.LocalAgentSocketPath, "unix socket the co-located node daemon (nft-agent daemon --server-local) connects through; empty disables it")
 	fs.StringVar(&dbPath, "db", "/var/lib/nft-forward/panel.db", "SQLite database path")
 	fs.StringVar(&bootstrapPw, "bootstrap-admin-password", "", "set admin password on first boot")
 	fs.StringVar(&resetAdminPw, "reset-admin-password", "", "reset admin password and exit")
@@ -76,6 +79,7 @@ func runServer(args []string) int {
 			log.Fatal(err)
 		}
 	}()
+	localSrv := serveLocalAgent(srv, agentSocket)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -84,7 +88,32 @@ func runServer(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
+	if localSrv != nil {
+		_ = localSrv.Shutdown(ctx) // 关闭监听时一并删掉 socket 文件
+	}
 	return 0
+}
+
+// serveLocalAgent 在 socketPath 上起本机入口，供同机的 daemon 接入成为 self 节点。
+// socketPath 为空表示不提供；起不来（路径不可写，或另一个面板进程正在这上面服务）
+// 不是致命错误——面板照常对外服务，只是 self 节点接不进来，日志里说明原因。
+func serveLocalAgent(srv *server.Server, socketPath string) *http.Server {
+	if socketPath == "" {
+		return nil
+	}
+	l, err := server.ListenLocalAgent(socketPath)
+	if err != nil {
+		log.Printf("本机节点入口不可用，面板宿主机上的 daemon 将无法接入: %v", err)
+		return nil
+	}
+	local := &http.Server{Handler: srv.LocalAgentHandler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		log.Printf("local node entrance listening on %s", socketPath)
+		if err := local.Serve(l); err != nil && err != http.ErrServerClosed {
+			log.Printf("本机节点入口停止服务: %v", err)
+		}
+	}()
+	return local
 }
 
 func runResetAdmin(dbPath, username, newPw string) int {

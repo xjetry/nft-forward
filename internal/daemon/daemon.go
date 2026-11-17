@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
 	"nft-forward/internal/tc"
+	"nft-forward/internal/wsproto"
 )
 
 const (
@@ -43,22 +45,23 @@ type Config struct {
 	LegacyPaths LegacyMigrationPaths
 	Iface       string
 
-	// ConnectURL, when non-empty, makes the daemon dial out to a panel
-	// WebSocket endpoint (e.g. wss://panel/v1/agents). When empty the
-	// daemon stays in tui/server-local mode and only serves its unix
-	// socket. ConnectToken is the bearer credential sent in the hello
-	// frame; required when ConnectURL is set.
+	// ConnectURL, when non-empty, makes the daemon dial out to a remote panel's
+	// WebSocket endpoint (e.g. wss://panel/v1/agents). ConnectToken is the
+	// bearer credential sent in the hello frame; required when ConnectURL is
+	// set.
 	ConnectURL   string
 	ConnectToken string
 	PortRange    string
 
-	// ServerLocal marks this daemon as the panel host's own node: it takes
-	// rule pushes from the co-located panel over the unix socket (ConnectURL
-	// stays empty) yet must keep its "panel" segment across restarts instead
-	// of downgrading it to "tui" the way a standalone daemon does — the panel
-	// re-pushes those rules and the two segments would fight over the same
-	// port. Set via cmd/nft-agent's --server-local flag.
+	// ServerLocal 表示本 daemon 是面板宿主机自己的节点（cmd/nft-agent 的
+	// --server-local）：它经面板的本机入口 socket（PanelSocketPath）拨面板，用的是
+	// 与 ConnectURL 相同的 agent 协议，只是不带 token——面板按入口把它认定为 self
+	// 节点。ConnectURL 与 ServerLocal 二选一；两者都没有就是单机 daemon，不拨任何
+	// 面板。
 	ServerLocal bool
+	// PanelSocketPath 是 ServerLocal 模式下要拨的 socket，缺省为
+	// wsproto.LocalAgentSocketPath。
+	PanelSocketPath string
 
 	// DeclaredRelayHost/DeclaredRelayHostV6, when set, are sent with every
 	// hello as the authoritative data-plane address for this node — see
@@ -78,6 +81,12 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	if cfg.GroupName == "" {
 		cfg.GroupName = DefaultGroupName
+	}
+	if cfg.PanelSocketPath == "" {
+		cfg.PanelSocketPath = wsproto.LocalAgentSocketPath
+	}
+	if cfg.ConnectURL != "" && cfg.ServerLocal {
+		return nil, errors.New("远程面板地址（--connect）与本机面板模式（--server-local）不能同时指定：一个 daemon 只归一个面板管")
 	}
 	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
 		cfg.LegacyPaths = DefaultLegacyPaths()
@@ -108,6 +117,7 @@ func New(cfg Config) (*Daemon, error) {
 		connectURL:          cfg.ConnectURL,
 		connectTok:          cfg.ConnectToken,
 		serverLocal:         cfg.ServerLocal,
+		panelSocket:         cfg.PanelSocketPath,
 		portRange:           cfg.PortRange,
 		declaredRelayHost:   cfg.DeclaredRelayHost,
 		declaredRelayHostV6: cfg.DeclaredRelayHostV6,
@@ -155,15 +165,13 @@ func (d *Daemon) Bootstrap() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Downgrade: when a standalone daemon starts without a --connect config but
-	// has rules in the "panel" segment (left from a previous connected session),
-	// copy them to "tui" with server metadata cleared, then drop "panel". This
-	// keeps the rules functional in standalone mode. Skipped for the panel host's
-	// own node (serverLocal): its connectURL is also empty, but the co-located
-	// panel re-pushes the "panel" segment over the unix socket — downgrading it
-	// would leave the downgraded "tui" copies fighting the re-pushed "panel"
-	// rules over the same port.
-	if !d.serverLocal && d.connectURL == "" && len(owners["panel"]) > 0 {
+	// 降级：单机 daemon（不归任何面板管）启动时若 "panel" 段里还有规则——上一次
+	// 归面板管时留下的——就把它们去掉面板侧的元数据搬进 "tui" 段，再删掉 "panel"
+	// 段，这样规则在单机模式下照常转发、可在 TUI 里管理。
+	//
+	// 归面板管的 daemon 不做这件事：面板在它连上之后会重新下发 "panel" 段，降级出
+	// 来的 "tui" 副本会和重新下发的规则抢同一个端口。
+	if !d.managedByPanel() && len(owners["panel"]) > 0 {
 		downgraded := make([]nft.Rule, len(owners["panel"]))
 		for i, r := range owners["panel"] {
 			downgraded[i] = downgradePanelRule(r)
@@ -244,10 +252,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.probeFirewallEnvironment()
 	go d.refreshLoop(ctx)
 
-	if d.connectURL != "" {
+	if d.managedByPanel() {
+		// 两种接法共用同一个拨号器，只在“往哪拨”上不同：远程面板给 URL 与 token，
+		// 本机面板给 socket 路径（两者由 New 保证不同时出现）。
 		dl := NewDialer(DialerConfig{
 			URL:                 d.connectURL,
 			Token:               d.connectTok,
+			SocketPath:          d.localPanelSocket(),
 			AgentVersion:        agentVersion(),
 			AgentSHA:            agentSHA(),
 			PortRange:           d.portRange,
@@ -361,12 +372,20 @@ func (d *Daemon) RunWithSignals() error {
 	return d.Run(ctx)
 }
 
-// SetPanelRuleset is invoked by the dialer when an apply_ruleset frame
-// arrives. Thin wrapper over the unified write path so every panel-
-// segment mutation funnels through reconcileOwners; rev is recorded in
-// agent_meta.LastAppliedRev as part of the same SaveState transaction
-// so a reconnect won't replay the same payload.
+// SetPanelRuleset 把 "panel" 段整体替换为 rules，走统一的 reconcileOwners 写路径。
+// daemon 对外服务期间 "panel" 段只在这里被写（另外两处写入——Bootstrap 的降级与旧
+// 状态文件迁移——都在启动阶段、开始服务之前）。调用方有两个：拨号器收到
+// apply_ruleset 帧时（rev 取帧里的值），以及本机清空 panel 段时（rev 为空）。
+//
+// rev 与规则在同一次 SaveState 里落盘，所以 agent_meta.LastAppliedRev 始终是“当前
+// panel 段对应面板的哪个版本”：握手时 daemon 把它报给面板，面板算出的版本与它相同
+// 就不再重发。空 rev 表示当前内容不对应面板的任何版本——本机清空之后必须如此，
+// 否则面板下次连上时会以为规则仍在而跳过下发。
+//
+// 同一次写入里，本地段中与新 panel 段占同一位置的规则让位（见
+// dropLocalRulesClaimedByPanel）。
 func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Rule) (string, error) {
+	var superseded []nft.Rule
 	_, unresolved, _, err := d.reconcileOwners(ctx,
 		func(candidate OwnerRuleset) {
 			if len(rules) == 0 {
@@ -374,16 +393,18 @@ func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Ru
 			} else {
 				candidate["panel"] = append([]nft.Rule(nil), rules...)
 			}
+			superseded = dropLocalRulesClaimedByPanel(candidate)
 		},
 		func(meta *AgentMeta) {
-			if rev != "" {
-				meta.LastAppliedRev = rev
-			}
+			meta.LastAppliedRev = rev
 		},
 		true,
 	)
 	if err != nil {
 		return "", d.classifyWriteError(err)
+	}
+	for _, r := range superseded {
+		log.Printf("daemon: 本地规则 %s（%s）让位给面板下发的同端口规则", r.ID, portClaim(r))
 	}
 	return summarizeUnresolved(unresolved), nil
 }

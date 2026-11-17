@@ -15,6 +15,7 @@ import (
 	"nft-forward/internal/nft"
 	"nft-forward/internal/sysdeps"
 	"nft-forward/internal/tui"
+	"nft-forward/internal/wsproto"
 )
 
 // validateConnectURL rejects a plaintext ws:// control channel unless the
@@ -65,6 +66,7 @@ func runDaemon(args []string) int {
 		relayHostV6    string
 		allowInsecure  bool
 		serverLocal    bool
+		panelSocket    string
 	)
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	fs.StringVar(&socketPath, "socket", daemon.DefaultSocketPath, "unix socket 路径")
@@ -77,7 +79,8 @@ func runDaemon(args []string) int {
 	fs.StringVar(&relayHost, "relay-host", "", "显式声明数据面 IPv4 地址/域名，覆盖面板的自动识别（用于双出口等场景）")
 	fs.StringVar(&relayHostV6, "relay-host-v6", "", "显式声明数据面 IPv6 地址，覆盖面板的自动识别")
 	fs.BoolVar(&allowInsecure, "insecure-connect", false, "允许明文 ws:// 控制信道（仅本地测试；生产必须用 wss://）")
-	fs.BoolVar(&serverLocal, "server-local", false, "标记本机为面板宿主自身节点：面板经本地 socket 推送规则，重启时保留 panel 段不降级为 tui")
+	fs.BoolVar(&serverLocal, "server-local", false, "本机是面板宿主机自己的节点：经面板的本机入口 socket 接入同机的面板（不需要 token），与 --connect 二选一")
+	fs.StringVar(&panelSocket, "panel-socket", wsproto.LocalAgentSocketPath, "--server-local 时要连的面板本机入口 socket，须与面板的 --agent-socket 一致")
 	if err := fs.Parse(args); err != nil {
 		// Tolerate unknown flags so a binary upgrade that predates a
 		// newly-added install.sh flag doesn't crash the daemon.
@@ -125,6 +128,7 @@ func runDaemon(args []string) int {
 		DeclaredRelayHost:   relayHost,
 		DeclaredRelayHostV6: relayHostV6,
 		ServerLocal:         serverLocal,
+		PanelSocketPath:     panelSocket,
 	}
 	if connectURL != "" {
 		tok, err := os.ReadFile(panelTokenFile)

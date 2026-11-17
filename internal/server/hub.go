@@ -105,13 +105,57 @@ func (h *Hub) NodeArch(nodeID int64) (arch string, ok bool) {
 	return ac.arch, true
 }
 
-// ServeWS handles the /v1/agents WS endpoint. Upgrades the request,
-// reads the mandatory hello frame, validates the bearer token against
-// nodes.secret, registers the conn, and loops on reads dispatching by
-// message type.
+// agentPeer 是一次握手认定出来的对端：它是哪个节点，以及这条连接从哪里来。
+type agentPeer struct {
+	node *db.Node
+	// origin 写进 nodes.address，供页面显示这条连接的来源。
+	origin string
+	// observedIP 是面板在这条连接上观察到的对端网络地址，作为回填数据面地址
+	// （relay_host）的候选。没有网络地址的连接（本机入口）留空，回填就只用 agent
+	// 自己探测到的出口地址。
+	observedIP string
+}
+
+// localAgentOrigin 是本机入口的连接在 nodes.address 里的来源标记。
+const localAgentOrigin = "本机"
+
+// ServeWS 是对外的 agent 入口（HTTP 路由上的 /v1/agents）：节点凭 hello 里的 token
+// 认定，token 对不上任何未停用的节点就拒绝。空 token 一律拒绝（lookupNodeBySecret），
+// 所以没有 token 的 self 节点不可能从这里接入。
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	h.serveAgent(w, r, func(hello wsproto.Hello) (agentPeer, string) {
+		node, err := lookupNodeBySecret(h.DB, hello.NodeToken)
+		if err != nil || node == nil {
+			return agentPeer{}, "unknown or revoked token"
+		}
+		ip := extractIP(r)
+		return agentPeer{node: node, origin: ip, observedIP: ip}, ""
+	})
+}
+
+// ServeLocalWS 是只给本机 daemon 用的 agent 入口。它不看 token：能连到这个入口本身
+// 就是认证——入口挂在 ListenLocalAgent 建的 unix socket 上，只有属主（root）可连，
+// 对外的 HTTP 路由上没有它。从这里进来的连接一律认定为 self 节点，握手之后与远程
+// 节点走同一条通道（下发、计数、探测、升级）。
+func (h *Hub) ServeLocalWS(w http.ResponseWriter, r *http.Request) {
+	h.serveAgent(w, r, func(wsproto.Hello) (agentPeer, string) {
+		node, err := db.GetSelfNode(h.DB)
+		if err != nil {
+			return agentPeer{}, "panel has no self node"
+		}
+		if node.Disabled {
+			return agentPeer{}, "node disabled"
+		}
+		return agentPeer{node: node, origin: localAgentOrigin}, ""
+	})
+}
+
+// serveAgent 是两个入口共用的会话：升级为 WebSocket，读必须先到的 hello，由 identify
+// 认定对端（返回非空的拒绝原因则回 hello_ack 报错并断开），登记连接，然后进入读循环
+// 按帧类型分发。两个入口只在“怎么认定对端”上不同。
+func (h *Hub) serveAgent(w http.ResponseWriter, r *http.Request, identify func(wsproto.Hello) (agentPeer, string)) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // we authenticate via bearer in hello
+		InsecureSkipVerify: true, // the peer is authenticated by identify, not by Origin
 	})
 	if err != nil {
 		log.Printf("hub: accept: %v", err)
@@ -134,13 +178,14 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, err := lookupNodeBySecret(h.DB, hello.NodeToken)
-	if err != nil || node == nil {
-		ack, _ := json.Marshal(wsproto.HelloAck{Error: "unknown or revoked token"})
+	peer, refusal := identify(hello)
+	if refusal != "" {
+		ack, _ := json.Marshal(wsproto.HelloAck{Error: refusal})
 		writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ack})
-		ws.Close(websocket.StatusPolicyViolation, "bad token")
+		ws.Close(websocket.StatusPolicyViolation, "hello refused")
 		return
 	}
+	node := peer.node
 
 	// Register before hello_ack so both sides can rely on the invariant
 	// "hello_ack visible => conn is in the hub map".
@@ -167,8 +212,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	connectIP := extractIP(r)
-	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
+	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, peer.origin); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
 	// 下面两步都可能改写 relay_host：声明值每次 hello 都覆盖库里的值，回填则在
@@ -176,7 +220,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// 判定以库里的最终值为准（重读一次），不依赖这两个函数是否同步了内存里的 node。
 	relayHostBefore := node.RelayHost
 	applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
-	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+	fillNodeRelayHosts(h.DB, node, peer.observedIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
 	if h.OnRelayHostChange != nil {
 		if cur, err := db.GetNode(h.DB, node.ID); err == nil && cur.RelayHost != relayHostBefore {
 			go h.OnRelayHostChange(node.ID)
@@ -1046,7 +1090,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 		return
 	}
 	total, _ := db.CountRulesForUser(h.DB, ownerID)
-	if total >= u.MaxForwards {
+	if ownerForwardCapExceeded(u, total, 1) {
 		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d）", u.MaxForwards))
 		return
 	}
@@ -1202,7 +1246,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 	}
 
 	total, _ := db.CountRulesForUser(h.DB, ownerID)
-	if total+len(req.Rules) > u.MaxForwards {
+	if ownerForwardCapExceeded(u, total, len(req.Rules)) {
 		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d），当前 %d 条，迁入 %d 条", u.MaxForwards, total, len(req.Rules)))
 		return
 	}
@@ -1259,6 +1303,21 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 	}
 	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
 	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+}
+
+// ownerForwardCapExceeded 报告节点属主 owner 在已有 total 条规则之上再加 adding 条，
+// 是否超出其转发数上限。节点侧的规则命令（rule_create、migrate_rules）以节点属主的
+// 身份建规则，两处都用这一个判定。
+//
+// 管理员没有上限：users.max_forwards 只约束普通用户。管理员账号的这一列默认是 0，
+// 管理员建规则的 HTTP 接口（apiCreateRule）也从不检查它；这里若照样拿 0 去比，
+// 管理员名下的节点——面板机自己的 self 节点属主就是管理员——从节点侧一条规则都建
+// 不了，本地规则也迁不进来。
+func ownerForwardCapExceeded(owner *db.User, total, adding int) bool {
+	if owner.Role == "admin" {
+		return false
+	}
+	return total+adding > owner.MaxForwards
 }
 
 func sendRuleAckErr(ac *agentConn, id, msg string) {

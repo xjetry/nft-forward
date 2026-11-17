@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"runtime"
 	"strconv"
 	"sync"
@@ -39,8 +40,12 @@ const (
 // owner-segmented state through plain function values so the test in
 // dialer_test.go can substitute fakes without spinning up a daemon.
 type DialerConfig struct {
+	// 往哪拨，二选一：URL + Token 是远程面板（握手带 token，面板按 token 认节点）；
+	// SocketPath 是本机面板的本机入口 socket（握手不带 token，面板按入口认定为
+	// self 节点）。SocketPath 非空时 URL 与 Token 不使用。
 	URL          string
 	Token        string
+	SocketPath   string
 	AgentVersion string
 	AgentSHA     string
 	PortRange    string
@@ -96,6 +101,34 @@ type Dialer struct {
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{} // closed when Run() returns
+}
+
+// localPanelURL 是经本机入口 socket 握手时用的 WebSocket 地址。主机名只是占位：
+// 连接由 dialTarget 给出的 DialContext 直接拨 socket，不做解析；起作用的是路径
+// /v1/agents，本机入口只有这一条路由。
+const localPanelURL = "ws://nft-forward-panel/v1/agents"
+
+// target 是本拨号器的拨号目标，用于日志。
+func (d *Dialer) target() string {
+	if d.cfg.SocketPath != "" {
+		return "unix " + d.cfg.SocketPath
+	}
+	return d.cfg.URL
+}
+
+// dialTarget 返回握手用的地址与选项。SocketPath 非空时 WebSocket 握手跑在那个 unix
+// socket 上（忽略 URL）；否则按 URL 走网络。
+func (d *Dialer) dialTarget() (string, *websocket.DialOptions) {
+	if d.cfg.SocketPath == "" {
+		return d.cfg.URL, nil
+	}
+	path := d.cfg.SocketPath
+	return localPanelURL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var nd net.Dialer
+			return nd.DialContext(ctx, "unix", path)
+		},
+	}}}
 }
 
 func NewDialer(cfg DialerConfig) *Dialer {
@@ -165,6 +198,33 @@ func (d *Dialer) MigrateRules(ctx context.Context, rules []nft.Rule) (wsproto.Ru
 		return wsproto.RuleCmdAck{}, err
 	}
 	return d.sendCommand(ctx, wsproto.TypeMigrateRules, p)
+}
+
+// adoptLocalRules 把本地（tui）段的规则交给面板接管：面板为每条建一条归节点属主的
+// 规则，成功后 OnMigrated 清掉本地段，这些规则此后由面板下发。每次会话建立时调用
+// 一次；本地段为空时什么都不做。
+//
+// 面板拒绝（属主的转发数上限、端口不在节点的端口范围内等，整批拒绝）或会话在应答
+// 前断开时，本地段原样保留，规则继续转发，下次会话再试。
+func (d *Dialer) adoptLocalRules(ctx context.Context) {
+	owners, _ := d.cfg.GetState()
+	local := owners["tui"]
+	if len(local) == 0 {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, dialerReadTimeout)
+	defer cancel()
+	ack, err := d.MigrateRules(cctx, local)
+	switch {
+	case err != nil:
+		log.Printf("dialer: migrate_rules: %v", err)
+	case !ack.OK:
+		log.Printf("dialer: migrate_rules rejected: %s", ack.Error)
+	default:
+		if d.cfg.OnMigrated != nil {
+			d.cfg.OnMigrated()
+		}
+	}
 }
 
 // EditRuleHop sends a rule_hop_edit to the server and blocks for the ack.
@@ -279,10 +339,11 @@ func (d *Dialer) Run(ctx context.Context) {
 // after a single panel hiccup.
 func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	ws, _, err := websocket.Dial(dctx, d.cfg.URL, nil)
+	url, opts := d.dialTarget()
+	ws, _, err := websocket.Dial(dctx, url, opts)
 	cancel()
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", d.cfg.URL, err)
+		return false, fmt.Errorf("dial %s: %w", d.target(), err)
 	}
 	// The panel may push the upgrade binary inline over WS (~13MB); the default
 	// read limit (32KB) would reject that frame and break upgrades.
@@ -337,35 +398,12 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 		d.cfg.OnConfigUpdate(ha.PoolSize)
 	}
 
-	// Migrate local tui rules to the server on first connect so they become
-	// server-managed. On success, the callback clears the tui segment locally.
-	owners, _ := d.cfg.GetState()
-	if tuiRules := owners["tui"]; len(tuiRules) > 0 {
-		migPayload, _ := json.Marshal(wsproto.MigrateRules{Rules: tuiRules})
-		if err := writeOne(ctx, ws, wsproto.Envelope{
-			Type:    wsproto.TypeMigrateRules,
-			ID:      "migrate-1",
-			Payload: migPayload,
-		}); err != nil {
-			log.Printf("dialer: write migrate_rules: %v", err)
-		} else {
-			migAck, err := readOne(ctx, ws, dialerReadTimeout)
-			if err != nil {
-				log.Printf("dialer: read migrate_rules ack: %v", err)
-			} else if migAck.Type == wsproto.TypeRuleCmdAck {
-				var ack wsproto.RuleCmdAck
-				if err := json.Unmarshal(migAck.Payload, &ack); err == nil && ack.OK {
-					if d.cfg.OnMigrated != nil {
-						d.cfg.OnMigrated()
-					}
-				} else if err == nil && !ack.OK {
-					log.Printf("dialer: migrate_rules rejected: %s", ack.Error)
-				}
-			}
-		}
-	}
-
 	d.connected.Store(true)
+	// 会话建立后把本地规则交给面板接管。必须在 connected 之后、作为一条普通命令
+	// 发出（sendCommand 只在会话存续时受理，应答由下面的主循环按帧 id 认领）：
+	// 面板在握手后会并行地核对并下发规则集，那一帧可能先于接管的应答到达，只有
+	// 主循环才能把两种帧各自交给对的处理者。
+	go d.adoptLocalRules(ctx)
 	defer func() {
 		d.connected.Store(false)
 		// Wake any in-flight command waiters so they don't hang until their

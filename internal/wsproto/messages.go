@@ -11,6 +11,16 @@ import (
 	"nft-forward/internal/nft"
 )
 
+// LocalAgentSocketPath 是面板“本机入口”的 unix socket 的默认路径：面板在这上面只
+// 提供 /v1/agents，面板宿主机上的 daemon 经它用同一套帧协议接入（面板把从这里进来
+// 的连接认定为 self 节点）。两端的默认值都取这一个常量——面板的 --agent-socket 与
+// daemon 的 --panel-socket——改路径时两边一起变。
+//
+// 它不放在 daemon 的 systemd 运行时目录（/run/nft-forward）里：那个目录归 daemon 的
+// 单元所有，daemon 进程每次停止——包括崩溃后被 systemd 拉起——时整个被删掉，放在里面
+// 的 socket 文件会跟着消失。放在外面，这个 socket 的存续只取决于面板进程自己。
+const LocalAgentSocketPath = "/var/run/nft-forward-panel.sock"
+
 // Type constants. Strings (not iota) so the wire is self-describing
 // when debugging with `wscat`/`websocat`.
 const (

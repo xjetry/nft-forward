@@ -135,12 +135,9 @@ func (s *Server) requireTokenAuth(next http.Handler) http.Handler {
 	})
 }
 
-// --- Dispatcher helpers for JSON handlers (no flash cookies) ---
+// --- Dispatch helpers for JSON handlers (no flash cookies) ---
 
 func (s *Server) apiDispatch(nodeID int64) error {
-	if s.Dispatcher == nil {
-		return nil
-	}
 	return s.dispatchToNode(nodeID)
 }
 

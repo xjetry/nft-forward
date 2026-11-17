@@ -24,7 +24,6 @@ import (
 type Server struct {
 	DB              *sql.DB
 	Hub             *Hub
-	Dispatcher      *Dispatcher
 	Landing         *landing.Fetcher
 	loginLimiter    *loginLimiter
 	tokenLimiter    *tokenLimiter
@@ -37,9 +36,13 @@ func New(d *sql.DB) (*Server, error) {
 	if _, err := EnsureSelfNode(d); err != nil {
 		return nil, fmt.Errorf("ensure self node: %w", err)
 	}
+	// 下面新建的 Hub 连接表是空的，nodes.online 是它的镜像，所以先整体清零
+	// （理由见 db.MarkAllNodesOffline）。
+	if err := db.MarkAllNodesOffline(d); err != nil {
+		return nil, fmt.Errorf("mark nodes offline: %w", err)
+	}
 	hub := NewHub(d)
-	disp := &Dispatcher{DB: d, Hub: hub}
-	s := &Server{DB: d, Hub: hub, Dispatcher: disp, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
 		s.enforcePerNodeQuota(userID, nodeID)
 		s.enforceUserQuota(userID)
@@ -251,8 +254,9 @@ func (s *Server) enforceExitQuota(userID int64) {
 }
 
 // dispatchToNode builds the panel-segment ruleset for nodeID from the
-// rule_hops DB and dispatches it via the Hub (or unix socket for the
-// self-node).
+// rule_hops DB and sends it over the node's agent connection. Every node —
+// the self node included — is reached the same way, through the Hub; a node
+// with no connection yields an error that lands in last_error.
 //
 // The outcome is reflected on the nodes row so the panel UI can show
 // sync status: success stamps last_apply_at and clears last_error;
@@ -265,7 +269,7 @@ func (s *Server) dispatchToNode(nodeID int64) error {
 	}
 	rules := buildRules(s.DB, ruleHops)
 	rev := computeRev(rules)
-	warning, err := s.Dispatcher.Dispatch(nodeID, rules, rev)
+	warning, err := s.Hub.SendApplyRuleset(nodeID, rules, rev)
 	if err != nil {
 		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
 		return err
