@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -374,7 +375,40 @@ func (d *Daemon) SetPanelRuleset(ctx context.Context, rev string, rules []nft.Ru
 	for _, r := range superseded {
 		log.Printf("daemon: 本地规则 %s（%s）让位给面板下发的同端口规则", r.ID, portClaim(r))
 	}
-	return summarizeUnresolved(unresolved), nil
+	return joinWarnings(summarizeUnresolved(unresolved), summarizeUnshaped(rules)), nil
+}
+
+// joinWarnings 把几条节点告警连成一条，空的不算。
+func joinWarnings(parts ...string) string {
+	kept := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, "；")
+}
+
+// summarizeUnshaped 点名面板规则里要求了分组限速、内核数据面却限不了速的那些
+// （nft.KernelCannotShape）。它们照常转发、不限速；不报出来，面板上看到的就是一份
+// 设了限速、节点也应用成功的授权。
+func summarizeUnshaped(rules []nft.Rule) string {
+	var ports []string
+	for _, r := range rules {
+		if nft.KernelCannotShape(r) {
+			ports = append(ports, strconv.Itoa(r.SrcPort))
+		}
+	}
+	if len(ports) == 0 {
+		return ""
+	}
+	const maxList = 5
+	listed := ports
+	if len(listed) > maxList {
+		listed = append(append([]string{}, ports[:maxList]...), fmt.Sprintf("等共 %d 条", len(ports)))
+	}
+	return fmt.Sprintf("%d 条规则的限速分组 id 超过 65535，内核模式下无法限速，这些规则当前不限速：端口 %s",
+		len(ports), strings.Join(listed, "，"))
 }
 
 // summarizeUnresolved renders a short, human-readable note naming the rules

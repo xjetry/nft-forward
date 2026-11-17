@@ -414,7 +414,8 @@ func TestGroupShapeMark(t *testing.T) {
 		{Rule{ShapeGroup: 5, RateMBytes: 10}, 0x10005},
 		{Rule{ShapeGroup: 0, RateMBytes: 10}, 0},
 		{Rule{ShapeGroup: 5, RateMBytes: 0}, 0},
-		{Rule{ShapeGroup: 0x10000, RateMBytes: 10}, 0}, // minor is 16-bit; oversize falls back to legacy shaping
+		{Rule{ShapeGroup: 0xFFFF, RateMBytes: 10}, 0x1FFFF},
+		{Rule{ShapeGroup: 0x10000, RateMBytes: 10}, 0}, // tc 的 class minor 只有 16 位，放不下的分组不整形
 	}
 	for i, c := range cases {
 		if got := GroupShapeMark(c.r); got != c.want {
@@ -441,36 +442,60 @@ func TestRenderRuleset_GroupShaping(t *testing.T) {
 	}
 }
 
-func TestRenderRuleset_LegacyPortMark(t *testing.T) {
+// 内核数据面只按分组整形，规则自带的 BandwidthMbps 不产生标记：dnat 规则所在的 nat
+// 链只处理连接的第一个包，在那里单打一个标记接不住整条连接。
+func TestRenderRuleset_PerRuleCapIsNotMarked(t *testing.T) {
 	out := RenderRuleset([]Rule{
 		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, BandwidthMbps: 50},
 	})
-	if !strings.Contains(out, "meta mark set 8080 dnat ip to 10.0.0.2:80") {
-		t.Fatalf("legacy per-port mark missing:\n%s", out)
+	if !strings.Contains(out, "tcp dport 8080 dnat ip to 10.0.0.2:80") {
+		t.Fatalf("规则应原样转发、dnat 之前不带别的语句:\n%s", out)
 	}
-	if strings.Contains(out, "restore_mark") {
-		t.Fatalf("legacy-only ruleset must not emit the restore chain:\n%s", out)
+	if strings.Contains(out, "meta mark set") || strings.Contains(out, "restore_mark") {
+		t.Fatalf("没有限速分组的规则不应带标记，规则集也不应有恢复链:\n%s", out)
 	}
 }
 
-func TestRenderRuleset_GroupOverridesLegacyMirror(t *testing.T) {
+func TestRenderRuleset_GroupRuleCarriesOnlyTheGroupMark(t *testing.T) {
 	out := RenderRuleset([]Rule{
 		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 5, RateMBytes: 10, BandwidthMbps: 84},
 	})
 	if strings.Contains(out, "meta mark set 8080 ") {
-		t.Fatalf("group-shaped rule must not also carry the legacy port mark:\n%s", out)
+		t.Fatalf("group-shaped rule must not also carry a port mark:\n%s", out)
 	}
 }
 
-func TestRenderRuleset_OversizeGroupFallsBackToLegacy(t *testing.T) {
+// 分组 id 超过 16 位建不出 tc 的 class，这样的规则不打标记（由 KernelCannotShape
+// 找出来报告）。
+func TestRenderRuleset_OversizeGroupIsNotMarked(t *testing.T) {
 	out := RenderRuleset([]Rule{
 		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 0x10000, RateMBytes: 10, BandwidthMbps: 84},
 	})
-	if !strings.Contains(out, "meta mark set 8080 ") {
-		t.Fatalf("oversize group must fall back to the legacy port mark:\n%s", out)
+	if strings.Contains(out, "meta mark set") || strings.Contains(out, "restore_mark") {
+		t.Fatalf("建不出 class 的分组不应带标记，规则集也不应有恢复链:\n%s", out)
 	}
-	if strings.Contains(out, "restore_mark") {
-		t.Fatalf("no valid group → no restore chain:\n%s", out)
+}
+
+// KernelCannotShape 找的是“带着分组与额度、走内核数据面、分组却建不出 class”的
+// 规则。用户态转发按分组 id 找限速器，没有 16 位的限制，不算。
+func TestKernelCannotShape(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rule Rule
+		want bool
+	}{
+		{"不限速", Rule{}, false},
+		{"分组放得下", Rule{ShapeGroup: 5, RateMBytes: 10}, false},
+		{"分组 id 是 16 位能放下的最大值", Rule{ShapeGroup: 0xFFFF, RateMBytes: 10}, false},
+		{"分组 id 超过 16 位，模式缺省（内核）", Rule{ShapeGroup: 0x10000, RateMBytes: 10}, true},
+		{"分组 id 超过 16 位，模式写明是内核", Rule{ShapeGroup: 0x10000, RateMBytes: 10, Mode: ModeKernel}, true},
+		{"分组 id 超过 16 位，用户态转发", Rule{ShapeGroup: 0x10000, RateMBytes: 10, Mode: ModeUserspace}, false},
+		{"分组 id 超过 16 位但额度为 0：没有要求限速", Rule{ShapeGroup: 0x10000}, false},
+		{"只有自带的按规则限速：不是分组限速的要求", Rule{BandwidthMbps: 50}, false},
+	} {
+		if got := KernelCannotShape(c.rule); got != c.want {
+			t.Errorf("%s：KernelCannotShape = %v，期望 %v", c.name, got, c.want)
+		}
 	}
 }
 

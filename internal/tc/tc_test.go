@@ -72,35 +72,20 @@ func TestPlanClasses(t *testing.T) {
 		// Two rules in one group produce exactly one class.
 		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.2", DestPort: 80, ShapeGroup: 5, RateMBytes: 10},
 		{Proto: "tcp", SrcPort: 8081, DestIP: "10.0.0.3", DestPort: 80, ShapeGroup: 5, RateMBytes: 10},
-		// Legacy per-port cap from a pre-group panel.
+		// A rule's own per-rule cap produces no class: the kernel data plane shapes by group only.
 		{Proto: "tcp", SrcPort: 9000, DestIP: "10.0.0.4", DestPort: 80, BandwidthMbps: 50},
-		// Group-shaped rules must not leak a legacy class from the mirror value.
+		// A group-shaped rule that also carries a per-rule cap gets its group class and nothing else.
 		{Proto: "tcp", SrcPort: 9001, DestIP: "10.0.0.5", DestPort: 80, ShapeGroup: 6, RateMBytes: 2, BandwidthMbps: 17},
+		// A group id that does not fit a 16-bit class minor produces no class.
+		{Proto: "tcp", SrcPort: 9003, DestIP: "10.0.0.7", DestPort: 80, ShapeGroup: 0x10000, RateMBytes: 2, BandwidthMbps: 17},
 		// Unshaped.
 		{Proto: "tcp", SrcPort: 9002, DestIP: "10.0.0.6", DestPort: 80},
 	}
 	got := planClasses(rules)
-	// Sorted lexicographically by ClassID ("1:2328" < "1:5" < "1:6").
+	// Sorted by ClassID.
 	want := []shapeClass{
-		{ClassID: "1:2328", Rate: "50mbit", Handle: "0x2328"},
 		{ClassID: "1:5", Rate: "83886080bit", Handle: "0x10005"},
 		{ClassID: "1:6", Rate: "16777216bit", Handle: "0x10006"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("planClasses:\n got %+v\nwant %+v", got, want)
-	}
-}
-
-func TestPlanClasses_GroupWinsMinorCollision(t *testing.T) {
-	// A legacy port whose hex minor equals a group id would collide in the
-	// class-id space; the group keeps the minor, the legacy class is dropped.
-	rules := []nft.Rule{
-		{Proto: "tcp", SrcPort: 5, DestIP: "10.0.0.2", DestPort: 80, BandwidthMbps: 50},
-		{Proto: "tcp", SrcPort: 8080, DestIP: "10.0.0.3", DestPort: 80, ShapeGroup: 5, RateMBytes: 10},
-	}
-	got := planClasses(rules)
-	want := []shapeClass{
-		{ClassID: "1:5", Rate: "83886080bit", Handle: "0x10005"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("planClasses:\n got %+v\nwant %+v", got, want)

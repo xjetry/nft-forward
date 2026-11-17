@@ -42,8 +42,11 @@ type Rule struct {
 	DestHost string `json:"dest_host,omitempty"`
 	DestPort int    `json:"dest_port"`
 	// Comment 是给人看的备注。数据面不读。
-	Comment       string `json:"comment,omitempty"`
-	BandwidthMbps int    `json:"bandwidth_mbps,omitempty"`
+	Comment string `json:"comment,omitempty"`
+	// BandwidthMbps 是这条规则自己的限速（Mbit/s），0 是不限。只有用户态转发读它，
+	// 而且只在规则没有带着分组与额度时（forward 的 setLimits）；内核数据面只按分组
+	// 整形，不读它。
+	BandwidthMbps int `json:"bandwidth_mbps,omitempty"`
 	// Mode selects the data plane for this forward: "" / "kernel" = nftables
 	// DNAT (zero-copy); "userspace" = the embedded TCP split-relay (TCP only).
 	Mode string `json:"mode,omitempty"`
@@ -54,13 +57,10 @@ type Rule struct {
 	RuleID   int64  `json:"rule_id,omitempty"`
 	RuleName string `json:"rule_name,omitempty"`
 	HopCount int    `json:"hop_count,omitempty"`
-	// ShapeGroup/RateMBytes carry the per-grant shared rate limit: every rule
-	// in the same group (one user's rules on one panel node, priced by one
-	// grant) shares a single RateMBytes MB/s bucket, both directions combined.
-	// ShapeGroup is the panel-side grant id; 0 = no group. When the group is
-	// valid the data plane ignores the legacy per-rule BandwidthMbps, which
-	// new panels still fill so pre-group agents degrade to an approximate
-	// per-rule cap.
+	// ShapeGroup 与 RateMBytes 是按授权共享的限速：ShapeGroup 是面板侧的授权 id（0
+	// 表示不分组），RateMBytes 是这份授权的额度（MB/s）。同一分组的规则在一个数据面
+	// 里合用一个桶：内核数据面是每组一个 tc class，连接两个方向的包都带分组的标记；
+	// 用户态转发是每组一个限速器，上下行都走它。
 	ShapeGroup int64 `json:"shape_group,omitempty"`
 	RateMBytes int   `json:"rate_mbytes,omitempty"`
 }
@@ -114,9 +114,8 @@ func SameDataplane(a, b []Rule) bool {
 // 和面板给的分组限速（ShapeGroup、RateMBytes）清零，其余不动。“哪些字段是面板给的”
 // 只在这里列一次。
 //
-// 分组限速跟着去掉，是因为那个额度由面板侧的授权定价，脱离面板后没有谁再管它。按
-// 规则的 BandwidthMbps 留着：它不依赖面板，ShapeGroup 与 RateMBytes 清零之后
-// RenderRuleset、tc 与用户态转发（setLimits）都按它限速。
+// 分组限速跟着去掉，是因为那个额度由面板侧的授权定价，脱离面板后没有谁再管它。
+// 规则自己的 BandwidthMbps 不在面板给的字段之列，原样留下。
 func (r Rule) WithoutPanelBinding() Rule {
 	r.RuleID = 0
 	r.RuleName = ""
@@ -126,16 +125,28 @@ func (r Rule) WithoutPanelBinding() Rule {
 	return r
 }
 
-// GroupShapeMark returns the fwmark for a validly group-shaped rule, or 0.
-// The 0x10000 offset keeps group marks disjoint from legacy per-port marks
-// (ports are ≤ 0xFFFF). Groups whose id exceeds 16 bits cannot become a tc
-// class minor and fall back to legacy shaping — callers must treat 0 as "not
-// group-shaped", never as "unshaped".
+// GroupShapeMark 返回内核数据面给这条规则的连接打的 fwmark；返回 0 的规则不打标记，
+// 在内核数据面不限速。内核数据面只按分组整形：RenderRuleset 按它打标记，tc 的
+// planClasses 按它建 class，两边调的是这同一个函数。
+//
+// 标记是 0x10000 | 分组 id。恢复链只把高 16 位等于 0x0001 的 ct mark 恢复成包标记
+// （见 RenderRuleset），主机上别的组件写的、不在这个范围里的 ct mark 不受影响。
+//
+// 分组 id 超过 16 位时返回 0：tc 的 class minor 只有 16 位，这样的分组建不出 class。
+// 带着分组与额度却落到这里的规则由 KernelCannotShape 找出来。
 func GroupShapeMark(r Rule) uint32 {
 	if r.ShapeGroup > 0 && r.RateMBytes > 0 && r.ShapeGroup <= 0xFFFF {
 		return uint32(0x10000 | r.ShapeGroup)
 	}
 	return 0
+}
+
+// KernelCannotShape 报告 r 是不是一条要求了分组限速、走内核数据面、而内核数据面
+// 限不了速的规则：带着分组与额度，分组 id 却建不出 class（GroupShapeMark 为 0）。
+// 这样的规则照常转发、不限速，daemon 应用面板规则集时把它们作为告警报给面板
+// （SetPanelRuleset）。用户态转发按分组 id 找限速器，没有 16 位的限制，不在此列。
+func KernelCannotShape(r Rule) bool {
+	return r.EffectiveMode() == ModeKernel && r.ShapeGroup > 0 && r.RateMBytes > 0 && GroupShapeMark(r) == 0
 }
 
 func (r Rule) Display() string {
@@ -267,8 +278,6 @@ func RenderRuleset(rules []Rule) string {
 			// class. nat prerouting only sees a connection's first packet,
 			// which is why the mark must be persisted via ct mark.
 			mark = fmt.Sprintf("meta mark set 0x%x ct mark set meta mark ", m)
-		} else if r.BandwidthMbps > 0 {
-			mark = fmt.Sprintf("meta mark set %d ", r.SrcPort)
 		}
 		if IsLoopback(r.DestIP) && IsIPv6(r.DestIP) {
 			// IPv6 has no route_localnet equivalent; redirect delivers the

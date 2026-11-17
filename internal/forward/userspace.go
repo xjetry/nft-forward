@@ -258,10 +258,8 @@ func (b *userspaceBackend) Reconcile(rules []nft.Rule) error {
 	return nil
 }
 
-// setLimits points a listener's limiters at the right bucket: group-shaped
-// rules share the group's bidirectional limiter; legacy per-rule caps (from
-// pre-group panels) keep their historical semantics — a private bucket, upload
-// only.
+// setLimits 让监听器的限速器指向该用的桶：带着分组与额度的规则合用分组的限速器，
+// 上下行都走它；其余规则按自己的 BandwidthMbps 得到一个私有的桶，只限上行。
 func (b *userspaceBackend) setLimits(l *listener, r nft.Rule) {
 	if r.ShapeGroup > 0 && r.RateMBytes > 0 {
 		g := b.groups[r.ShapeGroup]

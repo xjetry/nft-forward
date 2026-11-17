@@ -457,6 +457,53 @@ func TestSetPanelRuleset_ReturnsWarningForUnresolved(t *testing.T) {
 	}
 }
 
+// 限速分组的 id 超过 16 位时内核数据面建不出 class，这样的规则不限速。daemon 应用
+// 面板规则集时把它们写进告警（面板把告警显示在节点上），不悄悄放过。分组放得下的
+// 规则、用户态转发的规则、不限速的规则都不在告警里；没有这样的规则时没有告警。
+func TestSetPanelRulesetWarnsAboutGroupsTheKernelCannotShape(t *testing.T) {
+	d := newTestDaemon(t)
+	fits := nft.Rule{Proto: "tcp", SrcPort: 12001, DestIP: "10.0.0.1", DestPort: 80, ShapeGroup: 5, RateMBytes: 10}
+	oversize := nft.Rule{Proto: "tcp", SrcPort: 12002, DestIP: "10.0.0.1", DestPort: 80, ShapeGroup: 0x10000, RateMBytes: 10}
+	oversizeUserspace := nft.Rule{Proto: "tcp", SrcPort: 12003, DestIP: "10.0.0.1", DestPort: 80, ShapeGroup: 0x10000, RateMBytes: 10, Mode: nft.ModeUserspace}
+	unshaped := nft.Rule{Proto: "tcp", SrcPort: 12004, DestIP: "10.0.0.1", DestPort: 80}
+
+	warning, err := d.SetPanelRuleset(context.Background(), "rev1", []nft.Rule{fits, oversize, oversizeUserspace, unshaped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warning, "12002") || !strings.Contains(warning, "限速") {
+		t.Errorf("告警应点名端口 12002 的规则不限速，实际 %q", warning)
+	}
+	for _, port := range []string{"12001", "12003", "12004"} {
+		if strings.Contains(warning, port) {
+			t.Errorf("端口 %s 的规则不该出现在告警里，实际 %q", port, warning)
+		}
+	}
+
+	warning, err = d.SetPanelRuleset(context.Background(), "rev2", []nft.Rule{fits, oversizeUserspace, unshaped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warning != "" {
+		t.Errorf("没有内核数据面限不了速的规则时不应有告警，实际 %q", warning)
+	}
+
+	// 与“目标无法解析”的告警同时出现时两条都在。
+	d.resolveFn = func(ctx context.Context, in []nft.Rule) ([]nft.Rule, bool, error) {
+		return in, false, fmt.Errorf("dns: bad.invalid: no such host")
+	}
+	warning, err = d.SetPanelRuleset(context.Background(), "rev3", []nft.Rule{
+		oversize,
+		{Proto: "tcp", SrcPort: 12005, DestHost: "bad.invalid", DestPort: 80},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warning, "12002") || !strings.Contains(warning, "bad.invalid") {
+		t.Errorf("两条告警都应在，实际 %q", warning)
+	}
+}
+
 func TestCreateRule_RejectsSyntacticallyInvalidHost(t *testing.T) {
 	d := newTestDaemon(t)
 	body, _ := json.Marshal(createRuleReq{Proto: "tcp", ExitHost: "4212", ExitPort: 80, ListenPort: 12000})

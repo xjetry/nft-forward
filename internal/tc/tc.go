@@ -18,23 +18,17 @@ type shapeClass struct {
 	Handle  string // fw mark the filter matches, "0x..."
 }
 
-// planClasses derives the HTB leaves from the ruleset: one class per shape
-// group (minor = group id, mark carries the 0x10000 offset) plus one class per
-// legacy per-port cap from pre-group panels. Group-shaped rules never spawn a
-// legacy class from their mirror BandwidthMbps. When a legacy port's minor
-// collides with a group id the group wins — the group is current policy, the
-// port cap is a compatibility remnant. Output is sorted for determinism.
+// planClasses 从规则集推出 HTB 的叶子：每个限速分组一个 class，minor 是分组 id，
+// 过滤器接的标记是 nft.GroupShapeMark 给的那个——nft 打标记时调的是同一个函数。
+// 该函数返回 0 的规则没有 class。输出按 ClassID 排序，同一个规则集得到同一个结果。
 func planClasses(rules []nft.Rule) []shapeClass {
 	groups := map[int64]int{}
-	legacy := map[int]int{}
 	for _, r := range rules {
 		if nft.GroupShapeMark(r) != 0 {
 			groups[r.ShapeGroup] = r.RateMBytes
-		} else if r.BandwidthMbps > 0 {
-			legacy[r.SrcPort] = r.BandwidthMbps
 		}
 	}
-	out := make([]shapeClass, 0, len(groups)+len(legacy))
+	out := make([]shapeClass, 0, len(groups))
 	for sg, mb := range groups {
 		out = append(out, shapeClass{
 			ClassID: fmt.Sprintf("1:%x", sg),
@@ -44,35 +38,21 @@ func planClasses(rules []nft.Rule) []shapeClass {
 			Handle: fmt.Sprintf("0x%x", 0x10000|sg),
 		})
 	}
-	for port, mbps := range legacy {
-		if _, taken := groups[int64(port)]; taken {
-			continue
-		}
-		out = append(out, shapeClass{
-			ClassID: fmt.Sprintf("1:%x", port),
-			Rate:    fmt.Sprintf("%dmbit", mbps),
-			Handle:  fmt.Sprintf("0x%x", port),
-		})
-	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ClassID < out[j].ClassID })
 	return out
 }
 
-// Apply rebuilds the HTB tree on iface to match the rate limits encoded in
-// rules. Rules with group shaping or per-port bandwidth caps generate tc state
-// (default class for unmetered traffic). The tree is rebuilt from scratch on
-// every call so reconcile is trivially correct.
+// Apply 在 iface 上按规则集里的分组限速重建 HTB 树。每次调用都先拆掉整棵树再从头
+// 建，所以结果只取决于这一次的规则集；没有分组要整形时拆完就不再建。
 //
-// Layout:
+// 布局：
 //
 //	qdisc 1: htb default 1
-//	  class 1:1 — default, no limit
-//	  class 1:<group> — each shape group one class, rate=ceil
-//	  class 1:<port> — legacy per-rule cap
-//	filter handle fw-mark fw → classid
+//	  class 1:1 — 默认 class，没有标记的流量走这里，不限速
+//	  class 1:<分组 id> — 每个限速分组一个，rate 等于 ceil
+//	filter handle <标记> fw → classid
 //
-// Mark for shaped rules is set by nft (`meta mark set 0x1XXXX` for groups,
-// `meta mark set <port>` for legacy).
+// 标记由 nft 打（`meta mark set 0x1XXXX`，见 nft.RenderRuleset）。
 func Apply(rules []nft.Rule, iface string) error {
 	if iface == "" {
 		return nil
