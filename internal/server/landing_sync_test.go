@@ -42,7 +42,7 @@ func TestSyncLandingExitsMaterializes(t *testing.T) {
 	uid, _ := loginAsUser(t, d, 10)
 	db.SetUserLandingSource(d, uid, "", "vless://u@1.2.3.4:443#HK\nvless://u@1.2.3.4:443#DUP")
 	u, _ := db.GetUserByID(d, uid)
-	s, _ := New(d)
+	s, _ := newServer(d)
 
 	nodes, err := s.resolveLandingExits(u, false)
 	if err != nil {
@@ -59,7 +59,9 @@ func TestLandingSyncPassBackfillsManualUsers(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 10)
 	db.SetUserLandingSource(d, uid, "", "vless://u@1.2.3.4:443#HK")
-	s, _ := New(d)
+	// newServer 不启动后台循环。New 会在后台立刻跑一遍含手动用户的同步
+	// （landingSyncEnforcer），它若落在下面的删表与断言之间，就会把刚删掉的行写回去。
+	s, _ := newServer(d)
 
 	s.landingSyncPass(true)
 	exits, _ := db.ListUserLandingExits(d, uid)
@@ -79,7 +81,7 @@ func TestLandingSyncPassKeepsSetOnSubFailure(t *testing.T) {
 	d := openDB(t)
 	uid, _ := loginAsUser(t, d, 10)
 	db.SetUserLandingSource(d, uid, "", "vless://u@1.2.3.4:443#HK")
-	s, _ := New(d)
+	s, _ := newServer(d)
 	s.landingSyncPass(true)
 
 	// switching to a failing subscription must not flip the existing rows
