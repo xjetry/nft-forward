@@ -13,42 +13,6 @@ import (
 	"nft-forward/internal/resolver"
 )
 
-// ruleView is the per-rule row the list/detail API renders.
-type ruleView struct {
-	Rule        *db.Rule
-	Entry       string
-	EntryV6     string
-	Exit        string
-	EntryNodeID int64
-	EntryMode   string
-	ExitMode    string
-	OwnerName   string
-}
-
-func (s *Server) buildRuleView(r *db.Rule) ruleView {
-	hops, _ := db.ListRuleHops(s.DB, r.ID)
-	exit := net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
-	entry, entryV6 := "—", ""
-	var entryNodeID int64
-	entryMode, exitMode := "", ""
-	if len(hops) > 0 {
-		entryMode = hops[0].Mode
-		exitMode = hops[len(hops)-1].Mode
-	}
-	if len(hops) > 0 && r.EntryListenPort > 0 {
-		entryNodeID = hops[0].NodeID
-		if n, err := db.GetNode(s.DB, hops[0].NodeID); err == nil && n.RelayHost != "" {
-			// EntryAddresses returns "" for a family whose relay address the
-			// node no longer carries; keep the "—" placeholder instead of
-			// rendering an empty host.
-			if e, e6 := db.EntryAddresses(r.EntryFamily, n.RelayHost, n.RelayHostV6, r.EntryListenPort); e != "" {
-				entry, entryV6 = e, e6
-			}
-		}
-	}
-	return ruleView{Rule: r, Entry: entry, EntryV6: entryV6, Exit: exit, EntryNodeID: entryNodeID, EntryMode: entryMode, ExitMode: exitMode}
-}
-
 // ruleListItem is the JSON shape for rule-list endpoints. The embedded *db.Rule
 // promotes the rule's own fields (id, node_id, name, proto, ...) to the top
 // level so React list rows can read them flat alongside the computed view
@@ -59,7 +23,7 @@ type ruleListItem struct {
 	Entry     string `json:"entry"`
 	// EntryV6 is the rule's secondary entry address, populated only when
 	// entry_family is "both"; computed from the entry node's current relay
-	// addresses in buildRuleView.
+	// addresses in ruleItems.
 	EntryV6     string `json:"entry_v6,omitempty"`
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
@@ -94,9 +58,92 @@ type ruleListItem struct {
 	Suppressed db.SuppressReason `json:"suppressed,omitempty"`
 }
 
-// markSuppressed 给每个规则项填上它此刻不转发的原因；照常转发的规则留空。规则的
-// 每个对外面（管理员与用户的列表、详情，/api/v1）装配完都要调它，
-// TestEveryRuleSurfaceReportsTheSuppression 逐面对照。
+// ruleItems 是规则对外形状的唯一装配处：管理员与用户的列表、详情、/api/v1（经
+// toV1Rule 再收窄）都从这里取。每一项一次给全——规则自身的列、累计流量、入口地址与
+// 两端模式、所有者名、出口归类、倍率、展平后的物理链、压制原因。
+//
+// cat 是同一次请求里装配节点视图用的那份目录：入口地址按入口那台机器此刻的中继地址
+// 算，链路上每一跳的名字从目录里解析（链路会经过用户没被授权的组合成员，所以必须是
+// 全量节点，LoadNodeCatalog 保证）。倍率取规则入口节点的 rate_multiplier，与计费取的
+// 是同一个值（db.NodeRateMultipliers）。relayURI 决定是否算出可复制的代理 URI：只在
+// 提供复制操作的面上算（管理员详情、用户的列表与详情），管理员列表只显示出口类型。
+func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool) []ruleListItem {
+	db.FillRuleTraffic(s.DB, rules)
+	owners, err := db.UsersByID(s.DB)
+	if err != nil {
+		log.Printf("rules: load owners: %v", err)
+	}
+	landingByOwner := map[int64]map[string]landing.Node{}
+	ids := make([]int64, len(rules))
+	items := make([]ruleListItem, len(rules))
+	for i, r := range rules {
+		ids[i] = r.ID
+		it := ruleListItem{Rule: r, BillingRate: 1, RateMultiplier: 1}
+		it.fillEndpoints(s.DB, cat)
+		var idx map[string]landing.Node
+		if r.OwnerID.Valid {
+			if u := owners[r.OwnerID.Int64]; u != nil {
+				it.OwnerName = u.Username
+				if u.BillingRate > 0 {
+					it.BillingRate = u.BillingRate
+				}
+			}
+			var ok bool
+			if idx, ok = landingByOwner[r.OwnerID.Int64]; !ok {
+				idx = s.landingIndexFromDB(r.OwnerID.Int64)
+				landingByOwner[r.OwnerID.Int64] = idx
+			}
+		}
+		it.classifyExit(idx, relayURI)
+		if n := cat.Node(r.NodeID); n != nil {
+			it.RateMultiplier = n.RateMultiplier
+		}
+		items[i] = it
+	}
+	if chains, err := db.RuleChainNodeIDs(s.DB, ids); err != nil {
+		log.Printf("rules: load chains: %v", err)
+	} else {
+		for i := range items {
+			hopIDs := chains[items[i].ID]
+			path := make([]chainNode, 0, len(hopIDs))
+			for _, nid := range hopIDs {
+				if n := cat.Node(nid); n != nil {
+					path = append(path, chainNode{NodeID: nid, Name: n.Name, NodeType: n.NodeType})
+				}
+			}
+			items[i].Chain = path
+		}
+	}
+	s.markSuppressed(items)
+	return items
+}
+
+// fillEndpoints 填入口地址与两端的转发模式，取自规则落库的物理跳。入口地址按入口
+// 那台机器此刻的中继地址拼出；规则还没生成过物理跳、或入口机器已没有对应地址族的
+// 中继地址时，入口保持占位符“—”。
+func (it *ruleListItem) fillEndpoints(d *sql.DB, cat *db.NodeCatalog) {
+	r := it.Rule
+	it.Exit = net.JoinHostPort(r.ExitHost, strconv.Itoa(r.ExitPort))
+	it.Entry = "—"
+	hops, err := db.ListRuleHops(d, r.ID)
+	if err != nil || len(hops) == 0 {
+		return
+	}
+	it.EntryMode, it.ExitMode = hops[0].Mode, hops[len(hops)-1].Mode
+	if r.EntryListenPort <= 0 {
+		return
+	}
+	it.EntryNodeID = hops[0].NodeID
+	if n := cat.Node(hops[0].NodeID); n != nil && n.RelayHost != "" {
+		if e, e6 := db.EntryAddresses(r.EntryFamily, n.RelayHost, n.RelayHostV6, r.EntryListenPort); e != "" {
+			it.Entry, it.EntryV6 = e, e6
+		}
+	}
+}
+
+// markSuppressed 给每个规则项填上它此刻不转发的原因；照常转发的规则留空。只由
+// ruleItems 调用，所以规则的每个对外面都带着它；TestEveryRuleSurfaceReportsTheSuppression
+// 逐面对照。
 func (s *Server) markSuppressed(items []ruleListItem) {
 	reasons, err := db.RuleSuppressions(s.DB)
 	if err != nil {
@@ -122,40 +169,6 @@ type chainNode struct {
 type nodeHopView struct {
 	*db.NodeHop
 	NodeName string `json:"node_name"`
-}
-
-func (s *Server) buildRuleListItem(r *db.Rule, ownerName string) ruleListItem {
-	v := s.buildRuleView(r)
-	return ruleListItem{Rule: r, OwnerName: ownerName, Entry: v.Entry, EntryV6: v.EntryV6, Exit: v.Exit, EntryNodeID: v.EntryNodeID, EntryMode: v.EntryMode, ExitMode: v.ExitMode}
-}
-
-// fillRuleChains attaches the flattened physical chain to each item, resolving
-// every hop's node id to its display name/type via nodesByID. A hop whose node
-// can't be resolved is dropped rather than shown as a bare id. nodesByID should
-// span all nodes (composite children included), not just the caller's granted
-// subset, so a composite's members still resolve.
-func (s *Server) fillRuleChains(items []ruleListItem, nodesByID map[int64]*db.Node) {
-	if len(items) == 0 {
-		return
-	}
-	ids := make([]int64, len(items))
-	for i := range items {
-		ids[i] = items[i].ID
-	}
-	chains, err := db.RuleChainNodeIDs(s.DB, ids)
-	if err != nil {
-		return
-	}
-	for i := range items {
-		hopIDs := chains[items[i].ID]
-		chain := make([]chainNode, 0, len(hopIDs))
-		for _, nid := range hopIDs {
-			if n := nodesByID[nid]; n != nil {
-				chain = append(chain, chainNode{NodeID: nid, Name: n.Name, NodeType: n.NodeType})
-			}
-		}
-		items[i].Chain = chain
-	}
 }
 
 // classifyExit fills the exit-kind / proxy-URI fields. idx maps "host:port" to

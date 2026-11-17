@@ -11,8 +11,8 @@
       "Valid": false
     },
     "last_error": {
-      "String": "",
-      "Valid": false
+      "String": "node 2 not connected",
+      "Valid": true
     },
     "last_upgrade_at": {
       "Int64": 0,

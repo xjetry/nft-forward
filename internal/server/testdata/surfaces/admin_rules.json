@@ -215,7 +215,7 @@
       "name": "combo-k",
       "no_direct_exit": false,
       "node_type": "composite",
-      "online": 0,
+      "online": 1,
       "port_range": "10001-20000",
       "rate_multiplier": 3,
       "relay_host": "",

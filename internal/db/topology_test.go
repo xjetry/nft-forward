@@ -7,19 +7,6 @@ import (
 	"nft-forward/internal/chain"
 )
 
-// chainsOf 用测试里给的节点与成员关系建一份拓扑，展开 nodes 里的组合。组合聚合函数
-// 的测试用它准备输入，走的是与生产相同的展开（flattenComposites）。
-func chainsOf(nodes []*Node, hops []*NodeHop) map[int64][]chain.Hop {
-	topo := chain.Topology{Nodes: map[int64]chain.Node{}, Members: map[int64][]chain.Member{}}
-	for _, n := range nodes {
-		topo.Nodes[n.ID] = chain.Node{ID: n.ID, Name: n.Name, Composite: n.NodeType == "composite"}
-	}
-	for _, h := range hops {
-		topo.Members[h.NodeID] = append(topo.Members[h.NodeID], chain.Member{NodeID: h.HopNodeID, Mode: h.Mode})
-	}
-	return flattenComposites(topo, nodes)
-}
-
 func TestNodeSeatsAndGrantSeats(t *testing.T) {
 	e, v, x := chain.SeatEntry, chain.SeatVia, chain.SeatExit
 	nodeCases := []struct {
@@ -177,85 +164,5 @@ func TestInterNodeLegModeIsSettledWhenStored(t *testing.T) {
 	edges, _ := ListAllNodeBindings(d)
 	if len(edges) != 2 {
 		t.Fatalf("被拒绝的替换不应改动已有的边，实际剩 %d 条：%+v", len(edges), edges)
-	}
-}
-
-// 用户侧只拿得到被授权的节点，而组合的成员通常不在授权之列。成员链的展开必须按库里
-// 的全量拓扑来：嵌套的组合照样展开到物理节点，成员的名字照样解析得出。
-func TestResolveCompositeHopsForAGrantedSubset(t *testing.T) {
-	d := openTestDB(t)
-	a, _ := CreateNode(d, "a", "", "")
-	b, _ := CreateNode(d, "b", "", "")
-	x, _ := CreateNode(d, "x", "", "")
-	inner, _ := CreateNode(d, "inner", "", "")
-	outer, _ := CreateNode(d, "outer", "", "")
-	markComposite(t, d, inner.ID)
-	markComposite(t, d, outer.ID)
-	if err := CreateNodeHops(d, inner.ID, []NodeHop{{Position: 0, HopNodeID: a.ID, Mode: "kernel"}, {Position: 1, HopNodeID: b.ID, Mode: "userspace"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := CreateNodeHops(d, outer.ID, []NodeHop{{Position: 0, HopNodeID: inner.ID, Mode: "kernel"}, {Position: 1, HopNodeID: x.ID, Mode: "userspace"}}); err != nil {
-		t.Fatal(err)
-	}
-
-	all, err := ListNodes(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 用户只被授权了 outer 这一个节点。
-	var granted []*Node
-	for _, n := range all {
-		if n.ID == outer.ID {
-			cp := *n
-			granted = append(granted, &cp)
-		}
-	}
-	ResolveCompositeHops(d, granted, all)
-
-	want := []NodeChildHop{
-		{NodeID: a.ID, Name: "a", NodeType: "remote", Mode: "kernel"},
-		{NodeID: b.ID, Name: "b", NodeType: "remote", Mode: "userspace"},
-		{NodeID: x.ID, Name: "x", NodeType: "remote", Mode: "userspace"},
-	}
-	if !reflect.DeepEqual(granted[0].Hops, want) {
-		t.Fatalf("成员链：得到 %+v\n期望 %+v", granted[0].Hops, want)
-	}
-}
-
-// 展不开的组合（这里是成员关系成环）在四个聚合里表现一致：离线、没有成员链、没有
-// 出入口地址、不写原始流量；同一批里展得开的组合不受影响。
-func TestUnflattenableCompositeHasNoDerivedAttributes(t *testing.T) {
-	nodes := []*Node{
-		{ID: 1, Name: "a", NodeType: "remote", Online: 1, RelayHost: "10.0.0.1", RelayHostV6: "2001:db8::1"},
-		{ID: 7, Name: "loop-a", NodeType: "composite"},
-		{ID: 8, Name: "loop-b", NodeType: "composite"},
-		{ID: 9, Name: "ok", NodeType: "composite"},
-	}
-	hops := []*NodeHop{
-		{NodeID: 7, Position: 0, HopNodeID: 1}, {NodeID: 7, Position: 1, HopNodeID: 8},
-		{NodeID: 8, Position: 0, HopNodeID: 7},
-		{NodeID: 9, Position: 0, HopNodeID: 1},
-	}
-	chains := chainsOf(nodes, hops)
-	raw := map[int64]int64{1: 500}
-
-	resolveCompositeOnline(nodes, chains)
-	resolveCompositeRelayStack(nodes, chains)
-	resolveCompositeHops(nodes, chains, nodes)
-	fillCompositeRawTraffic(nodes, chains, raw)
-
-	for _, n := range nodes[1:3] {
-		if n.Online != 0 || n.Hops != nil || n.EntryRelayHost != "" || n.EntryRelayHostV6 != "" || n.ExitRelayHostV6 != "" {
-			t.Errorf("成环的组合 %s 不应有派生属性，实际 online=%d hops=%+v entry=%q/%q exit6=%q",
-				n.Name, n.Online, n.Hops, n.EntryRelayHost, n.EntryRelayHostV6, n.ExitRelayHostV6)
-		}
-		if _, written := raw[n.ID]; written {
-			t.Errorf("成环的组合 %s 不应写原始流量", n.Name)
-		}
-	}
-	ok := nodes[3]
-	if ok.Online != 1 || len(ok.Hops) != 1 || ok.EntryRelayHost != "10.0.0.1" || ok.ExitRelayHostV6 != "2001:db8::1" || raw[ok.ID] != 500 {
-		t.Errorf("展得开的组合应照常得到派生属性，实际 online=%d hops=%+v entry=%q exit6=%q raw=%d",
-			ok.Online, ok.Hops, ok.EntryRelayHost, ok.ExitRelayHostV6, raw[ok.ID])
 	}
 }

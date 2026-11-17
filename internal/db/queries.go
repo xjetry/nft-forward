@@ -57,71 +57,66 @@ type User struct {
 	RuleCount int `json:"rule_count"`
 }
 
+// Node 是 nodes 表的一行，字段与列一一对应，没有内存里补出来的派生值。组合的在线、
+// 出入口地址、成员链、原始流量不是列，由 NodeCatalog.Derive 从全量节点算出；对外
+// 的 JSON 形状由 server 包里各受众的视图定义，行本身不序列化（见 MarshalJSON）。
 type Node struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	NodeType string `json:"node_type"`
-	OwnerID  *int64 `json:"owner_id,omitempty"`
-	Address  string `json:"address"`
-	// Secret is the node's WS auth credential — the only thing an agent presents
-	// to connect. It must never be serialized to user-facing responses (a granted
-	// user could otherwise impersonate the node). json:"-" makes leaking it opt-in:
-	// the admin node-detail endpoint re-adds it explicitly via nodeWithSecret.
-	Secret              string         `json:"-"`
-	RelayHost           string         `json:"relay_host"`
-	RelayHostV6         string         `json:"relay_host_v6"`
-	RelayHostDeclared   bool           `json:"relay_host_declared"`
-	RelayHostV6Declared bool           `json:"relay_host_v6_declared"`
-	Online              int            `json:"online"`
-	AgentVersion        string         `json:"agent_version"`
-	AgentSHA            string         `json:"agent_sha"`
-	LastSeen            *int64         `json:"last_seen,omitempty"`
-	LastApplyAt         sql.NullInt64  `json:"last_apply_at"`
-	LastError           sql.NullString `json:"last_error"`
-	LastWarning         string         `json:"last_warning"`
-	Disabled            bool           `json:"disabled"`
-	PortRange           string         `json:"port_range"`
-	SortOrder           int64          `json:"sort_order"`
-	CreatedAt           int64          `json:"created_at"`
-	LastUpgradeAt       sql.NullInt64  `json:"last_upgrade_at"`
-	LastUpgradeVersion  string         `json:"last_upgrade_version,omitempty"`
-	LastUpgradeStatus   string         `json:"last_upgrade_status,omitempty"`
-	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
-	RateMultiplier      float64        `json:"rate_multiplier"`
-	Unidirectional      bool           `json:"unidirectional"`
+	ID       int64
+	Name     string
+	NodeType string
+	OwnerID  *int64
+	Address  string
+	// Secret 是节点接入 agent 通道时出示的凭据。只有管理员的节点详情页带它。
+	Secret              string
+	RelayHost           string
+	RelayHostV6         string
+	RelayHostDeclared   bool
+	RelayHostV6Declared bool
+	// Online 是 online 列：连接登记时置 1、注销时置 0。组合不跑 agent，这一列不是
+	// 组合的在线状态；组合的在线状态看 NodeCatalog.Derive。
+	Online             int
+	AgentVersion       string
+	AgentSHA           string
+	LastSeen           *int64
+	LastApplyAt        sql.NullInt64
+	LastError          sql.NullString
+	LastWarning        string
+	Disabled           bool
+	PortRange          string
+	SortOrder          int64
+	CreatedAt          int64
+	LastUpgradeAt      sql.NullInt64
+	LastUpgradeVersion string
+	LastUpgradeStatus  string
+	LastUpgradeError   string
+	RateMultiplier     float64
+	Unidirectional     bool
 	// NoDirectExit forbids the node from terminating a rule chain: it cannot
 	// launch the exit segment, so a rule entering here must cascade into at
 	// least one more middle layer.
-	NoDirectExit bool `json:"no_direct_exit"`
+	NoDirectExit bool
 	// Roles is a bitmask of what the node can be used as: NodeRoleEntry means
 	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
 	// behind an upstream node as a middle-layer segment. A node may hold both.
-	Roles int64 `json:"roles"`
-	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
-	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
-	// (entry = first hop's own relay fields, exit = last hop's v6 relay field).
-	// RateMultiplier above needs no such resolution: it is a real column on
-	// every node, composite included. Single/self nodes leave the relay-stack
-	// fields empty; callers fall back to the node's own RelayHost/RelayHostV6
-	// in that case.
-	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
-	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
-	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
-	// Hops is not a real column — for a composite node it holds the ordered
-	// member hops (physical child nodes) with their names, filled in-memory by
-	// ResolveCompositeHops so the UI can flatten the composite into its member
-	// chain for display and preview. Empty for single nodes.
-	Hops []NodeChildHop `json:"hops,omitempty"`
+	Roles int64
 }
 
-// NodeChildHop is one member of a composite node's chain, resolved to its
-// physical child node's name and type for display. Mode is the segment mode the
-// composite stored for that hop.
-type NodeChildHop struct {
-	NodeID   int64  `json:"node_id"`
-	Name     string `json:"name"`
-	NodeType string `json:"node_type"`
-	Mode     string `json:"mode"`
+// errNodeRowJSON 是直接序列化节点行时的错误。
+var errNodeRowJSON = errors.New("db.Node is a table row; serialize it through an audience view")
+
+// MarshalJSON 拒绝把节点行直接写进响应。行上没有组合的派生属性（组合的 online 列
+// 恒为 0），也带着只给管理员看的机器字段；直接序列化一行，读者既分不清“没有”与
+// “没算”，用户面还会拿到整行。所以对外一律经 server 包里的受众视图，这里让绕开
+// 视图的写法在第一次序列化时就失败，而不是悄悄发出一份残缺的形状。
+func (Node) MarshalJSON() ([]byte, error) { return nil, errNodeRowJSON }
+
+// NodeMember 是组合展开后的一个物理成员：节点行里的名字与类型，加上组合给这一跳配
+// 的转发模式。
+type NodeMember struct {
+	NodeID   int64
+	Name     string
+	NodeType string
+	Mode     string
 }
 
 type Rule struct {
@@ -354,9 +349,10 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-// NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
-// columns in this exact order — keep all three in lockstep when adding a column.
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
+// nodeCols 是读节点行的列清单，scanNodeAnd 按同样的次序扫描。凡是读节点行的查询都
+// 拼这一份清单、经 scanNodeAnd 扫描（ListNodesForUser 把授权的列接在后面，通过
+// extra 传入），所以加列只改这两处。
+const nodeCols =`id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
 
 // nodeColsQualified is nodeCols with every column prefixed by the "n." alias.
 // user_nodes has its own roles column (the grant-level override), so a query
@@ -371,14 +367,18 @@ func GetNode(d *sql.DB, id int64) (*Node, error) {
 
 type rowScanner interface{ Scan(...any) error }
 
-func scanNode(r rowScanner) (*Node, error) {
+func scanNode(r rowScanner) (*Node, error) { return scanNodeAnd(r) }
+
+// scanNodeAnd 扫描以 nodeCols 开头的一行；查询在 nodeCols 之后多选的列，按次序扫进
+// extra。
+func scanNodeAnd(r rowScanner, extra ...any) (*Node, error) {
 	n := &Node{}
 	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
 	var lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
 	var luVersion, luStatus, luError sql.NullString
-	if err := r.Scan(
+	dest := []any{
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
 		&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
@@ -386,7 +386,8 @@ func scanNode(r rowScanner) (*Node, error) {
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&n.SortOrder, &n.RateMultiplier, &unidirectional,
 		&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
-	); err != nil {
+	}
+	if err := r.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
@@ -411,7 +412,7 @@ func scanNode(r rowScanner) (*Node, error) {
 	return n, nil
 }
 
-func ListNodes(d *sql.DB) ([]*Node, error) {
+func ListNodes(d DBTX) ([]*Node, error) {
 	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY sort_order, id`, scanNode)
 }
 
@@ -711,8 +712,8 @@ func GetSelfNode(d *sql.DB) (*Node, error) {
 // MarkAllNodesOffline 把每个节点的 online 置 0。nodes.online 是面板进程里连接表的
 // 镜像（连接登记时置 1，注销时置 0），而连接表在进程启动时是空的；上一个进程若没
 // 走到注销就退出（崩溃、被杀），它留下的 online=1 在新进程里就是假的，所以启动时
-// 整体清一次。组合节点没有自己的连接，MarkNodeOnline 不会对它们调用；列表里它们的
-// 在线状态由 ResolveCompositeOnline 按成员聚合后覆盖这一列的值，清零对它们没有影响。
+// 整体清一次。组合的在线状态由 NodeCatalog.Derive 按成员算，不读组合自己的这一列，
+// 清零对它们没有影响。
 func MarkAllNodesOffline(d *sql.DB) error {
 	_, err := d.Exec(`UPDATE nodes SET online=0 WHERE online<>0`)
 	return err

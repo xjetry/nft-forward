@@ -52,16 +52,6 @@ func urlParamInt64(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(v, 10, 64)
 }
 
-// buildMap creates a lookup map from a slice, keyed by the result of the key
-// function. Replaces the repeated for-range map-building loops.
-func buildMap[T any](items []*T, key func(*T) int64) map[int64]*T {
-	m := make(map[int64]*T, len(items))
-	for _, item := range items {
-		m[key(item)] = item
-	}
-	return m
-}
-
 // PageInfo holds pagination state passed to templates.
 type PageInfo struct {
 	Page       int

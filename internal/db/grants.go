@@ -137,43 +137,10 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	var nodes []*Node
 	var grants []*UserNode
 	for rows.Next() {
-		n := &Node{}
 		g := &UserNode{UserID: userID}
-		var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
-		var lastSeen sql.NullInt64
-		var agentVersion sql.NullString
-		var ownerID sql.NullInt64
-		var luVersion, luStatus, luError sql.NullString
-		if err := rows.Scan(
-			&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
-			&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
-			&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
-			&disabled, &n.PortRange, &n.CreatedAt,
-			&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
-			&n.SortOrder, &n.RateMultiplier, &unidirectional,
-			&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
-			&g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt,
-		); err != nil {
+		n, err := scanNodeAnd(rows, &g.MaxForwards, &g.TrafficQuotaBytes, &g.TrafficUsedBytes, &g.RateLimitMBytes, &g.Roles, &g.GrantedAt)
+		if err != nil {
 			return nil, nil, err
-		}
-		n.LastUpgradeVersion = luVersion.String
-		n.LastUpgradeStatus = luStatus.String
-		n.LastUpgradeError = luError.String
-		n.Disabled = disabled == 1
-		n.Unidirectional = unidirectional == 1
-		n.NoDirectExit = noDirectExit == 1
-		n.RelayHostDeclared = relayHostDeclared == 1
-		n.RelayHostV6Declared = relayHostV6Declared == 1
-		if ownerID.Valid {
-			v := ownerID.Int64
-			n.OwnerID = &v
-		}
-		if lastSeen.Valid {
-			v := lastSeen.Int64
-			n.LastSeen = &v
-		}
-		if agentVersion.Valid {
-			n.AgentVersion = agentVersion.String
 		}
 		g.NodeID = n.ID
 		nodes = append(nodes, n)

@@ -193,6 +193,20 @@
       "entry_relay_host": "10.0.0.1",
       "entry_relay_host_v6": "2001:db8::a",
       "exit_relay_host_v6": "2001:db8::b",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
       "id": 6,
       "last_apply_at": {
         "Int64": 0,
@@ -229,6 +243,26 @@
       "disabled": false,
       "entry_relay_host": "10.0.0.1",
       "entry_relay_host_v6": "2001:db8::a",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "tail-c",
+          "node_id": 4,
+          "node_type": "remote"
+        }
+      ],
       "id": 7,
       "last_apply_at": {
         "Int64": 0,
@@ -265,6 +299,20 @@
       "disabled": false,
       "entry_relay_host": "10.0.0.1",
       "entry_relay_host_v6": "2001:db8::a",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "spare-d",
+          "node_id": 5,
+          "node_type": "remote"
+        }
+      ],
       "id": 8,
       "last_apply_at": {
         "Int64": 0,

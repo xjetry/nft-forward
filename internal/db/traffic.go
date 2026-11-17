@@ -63,7 +63,7 @@ func AddNodeRawTraffic(d DBTX, nodeID, delta int64) error {
 
 // NodeRawTraffic returns every node's cumulative raw bytes keyed by id. Nodes
 // that never reported a counter batch have no row and are absent from the map.
-func NodeRawTraffic(d *sql.DB) (map[int64]int64, error) {
+func NodeRawTraffic(d DBTX) (map[int64]int64, error) {
 	rows, err := d.Query(`SELECT node_id, raw_bytes FROM node_raw_traffic`)
 	if err != nil {
 		return nil, err
