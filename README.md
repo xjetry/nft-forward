@@ -34,7 +34,7 @@ curl -fsSL ... | sudo bash -s agent --panel-url https://panel.example.com --toke
 curl -fsSL ... | sudo bash -s tui
 ```
 
-> 仅支持 amd64 Linux；需 root + nftables。
+> 支持 amd64 / arm64 Linux，安装脚本按 `uname -m` 自动选择对应架构的产物；需 root + nftables。
 
 ### install.sh 模式
 
@@ -227,18 +227,23 @@ git clone <repo> && cd nft-forward
 go test ./...
 go vet ./...
 
-# 编译面板（含前端）
-cd web && npm run build && cd ..
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
-    -o build/nft-server ./cmd/nft-server
+# 构建全部发版产物到 build/：amd64 + arm64 各一套 nft-server / nft-agent（amd64 另有
+# 同内容的 -amd64 别名）与 SHA256SUMS
+# （含前端构建、UPX 压缩、ELF 架构校验，并在两种架构的容器里各试跑一次）
+scripts/build-release.sh
 
-# 编译节点（可复现构建，版本标签独立于二进制）
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-    -ldflags="-s -w" -o build/nft-agent ./cmd/nft-agent
-upx -9 --lzma build/nft-agent
+# 只编单个二进制（GOARCH 取 amd64 或 arm64）
+cd web && npm run build && cd ..          # 面板 embed web/dist，先构建前端
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+    -o build/nft-server-arm64 ./cmd/nft-server
+# 节点用 -buildvcs=false 做可复现构建，版本标签独立于二进制
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false \
+    -ldflags="-s -w" -o build/nft-agent-arm64 ./cmd/nft-agent
 ```
 
-依赖：Go ≥ 1.24，Node.js（前端构建），无 CGO。运行时需 nftables + iproute2（仅 Linux）。
+依赖：Go ≥ 1.24，Node.js（前端构建），无 CGO；`scripts/build-release.sh` 另需 upx 与 docker。运行时需 nftables + iproute2（仅 Linux）。
+
+release 里 amd64 的资产名不带后缀（`nft-server` / `nft-agent`），arm64 带 `-arm64` 后缀。amd64 的这一套另以 `nft-server-amd64` / `nft-agent-amd64` 的名字再发布一遍，内容与不带后缀的完全相同，方便按架构名手工下载；安装脚本和面板只取不带后缀的名字。
 
 ```
 nft-forward/
@@ -260,6 +265,7 @@ nft-forward/
 │   ├── portutil/           端口范围解析
 │   └── sysdeps/            系统依赖检查
 ├── web/                    React + Tailwind 前端（vite 构建，embed 进 server）
+├── scripts/                build-release.sh（发版构建）及数据迁移脚本
 └── install.sh              一键安装/升级/卸载脚本
 ```
 

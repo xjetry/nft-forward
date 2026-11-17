@@ -1186,11 +1186,6 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	art, err := s.loadAgentArtifact()
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
@@ -1200,19 +1195,22 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	if panelURL == "" {
 		panelURL = "https://" + r.Host
 	}
-	err = s.Hub.SendUpgrade(id, upgradeFor(node, art, panelURL))
+	// 推送目标恒为面板自身版本：loadAgentArtifact 只取 serverVersion() 对应 release
+	// 的产物，各架构的产物版本号相同。
+	version := serverVersion()
+	err = s.upgradeNode(node, panelURL)
 	// Record the dispatch outcome so the node detail can surface a silent
 	// failure later (an acked upgrade whose version never takes).
 	status, errText := "acked", ""
 	if err != nil {
 		status, errText = "error", err.Error()
 	}
-	db.RecordUpgradeResult(s.DB, id, art.Version, status, errText)
+	db.RecordUpgradeResult(s.DB, id, version, status, errText)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), art.Version)
+	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), version)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1360,26 +1358,45 @@ func (s *Server) apiResyncAllNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	art, err := s.loadAgentArtifact()
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	if panelURL == "" {
 		panelURL = "https://" + r.Host
 	}
-	nodes, err := db.ListNodes(s.DB)
+	all, err := db.ListNodes(s.DB)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var ok, fail int
-	for _, n := range nodes {
+	var nodes []*db.Node
+	for _, n := range all {
 		if n.NodeType == "composite" || n.Disabled {
 			continue
 		}
-		err := s.Hub.SendUpgrade(n.ID, upgradeFor(n, art, panelURL))
+		nodes = append(nodes, n)
+	}
+	// 先把本批在线节点用得到的产物取齐，任何一个取不到就整批失败、一个都不推。
+	// 产物取不到（dev 构建、GitHub 不可达、release 缺资产）是面板侧的故障，不是
+	// 某个节点的故障；前端对本接口只在请求失败时报错，若把它摊成逐节点失败，
+	// 界面上会是一句“已发起升级”而实际一台都没升。
+	// 离线、或架构不在 agentAssets 里的节点不参与这一步——那是节点级结果，由下面
+	// 的逐节点推送各自记账，不该拦住其他节点。
+	for _, n := range nodes {
+		arch, online := s.Hub.NodeArch(n.ID)
+		if !online {
+			continue
+		}
+		if _, err := agentAssetName(arch); err != nil {
+			continue
+		}
+		if _, err := s.loadAgentArtifact(arch); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	version := serverVersion()
+	var ok, fail int
+	for _, n := range nodes {
+		err := s.upgradeNode(n, panelURL)
 		status, errText := "acked", ""
 		if err != nil {
 			status, errText = "error", err.Error()
@@ -1387,7 +1404,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 		} else {
 			ok++
 		}
-		db.RecordUpgradeResult(s.DB, n.ID, art.Version, status, errText)
+		db.RecordUpgradeResult(s.DB, n.ID, version, status, errText)
 	}
 	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d fail=%d", ok, fail))
 	jsonOK(w, map[string]any{"ok": true, "upgraded": ok, "failed": fail})
