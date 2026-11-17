@@ -102,24 +102,24 @@ func meterBook() *Book {
 	b := &Book{Hops: map[CounterKey]*Hop{}}
 	add := func(port int, h *Hop) { b.Hops[CounterKey{Proto: "tcp", Port: port}] = h }
 	add(1, &Hop{ID: 101, RuleID: 10, Owner: 7,
-		Seat:    Seat{Entry: true, SegmentStart: true, Segment: 5},
+		Place:   Place{Entry: true, SegmentStart: true, Segment: 5},
 		Pricing: Pricing{Multiplier: 2, Rate: 1.5}})
 	add(2, &Hop{ID: 202, RuleID: 20, Owner: 7,
-		Seat:    Seat{SegmentStart: true, Segment: 50},
+		Place:   Place{SegmentStart: true, Segment: 50},
 		Pricing: Pricing{Unidirectional: true, Multiplier: 3, Rate: 1.5}})
 	add(3, &Hop{ID: 203, RuleID: 20, Owner: 7,
-		Seat:    Seat{Final: true, Segment: 50},
+		Place:   Place{Final: true, Segment: 50},
 		Pricing: Pricing{Unidirectional: true, Multiplier: 3, Rate: 1.5}, Exit: exit7})
 	add(4, &Hop{ID: 301, RuleID: 30, Owner: 8,
-		Seat:    Seat{Entry: true, Final: true, SegmentStart: true, Segment: 6},
+		Place:   Place{Entry: true, Final: true, SegmentStart: true, Segment: 6},
 		Pricing: Pricing{Multiplier: 1, Rate: 1}, Exit: exit8})
 	add(5, &Hop{ID: 401, RuleID: 40,
-		Seat:    Seat{Entry: true, Final: true, SegmentStart: true, Segment: 9},
+		Place:   Place{Entry: true, Final: true, SegmentStart: true, Segment: 9},
 		Pricing: Pricing{Multiplier: 1, Rate: 1}})
 	return b
 }
 
-func TestMeterPostsEachSeatToItsLedgers(t *testing.T) {
+func TestMeterPostsEachPlaceToItsLedgers(t *testing.T) {
 	tcp := func(port int, up, down int64) Sample {
 		return Sample{Proto: "tcp", ListenPort: port, Up: up, Down: down}
 	}
@@ -193,7 +193,7 @@ func TestMeterPostsEachSeatToItsLedgers(t *testing.T) {
 // 时就是这样）：倍率 1.5 下两个 1 字节的样本记 2 + 2 = 4，而不是先相加再加权的 3。
 func TestMeterRoundsEachSample(t *testing.T) {
 	h := &Hop{ID: 1, RuleID: 1, Owner: 7,
-		Seat:    Seat{Entry: true, SegmentStart: true, Segment: 1},
+		Place:   Place{Entry: true, SegmentStart: true, Segment: 1},
 		Pricing: Pricing{Multiplier: 1.5, Rate: 1}}
 	b := &Book{Hops: map[CounterKey]*Hop{{"tcp", 9}: h, {"udp", 9}: h}}
 	p := Meter(b, []Sample{{Proto: "tcp", ListenPort: 9, Up: 1}, {Proto: "udp", ListenPort: 9, Down: 1}})
@@ -209,7 +209,7 @@ func TestMeterRoundsEachSample(t *testing.T) {
 // 一跳的批次给他记了逐跳账，但没有配额账增长，不触发回调；周期翻转检查（Charged）
 // 仍然包括他。
 func TestQuotaOwnersAreGrantOrExitOwners(t *testing.T) {
-	h := &Hop{ID: 1, RuleID: 1, Owner: 7, Seat: Seat{Segment: 3}, Pricing: Pricing{Multiplier: 1, Rate: 1}}
+	h := &Hop{ID: 1, RuleID: 1, Owner: 7, Place: Place{Segment: 3}, Pricing: Pricing{Multiplier: 1, Rate: 1}}
 	b := &Book{Hops: map[CounterKey]*Hop{{"tcp", 9}: h}}
 	p := Meter(b, []Sample{{Proto: "tcp", ListenPort: 9, Up: 5}})
 	if got := p.QuotaOwners(); len(got) != 0 {

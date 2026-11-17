@@ -896,7 +896,8 @@ func (c *Changes) ruleOwnerSeats(rl *db.Rule) (map[int64]chain.Seat, *Error) {
 // explicitChain 把管理员直接给出的物理跳序列变成链。这是搭任意链的通道，有意不校验
 // 角色与绑定边；链尾能否直接转发仍然检查（chain.CheckExit）。没写 ViaNodeID 的跳自成
 // 一段：按授权计流量时一个逻辑段只在段首记一次、记到 ViaNodeID 指的逻辑节点上
-// （db.SegmentFirstHops），把组合展开写成显式链时各跳要带组合的 id。
+// （accounting.Place 的 SegmentStart 与 Segment），把组合展开写成显式链时各跳要带
+// 组合的 id。
 func explicitChain(topo chain.Topology, given []chain.Hop) ([]db.HopInput, *Error) {
 	hops := make([]chain.Hop, len(given))
 	for i, h := range given {

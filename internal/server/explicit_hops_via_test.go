@@ -8,7 +8,7 @@ import (
 )
 
 // Billing groups rule_hops by (rule_id, via_node_id) and charges each logical
-// segment once at its via (accounting.Seat). A composite is the grant unit:
+// segment once at its via (accounting.Place). A composite is the grant unit:
 // all its flattened physical children must share via = the composite's id so the
 // traffic bills to the composite's grant, not to the (ungranted) children. The
 // admin explicit-hops escape hatch must therefore let the caller tag each hop

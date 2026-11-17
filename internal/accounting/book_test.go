@@ -12,7 +12,7 @@ import (
 //
 //	规则：属主 U（费率 1.5），入口 CE = 组合(P1 → P2，倍率 3)，中转层 L = 组合(M1 → M2，倍率 7)
 //	物理链：P1 → P2 → M1 → M2，via 依次是 CE CE L L
-func TestLoadBookResolvesPricingAndSeatFromTheHop(t *testing.T) {
+func TestLoadBookResolvesPricingAndPlaceFromTheHop(t *testing.T) {
 	d := openDB(t)
 	uid := newUser(t, d)
 	if _, err := d.Exec(`UPDATE users SET billing_rate=1.5 WHERE id=?`, uid); err != nil {
@@ -45,14 +45,14 @@ func TestLoadBookResolvesPricingAndSeatFromTheHop(t *testing.T) {
 
 	exit := &ExitKey{User: uid, Host: "8.8.8.8", Port: 443}
 	for i, c := range []struct {
-		node int64
-		seat Seat
-		uni  bool
+		node  int64
+		place Place
+		uni   bool
 	}{
-		{p1, Seat{Entry: true, SegmentStart: true, Segment: ce}, false},
-		{p2, Seat{Segment: ce}, true},
-		{m1, Seat{SegmentStart: true, Segment: layer}, false},
-		{m2, Seat{Final: true, Segment: layer}, false},
+		{p1, Place{Entry: true, SegmentStart: true, Segment: ce}, false},
+		{p2, Place{Segment: ce}, true},
+		{m1, Place{SegmentStart: true, Segment: layer}, false},
+		{m2, Place{Final: true, Segment: layer}, false},
 	} {
 		b, err := LoadBook(d, c.node)
 		if err != nil {
@@ -62,9 +62,9 @@ func TestLoadBookResolvesPricingAndSeatFromTheHop(t *testing.T) {
 		if h == nil {
 			t.Fatalf("第 %d 跳：LoadBook 没有登记它的计数键", i)
 		}
-		want := Hop{ID: hops[i].ID, RuleID: hops[i].RuleID, Owner: uid, Seat: c.seat,
+		want := Hop{ID: hops[i].ID, RuleID: hops[i].RuleID, Owner: uid, Place: c.place,
 			Pricing: Pricing{Unidirectional: c.uni, Multiplier: 3, Rate: 1.5}, Exit: exit}
-		if h.ID != want.ID || h.RuleID != want.RuleID || h.Owner != want.Owner || h.Seat != want.Seat ||
+		if h.ID != want.ID || h.RuleID != want.RuleID || h.Owner != want.Owner || h.Place != want.Place ||
 			h.Pricing != want.Pricing || h.Exit == nil || *h.Exit != *want.Exit {
 			t.Errorf("第 %d 跳：\ngot  %+v exit=%v\nwant %+v exit=%v", i, *h, h.Exit, want, want.Exit)
 		}

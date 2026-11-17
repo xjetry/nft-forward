@@ -49,12 +49,12 @@ func LoadBook(d db.DBTX, nodeID int64) (*Book, error) {
 			multiplier, rate      sql.NullFloat64
 			entry, final, segHead bool
 		)
-		if err := rows.Scan(&h.ID, &h.RuleID, &proto, &port, &h.Seat.Segment,
+		if err := rows.Scan(&h.ID, &h.RuleID, &proto, &port, &h.Place.Segment,
 			&entry, &final, &segHead, &uni,
 			&owner, &multiplier, &rate, &exitHost, &exitPort, &exitPresent); err != nil {
 			return nil, err
 		}
-		h.Seat.Entry, h.Seat.Final, h.Seat.SegmentStart = entry, final, segHead
+		h.Place.Entry, h.Place.Final, h.Place.SegmentStart = entry, final, segHead
 		h.Owner = owner.Int64
 		h.Pricing = pricing(uni, owner.Valid, multiplier, rate)
 		if owner.Valid && exitPresent {

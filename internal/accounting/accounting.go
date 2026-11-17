@@ -107,8 +107,8 @@ func (p Pricing) Weigh(f Folded) Weighted {
 	return Weighted(math.Round(float64(f) * p.Multiplier * p.Rate))
 }
 
-// Seat 是一跳在规则链上的位置，决定它的样本记进哪几本账。
-type Seat struct {
+// Place 是一跳在规则链上的位置，决定它的样本记进哪几本账。
+type Place struct {
 	// Entry：入口跳（position 0）。同一批字节流过链上每一跳，规则账与属主的全局账
 	// 只在这里记一次。
 	Entry bool
@@ -143,7 +143,7 @@ type Hop struct {
 	RuleID int64
 	// Owner 是规则属主，0 表示无属主。
 	Owner   int64
-	Seat    Seat
+	Place   Place
 	Pricing Pricing
 	// Exit 非 nil 时，规则的出口是属主名下在册（present=1）的落地出口。
 	Exit *ExitKey
@@ -232,7 +232,7 @@ func Meter(b *Book, samples []Sample) *Postings {
 		folded := h.Pricing.Fold(s)
 		p.Hops[h.ID] += folded
 		var weighted Weighted
-		if h.Seat.Entry {
+		if h.Place.Entry {
 			weighted = h.Pricing.Weigh(folded)
 			p.Rules[h.RuleID] += weighted
 		}
@@ -241,7 +241,7 @@ func Meter(b *Book, samples []Sample) *Postings {
 			continue
 		}
 		// 落地出口账记的是到达目的地的真实字节：不折算、不加权。
-		if raw > 0 && h.Seat.Final && h.Exit != nil {
+		if raw > 0 && h.Place.Final && h.Exit != nil {
 			e := p.Exits[*h.Exit]
 			e.Up += s.Up
 			e.Down += s.Down
@@ -251,10 +251,10 @@ func Meter(b *Book, samples []Sample) *Postings {
 			continue
 		}
 		p.Charged[h.Owner] = true
-		if h.Seat.SegmentStart {
-			p.Grants[GrantKey{User: h.Owner, Node: h.Seat.Segment}] += folded
+		if h.Place.SegmentStart {
+			p.Grants[GrantKey{User: h.Owner, Node: h.Place.Segment}] += folded
 		}
-		if h.Seat.Entry && weighted > 0 {
+		if h.Place.Entry && weighted > 0 {
 			p.Users[h.Owner] += weighted
 		}
 	}
