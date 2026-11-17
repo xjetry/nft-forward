@@ -1,0 +1,44 @@
+{
+  "data": {
+    "billing_rate": 1.5,
+    "expires_at": 2000000000,
+    "last_traffic_reset_at": 1700000500,
+    "max_forwards": 20,
+    "nodes": [
+      {
+        "id": 2,
+        "name": "edge-a",
+        "rate_multiplier": 2,
+        "rule_count": 1,
+        "traffic_quota": 0,
+        "traffic_used": 0,
+        "unidirectional": false
+      },
+      {
+        "id": 4,
+        "name": "tail-c",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_quota": 0,
+        "traffic_used": 0,
+        "unidirectional": true
+      },
+      {
+        "id": 6,
+        "name": "combo-k",
+        "rate_multiplier": 3,
+        "rule_count": 1,
+        "traffic_quota": 1073741824,
+        "traffic_used": 2048,
+        "unidirectional": false
+      }
+    ],
+    "role": "user",
+    "rule_count": 2,
+    "scope": "readwrite",
+    "traffic_quota": 1073741824,
+    "traffic_reset_days": 30,
+    "traffic_used": 4096,
+    "username": "alice"
+  }
+}

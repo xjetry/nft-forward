@@ -157,10 +157,16 @@ func (t Topology) flatten(compositeID, via int64, onPath map[int64]bool, count *
 	return hops, nil
 }
 
-// ValidateMembers 检查要写给组合 rootID 的成员列表：成员必须存在，并且不能让成员
-// 关系成环。rootID 为 0 表示新建组合——此刻还没有节点能引用它，不可能绕回它。
-// 组合里嵌组合是允许的，被拒绝的只有环：有环时 Flatten 无法终止。
+// ValidateMembers 检查要写给组合 rootID 的成员列表：rootID 必须是组合（只有组合有
+// 成员），成员必须存在，并且不能让成员关系成环。rootID 为 0 表示新建组合——此刻还
+// 没有节点能引用它，不可能绕回它。组合里嵌组合是允许的，被拒绝的只有环：有环时
+// Flatten 无法终止。
 func (t Topology) ValidateMembers(rootID int64, members []int64) error {
+	if rootID != 0 {
+		if root, ok := t.Nodes[rootID]; !ok || !root.Composite {
+			return errors.New("非组合节点：只有组合节点有成员")
+		}
+	}
 	for _, id := range members {
 		if id == rootID {
 			return errors.New("组合节点不能引用自己")

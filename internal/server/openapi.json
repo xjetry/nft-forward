@@ -79,7 +79,8 @@
             "type": "boolean"
           },
           "port_range": {
-            "type": "string"
+            "type": "string",
+            "description": "监听端口的分配范围。组合节点不跑 agent、没有自己的端口范围，省略此字段。"
           },
           "last_seen": {
             "type": "integer",
@@ -1488,6 +1489,26 @@
         "responses": {
           "200": {
             "description": "下发结果"
+          },
+          "400": {
+            "description": "节点是组合（validation）：组合不跑 agent，其规则由成员节点执行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "节点不存在（not_found）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "500": {
             "description": "下发失败",

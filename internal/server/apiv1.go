@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -186,19 +187,22 @@ type v1Node struct {
 	LastSeen       *int64  `json:"last_seen,omitempty"`
 }
 
-func toV1Node(n *db.Node) v1Node {
+// toV1Node 是节点在 /api/v1 上的形状。在线状态取 NodeCatalog.Derive（组合按成员算）；
+// roles 由调用方给：管理员面给节点自己的掩码，用户面给授权下的生效角色。
+func toV1Node(c *db.NodeCatalog, n *db.Node, roles int64) v1Node {
 	return v1Node{
 		ID: n.ID, Name: n.Name, NodeType: n.NodeType,
-		Online: n.Online == 1, Disabled: n.Disabled, AgentVersion: n.AgentVersion,
-		Roles: n.Roles, RateMultiplier: n.RateMultiplier, Unidirectional: n.Unidirectional,
+		Online: c.Derive(n).Online, Disabled: n.Disabled, AgentVersion: n.AgentVersion,
+		Roles: roles, RateMultiplier: n.RateMultiplier, Unidirectional: n.Unidirectional,
 		NoDirectExit: n.NoDirectExit, PortRange: n.PortRange, LastSeen: n.LastSeen,
 	}
 }
 
-func toV1Nodes(nodes []*db.Node) []v1Node {
-	out := make([]v1Node, 0, len(nodes))
-	for _, n := range nodes {
-		out = append(out, toV1Node(n))
+// v1AdminNodes 是全部节点的 /api/v1 形状，roles 为节点自己的掩码。
+func v1AdminNodes(c *db.NodeCatalog) []v1Node {
+	out := make([]v1Node, 0, len(c.Nodes()))
+	for _, n := range c.Nodes() {
+		out = append(out, toV1Node(c, n, n.Roles))
 	}
 	return out
 }
@@ -280,17 +284,16 @@ func toV1Rule(it ruleListItem) v1Rule {
 	}
 }
 
-// v1RulesFromDB resolves a batch of rules into their slim DTOs, filling the
-// flattened chain (resolved over all nodes so composite members show).
+// v1RulesFromDB 把一批规则装配成 /api/v1 的形状：先经 ruleItems（与 /api 同一处装配），
+// 再收窄成 v1Rule。规则写接口在写入成功之后也用它回显规则，那时写入已经落库，读节点
+// 目录失败不该把成功的写入报成失败，所以这里只记日志：链路缺名字、入口为占位符。
 func (s *Server) v1RulesFromDB(rules []*db.Rule) []v1Rule {
-	allNodes, _ := db.ListNodes(s.DB)
-	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
-	items := make([]ruleListItem, 0, len(rules))
-	for _, rl := range rules {
-		items = append(items, s.buildRuleListItem(rl, ""))
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		log.Printf("v1 rules: load node catalog: %v", err)
+		cat = db.NewNodeCatalog(nil, nil, nil)
 	}
-	s.fillRuleChains(items, allByID)
-	s.markSuppressed(items)
+	items := s.ruleItems(rules, cat, true)
 	out := make([]v1Rule, 0, len(items))
 	for _, it := range items {
 		out = append(out, toV1Rule(it))
@@ -382,22 +385,21 @@ func probeStatusCode(status int) string {
 
 func (s *Server) v1MyListNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	applyEffectiveRoles(grantedNodes, grants)
-	// A composite's online state derives from its children, which may be outside
-	// the granted set; resolve over all nodes then project onto the granted ones.
-	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, allNodes)
-	onlineByID := make(map[int64]int, len(allNodes))
-	for _, n := range allNodes {
-		onlineByID[n.ID] = n.Online
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
 	}
-	for _, n := range grantedNodes {
-		if o, ok := onlineByID[n.ID]; ok {
-			n.Online = o
-		}
+	granted, grants, err := db.ListNodesForUser(s.DB, u.ID)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
 	}
-	v1OK(w, toV1Nodes(grantedNodes))
+	out := make([]v1Node, len(granted))
+	for i, n := range granted {
+		out[i] = toV1Node(cat, n, db.EffectiveNodeRoles(n.Roles, grants[i].Roles))
+	}
+	v1OK(w, out)
 }
 
 func (s *Server) v1MyListRules(w http.ResponseWriter, r *http.Request) {
@@ -561,9 +563,12 @@ func (s *Server) v1MyDeleteRule(w http.ResponseWriter, r *http.Request) {
 // --- Handlers: admin reads ---
 
 func (s *Server) v1ListNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
-	v1OK(w, toV1Nodes(nodes))
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	v1OK(w, v1AdminNodes(cat))
 }
 
 func (s *Server) v1ListUsers(w http.ResponseWriter, r *http.Request) {
@@ -577,11 +582,15 @@ func (s *Server) v1ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) v1Dashboard(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	nodes := v1AdminNodes(cat)
 	online := 0
 	for _, n := range nodes {
-		if n.Online == 1 {
+		if n.Online {
 			online++
 		}
 	}
@@ -594,7 +603,7 @@ func (s *Server) v1Dashboard(w http.ResponseWriter, r *http.Request) {
 		"rule_count":          ruleCount,
 		"user_count":          userCount,
 		"total_traffic_bytes": totalBytes,
-		"nodes":               toV1Nodes(nodes),
+		"nodes":               nodes,
 	})
 }
 

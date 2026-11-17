@@ -1,0 +1,108 @@
+{
+  "data": {
+    "generated_at": 0,
+    "nodes": [
+      {
+        "name": "self",
+        "node_id": 1,
+        "node_type": "self",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 0
+      },
+      {
+        "name": "edge-a",
+        "node_id": 2,
+        "node_type": "remote",
+        "rate_multiplier": 2,
+        "rule_count": 2,
+        "traffic_bytes": 1000
+      },
+      {
+        "name": "edge-b",
+        "node_id": 3,
+        "node_type": "remote",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 2000
+      },
+      {
+        "name": "tail-c",
+        "node_id": 4,
+        "node_type": "remote",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 500
+      },
+      {
+        "name": "spare-d",
+        "node_id": 5,
+        "node_type": "remote",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 0
+      },
+      {
+        "name": "combo-k",
+        "node_id": 6,
+        "node_type": "composite",
+        "rate_multiplier": 3,
+        "rule_count": 1,
+        "traffic_bytes": 0
+      },
+      {
+        "name": "nested-n",
+        "node_id": 7,
+        "node_type": "composite",
+        "rate_multiplier": 1,
+        "rule_count": 1,
+        "traffic_bytes": 0
+      },
+      {
+        "name": "with-disabled-m",
+        "node_id": 8,
+        "node_type": "composite",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 0
+      },
+      {
+        "name": "loop-l",
+        "node_id": 9,
+        "node_type": "composite",
+        "rate_multiplier": 1,
+        "rule_count": 0,
+        "traffic_bytes": 0
+      }
+    ],
+    "totals": {
+      "nodes_online": 4,
+      "nodes_total": 9,
+      "rules": 4,
+      "traffic_bytes": 10000,
+      "users": 2
+    },
+    "users": [
+      {
+        "disabled": false,
+        "expires_at": null,
+        "role": "admin",
+        "rule_count": 2,
+        "traffic_quota_bytes": 0,
+        "traffic_used_bytes": 0,
+        "user_id": 1,
+        "username": "root"
+      },
+      {
+        "disabled": false,
+        "expires_at": 2000000000,
+        "role": "user",
+        "rule_count": 2,
+        "traffic_quota_bytes": 1073741824,
+        "traffic_used_bytes": 4096,
+        "user_id": 2,
+        "username": "alice"
+      }
+    ]
+  }
+}

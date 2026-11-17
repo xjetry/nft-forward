@@ -1,0 +1,53 @@
+{
+  "node": {
+    "address": "",
+    "agent_sha": "",
+    "agent_version": "",
+    "created_at": 0,
+    "disabled": false,
+    "entry_relay_host": "10.0.0.1",
+    "entry_relay_host_v6": "2001:db8::a",
+    "exit_relay_host_v6": "2001:db8::b",
+    "hops": [
+      {
+        "mode": "kernel",
+        "name": "edge-a",
+        "node_id": 2,
+        "node_type": "remote"
+      },
+      {
+        "mode": "userspace",
+        "name": "edge-b",
+        "node_id": 3,
+        "node_type": "remote"
+      }
+    ],
+    "id": 6,
+    "last_apply_at": {
+      "Int64": 0,
+      "Valid": false
+    },
+    "last_error": {
+      "String": "",
+      "Valid": false
+    },
+    "last_upgrade_at": {
+      "Int64": 0,
+      "Valid": false
+    },
+    "last_warning": "",
+    "name": "combo-k",
+    "no_direct_exit": false,
+    "node_type": "composite",
+    "online": 1,
+    "port_range": "",
+    "rate_multiplier": 3,
+    "relay_host": "",
+    "relay_host_declared": false,
+    "relay_host_v6": "",
+    "relay_host_v6_declared": false,
+    "roles": 3,
+    "sort_order": 5,
+    "unidirectional": false
+  }
+}

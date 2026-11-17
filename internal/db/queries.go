@@ -58,71 +58,93 @@ type User struct {
 	RuleCount int `json:"rule_count"`
 }
 
+// Node 是 nodes 表的一行，字段与列一一对应，没有内存里补出来的派生值。组合的在线、
+// 出入口地址、成员链、原始流量不是列，由 NodeCatalog.Derive 从全量节点算出；对外
+// 的 JSON 形状由 server 包里各受众的视图定义，行本身不序列化（见 MarshalJSON）。
+//
+// 一行有两种身份。一台机器（remote、self）：跑 agent 的那一台，它的事实在 Machine
+// 里。一条线路：可授权、可计价、可在链里占位置的单元，它的属性在 Line 里；一台机器
+// 就是一条一段的线路，组合（composite）是由几台机器按序组成的线路，自己不是机器。
+// 所以组合行上的 Machine 恒为零值：机器列只经 updateMachine 写入，它排除组合；建
+// 组合时（CreateCompositeNode）不写机器列；此前留在组合行上的机器列由迁移
+// 0050_composite_rows_carry_no_machine 清空。Name、NodeType、Disabled、SortOrder、
+// CreatedAt 属于这一行本身，两种身份都用。
 type Node struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	NodeType string `json:"node_type"`
-	OwnerID  *int64 `json:"owner_id,omitempty"`
-	Address  string `json:"address"`
-	// Secret is the node's WS auth credential — the only thing an agent presents
-	// to connect. It must never be serialized to user-facing responses (a granted
-	// user could otherwise impersonate the node). json:"-" makes leaking it opt-in:
-	// the admin node-detail endpoint re-adds it explicitly via nodeWithSecret.
-	Secret              string         `json:"-"`
-	RelayHost           string         `json:"relay_host"`
-	RelayHostV6         string         `json:"relay_host_v6"`
-	RelayHostDeclared   bool           `json:"relay_host_declared"`
-	RelayHostV6Declared bool           `json:"relay_host_v6_declared"`
-	Online              int            `json:"online"`
-	AgentVersion        string         `json:"agent_version"`
-	AgentSHA            string         `json:"agent_sha"`
-	LastSeen            *int64         `json:"last_seen,omitempty"`
-	LastApplyAt         sql.NullInt64  `json:"last_apply_at"`
-	LastError           sql.NullString `json:"last_error"`
-	LastWarning         string         `json:"last_warning"`
-	Disabled            bool           `json:"disabled"`
-	PortRange           string         `json:"port_range"`
-	SortOrder           int64          `json:"sort_order"`
-	CreatedAt           int64          `json:"created_at"`
-	LastUpgradeAt       sql.NullInt64  `json:"last_upgrade_at"`
-	LastUpgradeVersion  string         `json:"last_upgrade_version,omitempty"`
-	LastUpgradeStatus   string         `json:"last_upgrade_status,omitempty"`
-	LastUpgradeError    string         `json:"last_upgrade_error,omitempty"`
-	RateMultiplier      float64        `json:"rate_multiplier"`
-	Unidirectional      bool           `json:"unidirectional"`
-	// NoDirectExit forbids the node from terminating a rule chain: it cannot
-	// launch the exit segment, so a rule entering here must cascade into at
-	// least one more middle layer.
-	NoDirectExit bool `json:"no_direct_exit"`
-	// Roles is a bitmask of what the node can be used as: NodeRoleEntry means
-	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
-	// behind an upstream node as a middle-layer segment. A node may hold both.
-	Roles int64 `json:"roles"`
-	// EntryRelayHost/EntryRelayHostV6/ExitRelayHostV6 are not real columns —
-	// ResolveCompositeRelayStack fills them in-memory for composite nodes only
-	// (entry = first hop's own relay fields, exit = last hop's v6 relay field).
-	// RateMultiplier above needs no such resolution: it is a real column on
-	// every node, composite included. Single/self nodes leave the relay-stack
-	// fields empty; callers fall back to the node's own RelayHost/RelayHostV6
-	// in that case.
-	EntryRelayHost   string `json:"entry_relay_host,omitempty"`
-	EntryRelayHostV6 string `json:"entry_relay_host_v6,omitempty"`
-	ExitRelayHostV6  string `json:"exit_relay_host_v6,omitempty"`
-	// Hops is not a real column — for a composite node it holds the ordered
-	// member hops (physical child nodes) with their names, filled in-memory by
-	// ResolveCompositeHops so the UI can flatten the composite into its member
-	// chain for display and preview. Empty for single nodes.
-	Hops []NodeChildHop `json:"hops,omitempty"`
+	ID       int64
+	Name     string
+	NodeType string
+	// Disabled：停用的节点不承载转发。压制判定（suppressedRulesSQL）对物理跳与
+	// 逻辑段一视同仁，所以停用机器与停用线路都会让经过它的规则整条撤下。
+	Disabled  bool
+	SortOrder int64
+	CreatedAt int64
+	Machine
+	Line
 }
 
-// NodeChildHop is one member of a composite node's chain, resolved to its
-// physical child node's name and type for display. Mode is the segment mode the
-// composite stored for that hop.
-type NodeChildHop struct {
-	NodeID   int64  `json:"node_id"`
-	Name     string `json:"name"`
-	NodeType string `json:"node_type"`
-	Mode     string `json:"mode"`
+// Machine 是一行作为机器时的事实：怎么接入（凭据、连接地址、中继地址）、在哪段端口上
+// 分配监听、此刻的连接与同步状态、升级记录、以谁的名义执行节点侧命令（属主），以及
+// 只能按物理节点判定的两个开关。
+type Machine struct {
+	// OwnerID 是属主：这台机器的节点侧命令（TUI 建规则、接管本地规则）以谁的名义执行。
+	OwnerID *int64
+	Address string
+	// Secret 是机器接入 agent 通道时出示的凭据。只有管理员的节点详情页带它。
+	Secret              string
+	RelayHost           string
+	RelayHostV6         string
+	RelayHostDeclared   bool
+	RelayHostV6Declared bool
+	// Online 是 online 列：连接登记时置 1、注销时置 0。组合的在线状态不读这一列，看
+	// NodeCatalog.Derive。
+	Online             int
+	AgentVersion       string
+	AgentSHA           string
+	LastSeen           *int64
+	LastApplyAt        sql.NullInt64
+	LastError          sql.NullString
+	LastWarning        string
+	PortRange          string
+	LastUpgradeAt      sql.NullInt64
+	LastUpgradeVersion string
+	LastUpgradeStatus  string
+	LastUpgradeError   string
+	// Unidirectional：这台机器上报的计数按单向计费。读者是记账（accounting.LoadBook），
+	// 读的是上报计数的那台机器。
+	Unidirectional bool
+	// NoDirectExit forbids the machine from terminating a rule chain: it cannot
+	// launch the exit segment, so a rule whose physical tail is this machine
+	// must cascade into at least one more middle layer.
+	NoDirectExit bool
+}
+
+// Line 是一行作为线路时的属性。授权（user_nodes）、绑定边（node_bindings）、组合的
+// 成员（node_hops）也挂在线路上，它们在各自的表里。
+type Line struct {
+	// Roles is a bitmask of what the line can be used as: NodeRoleEntry means
+	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
+	// behind an upstream node as a middle-layer segment. A line may hold both.
+	Roles int64
+	// RateMultiplier 是计价倍率，取规则入口那条线路的值。
+	RateMultiplier float64
+}
+
+// errNodeRowJSON 是直接序列化节点行时的错误。
+var errNodeRowJSON = errors.New("db.Node is a table row; serialize it through an audience view")
+
+// MarshalJSON 拒绝把节点行直接写进响应。行上没有组合的派生属性（组合的 online 列
+// 恒为 0），也带着只给管理员看的机器字段；直接序列化一行，读者既分不清“没有”与
+// “没算”，用户面还会拿到整行。所以对外一律经 server 包里的受众视图，这里让绕开
+// 视图的写法在第一次序列化时就失败，而不是悄悄发出一份残缺的形状。
+func (Node) MarshalJSON() ([]byte, error) { return nil, errNodeRowJSON }
+
+// NodeMember 是组合展开后的一个物理成员：节点行里的名字与类型，加上组合给这一跳配
+// 的转发模式。
+type NodeMember struct {
+	NodeID   int64
+	Name     string
+	NodeType string
+	Mode     string
 }
 
 type Rule struct {
@@ -239,6 +261,20 @@ func ListUsers(d *sql.DB) ([]*User, error) {
 	return queryAll(d, `SELECT `+userCols+` FROM users ORDER BY id`, scanUser)
 }
 
+// UsersByID 一次读出全部用户，按 id 索引。给要为一批规则逐条查属主的调用方用
+// （规则对外形状的装配要属主的名字与费率），免得每条规则各查一次。
+func UsersByID(d *sql.DB) (map[int64]*User, error) {
+	all, err := ListUsers(d)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int64]*User, len(all))
+	for _, u := range all {
+		m[u.ID] = u
+	}
+	return m, nil
+}
+
 func SetUserDisabled(d *sql.DB, id int64, disabled bool, reason string) error {
 	v := 0
 	if disabled {
@@ -328,16 +364,56 @@ func SetSetting(d *sql.DB, key, value string) error {
 
 // Nodes
 
+// MachineSpec 是建一台机器时给的机器属性。
+type MachineSpec struct {
+	// Secret 为空时随机生成。
+	Secret string
+	// OwnerID 是属主：建它的管理员。为空表示没有属主，节点侧命令会被拒绝。
+	OwnerID *int64
+	// Address 是连接地址的初值；正常为空，由机器 hello 时写入。
+	Address string
+	// PortRange 为空时取 DefaultPortRange；调用方先用 ValidatePortRange 校验。
+	PortRange      string
+	Unidirectional bool
+}
+
+// LineSpec 是建一条线路（机器或组合）时给的线路属性。角色一律是入口加中转
+// （NodeRoleEntry|NodeRoleVia），建好就能被选作入口或挂成中转层，不必再编辑一次。
+type LineSpec struct {
+	// RateMultiplier ≤ 0 时取 1.0：建节点的请求体分不清没填与填了 0，而 0 表示免费，
+	// 免费只经专门的倍率接口（UpdateNodeRateMultiplier）设置。
+	RateMultiplier float64
+}
+
+func (l LineSpec) rate() float64 {
+	if l.RateMultiplier <= 0 {
+		return 1.0
+	}
+	return l.RateMultiplier
+}
+
+const newLineRoles = NodeRoleEntry | NodeRoleVia
+
+// CreateNode 建一台机器，只给名字、连接地址初值与凭据，其余取默认值。
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
+	return CreateMachineNode(d, name, MachineSpec{Address: address, Secret: secret}, LineSpec{})
+}
+
+// CreateMachineNode 用一条 INSERT 建一台机器（node_type remote），机器属性与线路属性
+// 一次写全，不会留下只写了一半的行。
+func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node, error) {
+	secret := m.Secret
 	if secret == "" {
 		secret = RandToken(32)
 	}
-	// New agent nodes default to both roles (entry|via = 3) so a freshly
-	// registered node can be picked as an entry or bound as a middle layer
-	// without an extra edit; the numeric literal mirrors NodeRoleEntry|NodeRoleVia.
-	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, roles, sort_order, created_at)
-		VALUES (?,?,?,3, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
-		name, address, secret, now())
+	portRange := m.PortRange
+	if portRange == "" {
+		portRange = DefaultPortRange
+	}
+	res, err := d.Exec(`INSERT INTO nodes(name, node_type, owner_id, address, secret, port_range, unidirectional,
+			rate_multiplier, roles, sort_order, created_at)
+		VALUES (?, 'remote', ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
+		name, m.OwnerID, m.Address, secret, portRange, boolInt(m.Unidirectional), l.rate(), newLineRoles, now())
 	if err != nil {
 		return nil, err
 	}
@@ -345,8 +421,46 @@ func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return GetNode(d, id)
 }
 
-// NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
-// columns in this exact order — keep all three in lockstep when adding a column.
+// CreateCompositeNode 建一个组合：节点行（node_type composite）与它的成员在同一个事务
+// 里写入，任何一步失败都不留下东西。组合行上不写任何机器列：凭据为空串、没有端口段、
+// 没有属主。空凭据不会让谁以组合的身份接入——server 包的 lookupNodeBySecret 拒绝空
+// 凭据，也不匹配组合行。成员按 members 的次序编号，mode 经 CreateNodeHops 落值。
+func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) (*Node, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO nodes(name, node_type, secret, port_range, rate_multiplier, roles, sort_order, created_at)
+		VALUES (?, 'composite', '', '', ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
+		name, l.rate(), newLineRoles, now())
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	hops := make([]NodeHop, len(members))
+	for i, m := range members {
+		hops[i] = NodeHop{NodeID: id, Position: i, HopNodeID: m.HopNodeID, Mode: m.Mode}
+	}
+	if err := CreateNodeHops(tx, id, hops); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return GetNode(d, id)
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// nodeCols 是读节点行的列清单，scanNodeAnd 按同样的次序扫描。凡是读节点行的查询都
+// 拼这一份清单、经 scanNodeAnd 扫描（ListNodesForUser 把授权的列接在后面，通过
+// extra 传入），所以加列只改这两处。
 const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
 
 // nodeColsQualified is nodeCols with every column prefixed by the "n." alias.
@@ -362,14 +476,18 @@ func GetNode(d *sql.DB, id int64) (*Node, error) {
 
 type rowScanner interface{ Scan(...any) error }
 
-func scanNode(r rowScanner) (*Node, error) {
+func scanNode(r rowScanner) (*Node, error) { return scanNodeAnd(r) }
+
+// scanNodeAnd 扫描以 nodeCols 开头的一行；查询在 nodeCols 之后多选的列，按次序扫进
+// extra。
+func scanNodeAnd(r rowScanner, extra ...any) (*Node, error) {
 	n := &Node{}
 	var disabled, unidirectional, relayHostDeclared, relayHostV6Declared, noDirectExit int
 	var lastSeen sql.NullInt64
 	var agentVersion sql.NullString
 	var ownerID sql.NullInt64
 	var luVersion, luStatus, luError sql.NullString
-	if err := r.Scan(
+	dest := []any{
 		&n.ID, &n.Name, &n.NodeType, &ownerID, &n.Address, &n.Secret,
 		&n.RelayHost, &n.RelayHostV6, &n.Online, &agentVersion, &n.AgentSHA,
 		&lastSeen, &n.LastApplyAt, &n.LastError, &n.LastWarning,
@@ -377,7 +495,8 @@ func scanNode(r rowScanner) (*Node, error) {
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&n.SortOrder, &n.RateMultiplier, &unidirectional,
 		&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
-	); err != nil {
+	}
+	if err := r.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
 	n.Disabled = disabled == 1
@@ -402,7 +521,7 @@ func scanNode(r rowScanner) (*Node, error) {
 	return n, nil
 }
 
-func ListNodes(d *sql.DB) ([]*Node, error) {
+func ListNodes(d DBTX) ([]*Node, error) {
 	return queryAll(d, `SELECT `+nodeCols+` FROM nodes ORDER BY sort_order, id`, scanNode)
 }
 
@@ -433,47 +552,26 @@ func DeleteNode(d *sql.DB, id int64) error {
 	return err
 }
 
-// UpdateNodeRelayHost sets a node's data-plane reachable address (empty clears
-// it). Validation of the value (IPv4 / hostname) is the caller's job.
-func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
-	_, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, relayHost, id)
-	return err
-}
-
-func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
-	_, err := d.Exec(`UPDATE nodes SET relay_host_v6=? WHERE id=?`, relayHostV6, id)
-	return err
-}
-
-func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
-	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
-	return err
-}
-
-// ErrPhysicalNodeSetting 表示试图在组合节点上写一个只对物理节点有意义的设置。
+// ErrPhysicalNodeSetting 表示试图在组合上写一个机器属性（Machine 里的列）。
 var ErrPhysicalNodeSetting = errors.New("setting applies to physical nodes only")
 
-// setPhysicalNodeFlag 写 nodes 表上只对物理节点有意义的布尔列（unidirectional、
-// no_direct_exit）。column 只接受本文件里的字面量。
+// updateMachine 写节点 id 行上的机器列；set 是 "列=?" 形式的赋值，只由本文件的写函数
+// 以字面量传入。下面所有写 Machine 列的函数都经过这里（MarkAllNodesOffline 除外：它只把
+// online 清回 0，不会让组合行上出现机器属性）。
 //
-// 这两列的读者都只看物理节点：unidirectional 由 Hub 入账时读上报计数的节点，
-// no_direct_exit 由建规则时读链尾的物理跳。组合节点不上报计数，也不会成为物理跳
-// （建规则时被展平成成员），写在它身上的值没有任何读者。所以“组合节点上这两列恒
-// 为 0”由这条 UPDATE 的 WHERE 直接保证，不依赖调用方先判断节点类型；node_type 只在
-// 创建组合节点时写一次，之后不变，已有的物理节点不会带着非零值变成组合。
-func setPhysicalNodeFlag(d *sql.DB, column string, id int64, on bool) error {
-	v := 0
-	if on {
-		v = 1
-	}
-	res, err := d.Exec(`UPDATE nodes SET `+column+`=? WHERE id=? AND node_type<>'composite'`, v, id)
+// 机器列只对跑 agent 的机器有意义：组合不接入、不上报、不会成为物理跳，写在它身上的值
+// 没有读者，还会让页面与判定读到不属于它的状态。所以“组合行上 Machine 恒为零值”由这条
+// UPDATE 的 WHERE 直接保证，不依赖调用方先判断节点类型；node_type 只在建行时写一次，
+// 之后不变，已有的机器不会带着机器属性变成组合。没有改到行时分清两种失败：节点不存在
+// 返回 sql.ErrNoRows，节点是组合返回 ErrPhysicalNodeSetting。
+func updateMachine(d DBTX, id int64, set string, args ...any) error {
+	res, err := d.Exec(`UPDATE nodes SET `+set+` WHERE id=? AND node_type<>'composite'`, append(args, id)...)
 	if err != nil {
 		return err
 	}
 	if n, err := res.RowsAffected(); err != nil || n > 0 {
 		return err
 	}
-	// 没有改到行：分清是节点不存在还是节点是组合。
 	var nodeType string
 	if err := d.QueryRow(`SELECT node_type FROM nodes WHERE id=?`, id).Scan(&nodeType); err != nil {
 		return err
@@ -481,58 +579,67 @@ func setPhysicalNodeFlag(d *sql.DB, column string, id int64, on bool) error {
 	return ErrPhysicalNodeSetting
 }
 
-// UpdateNodeUnidirectional 设置物理节点的计费方向；组合节点返回 ErrPhysicalNodeSetting。
+// UpdateNodeRelayHost sets a machine's data-plane reachable address (empty clears
+// it). Validation of the value (IPv4 / hostname) is the caller's job.
+func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
+	return updateMachine(d, id, `relay_host=?`, relayHost)
+}
+
+func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
+	return updateMachine(d, id, `relay_host_v6=?`, relayHostV6)
+}
+
+func SetNodeRelayHostDeclared(d *sql.DB, id int64, declared bool) error {
+	return updateMachine(d, id, `relay_host_declared=?`, boolInt(declared))
+}
+
+func SetNodeRelayHostV6Declared(d *sql.DB, id int64, declared bool) error {
+	return updateMachine(d, id, `relay_host_v6_declared=?`, boolInt(declared))
+}
+
+// UpdateNodeUnidirectional 设置机器的计费方向。
 func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
-	return setPhysicalNodeFlag(d, "unidirectional", id, uni)
+	return updateMachine(d, id, `unidirectional=?`, boolInt(uni))
 }
 
-func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
-	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
-	return err
-}
-
-// UpdateNodeNoDirectExit 设置物理节点能否作为链尾直连目标；组合节点返回
-// ErrPhysicalNodeSetting。
+// UpdateNodeNoDirectExit 设置机器能否作为链尾直连目标。
 func UpdateNodeNoDirectExit(d *sql.DB, id int64, v bool) error {
-	return setPhysicalNodeFlag(d, "no_direct_exit", id, v)
+	return updateMachine(d, id, `no_direct_exit=?`, boolInt(v))
 }
 
-// UpdateNodePortRange sets a node's port_range spec. An empty string resets to
-// the default range. Callers must validate with ValidatePortRange first.
+// UpdateNodePortRange sets a machine's port_range spec. An empty string resets
+// to the default range. Callers must validate with ValidatePortRange first.
 func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
 	if portRange == "" {
 		portRange = DefaultPortRange
 	}
-	_, err := d.Exec(`UPDATE nodes SET port_range=? WHERE id=?`, portRange, id)
-	return err
+	return updateMachine(d, id, `port_range=?`, portRange)
 }
 
-func SetNodeRelayHostDeclared(d *sql.DB, id int64, declared bool) error {
-	v := 0
-	if declared {
-		v = 1
-	}
-	_, err := d.Exec(`UPDATE nodes SET relay_host_declared=? WHERE id=?`, v, id)
-	return err
-}
-
-func SetNodeRelayHostV6Declared(d *sql.DB, id int64, declared bool) error {
-	v := 0
-	if declared {
-		v = 1
-	}
-	_, err := d.Exec(`UPDATE nodes SET relay_host_v6_declared=? WHERE id=?`, v, id)
-	return err
+// UpdateNodeOwner 设置机器的属主；ownerID 为 nil 表示清除。
+func UpdateNodeOwner(d *sql.DB, id int64, ownerID *int64) error {
+	return updateMachine(d, id, `owner_id=?`, ownerID)
 }
 
 // RecordUpgradeResult stores the outcome of the most recent upgrade push to a
-// node. status is "acked" (daemon accepted and is restarting) or "error"
+// machine. status is "acked" (daemon accepted and is restarting) or "error"
 // (send/ack failure); errText is empty on acked. It overwrites the previous
 // record — only the latest attempt is kept.
 func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) error {
-	_, err := d.Exec(
-		`UPDATE nodes SET last_upgrade_at=?, last_upgrade_version=?, last_upgrade_status=?, last_upgrade_error=? WHERE id=?`,
-		now(), version, status, errText, nodeID)
+	return updateMachine(d, nodeID,
+		`last_upgrade_at=?, last_upgrade_version=?, last_upgrade_status=?, last_upgrade_error=?`,
+		now(), version, status, errText)
+}
+
+// 线路属性的写函数：组合与机器都有这些属性，不按节点类型区分。
+
+func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
+	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
+	return err
+}
+
+func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
+	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
 	return err
 }
 
@@ -685,8 +792,8 @@ func GetSelfNode(d *sql.DB) (*Node, error) {
 // MarkAllNodesOffline 把每个节点的 online 置 0。nodes.online 是面板进程里连接表的
 // 镜像（连接登记时置 1，注销时置 0），而连接表在进程启动时是空的；上一个进程若没
 // 走到注销就退出（崩溃、被杀），它留下的 online=1 在新进程里就是假的，所以启动时
-// 整体清一次。组合节点没有自己的连接，MarkNodeOnline 不会对它们调用；列表里它们的
-// 在线状态由 ResolveCompositeOnline 按成员聚合后覆盖这一列的值，清零对它们没有影响。
+// 整体清一次。组合的在线状态由 NodeCatalog.Derive 按成员算，不读组合自己的这一列，
+// 清零对它们没有影响。
 func MarkAllNodesOffline(d *sql.DB) error {
 	_, err := d.Exec(`UPDATE nodes SET online=0 WHERE online<>0`)
 	return err
@@ -695,17 +802,14 @@ func MarkAllNodesOffline(d *sql.DB) error {
 // MarkNodeOnline records a successful hello/heartbeat from an agent and
 // refreshes the reported binary version and connect IP.
 func MarkNodeOnline(d *sql.DB, id int64, agentVersion, agentSHA, connectIP string) error {
-	_, err := d.Exec(
-		`UPDATE nodes SET online=1, last_seen=?, agent_version=?, agent_sha=?, last_error=NULL, address=? WHERE id=?`,
-		now(), agentVersion, agentSHA, connectIP, id)
-	return err
+	return updateMachine(d, id, `online=1, last_seen=?, agent_version=?, agent_sha=?, last_error=NULL, address=?`,
+		now(), agentVersion, agentSHA, connectIP)
 }
 
-// MarkNodeOffline flips a node back to offline when its websocket drops; we
+// MarkNodeOffline flips a machine back to offline when its websocket drops; we
 // keep last_seen as-is so the UI can still show "last seen N minutes ago".
 func MarkNodeOffline(d *sql.DB, id int64) error {
-	_, err := d.Exec(`UPDATE nodes SET online=0 WHERE id=?`, id)
-	return err
+	return updateMachine(d, id, `online=0`)
 }
 
 // MarkNodeApplied stamps last_apply_at and clears last_error after a
@@ -714,27 +818,20 @@ func MarkNodeOffline(d *sql.DB, id int64) error {
 // caveat (e.g. some rules skipped) so the UI can flag "applied, but..." —
 // pass "" when the apply had nothing to warn about.
 func MarkNodeApplied(d *sql.DB, id int64, warning string) error {
-	_, err := d.Exec(`UPDATE nodes SET last_apply_at=?, last_error=NULL, last_warning=? WHERE id=?`, now(), warning, id)
-	return err
+	return updateMachine(d, id, `last_apply_at=?, last_error=NULL, last_warning=?`, now(), warning)
 }
 
 // MarkNodeDispatchError records a dispatch failure so the panel UI can
-// flag the node as out-of-sync. last_apply_at is deliberately not touched
+// flag the machine as out-of-sync. last_apply_at is deliberately not touched
 // — the admin needs to see both "last successful apply was at T" and
 // "but the most recent attempt failed with msg". A newer failed attempt
 // supersedes any prior success's skip-state, so last_warning is cleared
 // and only the error (red) is shown.
 func MarkNodeDispatchError(d *sql.DB, id int64, msg string) error {
-	_, err := d.Exec(`UPDATE nodes SET last_error=?, last_warning='' WHERE id=?`, msg, id)
-	return err
+	return updateMachine(d, id, `last_error=?, last_warning=''`, msg)
 }
 
 func ToggleNode(d *sql.DB, id int64) error {
 	_, err := d.Exec(`UPDATE nodes SET disabled = CASE WHEN disabled = 0 THEN 1 ELSE 0 END WHERE id = ?`, id)
-	return err
-}
-
-func UpdateNodeOwner(d *sql.DB, id int64, ownerID *int64) error {
-	_, err := d.Exec(`UPDATE nodes SET owner_id = ? WHERE id = ?`, ownerID, id)
 	return err
 }

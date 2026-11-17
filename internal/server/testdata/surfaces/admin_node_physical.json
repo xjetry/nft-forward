@@ -1,0 +1,152 @@
+{
+  "granted_users": [
+    {
+      "granted_at": 1700000100,
+      "max_forwards": 10,
+      "rate_limit_mbytes": 0,
+      "roles": 1,
+      "traffic_quota_bytes": 0,
+      "traffic_used_bytes": 0,
+      "user_id": 2,
+      "username": "alice"
+    }
+  ],
+  "latest_agent_version": "dev",
+  "node": {
+    "address": "203.0.113.1",
+    "agent_sha": "sha-a",
+    "agent_version": "v0.69.0",
+    "created_at": 1700000002,
+    "disabled": false,
+    "id": 2,
+    "last_apply_at": {
+      "Int64": 1700000950,
+      "Valid": true
+    },
+    "last_error": {
+      "String": "",
+      "Valid": false
+    },
+    "last_seen": 1700000900,
+    "last_upgrade_at": {
+      "Int64": 0,
+      "Valid": false
+    },
+    "last_warning": "skipped 1",
+    "name": "edge-a",
+    "no_direct_exit": false,
+    "node_type": "remote",
+    "online": 1,
+    "owner_id": 1,
+    "port_range": "20000-20100",
+    "rate_multiplier": 2,
+    "relay_host": "10.0.0.1",
+    "relay_host_declared": false,
+    "relay_host_v6": "2001:db8::a",
+    "relay_host_v6_declared": false,
+    "roles": 3,
+    "secret": "\u003cset\u003e",
+    "sort_order": 1,
+    "unidirectional": false
+  },
+  "panel_url": "",
+  "panel_url_configured": false,
+  "referenced_by_composites": [
+    {
+      "id": 6,
+      "name": "combo-k",
+      "node_type": "composite"
+    },
+    {
+      "id": 8,
+      "name": "with-disabled-m",
+      "node_type": "composite"
+    },
+    {
+      "id": 9,
+      "name": "loop-l",
+      "node_type": "composite"
+    }
+  ],
+  "rule_hops": [
+    {
+      "comment": "链路 adm-a · 第1跳",
+      "id": 1,
+      "listen_port": 20001,
+      "mode": "userspace",
+      "node_id": 2,
+      "node_type": "remote",
+      "owner_id": 1,
+      "owner_name": "root",
+      "position": 0,
+      "proto": "tcp",
+      "rule_id": 1,
+      "rule_node_id": 2,
+      "target_host": "9.9.9.9",
+      "target_port": 443,
+      "total_bytes": 10,
+      "total_hops": 1,
+      "via_node_id": 2
+    },
+    {
+      "comment": "链路 adm-n · 第1跳",
+      "id": 2,
+      "listen_port": 20002,
+      "mode": "kernel",
+      "node_id": 2,
+      "node_type": "composite",
+      "owner_id": 1,
+      "owner_name": "root",
+      "position": 0,
+      "proto": "tcp+udp",
+      "rule_id": 2,
+      "rule_node_id": 7,
+      "target_host": "10.0.0.2",
+      "target_port": 40003,
+      "total_bytes": 20,
+      "total_hops": 3,
+      "via_node_id": 7
+    },
+    {
+      "comment": "链路 alice-a · 第1跳",
+      "id": 5,
+      "listen_port": 20003,
+      "mode": "userspace",
+      "node_id": 2,
+      "node_type": "remote",
+      "owner_id": 2,
+      "owner_name": "alice",
+      "position": 0,
+      "proto": "tcp",
+      "rule_id": 3,
+      "rule_node_id": 2,
+      "target_host": "10.0.0.3",
+      "target_port": 40006,
+      "total_bytes": 50,
+      "total_hops": 2,
+      "via_node_id": 2
+    },
+    {
+      "comment": "链路 alice-k · 第1跳",
+      "id": 7,
+      "listen_port": 20004,
+      "mode": "userspace",
+      "node_id": 2,
+      "node_type": "composite",
+      "owner_id": 2,
+      "owner_name": "alice",
+      "position": 0,
+      "proto": "tcp",
+      "rule_id": 4,
+      "rule_node_id": 6,
+      "target_host": "10.0.0.2",
+      "target_port": 40008,
+      "total_bytes": 70,
+      "total_hops": 2,
+      "via_node_id": 6
+    }
+  ],
+  "upgrade": {
+    "status": "none"
+  }
+}

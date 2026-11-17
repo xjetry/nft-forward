@@ -399,8 +399,8 @@ func (s *Server) v1AdminResyncNode(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
-	if err := s.dispatchToNode(id); err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+	if aerr := s.resyncNode(id); aerr != nil {
+		writeAdminErrV1(w, aerr)
 		return
 	}
 	v1OK(w, map[string]any{"resynced": true})
@@ -457,8 +457,10 @@ func (s *Server) v1LandingUsage(w http.ResponseWriter, r *http.Request) {
 
 // v1Usage returns a one-shot billing snapshot: per-user rollup, per-node raw
 // traffic + rule counts, and cluster totals. Read scope suffices — it's pure
-// observability. Node traffic uses the raw per-node counter (the same figure
-// the admin aggregate view shows), not per-rule attribution.
+// observability. 节点的 traffic_bytes 是这个节点自己上报的原始字节累计
+// （NodeCatalog.OwnRawBytes），组合不上报计数、恒为 0；页面上组合那一项借用链首成员
+// 累计的展示近似值（RawTrafficForDisplay）不进这份快照，否则各节点相加会把组合与它
+// 的链首重复计入。
 func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 	users, _ := db.ListUsers(s.DB)
 	db.FillUserRuleCounts(s.DB, users)
@@ -475,19 +477,22 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 			"rule_count": u.RuleCount, "expires_at": exp,
 		})
 	}
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
-	rawByNode, _ := db.NodeRawTraffic(s.DB)
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	nodes := cat.Nodes()
 	rcByNode, _ := db.RuleCountByNode(s.DB)
 	online := 0
 	nodeViews := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
-		if n.Online == 1 {
+		if cat.Derive(n).Online {
 			online++
 		}
 		nodeViews = append(nodeViews, map[string]any{
 			"node_id": n.ID, "name": n.Name, "node_type": n.NodeType,
-			"rate_multiplier": n.RateMultiplier, "traffic_bytes": rawByNode[n.ID], "rule_count": rcByNode[n.ID],
+			"rate_multiplier": n.RateMultiplier, "traffic_bytes": cat.OwnRawBytes(n.ID), "rule_count": rcByNode[n.ID],
 		})
 	}
 	userCount, _ := db.CountUsers(s.DB)

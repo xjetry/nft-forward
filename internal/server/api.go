@@ -19,7 +19,6 @@ import (
 	"nft-forward/internal/accounting"
 	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
-	"nft-forward/internal/landing"
 	"nft-forward/internal/resolver"
 )
 
@@ -266,9 +265,13 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 
 // --- Dashboard ---
 
+// apiDashboard 是管理员仪表盘，挂在管理员路由下：它给的是全部节点的管理员视图。
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// The dashboard only shows aggregates over rules/users, so compute them
 	// server-side instead of shipping the full rules and users arrays (plus a
 	// node_by_id map the UI never read) on every load.
@@ -277,8 +280,8 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
 	userCount, _ := db.CountUsers(s.DB)
 	jsonOK(w, map[string]any{
-		"nodes":              nodes,
-		"node_raw_traffic":   s.nodeRawTrafficWithComposites(nodes),
+		"nodes":              adminNodesOf(cat, cat.Nodes()),
+		"node_raw_traffic":   cat.RawTrafficForDisplay(),
 		"rule_count":         ruleCount,
 		"rule_count_by_node": ruleCountByNode,
 		"total_bytes":        totalBytes,
@@ -286,37 +289,20 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// nodeRawTrafficWithComposites returns raw forwarded bytes (uplink+downlink, no
-// multiplier, never reset) keyed by node id, with every composite node populated
-// from its entry physical child's raw so callers read node_raw_traffic[id]
-// uniformly for single and composite nodes alike. A nil map (load error) is
-// normalized to empty so it JSON-encodes as {} rather than null, which would
-// bypass the frontend's destructuring defaults.
-func (s *Server) nodeRawTrafficWithComposites(nodes []*db.Node) map[int64]int64 {
-	raw, _ := db.NodeRawTraffic(s.DB)
-	if raw == nil {
-		raw = map[int64]int64{}
-	}
-	db.FillCompositeRawTraffic(s.DB, nodes, raw)
-	return raw
-}
-
 // --- Nodes ---
 
 func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, err := db.ListNodes(s.DB)
+	cat, err := db.LoadNodeCatalog(s.DB)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	db.ResolveCompositeOnline(s.DB, nodes)
-	db.ResolveCompositeRelayStack(s.DB, nodes)
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
 	panelName, _ := db.GetSetting(s.DB, "panel_name")
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
-		"nodes": nodes, "panel_url": panelURL, "panel_name": panelName,
-		"node_raw_traffic":     s.nodeRawTrafficWithComposites(nodes),
+		"nodes": adminNodesOf(cat, cat.Nodes()), "panel_url": panelURL, "panel_name": panelName,
+		"node_raw_traffic":     cat.RawTrafficForDisplay(),
 		"latest_agent_version": serverVersion(),
 		"show_rate_to_user":    showRate == "1",
 	})
@@ -371,17 +357,21 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeType := strings.TrimSpace(body.NodeType)
-	if nodeType == "composite" {
-		// Create a composite node with hops
+	// 线路属性两种节点都有；机器属性只给机器，成员只给组合。只对另一种节点有意义的
+	// 字段直接拒绝，不悄悄丢掉。请求在任何写入之前校验完，被拒绝的请求不留下节点行。
+	line := db.LineSpec{RateMultiplier: body.RateMultiplier}
+	switch strings.TrimSpace(body.NodeType) {
+	case "composite":
+		if body.Secret != "" || body.PortRange != "" || body.Unidirectional {
+			jsonErr(w, http.StatusBadRequest, "组合节点不跑 agent，没有接入凭据、端口范围与计费方向：这些按成员节点各自的设置")
+			return
+		}
 		if len(body.Hops) < 2 {
 			jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 			return
 		}
-		// 成员与各自的转发模式都在建节点之前校验完：后面的建节点、写成员不在同一个
-		// 事务里，校验放在后面的话，被拒绝的请求会留下一个没有成员的组合。
 		childIDs := make([]int64, len(body.Hops))
-		memberModes := make([]string, len(body.Hops))
+		members := make([]db.NodeHop, len(body.Hops))
 		for i, h := range body.Hops {
 			childIDs[i] = h.NodeID
 			mode, err := chain.InterNodeLegMode(h.Mode)
@@ -389,85 +379,62 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			memberModes[i] = mode
+			members[i] = db.NodeHop{HopNodeID: h.NodeID, Mode: mode}
 		}
 		if status, err := s.validateCompositeMembers(0, childIDs); err != nil {
 			jsonErr(w, status, err.Error())
 			return
 		}
-		n, err := db.CreateNode(s.DB, body.Name, "", "")
+		n, err := db.CreateCompositeNode(s.DB, body.Name, line, members)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Set node_type to composite
-		if _, err := s.DB.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, n.ID); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		nodeHops := make([]db.NodeHop, len(body.Hops))
-		for i, h := range body.Hops {
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: memberModes[i], TrafficMultiplier: 0}
-		}
-		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		// Create can't distinguish an unset multiplier from an explicit 0: an
-		// absent JSON field decodes to 0 too. So 0 keeps the default 1.0 here;
-		// configuring a node as free (0) is done afterward via the dedicated
-		// rate-multiplier endpoint, which alone treats 0 as the free marker.
-		if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
-			_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
-		}
-		n, _ = db.GetNode(s.DB, n.ID)
 		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
 		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-		jsonOK(w, map[string]any{"node": n})
-		return
+		s.writeAdminNode(w, n.ID)
+	case "", "remote":
+		if len(body.Hops) > 0 {
+			jsonErr(w, http.StatusBadRequest, "只有组合节点有成员；建组合请指定 node_type 为 composite")
+			return
+		}
+		if body.PortRange != "" {
+			if err := db.ValidatePortRange(body.PortRange); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		// 属主是建它的管理员：这台机器的节点侧命令以属主的名义执行。
+		n, err := db.CreateMachineNode(s.DB, body.Name, db.MachineSpec{
+			Secret: strings.TrimSpace(body.Secret), OwnerID: &u.ID,
+			PortRange: body.PortRange, Unidirectional: body.Unidirectional,
+		}, line)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
+		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
+		s.dispatchNodes("新建节点", []int64{n.ID})
+		s.writeAdminNode(w, n.ID)
+	default:
+		jsonErr(w, http.StatusBadRequest, "node_type 须为 remote 或 composite")
 	}
+}
 
-	// Default: create a remote node
-	n, err := db.CreateNode(s.DB, body.Name, "", strings.TrimSpace(body.Secret))
+// writeAdminNode 回 {"node": 节点 id 的管理员视图}，给写完节点之后的响应用。
+func (s *Server) writeAdminNode(w http.ResponseWriter, id int64) {
+	cat, err := db.LoadNodeCatalog(s.DB)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Absent field and explicit 0 are indistinguishable on create, so 0 keeps
-	// the default 1.0; free (0) is set later via the dedicated endpoint.
-	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
-		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
+	n := cat.Node(id)
+	if n == nil {
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+		return
 	}
-	if body.Unidirectional {
-		_ = db.UpdateNodeUnidirectional(s.DB, n.ID, true)
-	}
-	if body.PortRange != "" {
-		if err := db.ValidatePortRange(body.PortRange); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := db.UpdateNodePortRange(s.DB, n.ID, body.PortRange); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if body.RateMultiplier > 0 || body.PortRange != "" || body.Unidirectional {
-		n, _ = db.GetNode(s.DB, n.ID)
-	}
-	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
-	s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-	s.dispatchNodes("新建节点", []int64{n.ID})
-	jsonOK(w, map[string]any{"node": n})
-}
-
-// nodeWithSecret re-exposes a node's secret on the admin node-detail response
-// only. db.Node.Secret is json:"-" so it never leaks elsewhere; the embedded
-// pointer promotes every other node field, and the explicit Secret field (at
-// depth 0) shadows the hidden embedded one, serializing back as "secret" for
-// the install-command view.
-type nodeWithSecret struct {
-	*db.Node
-	Secret string `json:"secret"`
+	jsonOK(w, map[string]any{"node": adminNodeOf(cat, n)})
 }
 
 func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
@@ -476,8 +443,13 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	n, err := db.GetNode(s.DB, id)
+	cat, err := db.LoadNodeCatalog(s.DB)
 	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	n := cat.Node(id)
+	if n == nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
@@ -542,7 +514,8 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		referencedBy = append(referencedBy, compositeRefView{ID: c.ID, Name: c.Name, NodeType: c.NodeType})
 	}
 	resp := map[string]any{
-		"node": nodeWithSecret{Node: n, Secret: n.Secret}, "rule_hops": views, "panel_url": panelURL,
+		"node":      adminNodeDetailView{adminNodeView: adminNodeOf(cat, n), Secret: n.Secret},
+		"rule_hops": views, "panel_url": panelURL,
 		"panel_url_configured":     panelURL != "",
 		"latest_agent_version":     serverVersion(),
 		"upgrade":                  deriveUpgradeStatus(n, serverVersion(), time.Now()),
@@ -553,12 +526,10 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	// Include node_hops if composite, enriched with each child's name.
 	if n.NodeType == "composite" {
 		nodeHops, _ := db.ListNodeHops(s.DB, n.ID)
-		all, _ := db.ListNodes(s.DB)
-		byID := buildMap(all, func(nd *db.Node) int64 { return nd.ID })
 		views := make([]nodeHopView, len(nodeHops))
 		for i, h := range nodeHops {
 			nm := ""
-			if nd := byID[h.HopNodeID]; nd != nil {
+			if nd := cat.Node(h.HopNodeID); nd != nil {
 				nm = nd.Name
 			}
 			views[i] = nodeHopView{NodeHop: h, NodeName: nm}
@@ -568,26 +539,13 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		// composite itself (a self-reference is refused). Nesting is allowed, so
 		// other composites are eligible members too — chain.Topology.ValidateMembers on
 		// the server is the authoritative cycle guard.
-		singleNodes := make([]*db.Node, 0)
-		for _, nd := range all {
-			if nd.ID == n.ID {
-				continue
-			}
-			singleNodes = append(singleNodes, nd)
-		}
-		resp["single_nodes"] = singleNodes
-		// Online is aggregated from children; reuse the same node list.
-		db.ResolveCompositeOnline(s.DB, all)
-		db.ResolveCompositeRelayStack(s.DB, all)
-		for _, c := range all {
-			if c.ID == n.ID {
-				n.Online = c.Online
-				n.EntryRelayHost = c.EntryRelayHost
-				n.EntryRelayHostV6 = c.EntryRelayHostV6
-				n.ExitRelayHostV6 = c.ExitRelayHostV6
-				break
+		candidates := make([]adminNodeView, 0, len(cat.Nodes()))
+		for _, nd := range cat.Nodes() {
+			if nd.ID != n.ID {
+				candidates = append(candidates, adminNodeOf(cat, nd))
 			}
 		}
+		resp["single_nodes"] = candidates
 	}
 
 	jsonOK(w, resp)
@@ -627,10 +585,6 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
-	if node.NodeType != "composite" {
-		jsonErr(w, http.StatusBadRequest, "非组合节点")
-		return
-	}
 	type hopUpdate struct {
 		NodeID int64  `json:"node_id"`
 		Mode   string `json:"mode"`
@@ -646,10 +600,6 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if len(body.Hops) < 2 {
-		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
-		return
-	}
 	childIDs := make([]int64, len(body.Hops))
 	for i, hu := range body.Hops {
 		if hu.NodeID == 0 {
@@ -658,8 +608,14 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		}
 		childIDs[i] = hu.NodeID
 	}
+	// 先判定 id 是不是组合（ValidateMembers），再看成员个数：给机器写成员的请求报的是
+	// “非组合节点”。
 	if status, err := s.validateCompositeMembers(id, childIDs); err != nil {
 		jsonErr(w, status, err.Error())
+		return
+	}
+	if len(body.Hops) < 2 {
+		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 		return
 	}
 	hops := make([]db.NodeHop, len(body.Hops))
@@ -937,7 +893,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的中继地址：入口取展开后第一台机器的中继地址，请在那台机器上设置")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
@@ -997,11 +953,24 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := db.UpdateNodeRelayHostV6(s.DB, id, host); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的 IPv6 中继地址：入口与出口取展开后首尾两台机器的地址，请在那两台机器上设置")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host_v6", strconv.FormatInt(id, 10), host)
 	jsonOK(w, map[string]any{"ok": true})
+}
+
+// jsonMachineWriteErr 报告一次机器属性写入（db.updateMachine）的失败：目标是组合时回
+// 400 与 compositeMsg，节点不存在回 404，其余回 500。
+func jsonMachineWriteErr(w http.ResponseWriter, err error, compositeMsg string) {
+	switch {
+	case errors.Is(err, db.ErrPhysicalNodeSetting):
+		jsonErr(w, http.StatusBadRequest, compositeMsg)
+	case errors.Is(err, sql.ErrNoRows):
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+	default:
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) {
@@ -1011,13 +980,8 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	node, err := db.GetNode(s.DB, id)
-	if err != nil {
+	if _, err := db.GetNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-	if node.NodeType == "composite" {
-		jsonErr(w, http.StatusBadRequest, "组合节点不支持设置端口范围")
 		return
 	}
 	var body struct {
@@ -1033,7 +997,7 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.UpdateNodePortRange(s.DB, id, spec); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点不支持设置端口范围：监听端口在成员节点上分配，按各成员节点的端口范围")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_port_range", strconv.FormatInt(id, 10), spec)
@@ -1093,11 +1057,7 @@ func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := db.UpdateNodeUnidirectional(s.DB, id, body.Unidirectional); err != nil {
-		if errors.Is(err, db.ErrPhysicalNodeSetting) {
-			jsonErr(w, http.StatusBadRequest, "组合节点没有自己的计费方向：按上报流量的成员节点各自的设置计费，请在成员节点上设置")
-			return
-		}
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的计费方向：按上报流量的成员节点各自的设置计费，请在成员节点上设置")
 		return
 	}
 	label := "双向"
@@ -1130,11 +1090,7 @@ func (s *Server) apiSetNodeNoDirectExit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.UpdateNodeNoDirectExit(s.DB, id, body.NoDirectExit); err != nil {
-		if errors.Is(err, db.ErrPhysicalNodeSetting) {
-			jsonErr(w, http.StatusBadRequest, "组合节点不能设置“禁止直接转发”：能否作为链尾由组合里最后一个成员节点决定，请在该成员节点上设置")
-			return
-		}
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点不能设置“禁止直接转发”：能否作为链尾由组合里最后一个成员节点决定，请在该成员节点上设置")
 		return
 	}
 	label := "允许直接转发"
@@ -1151,8 +1107,8 @@ func (s *Server) apiResyncNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := s.dispatchToNode(id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if aerr := s.resyncNode(id); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
@@ -1178,6 +1134,10 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	// 的产物，各架构的产物版本号相同。
 	version := serverVersion()
 	err = s.upgradeNode(node, panelURL)
+	if errors.Is(err, errNotAMachine) {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Record the dispatch outcome so the node detail can surface a silent
 	// failure later (an acked upgrade whose version never takes).
 	status, errText := "acked", ""
@@ -1299,7 +1259,7 @@ func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := db.UpdateNodeOwner(s.DB, id, body.OwnerID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有属主：属主是机器的节点侧命令的执行身份，组合不跑 agent")
 		return
 	}
 	ownerStr := "nil"
@@ -1351,7 +1311,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var nodes []*db.Node
 	for _, n := range all {
-		if n.NodeType == "composite" || n.Disabled {
+		if requireMachine(n) != nil || n.Disabled {
 			continue
 		}
 		nodes = append(nodes, n)
@@ -1530,58 +1490,21 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rules, _ = db.ListAllRules(s.DB)
 	}
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRelayStack(s.DB, nodes)
-	db.ResolveCompositeHops(s.DB, nodes, nodes)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	allUsers, _ := db.ListUsers(s.DB)
-	byID := make(map[int64]*db.User, len(allUsers))
 	userList := make([]map[string]any, 0, len(allUsers))
 	for _, u := range allUsers {
-		byID[u.ID] = u
 		userList = append(userList, map[string]any{"id": u.ID, "username": u.Username})
 	}
-	// Per-owner landing index, built once per owner from the materialized landing
-	// set — the same table that drives metering, so the badge matches billing.
-	// The admin list only needs the kind badge, so withURI=false — no relay URI
-	// is computed here.
-	idxByOwner := map[int64]map[string]landing.Node{}
-	ownerIndex := func(ownerID int64) map[string]landing.Node {
-		if idx, ok := idxByOwner[ownerID]; ok {
-			return idx
-		}
-		idx := s.landingIndexFromDB(ownerID)
-		idxByOwner[ownerID] = idx
-		return idx
-	}
-	views := make([]ruleListItem, 0, len(rules))
-	for _, rl := range rules {
-		oname := ""
-		var idx map[string]landing.Node
-		if rl.OwnerID.Valid {
-			if u := byID[rl.OwnerID.Int64]; u != nil {
-				oname = u.Username
-			}
-			idx = ownerIndex(rl.OwnerID.Int64)
-		}
-		item := s.buildRuleListItem(rl, oname)
-		item.classifyExit(idx, false)
-		if n := nodeByID[rl.NodeID]; n != nil {
-			item.RateMultiplier = n.RateMultiplier
-		} else {
-			item.RateMultiplier = 1
-		}
-		item.BillingRate = 1
-		if rl.OwnerID.Valid {
-			if u := byID[rl.OwnerID.Int64]; u != nil && u.BillingRate > 0 {
-				item.BillingRate = u.BillingRate
-			}
-		}
-		views = append(views, item)
-	}
-	s.fillRuleChains(views, nodeByID)
-	s.markSuppressed(views)
-	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
+	jsonOK(w, map[string]any{
+		"rules": s.ruleItems(rules, cat, false),
+		"nodes": adminNodesOf(cat, cat.Nodes()),
+		"users": userList,
+	})
 }
 
 func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
@@ -1595,35 +1518,16 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	hops, _ := db.ListRuleHops(s.DB, id)
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRelayStack(s.DB, nodes)
-	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
-	ownerName := ""
-	var idx map[string]landing.Node
-	billingRate := 1.0
-	if rl.OwnerID.Valid {
-		if u, e := db.GetUserByID(s.DB, rl.OwnerID.Int64); e == nil {
-			ownerName = u.Username
-			idx = s.landingIndexFromDB(rl.OwnerID.Int64)
-			if u.BillingRate > 0 {
-				billingRate = u.BillingRate
-			}
-		}
-	}
-	item := s.buildRuleListItem(rl, ownerName)
-	item.classifyExit(idx, true)
-	if n := nodeByID[rl.NodeID]; n != nil {
-		item.RateMultiplier = n.RateMultiplier
-	} else {
-		item.RateMultiplier = 1
-	}
-	item.BillingRate = billingRate
-	views := []ruleListItem{item}
-	s.markSuppressed(views)
-	item = views[0]
+	nodes := adminNodesOf(cat, cat.Nodes())
 	jsonOK(w, map[string]any{
-		"rule": item, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
+		"rule": s.ruleItems([]*db.Rule{rl}, cat, true)[0], "hops": hops,
+		"nodes": nodes, "node_by_id": adminNodesByID(nodes),
 	})
 }
 
@@ -1650,8 +1554,16 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, id)
-	allNodes, _ := db.ListNodes(s.DB)
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	grantedNodes, grants, err := db.ListNodesForUser(s.DB, id)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	rules, _ := db.ListRulesByUser(s.DB, id)
 	// The landing_nodes preview doubles as a sync point: any successful
 	// resolution keeps the materialized set fresh without waiting for the
@@ -1663,8 +1575,8 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		landingPreview = s.landingNodesFor(target, false)
 	}
 	jsonOK(w, map[string]any{
-		"user": apiUserFullView(target), "nodes": grantedNodes,
-		"grants": grants, "all_nodes": allNodes,
+		"user": apiUserFullView(target), "nodes": adminNodesOf(cat, grantedNodes),
+		"grants": grants, "all_nodes": adminNodesOf(cat, cat.Nodes()),
 		"rules":         rules,
 		"landing_nodes": landingPreview,
 	})
@@ -2109,87 +2021,30 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	nodes, grants, _, err := s.grantedNodes(u)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
-	nodes, _ := db.ListNodes(s.DB)
-	// A composite's online state is derived from its children, which may not be
-	// in the user's granted set — resolve over the full node list, then project
-	// the result onto the granted nodes so the dashboard shows accurate status.
-	db.ResolveCompositeOnline(s.DB, nodes)
-	onlineByID := make(map[int64]int, len(nodes))
-	for _, n := range nodes {
-		onlineByID[n.ID] = n.Online
-	}
-	for _, gn := range grantedNodes {
-		if o, ok := onlineByID[gn.ID]; ok {
-			gn.Online = o
-		}
-	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
-		"user": apiUserFullView(u), "nodes": grantedNodes, "grants": grants,
+		"user": apiUserFullView(u), "nodes": nodes, "grants": grants,
 		"rules": rules, "show_rate": showRate == "1",
 	})
 }
 
-// applyEffectiveRoles overwrites each granted node's Roles with the grantee's
-// effective role (grant override if set, else the node's own mask) so the
-// my-side rule form filters entry/via candidates by what this user may actually
-// do with the node. nodes and grants are index-aligned as ListNodesForUser
-// returns them.
-func applyEffectiveRoles(nodes []*db.Node, grants []*db.UserNode) {
-	for i, n := range nodes {
-		if i < len(grants) && grants[i] != nil {
-			n.Roles = db.EffectiveNodeRoles(n.Roles, grants[i].Roles)
-		}
-	}
-}
-
 func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
+	nodes, _, cat, err := s.grantedNodes(u)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	rules, _ := db.ListRulesByUser(s.DB, u.ID)
-	idx := s.landingIndexFromDB(u.ID)
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	applyEffectiveRoles(grantedNodes, grants)
-	// A user is granted the composite itself, not its hop children, so the
-	// relay-stack resolver needs the full node list to see the child hosts;
-	// copy the derived fields back onto the (narrower) granted set.
-	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRelayStack(s.DB, allNodes)
-	stackByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
-	for _, n := range grantedNodes {
-		if full := stackByID[n.ID]; full != nil {
-			n.EntryRelayHost = full.EntryRelayHost
-			n.EntryRelayHostV6 = full.EntryRelayHostV6
-			n.ExitRelayHostV6 = full.ExitRelayHostV6
-		}
-	}
-	// Attach each granted composite's member chain so the rule form can flatten
-	// it in the live preview, and keep the all-nodes map for resolving saved
-	// rules' physical hops (which may pass through non-granted composite members).
-	db.ResolveCompositeHops(s.DB, grantedNodes, allNodes)
-	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
-	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
-	br := u.BillingRate
-	if br <= 0 {
-		br = 1
-	}
-	views := make([]ruleListItem, 0, len(rules))
-	for _, rl := range rules {
-		item := s.buildRuleListItem(rl, "")
-		item.classifyExit(idx, true)
-		if n := grantedByID[rl.NodeID]; n != nil {
-			item.RateMultiplier = n.RateMultiplier
-		} else {
-			item.RateMultiplier = 1
-		}
-		item.BillingRate = br
-		views = append(views, item)
-	}
-	s.fillRuleChains(views, allByID)
-	s.markSuppressed(views)
-	grantedSet := make(map[int64]bool)
-	for _, n := range grantedNodes {
+	// 级联选择中转层用的绑定边：两端都在用户的授权里才给。
+	grantedSet := make(map[int64]bool, len(nodes))
+	for _, n := range nodes {
 		grantedSet[n.ID] = true
 	}
 	allEdges, _ := db.ListAllNodeBindings(s.DB)
@@ -2201,8 +2056,8 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	}
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
-		"rules": views, "nodes": grantedNodes,
-		"node_by_id": grantedByID, "show_rate": showRate == "1",
+		"rules": s.ruleItems(rules, cat, true), "nodes": nodes,
+		"node_by_id": myNodesByID(nodes), "show_rate": showRate == "1",
 		"bindings": edges,
 	})
 }
@@ -2219,44 +2074,15 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	applyEffectiveRoles(grantedNodes, grants)
-	// A user is granted the composite itself, not its hop children, so the
-	// relay-stack resolver needs the full node list to see the child hosts;
-	// copy the derived fields back onto the (narrower) granted set.
-	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeRelayStack(s.DB, allNodes)
-	stackByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
-	for _, n := range grantedNodes {
-		if full := stackByID[n.ID]; full != nil {
-			n.EntryRelayHost = full.EntryRelayHost
-			n.EntryRelayHostV6 = full.EntryRelayHostV6
-			n.ExitRelayHostV6 = full.ExitRelayHostV6
-		}
+	nodes, _, cat, err := s.grantedNodes(u)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	db.ResolveCompositeHops(s.DB, grantedNodes, allNodes)
-	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
-	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
-	idx := s.landingIndexFromDB(u.ID)
-	item := s.buildRuleListItem(rl, "")
-	item.classifyExit(idx, true)
-	if n := grantedByID[rl.NodeID]; n != nil {
-		item.RateMultiplier = n.RateMultiplier
-	} else {
-		item.RateMultiplier = 1
-	}
-	item.BillingRate = u.BillingRate
-	if item.BillingRate <= 0 {
-		item.BillingRate = 1
-	}
-	views := []ruleListItem{item}
-	s.fillRuleChains(views, allByID)
-	s.markSuppressed(views)
-	item = views[0]
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
-		"rule": item, "nodes": grantedNodes, "node_by_id": grantedByID,
-		"show_rate": showRate == "1",
+		"rule": s.ruleItems([]*db.Rule{rl}, cat, true)[0], "nodes": nodes,
+		"node_by_id": myNodesByID(nodes), "show_rate": showRate == "1",
 	})
 }
 

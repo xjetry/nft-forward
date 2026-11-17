@@ -314,7 +314,6 @@ func (s *Server) Router() http.Handler {
 			r.Post("/change-password", s.apiChangePassword)
 			r.Get("/probe", s.probeEndpoint)
 			r.Get("/probe-chain", s.probeChainEndpoint)
-			r.Get("/dashboard", s.apiDashboard)
 			r.Post("/sub-fetch", s.apiSubFetch)
 			r.Get("/node-roles", s.apiGetNodeRoles)
 		})
@@ -323,6 +322,7 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth, s.requireRole("admin"))
 
+			r.Get("/dashboard", s.apiDashboard)
 			r.Get("/nodes", s.apiListNodes)
 			r.Post("/nodes", s.apiCreateNode)
 			r.Get("/nodes/{id}", s.apiGetNode)

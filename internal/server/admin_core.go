@@ -1,6 +1,8 @@
 package server
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -273,6 +275,36 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	return granted, skipped, nil
 }
 
+// errNotAMachine 是对组合发起只有机器才能执行的操作（下发规则、推送升级）时的错误。
+var errNotAMachine = errors.New("组合节点不跑 agent：它承载的规则由成员节点执行，请对成员节点操作")
+
+// requireMachine 是“这个操作只对机器有意义”的判定：下发与升级都要经过一个 agent
+// 连接，组合没有自己的连接，对它下发或升级只会把失败记在组合行上。
+func requireMachine(n *db.Node) error {
+	if n.NodeType == "composite" {
+		return errNotAMachine
+	}
+	return nil
+}
+
+// resyncNode 把一台机器此刻应有的规则集重新下发给它，SPA 与 /api/v1 共用。
+func (s *Server) resyncNode(id int64) *adminError {
+	n, err := db.GetNode(s.DB, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &adminError{http.StatusNotFound, codeNotFound, "节点不存在"}
+	}
+	if err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	if err := requireMachine(n); err != nil {
+		return &adminError{http.StatusBadRequest, codeValidation, err.Error()}
+	}
+	if err := s.dispatchToNode(id); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	return nil
+}
+
 // resyncAllNodes re-pushes kernel state to every non-composite node, tolerating
 // per-node dispatch failures (a disconnected node counts as failed, not fatal).
 // Composite nodes have no agent of their own and are skipped.
@@ -283,7 +315,7 @@ func (s *Server) resyncAllNodes() (int, int, error) {
 	}
 	var synced, failed int
 	for _, n := range nodes {
-		if n.NodeType == "composite" {
+		if requireMachine(n) != nil {
 			continue
 		}
 		if e := s.dispatchToNode(n.ID); e != nil {

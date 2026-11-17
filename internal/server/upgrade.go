@@ -199,6 +199,9 @@ func upgradeFor(node *db.Node, art *agentArtifact, panelURL string) wsproto.Upgr
 // 推送只能发给在线连接，而在线连接的 hello 就是“此刻那台机器上跑的是什么”的
 // 第一手陈述；同一 token 换到另一种架构的机器上重装后，这里立刻跟着变。
 func (s *Server) upgradeNode(node *db.Node, panelURL string) error {
+	if err := requireMachine(node); err != nil {
+		return err
+	}
 	arch, ok := s.Hub.NodeArch(node.ID)
 	if !ok {
 		return errNodeNotConnected

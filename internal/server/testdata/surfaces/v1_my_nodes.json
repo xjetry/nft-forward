@@ -1,0 +1,42 @@
+{
+  "data": [
+    {
+      "agent_version": "v0.69.0",
+      "disabled": false,
+      "id": 2,
+      "last_seen": 1700000900,
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": true,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "roles": 1,
+      "unidirectional": false
+    },
+    {
+      "disabled": false,
+      "id": 4,
+      "last_seen": 1700000902,
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": false,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "roles": 2,
+      "unidirectional": true
+    },
+    {
+      "disabled": false,
+      "id": 6,
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": true,
+      "rate_multiplier": 3,
+      "roles": 3,
+      "unidirectional": false
+    }
+  ]
+}

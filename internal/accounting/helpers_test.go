@@ -42,18 +42,12 @@ func newNode(t *testing.T, d *sql.DB, name, relay string) int64 {
 // newComposite 建一个按顺序由 members 组成的组合节点。
 func newComposite(t *testing.T, d *sql.DB, name string, members ...int64) int64 {
 	t.Helper()
-	c, err := db.CreateNode(d, name+"-"+db.RandToken(4), "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, c.ID); err != nil {
-		t.Fatal(err)
-	}
 	hops := make([]db.NodeHop, len(members))
 	for i, m := range members {
-		hops[i] = db.NodeHop{NodeID: c.ID, Position: i, HopNodeID: m, Mode: "userspace"}
+		hops[i] = db.NodeHop{HopNodeID: m, Mode: "userspace"}
 	}
-	if err := db.CreateNodeHops(d, c.ID, hops); err != nil {
+	c, err := db.CreateCompositeNode(d, name+"-"+db.RandToken(4), db.LineSpec{}, hops)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return c.ID

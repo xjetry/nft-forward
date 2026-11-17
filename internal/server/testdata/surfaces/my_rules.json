@@ -1,0 +1,214 @@
+{
+  "bindings": [
+    {
+      "downstream_node_id": 4,
+      "mode": "userspace",
+      "upstream_node_id": 2
+    }
+  ],
+  "node_by_id": {
+    "2": {
+      "disabled": false,
+      "id": 2,
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_v6": "2001:db8::a",
+      "roles": 1,
+      "unidirectional": false
+    },
+    "4": {
+      "disabled": false,
+      "id": 4,
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_v6": "",
+      "roles": 2,
+      "unidirectional": true
+    },
+    "6": {
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "id": 6,
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 1,
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_v6": "",
+      "roles": 3,
+      "unidirectional": false
+    }
+  },
+  "nodes": [
+    {
+      "disabled": false,
+      "id": 2,
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_v6": "2001:db8::a",
+      "roles": 1,
+      "unidirectional": false
+    },
+    {
+      "disabled": false,
+      "id": 4,
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_v6": "",
+      "roles": 2,
+      "unidirectional": true
+    },
+    {
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "id": 6,
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 1,
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_v6": "",
+      "roles": 3,
+      "unidirectional": false
+    }
+  ],
+  "rules": [
+    {
+      "billing_rate": 1.5,
+      "chain": [
+        {
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "name": "tail-c",
+          "node_id": 4,
+          "node_type": "remote"
+        }
+      ],
+      "comment": "",
+      "created_at": 1700001003,
+      "entry": "10.0.0.1:20003",
+      "entry_family": "both",
+      "entry_listen_port": 20003,
+      "entry_mode": "userspace",
+      "entry_node_id": 2,
+      "entry_v6": "[2001:db8::a]:20003",
+      "exit": "6.6.6.6:8388",
+      "exit_host": "6.6.6.6",
+      "exit_kind": "landing",
+      "exit_mode": "kernel",
+      "exit_port": 8388,
+      "id": 3,
+      "landing_name": "HK",
+      "landing_protocol": "vless",
+      "landing_uri": "vless://u@6.6.6.6:8388#HK",
+      "name": "alice-a",
+      "node_id": 2,
+      "owner_id": {
+        "Int64": 2,
+        "Valid": true
+      },
+      "owner_name": "alice",
+      "proto": "tcp",
+      "rate_multiplier": 2,
+      "relay_uri": "vless://u@10.0.0.1:20003#HK",
+      "total_bytes": 3000,
+      "via_node_ids": [
+        4
+      ]
+    },
+    {
+      "billing_rate": 1.5,
+      "chain": [
+        {
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "comment": "",
+      "created_at": 1700001004,
+      "entry": "10.0.0.1:20004",
+      "entry_family": "both",
+      "entry_listen_port": 20004,
+      "entry_mode": "userspace",
+      "entry_node_id": 2,
+      "entry_v6": "[2001:db8::a]:20004",
+      "exit": "7.7.7.7:7",
+      "exit_host": "7.7.7.7",
+      "exit_kind": "custom",
+      "exit_mode": "userspace",
+      "exit_port": 7,
+      "id": 4,
+      "name": "alice-k",
+      "node_id": 6,
+      "owner_id": {
+        "Int64": 2,
+        "Valid": true
+      },
+      "owner_name": "alice",
+      "proto": "tcp",
+      "rate_multiplier": 3,
+      "total_bytes": 4000,
+      "via_node_ids": []
+    }
+  ],
+  "show_rate": false
+}
