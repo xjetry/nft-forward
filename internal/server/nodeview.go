@@ -93,7 +93,7 @@ func adminNodeOf(c *db.NodeCatalog, n *db.Node) adminNodeView {
 		Disabled: n.Disabled, PortRange: n.PortRange, SortOrder: n.SortOrder, CreatedAt: n.CreatedAt,
 		LastUpgradeAt: n.LastUpgradeAt, LastUpgradeVersion: n.LastUpgradeVersion,
 		LastUpgradeStatus: n.LastUpgradeStatus, LastUpgradeError: n.LastUpgradeError,
-		RateMultiplier: n.RateMultiplier, Unidirectional: n.Unidirectional, NoDirectExit: n.NoDirectExit,
+		RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional, NoDirectExit: d.NoDirectExit,
 		Roles:         n.Roles,
 		compositeView: compositeViewOf(d),
 	}
@@ -147,7 +147,7 @@ func myNodeOf(c *db.NodeCatalog, n *db.Node, g *db.UserNode) myNodeView {
 	return myNodeView{
 		ID: n.ID, Name: n.Name, NodeType: n.NodeType,
 		Roles:          db.EffectiveNodeRoles(n.Roles, g.Roles),
-		RateMultiplier: n.RateMultiplier, Unidirectional: n.Unidirectional, NoDirectExit: n.NoDirectExit,
+		RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional, NoDirectExit: d.NoDirectExit,
 		Disabled: n.Disabled, Online: onlineFlag(d.Online),
 		RelayHost: n.RelayHost, RelayHostV6: n.RelayHostV6,
 		compositeView: compositeViewOf(d),

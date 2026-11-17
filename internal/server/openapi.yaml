@@ -37,8 +37,8 @@ components:
         agent_version: { type: string }
         roles: { type: integer }
         rate_multiplier: { type: number }
-        unidirectional: { type: boolean }
-        no_direct_exit: { type: boolean }
+        unidirectional: { type: boolean, description: "按单向计费（上下行取较大的一侧）。组合节点取它第一个物理成员的设置。" }
+        no_direct_exit: { type: boolean, description: "不能作为链尾直连目标。组合节点取它最后一个物理成员的设置。" }
         port_range: { type: string, description: "监听端口的分配范围。组合节点不跑 agent、没有自己的端口范围，省略此字段。" }
         last_seen: { type: integer, nullable: true }
     User:

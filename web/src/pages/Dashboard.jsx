@@ -94,7 +94,8 @@ export default function Dashboard() {
                       </Link>
                     </td>
                     <td className="font-mono text-xs text-ink-soft">
-                      <span className="admin-node-address"><SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText></span>
+                      {/* 组合没有自己的地址，入口是它第一个物理成员的中继地址（服务端给的 entry_relay_host）。 */}
+                      <span className="admin-node-address"><SensText blurred={blurred}>{(n.node_type === 'composite' ? n.entry_relay_host : (n.relay_host || n.address)) || '--'}</SensText></span>
                     </td>
                     <td><NodeTypeBadge type={n.node_type} /></td>
                     <td><span className="admin-node-rule-count">{ruleCount[n.id] || 0}</span></td>

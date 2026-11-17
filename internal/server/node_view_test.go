@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"nft-forward/internal/db"
 )
 
 // 管理员仪表盘给的是全部节点的整行（连接地址、错误、属主……），只能给管理员。
@@ -193,4 +195,110 @@ func TestEveryNodeSurfaceDerivesTheSameAttributes(t *testing.T) {
 	check("管理员", admin, nil)
 	// alice 对 edge-a 的授权把角色覆盖成只能做入口。
 	check("用户", user, map[int64]float64{f.a: 1})
+}
+
+// nodeObjects 在一份解码后的响应里找出所有节点对象：带 id 与 unidirectional 两个键的
+// 对象（规则、成员链、授权都不带 unidirectional）。
+func nodeObjects(v any, visit func(map[string]any)) {
+	switch x := v.(type) {
+	case map[string]any:
+		_, hasID := x["id"]
+		if _, hasUni := x["unidirectional"]; hasID && hasUni {
+			visit(x)
+		}
+		for _, c := range x {
+			nodeObjects(c, visit)
+		}
+	case []any:
+		for _, c := range x {
+			nodeObjects(c, visit)
+		}
+	}
+}
+
+// 组合的计费方向与链尾资格不在它自己那一行上，要从成员推出：计费方向取第一个物理成员
+// 的（经过组合的流量在段首那一跳入账，按上报那台机器的方向折算），链尾资格取最后一个
+// 物理成员的（发起出口那条腿的是它）。物理节点取自己的列。节点不论出现在哪个面，给的
+// 都是这个值——用户拿不到组合的成员，只能靠组合自己带着。
+func TestCompositeBillingDirectionAndExitEligibilityComeFromItsMembers(t *testing.T) {
+	f := newSurfaceFixture(t)
+	if err := db.UpdateNodeUnidirectional(f.d, f.a, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateNodeNoDirectExit(f.d, f.b, true); err != nil {
+		t.Fatal(err)
+	}
+	// 夹具里的组合都以 a 打头；再建一个次序反过来的，“取第一个/最后一个成员”才与
+	// “任何一个成员有就算”分得开。
+	rev, err := db.CreateCompositeNode(f.d, "reversed", db.LineSpec{}, []db.NodeHop{
+		{HopNodeID: f.b, Mode: "kernel"}, {HopNodeID: f.a, Mode: "userspace"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type flags struct{ unidirectional, noDirectExit bool }
+	want := map[int64]flags{
+		f.a:    {true, false},
+		f.b:    {false, true},
+		f.c:    {true, false},  // 夹具建它时就是单向计费
+		f.k:    {true, true},   // 成员 a、b
+		rev.ID: {false, false}, // 成员 b、a
+		f.n:    {true, false},  // 展开为 a、b、c
+		f.loop: {false, false}, // 展不开
+	}
+	type side struct {
+		name   string
+		cookie *http.Cookie
+		token  string
+		paths  []string
+		// 这一侧必须给出的节点：管理员面是全部，用户面是 alice 被授权的。
+		must []int64
+	}
+	all := []int64{f.a, f.b, f.c, f.k, rev.ID, f.n, f.loop}
+	granted := []int64{f.a, f.c, f.k}
+	sides := []side{
+		{"管理员", f.adminCookie, "", []string{
+			"/api/dashboard", "/api/nodes", fmt.Sprintf("/api/nodes/%d", f.k), fmt.Sprintf("/api/nodes/%d", f.n),
+			"/api/rules", fmt.Sprintf("/api/rules/%d", f.r2), fmt.Sprintf("/api/users/%d", f.alice),
+		}, all},
+		{"用户", f.aliceCookie, "", []string{
+			"/api/my", "/api/my/rules", fmt.Sprintf("/api/my/rules/%d", f.r3),
+		}, granted},
+		{"v1 管理员", nil, f.adminToken, []string{"/api/v1/nodes"}, all},
+		{"v1 用户", nil, f.aliceToken, []string{"/api/v1/my/nodes", "/api/v1/info"}, granted},
+	}
+	for _, sd := range sides {
+		seen := map[int64]int{}
+		for _, path := range sd.paths {
+			rec := surfaceGet(t, f.s, sd.cookie, sd.token, path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s %s：%d %s", sd.name, path, rec.Code, rec.Body.String())
+			}
+			found := 0
+			nodeObjects(decodeAny(t, rec), func(n map[string]any) {
+				found++
+				id := int64(n["id"].(float64))
+				exp, ok := want[id]
+				if !ok {
+					return
+				}
+				seen[id]++
+				if got := n["unidirectional"]; got != exp.unidirectional {
+					t.Errorf("%s %s 节点 %d（%v）：unidirectional = %v，应为 %v", sd.name, path, id, n["name"], got, exp.unidirectional)
+				}
+				// /api/v1/info 的节点只带计费方向。
+				if got, has := n["no_direct_exit"]; has && got != exp.noDirectExit {
+					t.Errorf("%s %s 节点 %d（%v）：no_direct_exit = %v，应为 %v", sd.name, path, id, n["name"], got, exp.noDirectExit)
+				}
+			})
+			if found == 0 {
+				t.Errorf("%s %s：响应里一个节点对象都没找到", sd.name, path)
+			}
+		}
+		for _, id := range sd.must {
+			if seen[id] == 0 {
+				t.Errorf("%s面没有给出节点 %d", sd.name, id)
+			}
+		}
+	}
 }

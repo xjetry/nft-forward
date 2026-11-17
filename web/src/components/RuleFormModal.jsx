@@ -136,18 +136,10 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
     if (v) next.push(Number(v))
     return { ...f, via_node_ids: next }
   })
-  // “禁止直接转发”是物理节点的设置：发起出口段的是链尾的物理节点，所以组合节点
-  // 由它的最后一个成员代表（n.hops 是服务端展平好的物理成员，按顺序）。服务端建
-  // 规则时按同一规则校验链尾的物理跳。成员不在 nodes 里时（用户侧只拿得到被授权
-  // 的节点）这里判断不了，返回 false，由服务端在提交时拒绝。
-  const forbidsDirectExit = (n) => {
-    if (!n) return false
-    if (n.node_type === 'composite') {
-      const last = n.hops?.[n.hops.length - 1]
-      return !!nodeById[last?.node_id]?.no_direct_exit
-    }
-    return !!n.no_direct_exit
-  }
+  // “禁止直接转发”是物理节点的设置：发起出口段的是链尾的物理节点。组合节点的
+  // no_direct_exit 由服务端按它最后一个物理成员给出，这里不必（用户侧也拿不到）
+  // 成员节点；服务端建规则时按同一个物理跳校验。
+  const forbidsDirectExit = (n) => !!n?.no_direct_exit
   const viaLevels = []
   if (form.node_id) {
     let upstream = Number(form.node_id)

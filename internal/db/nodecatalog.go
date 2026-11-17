@@ -76,8 +76,9 @@ func (c *NodeCatalog) Nodes() []*Node { return c.nodes }
 // Node 按 id 取节点行，不存在时为 nil。
 func (c *NodeCatalog) Node(id int64) *Node { return c.byID[id] }
 
-// NodeDerived 是节点不在自己那一行上、要从别的行推出的属性。物理节点只有 Online
-// （就是它的 online 列）；其余字段只对能展开的组合有值。
+// NodeDerived 是节点对外给出、而组合不能从自己那一行读到的属性。物理节点的 Online、
+// Unidirectional、NoDirectExit 就是它自己的列，其余字段为空；组合的每一项都从展开后
+// 的物理成员推出，展不开的组合全为零值。
 type NodeDerived struct {
 	// Online：物理节点取 online 列；组合要求展开后的每个物理成员都在线且未停用，
 	// 展不开的组合离线。
@@ -89,6 +90,14 @@ type NodeDerived struct {
 	ExitRelayHostV6  string
 	// Members 是展开后的物理成员，按次序。
 	Members []NodeMember
+	// Unidirectional 是计费方向。组合取第一个物理成员的：经过组合的流量在这一段的段首
+	// 那一跳入账（accounting.Place.SegmentStart），折算用的是上报样本那台机器的方向
+	// （accounting.LoadBook 读 rule_hops.node_id 那一行的 unidirectional）；链路推导
+	// 按展开次序落跳行，所以一段的段首就是组合展开后的第一台机器。
+	Unidirectional bool
+	// NoDirectExit 是“不能作链尾直连目标”。组合取最后一个物理成员的：链尾资格按发起
+	// 出口那条腿的物理节点判定（chain.Topology.CheckExit）。
+	NoDirectExit bool
 }
 
 // Derive 算出节点 n 的派生属性。n 可以来自别的查询（比如带授权列的
@@ -98,7 +107,7 @@ type NodeDerived struct {
 // 的组合 Flatten 会失败、不进 chains。
 func (c *NodeCatalog) Derive(n *Node) NodeDerived {
 	if n.NodeType != "composite" {
-		return NodeDerived{Online: n.Online == 1}
+		return NodeDerived{Online: n.Online == 1, Unidirectional: n.Unidirectional, NoDirectExit: n.NoDirectExit}
 	}
 	leaves := c.chains[n.ID]
 	if len(leaves) == 0 {
@@ -115,6 +124,7 @@ func (c *NodeCatalog) Derive(n *Node) NodeDerived {
 	first, last := c.byID[leaves[0].NodeID], c.byID[leaves[len(leaves)-1].NodeID]
 	d.EntryRelayHost, d.EntryRelayHostV6 = first.RelayHost, first.RelayHostV6
 	d.ExitRelayHostV6 = last.RelayHostV6
+	d.Unidirectional, d.NoDirectExit = first.Unidirectional, last.NoDirectExit
 	return d
 }
 

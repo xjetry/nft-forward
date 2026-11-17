@@ -187,14 +187,16 @@ type v1Node struct {
 	LastSeen       *int64  `json:"last_seen,omitempty"`
 }
 
-// toV1Node 是节点在 /api/v1 上的形状。在线状态取 NodeCatalog.Derive（组合按成员算）；
-// roles 由调用方给：管理员面给节点自己的掩码，用户面给授权下的生效角色。
+// toV1Node 是节点在 /api/v1 上的形状。在线状态、计费方向、链尾资格取
+// NodeCatalog.Derive（组合按成员算）；roles 由调用方给：管理员面给节点自己的掩码，
+// 用户面给授权下的生效角色。
 func toV1Node(c *db.NodeCatalog, n *db.Node, roles int64) v1Node {
+	d := c.Derive(n)
 	return v1Node{
 		ID: n.ID, Name: n.Name, NodeType: n.NodeType,
-		Online: c.Derive(n).Online, Disabled: n.Disabled, AgentVersion: n.AgentVersion,
-		Roles: roles, RateMultiplier: n.RateMultiplier, Unidirectional: n.Unidirectional,
-		NoDirectExit: n.NoDirectExit, PortRange: n.PortRange, LastSeen: n.LastSeen,
+		Online: d.Online, Disabled: n.Disabled, AgentVersion: n.AgentVersion,
+		Roles: roles, RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional,
+		NoDirectExit: d.NoDirectExit, PortRange: n.PortRange, LastSeen: n.LastSeen,
 	}
 }
 
@@ -305,7 +307,13 @@ func (s *Server) v1RulesFromDB(rules []*db.Rule) []v1Rule {
 
 func (s *Server) v1Info(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	// 节点经用户视图取：计费方向对组合是派生值（db.NodeDerived.Unidirectional），节点行
+	// 上读不到。
+	grantedNodes, grants, _, err := s.grantedNodes(u)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
 
 	nodeViews := make([]map[string]any, 0, len(grantedNodes))
