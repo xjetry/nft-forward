@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -639,5 +641,265 @@ func TestHelloRelayHostWritesStopAtAFailedWriteAndTheNextHelloFinishes(t *testin
 	}
 	if checked < 8 {
 		t.Fatalf("only %d failed writes were checked", checked)
+	}
+}
+
+// A hello that changes a node's relay address is followed by the rules that
+// run into the node being re-generated, so that the hop before the node's
+// targets the new address (settleHelloRelayHosts). With any one statement of
+// that failing:
+//
+//   - every rule is whole: as it was before the hello, or as the hello leaves
+//     it with nothing failing — never with some of its hops gone;
+//   - the failure is logged, naming the node;
+//   - the nodes of every rule that was re-generated are handed to
+//     Redispatch, so no node is left running a hop the panel replaced;
+//   - the next hello, with nothing failing, finishes: the address is the
+//     declared one and every rule targets it.
+func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
+	seed := seedFaultDB(t)
+	dir := t.TempDir()
+	const declared = "192.0.2.50"
+	hello := wsproto.Hello{DeclaredRelayHost: declared}
+
+	type outcome struct {
+		stmts  int
+		failed string
+		logged string
+		// Per rule: its hops before the hello, after it, and as the hello
+		// leaves them with nothing failing. A re-generated rule keeps the
+		// ports its hops listen on, so the last is the first with the old
+		// address replaced by the declared one. (The second rule's ports are
+		// picked at random in every attempt, so there is no one expected
+		// value across attempts.)
+		before, hops, want map[int64][]string
+		storedHost         string // the node's relay address after the hello
+		redispatch         []int64
+		// after a second hello with nothing failing
+		finalHost  string
+		finalHops  map[int64][]string
+		finalStale []int64
+	}
+	var rules []int64
+	serial := 0
+	attempt := func(failAt int) outcome {
+		t.Helper()
+		serial++
+		s, script, release, err := openFaulted(seed, filepath.Join(dir, fmt.Sprintf("move-%d.db", serial)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		s.Hub.OnTrafficUpdate = nil
+		redispatched := make(chan []int64, 4)
+		s.Hub.Redispatch = func(nodes []int64) { redispatched <- nodes }
+
+		// A second rule over the same two nodes, so that one rule can be done
+		// and the other not.
+		second := &db.Rule{NodeID: seed.nodeID, Name: "wire-2", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 8443}
+		tx, err := s.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if second.ID, err = db.CreateRule(tx, second); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := db.RegenerateRule(tx, second, []db.HopInput{{NodeID: seed.nodeID}, {NodeID: seed.viaID}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		rules = []int64{seed.ruleID, second.ID}
+		hopsNow := func() map[int64][]string {
+			t.Helper()
+			out := map[int64][]string{}
+			for _, id := range rules {
+				hops, err := db.ListRuleHops(s.DB, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, h := range hops {
+					out[id] = append(out[id], fmt.Sprintf("#%d node %d :%d -> %s:%d", h.Position, h.NodeID, h.ListenPort, h.TargetHost, h.TargetPort))
+				}
+			}
+			return out
+		}
+		node, err := db.GetNode(s.DB, seed.viaID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := hopsNow()
+		want := map[int64][]string{}
+		for id, lines := range before {
+			for _, line := range lines {
+				want[id] = append(want[id], strings.Replace(line, "-> "+node.RelayHost+":", "-> "+declared+":", 1))
+			}
+		}
+
+		var logs strings.Builder
+		prevOut := log.Writer()
+		log.SetOutput(&logs)
+		script.arm(failAt)
+		s.Hub.settleHelloRelayHosts(node, "198.51.100.77", hello)
+		script.disarm()
+		log.SetOutput(prevOut)
+
+		o := outcome{stmts: len(script.seen), failed: script.failed, logged: logs.String(), before: before, hops: hopsNow(), want: want}
+		// Redispatch is started on another goroutine when there is something
+		// to re-push; whether there is, is known from the hops.
+		regenerated := false
+		for _, id := range rules {
+			if !reflect.DeepEqual(o.hops[id], before[id]) {
+				regenerated = true
+			}
+		}
+		if regenerated {
+			select {
+			case o.redispatch = <-redispatched:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("failAt %d: rules were re-generated but nothing was handed to Redispatch", failAt)
+			}
+		}
+
+		reloaded, err := db.GetNode(s.DB, seed.viaID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.storedHost = reloaded.RelayHost
+		s.Hub.settleHelloRelayHosts(reloaded, "198.51.100.77", hello)
+		final, err := db.GetNode(s.DB, seed.viaID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.finalHost, o.finalHops = final.RelayHost, hopsNow()
+		if o.finalStale, err = db.StaleRulesIntoNode(s.DB, seed.viaID); err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+
+	clean := attempt(0)
+	if clean.logged != "" {
+		t.Fatalf("with nothing failing the hello logs: %s", clean.logged)
+	}
+	for _, id := range rules {
+		if len(clean.hops[id]) != 2 || !strings.Contains(clean.hops[id][0], "-> "+declared+":") {
+			t.Fatalf("with nothing failing, rule %d is %v; want its first hop to target %s", id, clean.hops[id], declared)
+		}
+		if !reflect.DeepEqual(clean.hops[id], clean.want[id]) || reflect.DeepEqual(clean.want[id], clean.before[id]) {
+			t.Fatalf("with nothing failing, rule %d is %v; before the hello it was %v, and re-generated it should be %v", id, clean.hops[id], clean.before[id], clean.want[id])
+		}
+	}
+	if got := append([]int64{}, clean.redispatch...); len(got) != 2 {
+		t.Fatalf("with nothing failing, Redispatch got %v; want the two nodes of the rules", got)
+	}
+	if clean.stmts < 10 {
+		t.Fatalf("the hello issued only %d statements; the rules are not being re-generated", clean.stmts)
+	}
+
+	partial := 0
+	for k := 1; k <= clean.stmts; k++ {
+		o := attempt(k)
+		if o.failed == "" {
+			continue // this run issued fewer statements than the fault-free one
+		}
+		where := fmt.Sprintf("failed statement %d: %s", k, o.failed)
+		before, want := o.before, o.want
+		done := 0
+		for _, id := range rules {
+			switch {
+			case reflect.DeepEqual(o.hops[id], before[id]):
+			case reflect.DeepEqual(o.hops[id], want[id]):
+				done++
+			default:
+				t.Errorf("%s\n    rule %d is neither as it was nor re-generated:\n    %v\n    was %v\n    re-generated it is %v", where, id, o.hops[id], before[id], want[id])
+			}
+		}
+		if done == 1 {
+			partial++
+		}
+		// The rules follow the address that is stored, whatever became of the
+		// rest of the store step: a failure in writing the declared flag,
+		// after the address, does not leave the rules behind.
+		if strings.HasPrefix(o.failed, "UPDATE nodes SET") && o.storedHost == declared && done != len(rules) {
+			t.Errorf("%s\n    the address is stored and no statement of the re-generation failed, but only %d of %d rules were re-generated", where, done, len(rules))
+		}
+		if !strings.Contains(o.logged, fmt.Sprintf("hub: node %d:", seed.viaID)) {
+			t.Errorf("%s\n    is not logged against the node; logged: %q", where, o.logged)
+		}
+		if done > 0 {
+			got := append([]int64{}, o.redispatch...)
+			sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+			wantNodes := []int64{seed.nodeID, seed.viaID}
+			sort.Slice(wantNodes, func(i, j int) bool { return wantNodes[i] < wantNodes[j] })
+			if !reflect.DeepEqual(got, wantNodes) {
+				t.Errorf("%s\n    %d rule(s) were re-generated but Redispatch got %v, want %v", where, done, got, wantNodes)
+			}
+		}
+		if o.finalHost != declared || len(o.finalStale) != 0 || !reflect.DeepEqual(o.finalHops, want) {
+			t.Errorf("%s\n    after the next hello: address %s, stale rules %v, hops %v\n    want address %s, none stale, hops %v",
+				where, o.finalHost, o.finalStale, o.finalHops, declared, want)
+		}
+	}
+	// A failure inside the second rule's re-generation leaves the first done
+	// and the second as it was; if that never happens here, the rules are not
+	// being re-generated one transaction each and the test is not looking at
+	// what it describes.
+	if partial == 0 {
+		t.Error("no failed statement left one rule re-generated and the other as it was")
+	}
+}
+
+// TestHelloThatChangesNothingStillBringsStaleRulesInLine: whether a rule is
+// stale is read from the stored rows, not inferred from what the hello
+// changed. So a database in which the node's address was written without its
+// rules being re-generated — the hello stores nothing new there — is brought
+// in line by the node's next hello all the same.
+func TestHelloThatChangesNothingStillBringsStaleRulesInLine(t *testing.T) {
+	d := openDB(t)
+	s, err := newServer(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, entry, via := seedTwoHopRuleDB(t, d)
+	const declared = "192.0.2.60"
+	if _, err := d.Exec(`UPDATE nodes SET relay_host=?, relay_host_declared=1 WHERE id=?`, declared, via); err != nil {
+		t.Fatal(err)
+	}
+	redispatched := make(chan []int64, 2)
+	s.Hub.Redispatch = func(nodes []int64) { redispatched <- nodes }
+
+	node, err := db.GetNode(d, via)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Hub.settleHelloRelayHosts(node, "198.51.100.77", wsproto.Hello{DeclaredRelayHost: declared})
+
+	hops, err := db.ListRuleHops(d, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hops) != 2 || hops[0].TargetHost != declared {
+		t.Fatalf("the hop before the node targets %s, want the node's stored address %s", hops[0].TargetHost, declared)
+	}
+	select {
+	case nodes := <-redispatched:
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
+		want := []int64{entry, via}
+		sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+		if !reflect.DeepEqual(nodes, want) {
+			t.Errorf("Redispatch got %v, want %v", nodes, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the rule was re-generated but its nodes were not handed to Redispatch")
+	}
+
+	// And with every rule in line, a hello re-pushes nothing on this account.
+	s.Hub.settleHelloRelayHosts(node, "198.51.100.77", wsproto.Hello{DeclaredRelayHost: declared})
+	select {
+	case nodes := <-redispatched:
+		t.Errorf("a hello with no stale rule handed %v to Redispatch", nodes)
+	case <-time.After(300 * time.Millisecond):
 	}
 }

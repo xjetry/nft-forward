@@ -349,3 +349,66 @@ func SetNodeRelayHostAndRewire(d *sql.DB, nodeID int64, relayHost string) ([]int
 	}
 	return nodes, nil
 }
+
+// StaleRulesIntoNode returns the rules in which the hop before one on the
+// node does not target the node's stored relay address.
+//
+// RegenerateRule writes every hop but the last with the next hop's node's
+// relay_host as its target, so on rules generated against the address the
+// node has now this finds nothing. It finds a rule when the address was
+// written without the rule being re-generated.
+func StaleRulesIntoNode(d DBTX, nodeID int64) ([]int64, error) {
+	return queryInt64s(d, `SELECT DISTINCT cur.rule_id
+		FROM rule_hops cur
+		JOIN rule_hops prev ON prev.rule_id = cur.rule_id AND prev.position = cur.position - 1
+		JOIN nodes n ON n.id = cur.node_id
+		WHERE cur.node_id = ? AND prev.target_host != n.relay_host
+		ORDER BY cur.rule_id`, nodeID)
+}
+
+// RewireRulesIntoNode re-generates the rules that are stale against the
+// node's stored relay address (StaleRulesIntoNode), and returns the nodes to
+// re-push.
+//
+// It is for an address the panel does not get to refuse: one a node reports
+// about itself. The address is stored first, by the caller, and the rules
+// follow here. Each rule is re-generated in a transaction of its own, so a
+// rule is left either as it was or re-generated in full, and one that cannot
+// be re-generated does not hold back the others.
+//
+// The error joins a *RewireError for every rule that was not re-generated;
+// the returned nodes are those of the rules that were, whether or not the
+// error is nil. Nothing has to remember a rule that failed: it still does
+// not target the stored address, so the next call finds it again.
+func RewireRulesIntoNode(d *sql.DB, nodeID int64) ([]int64, error) {
+	stale, err := StaleRulesIntoNode(d, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int64]bool{}
+	var nodes []int64
+	var failed []error
+	for _, id := range stale {
+		var affected []int64
+		err := inTx(d, func(tx *sql.Tx) error {
+			var err error
+			affected, err = rewireRules(tx, []int64{id})
+			return err
+		})
+		if err != nil {
+			var rewire *RewireError
+			if !errors.As(err, &rewire) {
+				err = &RewireError{RuleID: id, Err: err}
+			}
+			failed = append(failed, err)
+			continue
+		}
+		for _, n := range affected {
+			if !seen[n] {
+				seen[n] = true
+				nodes = append(nodes, n)
+			}
+		}
+	}
+	return nodes, errors.Join(failed...)
+}

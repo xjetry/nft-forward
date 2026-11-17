@@ -180,9 +180,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	if err := storeHelloRelayHosts(h.DB, node, connectIP, hello); err != nil {
-		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
-	}
+	h.settleHelloRelayHosts(node, connectIP, hello)
 	if hello.PortRange != "" {
 		if err := db.ValidatePortRange(hello.PortRange); err != nil {
 			log.Printf("hub: node %d reported invalid port range %q, ignoring: %v", node.ID, hello.PortRange, err)
@@ -480,6 +478,36 @@ func extractIP(r *http.Request) string {
 		host = host[:i]
 	}
 	return strings.Trim(host, "[]")
+}
+
+// settleHelloRelayHosts stores what a hello says about the node's relay
+// addresses (storeHelloRelayHosts) and brings the rules in line with the
+// address the node then has.
+//
+// In every rule, the hop before one on this node targets the node's relay
+// address, as stored when the rule was generated. A hello can change that
+// address — the daemon declares another one, or an empty field is seeded —
+// and the hops that target the old one would go on sending traffic there.
+// db.RewireRulesIntoNode re-generates the rules that do not target the
+// stored address. It decides from the stored rows alone, so it is run on
+// every hello, including one whose store step failed or changed nothing:
+// that is what picks up a rule it could not re-generate on an earlier hello,
+// and a rule that is stale in the database the panel was started on.
+//
+// The nodes of the re-generated rules are re-pushed off-goroutine. The node
+// saying hello is among them, and its ack to a push cannot be read before
+// this hello has been handled (ServeWS starts reading frames after it).
+func (h *Hub) settleHelloRelayHosts(node *db.Node, connectIP string, hello wsproto.Hello) {
+	if err := storeHelloRelayHosts(h.DB, node, connectIP, hello); err != nil {
+		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
+	}
+	nodes, err := db.RewireRulesIntoNode(h.DB, node.ID)
+	if err != nil {
+		log.Printf("hub: node %d: rules left targeting an address the node no longer has: %v", node.ID, err)
+	}
+	if len(nodes) > 0 && h.Redispatch != nil {
+		go h.Redispatch(nodes)
+	}
 }
 
 // storeHelloRelayHosts brings a node's stored relay addresses in line with a
