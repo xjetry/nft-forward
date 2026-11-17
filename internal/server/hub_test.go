@@ -255,7 +255,7 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	// OnTrafficUpdate fires off-goroutine (so quota enforcement can't deadlock
 	// the reader loop), so collect via a channel rather than a shared slice.
 	notified := make(chan int64, 4)
-	hub.OnTrafficUpdate = func(userID int64, nodeID int64) { notified <- userID }
+	hub.OnTrafficUpdate = func(userID int64) { notified <- userID }
 
 	const delta = int64(4096)
 	hub.applyCounters(n.ID, []wsproto.CounterSample{

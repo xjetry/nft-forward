@@ -43,7 +43,7 @@ func New(d *sql.DB) (*Server, error) {
 	hub := NewHub(d)
 	s := &Server{DB: d, Hub: hub, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	s.dispatch = newNodeDispatchQueue(s.dispatchRound)
-	hub.OnTrafficUpdate = func(userID int64, _ int64) {
+	hub.OnTrafficUpdate = func(userID int64) {
 		s.enforcePerNodeQuota(userID)
 		s.enforceUserQuota(userID)
 		s.enforceExitQuota(userID)

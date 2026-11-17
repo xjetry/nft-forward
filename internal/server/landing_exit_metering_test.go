@@ -100,7 +100,7 @@ func TestExitLedgerUnidirectionalAndTouch(t *testing.T) {
 
 	s, _ := New(d)
 	touched := make(chan struct{}, 1)
-	s.Hub.OnTrafficUpdate = func(userID, nodeID int64) {
+	s.Hub.OnTrafficUpdate = func(userID int64) {
 		select {
 		case touched <- struct{}{}:
 		default:

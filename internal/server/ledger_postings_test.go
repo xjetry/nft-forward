@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/wsproto"
@@ -150,7 +151,7 @@ func newLedgerFixture(t *testing.T) *ledgerFixture {
 		t.Fatal(err)
 	}
 	f.s = s
-	s.Hub.OnTrafficUpdate = func(userID int64, _ int64) {
+	s.Hub.OnTrafficUpdate = func(userID int64) {
 		f.touchedMu.Lock()
 		f.touched[userID] = true
 		f.touchedMu.Unlock()
@@ -375,6 +376,62 @@ func TestRuleTrafficSurvivesHeaderEditAndRegeneration(t *testing.T) {
 		return err
 	})
 	check("重建链")
+}
+
+// 配额回调按属主触发，一批里一个属主只触发一次：同一台物理节点上的两跳分属两个
+// 逻辑段（单点 N 与只含 N 的组合 K），这一批记了他两本授权账、一本落地出口账，回调
+// 仍只来一次。
+func TestQuotaCallbackOncePerOwnerPerBatch(t *testing.T) {
+	d := openDB(t)
+	uid, _ := loginAsUser(t, d, 10)
+	n, _ := db.CreateNode(d, "N", "", "")
+	_ = db.UpdateNodeRelayHost(d, n.ID, "10.0.1.1")
+	k := makeComposite(t, d, "K", n.ID)
+	_ = db.GrantNode(d, uid, n.ID, 5, 0)
+	_ = db.GrantNode(d, uid, k.ID, 5, 0)
+	seedLandingExit(t, d, uid, "8.8.8.8", 443, 0, 0)
+	plain := createTestRuleDirectNode(t, d, uid, n.ID)
+	viaK := &db.Rule{NodeID: k.ID, OwnerID: sql.NullInt64{Int64: uid, Valid: true}, Name: "via-k", Proto: "tcp", ExitHost: "9.9.9.9", ExitPort: 443}
+	tx, _ := d.Begin()
+	id, err := db.CreateRule(tx, viaK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaK.ID = id
+	if _, _, _, err := db.RegenerateRule(tx, viaK, []db.HopInput{{NodeID: n.ID, Mode: "kernel", ViaNodeID: k.ID}}, nil); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	hub := NewHub(d)
+	calls := make(chan int64, 8)
+	hub.OnTrafficUpdate = func(userID int64) { calls <- userID }
+	hub.applyCounters(n.ID, []wsproto.CounterSample{
+		{Proto: "tcp", ListenPort: getHopPort(t, d, plain, n.ID), BytesUp: 10, BytesDown: 10},
+		{Proto: "tcp", ListenPort: getHopPort(t, d, viaK.ID, n.ID), BytesUp: 20, BytesDown: 20},
+	})
+
+	for _, node := range []int64{n.ID, k.ID} {
+		if g, _ := db.GetNodeGrant(d, uid, node); g.TrafficUsedBytes == 0 {
+			t.Fatalf("前置条件：这一批应记到授权 %d 上", node)
+		}
+	}
+	select {
+	case got := <-calls:
+		if got != uid {
+			t.Fatalf("回调的属主 = %d，期望 %d", got, uid)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("配额回调没有触发")
+	}
+	select {
+	case extra := <-calls:
+		t.Fatalf("一批里同一个属主的回调触发了不止一次（又来了 %d）", extra)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // 一批计数入账后，配额回调对每个配额账有增长的属主各触发；无属主的规则不触发。

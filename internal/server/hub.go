@@ -32,11 +32,11 @@ const (
 type Hub struct {
 	DB *sql.DB
 
-	// OnTrafficUpdate, when set, is invoked once per (user, node) pair whose
-	// usage was advanced by a counters batch. The Hub stays a pure transport:
-	// it knows how to accumulate bytes but delegates quota policy (and the
-	// re-dispatch it may trigger) to the owner that wires this callback.
-	OnTrafficUpdate func(userID int64, nodeID int64)
+	// OnTrafficUpdate 在一批计数入账后，对这一批向其授权已用量或落地出口账记过账的
+	// 每个属主各调用一次。全局已用量只在入口跳记账，入口跳总是一段的段首、同时记
+	// 授权账，所以全局配额的变化也在其中。配额判定与它可能引起的重推属于面板，由
+	// 接线的一方负责。
+	OnTrafficUpdate func(userID int64)
 
 	// Redispatch re-pushes kernel state to a set of nodes after the hub
 	// mutates rule state on their behalf. Keeps the hub transport-only.
@@ -732,7 +732,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	}
 
 	type userNode struct{ userID, nodeID int64 }
-	touched := map[userNode]bool{}
+	touched := map[int64]bool{}
 	// userCache holds each owning user loaded once per batch (nil on load error),
 	// serving both the cycle-reset check and the billing-rate lookup so the same
 	// user isn't queried twice per sample.
@@ -793,7 +793,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 				ea.up += s.BytesUp
 				ea.down += s.BytesDown
-				touched[userNode{key.UserID, nodeID}] = true
+				touched[key.UserID] = true
 			}
 		}
 
@@ -857,7 +857,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 		// step with this accounting.
 		if via, ok := segFirst[rh.RuleID][rh.Position]; ok {
 			userNodeAdds[userNode{userID, via}] += billedDelta
-			touched[userNode{userID, via}] = true
+			touched[userID] = true
 		}
 		// Global usage is entry-only: bill the weighted amount once, at position 0.
 		if rh.Position == 0 && weighted > 0 {
@@ -970,13 +970,13 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	// itself — otherwise every enforcement fires the 30s apply timeout and flaps
 	// the node. touched is loop-local, so snapshotting it here is race-free.
 	if h.OnTrafficUpdate != nil && len(touched) > 0 {
-		pairs := make([]userNode, 0, len(touched))
-		for un := range touched {
-			pairs = append(pairs, un)
+		users := make([]int64, 0, len(touched))
+		for uid := range touched {
+			users = append(users, uid)
 		}
 		go func() {
-			for _, un := range pairs {
-				h.OnTrafficUpdate(un.userID, un.nodeID)
+			for _, uid := range users {
+				h.OnTrafficUpdate(uid)
 			}
 		}()
 	}
