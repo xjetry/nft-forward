@@ -51,7 +51,7 @@ func TestFillCompositeRawTraffic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fillCompositeRawTraffic(tt.nodes, tt.hops, tt.raw)
+			fillCompositeRawTraffic(tt.nodes, chainsOf(tt.nodes, tt.hops), tt.raw)
 			if got := tt.raw[tt.compID]; got != tt.want {
 				t.Errorf("raw[%d] = %d, want %d", tt.compID, got, tt.want)
 			}
@@ -64,7 +64,7 @@ func TestFillCompositeRawTrafficLeavesPhysicalUntouched(t *testing.T) {
 	nodes := []*Node{{ID: 1, NodeType: "remote"}, {ID: 9, NodeType: "composite"}}
 	hops := []*NodeHop{{NodeID: 9, HopNodeID: 1}}
 	raw := map[int64]int64{1: 500}
-	fillCompositeRawTraffic(nodes, hops, raw)
+	fillCompositeRawTraffic(nodes, chainsOf(nodes, hops), raw)
 	if raw[1] != 500 {
 		t.Errorf("physical raw[1] = %d, want 500", raw[1])
 	}

@@ -1,6 +1,10 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"nft-forward/internal/chain"
+)
 
 // NodeBinding is an edge of the middle-layer graph: downstream may be attached
 // behind upstream in a rule's chain. Mode is the junction segment's forwarding
@@ -22,7 +26,7 @@ func scanNodeBinding(r rowScanner) (*NodeBinding, error) {
 
 const bindingCols = `upstream_node_id, downstream_node_id, mode`
 
-func ListAllNodeBindings(d *sql.DB) ([]*NodeBinding, error) {
+func ListAllNodeBindings(d DBTX) ([]*NodeBinding, error) {
 	return queryAll(d, `SELECT `+bindingCols+` FROM node_bindings ORDER BY downstream_node_id, upstream_node_id`, scanNodeBinding)
 }
 
@@ -36,6 +40,10 @@ func GetNodeBinding(d DBTX, upstreamID, downstreamID int64) (*NodeBinding, error
 
 // ReplaceBindingsForDownstream swaps the downstream node's full upstream edge
 // set in one transaction, mirroring how composite hops are replaced whole.
+//
+// 边的 mode 经 chain.InterNodeLegMode 落值后才入库：没填的记成 userspace，认不出的
+// 值返回错误且整次替换回滚。node_bindings 只经本函数与 ReplaceBindingsForUpstream
+// 写入，所以链路推导读到的边 mode 一定是两种模式之一。
 func ReplaceBindingsForDownstream(d *sql.DB, downstreamID int64, bindings []NodeBinding) error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -46,7 +54,10 @@ func ReplaceBindingsForDownstream(d *sql.DB, downstreamID int64, bindings []Node
 		return err
 	}
 	for _, b := range bindings {
-		mode := NormalizeForwardMode(b.Mode)
+		mode, err := chain.InterNodeLegMode(b.Mode)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`INSERT INTO node_bindings(upstream_node_id, downstream_node_id, mode) VALUES (?,?,?)`,
 			b.UpstreamNodeID, downstreamID, mode); err != nil {
 			return err
@@ -73,7 +84,11 @@ func ReplaceBindingsForUpstream(d *sql.DB, upstreamID int64, bindings []NodeBind
 		return err
 	}
 	for _, b := range bindings {
-		mode := NormalizeForwardMode(b.Mode)
+		// 与 ReplaceBindingsForDownstream 同一条落值规则，见它的说明。
+		mode, err := chain.InterNodeLegMode(b.Mode)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`INSERT INTO node_bindings(upstream_node_id, downstream_node_id, mode) VALUES (?,?,?)`,
 			upstreamID, b.DownstreamNodeID, mode); err != nil {
 			return err

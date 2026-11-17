@@ -14,7 +14,7 @@ func TestResolveCompositeHops(t *testing.T) {
 		{NodeID: 9, Position: 1, HopNodeID: 2, Mode: "userspace"},
 	}
 
-	resolveCompositeHops(nodes, hops)
+	resolveCompositeHops(nodes, chainsOf(nodes, hops), nodes)
 
 	byID := map[int64]*Node{}
 	for _, n := range nodes {
@@ -57,7 +57,7 @@ func TestResolveCompositeHopsNested(t *testing.T) {
 		{NodeID: 8, Position: 1, HopNodeID: 2, Mode: "userspace"}, // inner -> b
 	}
 
-	resolveCompositeHops(nodes, hops)
+	resolveCompositeHops(nodes, chainsOf(nodes, hops), nodes)
 
 	byID := map[int64]*Node{}
 	for _, n := range nodes {

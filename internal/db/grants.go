@@ -1,6 +1,10 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"nft-forward/internal/chain"
+)
 
 type NodeHop struct {
 	NodeID            int64   `json:"node_id"`
@@ -29,15 +33,23 @@ type UserNode struct {
 	GrantedAt int64 `json:"granted_at"`
 }
 
-// CreateNodeHops inserts ordered hops for a composite node.
+// CreateNodeHops 写入组合节点 nodeID 的有序成员。
+//
+// 成员的 mode 经 chain.InterNodeLegMode 落值后才入库：没填的按节点间那条腿的默认值
+// 记成 userspace，认不出的值返回错误。node_hops 只经本函数写入，所以读侧（展开、
+// 链路推导）拿到的成员 mode 一定是两种模式之一。
 func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 	for _, h := range hops {
 		mult := h.TrafficMultiplier
 		if mult < 0 {
 			mult = 0
 		}
+		mode, err := chain.InterNodeLegMode(h.Mode)
+		if err != nil {
+			return err
+		}
 		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode, traffic_multiplier) VALUES (?,?,?,?,?)`,
-			nodeID, h.Position, h.HopNodeID, h.Mode, mult); err != nil {
+			nodeID, h.Position, h.HopNodeID, mode, mult); err != nil {
 			return err
 		}
 	}
@@ -58,7 +70,7 @@ func ListNodeHops(d *sql.DB, nodeID int64) ([]*NodeHop, error) {
 
 // ListAllNodeHops returns every composite node's hops in one query, ordered so
 // callers can group by node_id without an N+1 fan-out.
-func ListAllNodeHops(d *sql.DB) ([]*NodeHop, error) {
+func ListAllNodeHops(d DBTX) ([]*NodeHop, error) {
 	return queryAll(d, `SELECT node_id, position, hop_node_id, mode, traffic_multiplier FROM node_hops ORDER BY node_id, position`, scanNodeHop)
 }
 

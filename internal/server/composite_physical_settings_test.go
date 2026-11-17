@@ -10,7 +10,7 @@ import (
 
 // “单向计费”和“禁止直接转发”是物理节点的设置：前者由上报计数的物理节点决定
 // （Hub 入账时读上报节点的 Unidirectional），后者由链尾的物理节点决定
-// （exitHopForbidsDirect 读最后一个物理跳的 NoDirectExit）。组合节点既不上报计数，
+// （chain.Topology.CheckExit 读最后一个物理跳所在节点的链尾资格）。组合节点既不上报计数，
 // 也不会成为物理跳，在它身上存这两个值没有任何读者，所以设置接口必须拒绝，而不是
 // 收下一个不起作用的开关。
 func TestCompositeRefusesPhysicalNodeSettings(t *testing.T) {

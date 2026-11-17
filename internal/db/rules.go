@@ -9,6 +9,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"nft-forward/internal/chain"
 )
 
 // DBTX is satisfied by both *sql.DB and *sql.Tx so rule helpers can run either
@@ -118,16 +120,6 @@ func PickFreePortFromRange(segments [][2]int, used map[int]bool) int {
 		}
 	}
 	return 0
-}
-
-// NormalizeForwardMode keeps the NOT NULL mode column valid: empty or any
-// unknown value means kernel. Centralizing it means the kernel default is
-// computed in one place across rule creation and the register_local import.
-func NormalizeForwardMode(m string) string {
-	if m == "userspace" {
-		return "userspace"
-	}
-	return "kernel"
 }
 
 // storedProtos enumerates the proto values rule_hops.proto can hold (enforced by
@@ -637,10 +629,6 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if err != nil {
 			return "", "", nil, fmt.Errorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
-		mode := NormalizeForwardMode(hop.Mode)
-		if r.Proto == "udp" {
-			mode = "kernel" // userspace relay is TCP-only
-		}
 		// A caller that leaves ViaNodeID unset (older call sites, or a hop
 		// that has no explicit segment of its own) inherits the rule's entry
 		// node so rule_hops.via_node_id is never left at the zero value.
@@ -648,7 +636,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if viaNodeID == 0 {
 			viaNodeID = r.NodeID
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, mode: mode, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, viaNodeID: viaNodeID}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, viaNodeID: viaNodeID}
 	}
 
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
@@ -664,14 +652,22 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	// userspace relay (kernel DNAT can't cross address families, and there's no
 	// NAT64), which is TCP-only — so a v6 entry is offered only for a plain TCP
 	// rule; a udp / tcp+udp rule stays v4-only.
-	if rs[0].relayHostV6 != "" && r.Proto == "tcp" {
+	entryOffersV6 := rs[0].relayHostV6 != "" && r.Proto == "tcp"
+	if entryOffersV6 {
 		r.EntryFamily = "both"
-		// Silently run the entry segment in userspace — the only mode that
-		// accepts a v6 client and dials onward over v4. Overrides an entry hop
-		// left in kernel mode (single-node, composite first child, explicit hop).
-		rs[0].mode = "userspace"
 	} else {
 		r.EntryFamily = "v4"
+	}
+
+	// 调用方给的各跳模式在这里落成写进 rule_hops 的值：空值的默认、udp 只走内核、
+	// 入口对外提供 v6 时入口那一跳走用户态，三条都在 chain.EnforceModes 里。rule_hops
+	// 的行只在本函数里插入，所以调用方不需要、也不应该自己先补默认值。
+	requested := make([]string, len(hops))
+	for i, hop := range hops {
+		requested[i] = hop.Mode
+	}
+	for i, mode := range chain.EnforceModes(r.Proto, entryOffersV6, requested) {
+		rs[i].mode = mode
 	}
 
 	// Read existing ports (keyed by node) BEFORE deleting so unchanged nodes keep

@@ -67,7 +67,7 @@ func TestResolveCompositeRelayStack(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolveCompositeRelayStack(tt.nodes, tt.hops)
+			resolveCompositeRelayStack(tt.nodes, chainsOf(tt.nodes, tt.hops))
 			var got *Node
 			for _, n := range tt.nodes {
 				if n.ID == tt.compID {

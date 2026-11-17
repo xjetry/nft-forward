@@ -1006,7 +1006,7 @@ func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comme
 		if hp.NodeID == nodeID {
 			found = true
 			in.DesiredPort = listenPort
-			in.Mode = db.NormalizeForwardMode(mode)
+			in.Mode = mode
 			in.Comment = comment
 		}
 		inputs[i] = in
@@ -1120,7 +1120,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	}
 	rl.ID = id
 
-	hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(req.Mode), ViaNodeID: ac.nodeID}
+	hop := db.HopInput{NodeID: ac.nodeID, Mode: req.Mode, ViaNodeID: ac.nodeID}
 	if req.ListenPort > 0 {
 		hop.DesiredPort = req.ListenPort
 	}
@@ -1195,7 +1195,7 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 		sendRuleAckErr(ac, env.ID, err.Error())
 		return
 	}
-	hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(req.Mode), ViaNodeID: ac.nodeID}
+	hop := db.HopInput{NodeID: ac.nodeID, Mode: req.Mode, ViaNodeID: ac.nodeID}
 	if req.ListenPort > 0 {
 		hop.DesiredPort = req.ListenPort
 	}
@@ -1284,7 +1284,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 			return
 		}
 		rl.ID = id
-		hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(r.Mode), ViaNodeID: ac.nodeID}
+		hop := db.HopInput{NodeID: ac.nodeID, Mode: r.Mode, ViaNodeID: ac.nodeID}
 		if r.SrcPort > 0 {
 			hop.DesiredPort = r.SrcPort
 		}

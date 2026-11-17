@@ -52,11 +52,6 @@ func urlParamInt64(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(v, 10, 64)
 }
 
-// validMode checks that a forwarding mode is one of the known values.
-func validMode(mode string) bool {
-	return mode == "" || mode == "kernel" || mode == "userspace"
-}
-
 // buildMap creates a lookup map from a slice, keyed by the result of the key
 // function. Replaces the repeated for-range map-building loops.
 func buildMap[T any](items []*T, key func(*T) int64) map[int64]*T {

@@ -232,8 +232,8 @@ func TestNodeBindingsModeDefaultValidationAndDuplicates(t *testing.T) {
 		return w
 	}
 
-	// Omitted mode must persist as userspace, not NormalizeForwardMode's
-	// kernel default.
+	// Omitted mode must persist as userspace (chain.InterNodeLegMode), not the
+	// kernel default that applies to a rule's exit leg.
 	body := fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d}]}`, up.ID)
 	if w := do(body); w.Code != http.StatusOK {
 		t.Fatalf("omitted mode: want 200, got %d %s", w.Code, w.Body.String())

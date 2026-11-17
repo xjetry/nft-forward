@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
 	"nft-forward/internal/resolver"
@@ -390,12 +391,21 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 			return
 		}
+		// 成员与各自的转发模式都在建节点之前校验完：后面的建节点、写成员不在同一个
+		// 事务里，校验放在后面的话，被拒绝的请求会留下一个没有成员的组合。
 		childIDs := make([]int64, len(body.Hops))
+		memberModes := make([]string, len(body.Hops))
 		for i, h := range body.Hops {
 			childIDs[i] = h.NodeID
+			mode, err := chain.InterNodeLegMode(h.Mode)
+			if err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			memberModes[i] = mode
 		}
-		if err := s.validateCompositeChildren(0, childIDs); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+		if status, err := s.validateCompositeMembers(0, childIDs); err != nil {
+			jsonErr(w, status, err.Error())
 			return
 		}
 		n, err := db.CreateNode(s.DB, body.Name, "", "")
@@ -410,11 +420,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		}
 		nodeHops := make([]db.NodeHop, len(body.Hops))
 		for i, h := range body.Hops {
-			mode := h.Mode
-			if mode == "" {
-				mode = "userspace"
-			}
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: mode, TrafficMultiplier: 0}
+			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: memberModes[i], TrafficMultiplier: 0}
 		}
 		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -573,7 +579,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		resp["node_hops"] = views
 		// Candidate members for the composite editor: any node except this
 		// composite itself (a self-reference is refused). Nesting is allowed, so
-		// other composites are eligible members too — validateCompositeChildren on
+		// other composites are eligible members too — chain.Topology.ValidateMembers on
 		// the server is the authoritative cycle guard.
 		singleNodes := make([]*db.Node, 0)
 		for _, nd := range all {
@@ -617,7 +623,7 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 // apiUpdateNodeHops replaces a composite node's hop chain (membership, order
 // and per-hop mode). The config modes shape rules subsequently created on the
 // composite, and only for the inter-node segments: the exit segment's mode
-// belongs to the rule (see hopsForChain), so the stored last-hop mode stays
+// belongs to the rule (see chain.ExitChoice), so the stored last-hop mode stays
 // dormant until a reorder turns that hop into an inter-node one. Existing
 // rules keep the modes captured when they were expanded. The multiplier is no
 // longer a per-hop attribute — a composite's billing multiplier is its own
@@ -665,18 +671,15 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		}
 		childIDs[i] = hu.NodeID
 	}
-	if err := s.validateCompositeChildren(id, childIDs); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+	if status, err := s.validateCompositeMembers(id, childIDs); err != nil {
+		jsonErr(w, status, err.Error())
 		return
 	}
 	hops := make([]db.NodeHop, len(body.Hops))
 	for i, hu := range body.Hops {
-		mode := strings.ToLower(strings.TrimSpace(hu.Mode))
-		if mode == "" {
-			mode = "userspace"
-		}
-		if mode != "kernel" && mode != "userspace" {
-			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+		mode, err := chain.InterNodeLegMode(hu.Mode)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hu.NodeID, Mode: mode, TrafficMultiplier: 0}
@@ -794,16 +797,9 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "upstream node not found")
 			return
 		}
-		// The schema and the design for junction segments both default a
-		// binding edge to userspace; only NormalizeForwardMode's caller-wide
-		// fallback is kernel, which would silently override that default for
-		// a row that omitted mode.
-		mode := strings.ToLower(strings.TrimSpace(b.Mode))
-		if mode == "" {
-			mode = "userspace"
-		}
-		if mode != "kernel" && mode != "userspace" {
-			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+		mode, err := chain.InterNodeLegMode(b.Mode)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		bs[i] = db.NodeBinding{UpstreamNodeID: b.UpstreamNodeID, DownstreamNodeID: id, Mode: mode}
@@ -883,14 +879,9 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中转角色")
 			return
 		}
-		// Match the downstream-side default: an omitted mode is userspace, not
-		// NormalizeForwardMode's kernel fallback.
-		mode := strings.ToLower(strings.TrimSpace(b.Mode))
-		if mode == "" {
-			mode = "userspace"
-		}
-		if mode != "kernel" && mode != "userspace" {
-			jsonErr(w, http.StatusBadRequest, "转发模式必须为 kernel 或 userspace")
+		mode, err := chain.InterNodeLegMode(b.Mode)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		bs[i] = db.NodeBinding{UpstreamNodeID: id, DownstreamNodeID: b.DownstreamNodeID, Mode: mode}
@@ -1555,7 +1546,7 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 	db.FillRuleTraffic(s.DB, rules)
 	nodes, _ := db.ListNodes(s.DB)
 	db.ResolveCompositeRelayStack(s.DB, nodes)
-	db.ResolveCompositeHops(s.DB, nodes)
+	db.ResolveCompositeHops(s.DB, nodes, nodes)
 	nodeByID := buildMap(nodes, func(n *db.Node) int64 { return n.ID })
 	allUsers, _ := db.ListUsers(s.DB)
 	byID := make(map[int64]*db.User, len(allUsers))
@@ -1619,20 +1610,10 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForChain.
-		Mode     string `json:"mode"`
-		ExitMode string `json:"exit_mode"`
-		Hops     []struct {
-			NodeID int64  `json:"node_id"`
-			Mode   string `json:"mode"`
-			// ViaNodeID tags the logical segment this physical hop belongs to.
-			// Billing groups rule_hops by via_node_id and charges each segment
-			// once at its via, so a composite's flattened children must all carry
-			// via = the composite's id to bill to the composite's grant. Absent
-			// (0) falls back to node_id — each hop its own segment, correct for a
-			// plain arbitrary physical chain that isn't a composite.
-			ViaNodeID int64 `json:"via_node_id"`
-		} `json:"hops"`
+		// legacy alias honored for single-node rules only — see chain.ExitChoice.
+		Mode     string        `json:"mode"`
+		ExitMode string        `json:"exit_mode"`
+		Hops     []explicitHop `json:"hops"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
 		// sent" (edits keep the stored path — old clients must not silently
 		// strip layers) apart from an explicit empty list (clear the layers).
@@ -1668,28 +1649,20 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	var vias []int64
 
 	if len(body.Hops) > 0 {
-		// Explicit hops: an admin-only escape hatch for arbitrary chains, so role
-		// and binding-edge fitness are intentionally not enforced here. The
-		// no_direct_exit invariant is a hard safety rule and still applies — a
-		// node that forbids launching the exit must not be seated at the exit
-		// even on this path.
-		hops = make([]db.HopInput, len(body.Hops))
-		for i, h := range body.Hops {
-			via := h.ViaNodeID
-			if via == 0 {
-				via = h.NodeID
-			}
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: via}
-		}
-		if name, bad := s.exitHopForbidsDirect(hops); bad {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("节点 %s 禁止直接转发，必须在其后选择线路层", name))
+		given, merr := s.explicitChain(body.Hops)
+		if merr != nil {
+			jsonErr(w, merr.status, merr.msg)
 			return
 		}
+		hops = given
 	} else if body.NodeID > 0 {
 		vias = viasOf(body.ViaNodeIDs)
-		derived, _, derr := s.hopsForChain(body.NodeID, vias, body.Mode, body.ExitMode, nil)
-		if derr != nil {
-			jsonErr(w, http.StatusBadRequest, derr.Error())
+		derived, merr := s.deriveChain(chain.Request{
+			Entry: body.NodeID, Vias: vias,
+			Exit: chain.ExitChoice{Explicit: body.ExitMode, Legacy: body.Mode},
+		})
+		if merr != nil {
+			jsonErr(w, merr.status, merr.msg)
 			return
 		}
 		hops = derived
@@ -1800,245 +1773,6 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// expandSegment expands one logical node into its physical hops: a single node
-// is itself; a composite is its ordered children with the config's inter-node
-// modes. Every hop carries the segment's logical node id for provenance. Mode
-// of the segment's tail hop is left as stored (dormant for composites) — the
-// chain assembler overwrites it with the junction edge mode or the rule's
-// exit mode.
-// maxFlattenedHops bounds one logical segment's physical fan-out. Recursive
-// nesting can multiply hops (C2=[C1,C1], C3=[C2,C2]… flatten to 2^n physical
-// leaves), and a forwarding leg with dozens of relays is meaningless anyway. A
-// cycle is refused at write time so flattening always terminates; this cap keeps
-// the flattened size bounded even for an acyclic exponential nest. Recursion
-// depth is implied (every level adds ≥1 hop), so no separate depth cap is needed.
-const maxFlattenedHops = 32
-
-// expandSegment flattens one logical node into its physical hop sequence. A
-// physical node yields a single hop. A composite recurses through its members
-// down to physical leaves — nested composites are transparent sugar, so every
-// leaf's ViaNodeID stays the top-level logical node the rule references
-// (authorization, quota and billing all attribute there, never to an inner
-// composite). The returned bool reports whether the top-level node is a
-// composite, which the caller uses for segment-boundary mode handling.
-func (s *Server) expandSegment(nodeID int64) ([]db.HopInput, bool, error) {
-	node, err := db.GetNode(s.DB, nodeID)
-	if err != nil {
-		return nil, false, fmt.Errorf("节点不存在")
-	}
-	if node.NodeType == "composite" {
-		count := 0
-		hops, err := s.flattenComposite(nodeID, nodeID, map[int64]bool{}, &count)
-		if err != nil {
-			return nil, true, err
-		}
-		return hops, true, nil
-	}
-	return []db.HopInput{{NodeID: nodeID, Mode: "", ViaNodeID: nodeID}}, false, nil
-}
-
-// flattenComposite recursively expands composite compositeID into physical hops,
-// tagging each with viaNodeID (the rule's top-level logical node, kept constant
-// through the recursion). Each physical leaf takes the mode configured in the
-// innermost composite that directly owns it. visited is the current DFS path,
-// guarding against a cyclic definition — writes reject cycles, but a defensive
-// guard keeps flattening total even against stale data. count accumulates
-// physical hops across the whole recursion and caps at maxFlattenedHops.
-func (s *Server) flattenComposite(compositeID, viaNodeID int64, visited map[int64]bool, count *int) ([]db.HopInput, error) {
-	if visited[compositeID] {
-		return nil, fmt.Errorf("组合节点存在环引用")
-	}
-	visited[compositeID] = true
-	defer delete(visited, compositeID)
-	nh, _ := db.ListNodeHops(s.DB, compositeID)
-	if len(nh) == 0 {
-		return nil, fmt.Errorf("组合节点无子节点")
-	}
-	var hops []db.HopInput
-	for _, h := range nh {
-		child, err := db.GetNode(s.DB, h.HopNodeID)
-		if err != nil {
-			return nil, fmt.Errorf("子节点不存在")
-		}
-		if child.NodeType == "composite" {
-			sub, err := s.flattenComposite(h.HopNodeID, viaNodeID, visited, count)
-			if err != nil {
-				return nil, err
-			}
-			hops = append(hops, sub...)
-			continue
-		}
-		*count++
-		if *count > maxFlattenedHops {
-			return nil, fmt.Errorf("组合展平后物理跳数超过上限 %d", maxFlattenedHops)
-		}
-		hops = append(hops, db.HopInput{NodeID: h.HopNodeID, Mode: h.Mode, ViaNodeID: viaNodeID})
-	}
-	return hops, nil
-}
-
-// hopsForChain assembles a rule's physical chain: the entry segment followed
-// by each middle-layer (via) segment. At a non-final junction a single-node
-// segment's tail takes the binding edge's mode, while a composite segment
-// mid-chain keeps its own configured last-hop mode (the composite owns how its
-// exit leg forwards; the edge is only checked for reachability). The final hop
-// takes the rule's exitMode (empty falls back to singleMode for a bare
-// single-node chain — the legacy alias — else the kernel default). The entry node must
-// carry the entry role, and every via must carry the via role and be
-// reachable from its predecessor through a binding edge — this is the
-// authoritative check, since a picker filtering the UI's node list is only
-// a convenience and grants alone don't imply role fitness. Grants remain the
-// caller's policy. The composite flag tells edit handlers which fields count
-// as an explicit exit-mode request: any chain beyond a bare single node never
-// honors the legacy mode alias.
-// validateCompositeChildren checks a composite's proposed member list: every
-// child must exist, and the members must not close a reference cycle. rootID is
-// the composite being written (0 when creating a brand-new composite, which no
-// node can yet reference, so it can never be cycled back to). Nesting a composite
-// inside a composite is allowed — it is pure sugar that flattens to physical
-// leaves; only cycles are refused, since a cycle would make flattening
-// non-terminating. This is the authoritative server-side guard: the editors only
-// filter the picker as a convenience.
-func (s *Server) validateCompositeChildren(rootID int64, childIDs []int64) error {
-	for _, cid := range childIDs {
-		if cid == rootID {
-			return fmt.Errorf("组合节点不能引用自己")
-		}
-		n, err := db.GetNode(s.DB, cid)
-		if err != nil {
-			return fmt.Errorf("子节点 %d 不存在", cid)
-		}
-		if n.NodeType != "composite" {
-			continue
-		}
-		// A composite member: if rootID is reachable from it through composite
-		// member edges, saving these members would close a cycle.
-		if path, cyclic := s.compositePathTo(cid, rootID, map[int64]bool{}); cyclic {
-			return fmt.Errorf("组合节点存在环引用：%s", path)
-		}
-	}
-	return nil
-}
-
-// compositePathTo reports whether targetID is reachable from nodeID by following
-// composite member edges, returning a "→"-joined node-name path for the error
-// message when it is. visited guards against a pre-existing cycle in stored data
-// so the walk always terminates.
-func (s *Server) compositePathTo(nodeID, targetID int64, visited map[int64]bool) (string, bool) {
-	node, err := db.GetNode(s.DB, nodeID)
-	if err != nil {
-		return "", false
-	}
-	if nodeID == targetID {
-		return node.Name, true
-	}
-	if node.NodeType != "composite" || visited[nodeID] {
-		return "", false
-	}
-	visited[nodeID] = true
-	nh, _ := db.ListNodeHops(s.DB, nodeID)
-	for _, h := range nh {
-		if path, ok := s.compositePathTo(h.HopNodeID, targetID, visited); ok {
-			return node.Name + " → " + path, true
-		}
-	}
-	return "", false
-}
-
-// exitHopForbidsDirect reports whether the chain's final physical hop is a
-// no_direct_exit node (which would launch the exit segment it is forbidden to
-// launch), returning that node's name. Shared by the derived and explicit-hops
-// rule-building paths so neither can seat a no-direct-exit node at the exit.
-func (s *Server) exitHopForbidsDirect(hops []db.HopInput) (string, bool) {
-	if len(hops) == 0 {
-		return "", false
-	}
-	n, err := db.GetNode(s.DB, hops[len(hops)-1].NodeID)
-	if err != nil {
-		return "", false // a missing node is caught downstream by RegenerateRule
-	}
-	return n.Name, n.NoDirectExit
-}
-
-// grantRoleOverrides returns a user's per-grant role overrides keyed by node
-// id, including only grants that actually override (roles != 0). hopsForChain
-// consults it so a node's usability as entry/via is judged by the user's
-// effective role, not the node's global mask. nil/absent entries fall back to
-// the node mask via db.EffectiveNodeRoles.
-func (s *Server) grantRoleOverrides(userID int64) map[int64]int64 {
-	_, grants, err := db.ListNodesForUser(s.DB, userID)
-	if err != nil {
-		return nil
-	}
-	out := map[int64]int64{}
-	for _, g := range grants {
-		if g.Roles != 0 {
-			out[g.NodeID] = g.Roles
-		}
-	}
-	return out
-}
-
-func (s *Server) hopsForChain(entryID int64, vias []int64, singleMode, exitMode string, effRoles map[int64]int64) ([]db.HopInput, bool, error) {
-	entryNode, err := db.GetNode(s.DB, entryID)
-	if err != nil {
-		return nil, false, fmt.Errorf("节点不存在")
-	}
-	if db.EffectiveNodeRoles(entryNode.Roles, effRoles[entryID])&db.NodeRoleEntry == 0 {
-		return nil, false, fmt.Errorf("节点 %s 不是入口", entryNode.Name)
-	}
-	hops, entryComposite, err := s.expandSegment(entryID)
-	if err != nil {
-		return nil, false, err
-	}
-	prev := entryID
-	prevComposite := entryComposite
-	for _, viaID := range vias {
-		viaNode, err := db.GetNode(s.DB, viaID)
-		if err != nil {
-			return nil, true, fmt.Errorf("中转节点不存在")
-		}
-		if db.EffectiveNodeRoles(viaNode.Roles, effRoles[viaID])&db.NodeRoleVia == 0 {
-			return nil, true, fmt.Errorf("节点 %s 不是中转", viaNode.Name)
-		}
-		edge, err := db.GetNodeBinding(s.DB, prev, viaID)
-		if err != nil {
-			return nil, true, fmt.Errorf("中转 %s 未绑定到所选上游", viaNode.Name)
-		}
-		seg, viaComposite, err := s.expandSegment(viaID)
-		if err != nil {
-			return nil, true, err
-		}
-		// The junction is the leg from the previous segment's tail into this
-		// segment's head. A single-node previous segment takes the binding edge's
-		// mode for that leg. A composite previous segment sitting mid-chain owns
-		// how its own exit leg forwards — its last hop keeps the mode configured
-		// in the composite, so we don't overwrite it with the edge. The binding
-		// edge is still required for reachability; only its mode defers here.
-		if !prevComposite {
-			hops[len(hops)-1].Mode = edge.Mode
-		}
-		hops = append(hops, seg...)
-		prev = viaID
-		prevComposite = viaComposite
-	}
-	// The physical node that actually launches the exit segment is the last hop,
-	// which for a composite tail is its last child — not the logical tail node.
-	// A no_direct_exit node may never launch the exit, so the chain must cascade
-	// further. Checked here — not in the picker — so a hand-crafted request can't
-	// bypass it.
-	if name, bad := s.exitHopForbidsDirect(hops); bad {
-		return nil, len(vias) > 0, fmt.Errorf("节点 %s 禁止直接转发，必须在其后选择线路层", name)
-	}
-	composite := entryComposite || len(vias) > 0
-	mode := exitMode
-	if mode == "" && !composite {
-		mode = singleMode
-	}
-	hops[len(hops)-1].Mode = mode
-	return hops, composite, nil
-}
-
 func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
@@ -2062,20 +1796,10 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForChain.
-		Mode     string `json:"mode"`
-		ExitMode string `json:"exit_mode"`
-		Hops     []struct {
-			NodeID int64  `json:"node_id"`
-			Mode   string `json:"mode"`
-			// ViaNodeID tags the logical segment this physical hop belongs to.
-			// Billing groups rule_hops by via_node_id and charges each segment
-			// once at its via, so a composite's flattened children must all carry
-			// via = the composite's id to bill to the composite's grant. Absent
-			// (0) falls back to node_id — each hop its own segment, correct for a
-			// plain arbitrary physical chain that isn't a composite.
-			ViaNodeID int64 `json:"via_node_id"`
-		} `json:"hops"`
+		// chain.ExitChoice.
+		Mode     string        `json:"mode"`
+		ExitMode string        `json:"exit_mode"`
+		Hops     []explicitHop `json:"hops"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
 		// sent" (keep the stored path — old clients must not silently strip
 		// layers) apart from an explicit empty list (clear the layers).
@@ -2125,27 +1849,24 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		if body.ViaNodeIDs != nil {
 			vias = *body.ViaNodeIDs
 		}
-		var ownerOverrides map[int64]int64
-		if rl.OwnerID.Valid {
-			ownerOverrides = s.grantRoleOverrides(rl.OwnerID.Int64)
+		req := chain.Request{
+			Entry: entryID, Vias: vias,
+			Exit: chain.ExitChoice{Explicit: body.ExitMode, Legacy: body.Mode},
 		}
-		derived, composite, derr := s.hopsForChain(entryID, vias, body.Mode, body.ExitMode, ownerOverrides)
-		if derr != nil {
-			jsonErr(w, http.StatusBadRequest, derr.Error())
+		if rl.OwnerID.Valid {
+			overrides, merr := s.seatOverrides(rl.OwnerID.Int64)
+			if merr != nil {
+				jsonErr(w, merr.status, merr.msg)
+				return
+			}
+			req.SeatOverrides = overrides
+		}
+		derived, merr := s.rederiveChain(rl, req)
+		if merr != nil {
+			jsonErr(w, merr.status, merr.msg)
 			return
 		}
 		hops = derived
-		// A same-entry edit without an explicit exit-segment mode keeps the
-		// exit hop's current mode, so clients that don't send one can't
-		// silently reset a userspace exit back to kernel. Any chain beyond a
-		// bare single node treats only exit_mode as explicit — the legacy mode
-		// field never was an exit-segment request for them.
-		explicit := body.ExitMode != "" || (!composite && body.Mode != "")
-		if !explicit && entryID == rl.NodeID {
-			if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
-				hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
-			}
-		}
 		rl.NodeID = entryID
 		rl.ViaNodeIDs = vias
 	case len(body.Hops) == 0:
@@ -2158,27 +1879,21 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "至少添加一个节点")
 			return
 		}
-		hops = make([]db.HopInput, len(existing))
+		// 链不重新推导，沿用规则落库的快照；请求对出口模式的指定仍然生效，取舍
+		// 规则与重新推导时相同（chain.ExitChoice），没有指定就保持现状。
+		kept := make([]chain.Hop, len(existing))
 		for i, h := range existing {
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
+			kept[i] = chain.Hop{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
 		}
-		// A header-only edit still owns the exit segment: an explicit
-		// exit_mode (or the single-node legacy mode) applies to the last hop
-		// instead of being silently dropped with a 200.
-		if body.ExitMode != "" {
-			hops[len(hops)-1].Mode = body.ExitMode
-		} else if body.Mode != "" && len(hops) == 1 {
-			hops[0].Mode = body.Mode
-		}
+		chain.ExitChoice{Explicit: body.ExitMode, Legacy: body.Mode, Current: kept[len(kept)-1].Mode}.Apply(kept)
+		hops = hopInputs(kept)
 	default:
-		hops = make([]db.HopInput, len(body.Hops))
-		for i, h := range body.Hops {
-			via := h.ViaNodeID
-			if via == 0 {
-				via = h.NodeID
-			}
-			hops[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: via}
+		given, merr := s.explicitChain(body.Hops)
+		if merr != nil {
+			jsonErr(w, merr.status, merr.msg)
+			return
 		}
+		hops = given
 	}
 	if body.EntryPort > 0 && len(hops) > 0 {
 		hops[0].DesiredPort = body.EntryPort
@@ -2830,7 +2545,7 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 	// Attach each granted composite's member chain so the rule form can flatten
 	// it in the live preview, and keep the all-nodes map for resolving saved
 	// rules' physical hops (which may pass through non-granted composite members).
-	db.ResolveCompositeHops(s.DB, grantedNodes)
+	db.ResolveCompositeHops(s.DB, grantedNodes, allNodes)
 	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	br := u.BillingRate
@@ -2898,7 +2613,7 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 			n.ExitRelayHostV6 = full.ExitRelayHostV6
 		}
 	}
-	db.ResolveCompositeHops(s.DB, grantedNodes)
+	db.ResolveCompositeHops(s.DB, grantedNodes, allNodes)
 	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	grantedByID := buildMap(grantedNodes, func(n *db.Node) int64 { return n.ID })
 	idx := s.landingIndexFromDB(u.ID)
@@ -2936,7 +2651,7 @@ func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 		// ExitMode is the exit-segment forwarding mode: the only hop of a
 		// single-node rule, or the last hop of a composite chain (whose
 		// inter-node hops take their modes from the node config). Mode is its
-		// legacy alias honored for single-node rules only — see hopsForChain.
+		// legacy alias honored for single-node rules only — see chain.ExitChoice.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
@@ -3053,9 +2768,17 @@ func (s *Server) createUserRule(u *db.User, p userRuleParams, dryRun bool) (rule
 		}
 	}
 
-	hops, _, derr := s.hopsForChain(p.NodeID, vias, p.Mode, p.ExitMode, s.grantRoleOverrides(u.ID))
-	if derr != nil {
-		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusBadRequest, msg: derr.Error()}
+	overrides, merr := s.seatOverrides(u.ID)
+	if merr != nil {
+		return ruleCreateOutcome{}, merr
+	}
+	hops, merr := s.deriveChain(chain.Request{
+		Entry: p.NodeID, Vias: vias,
+		Exit:          chain.ExitChoice{Explicit: p.ExitMode, Legacy: p.Mode},
+		SeatOverrides: overrides,
+	})
+	if merr != nil {
+		return ruleCreateOutcome{}, merr
 	}
 
 	if p.EntryPort > 0 {
@@ -3137,7 +2860,7 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		// chain's last hop); empty keeps the current mode so clients that
 		// don't send it can't silently reset a userspace exit back to kernel.
 		// Mode is its legacy alias honored for single-node rules only — see
-		// hopsForChain.
+		// chain.ExitChoice.
 		Mode     string `json:"mode"`
 		ExitMode string `json:"exit_mode"`
 		// ViaNodeIDs is the ordered middle-layer path. A pointer tells "not
@@ -3241,17 +2964,17 @@ func (s *Server) updateUserRule(u *db.User, id int64, p updateUserRuleParams) (s
 			return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "无权使用中转节点"}
 		}
 	}
-	hops, composite, derr := s.hopsForChain(entryID, vias, p.Mode, p.ExitMode, s.grantRoleOverrides(u.ID))
-	if derr != nil {
-		return "", "", &ruleMutationError{status: http.StatusBadRequest, msg: derr.Error()}
+	overrides, merr := s.seatOverrides(u.ID)
+	if merr != nil {
+		return "", "", merr
 	}
-	// Same-entry edits without an explicit exit-segment mode keep the exit
-	// hop's current mode (see the admin update handler for the rationale).
-	explicit := p.ExitMode != "" || (!composite && p.Mode != "")
-	if !explicit && entryID == rl.NodeID {
-		if existing, _ := db.ListRuleHops(s.DB, id); len(existing) > 0 {
-			hops[len(hops)-1].Mode = existing[len(existing)-1].Mode
-		}
+	hops, merr := s.rederiveChain(rl, chain.Request{
+		Entry: entryID, Vias: vias,
+		Exit:          chain.ExitChoice{Explicit: p.ExitMode, Legacy: p.Mode},
+		SeatOverrides: overrides,
+	})
+	if merr != nil {
+		return "", "", merr
 	}
 	if p.EntryPort > 0 && len(hops) > 0 {
 		hops[0].DesiredPort = p.EntryPort

@@ -70,7 +70,7 @@ func TestResolveCompositeOnline(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolveCompositeOnline(tt.nodes, tt.hops)
+			resolveCompositeOnline(tt.nodes, chainsOf(tt.nodes, tt.hops))
 			for _, n := range tt.nodes {
 				if exp, ok := tt.want[n.ID]; ok && n.Online != exp {
 					t.Errorf("node %d online = %d, want %d", n.ID, n.Online, exp)

@@ -114,12 +114,15 @@ func probeProto(p string) string {
 }
 
 func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string) probeResult {
-	// 探测面对的是展平后的物理节点，与建规则时用的是同一份展平（flattenComposite）。
-	// 组合的成员可以还是组合，而探测帧只能发给有 agent 连接的节点（Hub.SendProbe
-	// 按节点 id 找连接）；只遍历 node_hops 的第一层，会把嵌套的组合当成一台机器
-	// 去探测，得到的永远是“未连接”。
-	count := 0
-	hops, err := s.flattenComposite(compositeID, compositeID, map[int64]bool{}, &count)
+	// 探测面对的是展平后的物理节点，与建规则时用的是同一份展平（chain.Topology
+	// 的 Flatten）。组合的成员可以还是组合，而探测帧只能发给有 agent 连接的节点
+	// （Hub.SendProbe 按节点 id 找连接）；只遍历 node_hops 的第一层，会把嵌套的
+	// 组合当成一台机器去探测，得到的永远是“未连接”。
+	topo, err := db.LoadTopology(s.DB)
+	if err != nil {
+		return probeResult{Error: err.Error()}
+	}
+	hops, err := topo.Flatten(compositeID)
 	if err != nil {
 		return probeResult{Error: err.Error()}
 	}
@@ -134,6 +137,8 @@ func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string)
 	allOK := true
 	total := 0
 	for i, h := range hops {
+		// 节点行在这里另读一次：中间成员是否在线要看行上的 online 与 disabled，
+		// 这两项不在拓扑快照里。
 		n, gerr := db.GetNode(s.DB, h.NodeID)
 		name := fmt.Sprintf("#%d", h.NodeID)
 		if gerr == nil {
