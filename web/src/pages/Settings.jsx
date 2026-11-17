@@ -31,12 +31,23 @@ function parsePoolSize(text) {
   return n <= POOL_SIZE_MAX ? n : null
 }
 
+/** 两份表单值的内容是否相同。字段都是原始值，逐个比较即可。 */
+function sameForm(a, b) {
+  return Object.keys(a).every(key => a[key] === b[key])
+}
+
 /**
  * 设置表单。
  *
- * 不变式：表单值是服务端设置的一份本地副本 —— 挂载时从 initial 取一次，之后
- * 只随用户输入变化，不会被后台刷新覆盖。需要重新对齐服务端时由调用方换
- * key 重建这个组件（见 Settings）。
+ * 不变式：表单值是服务端设置的一份本地副本。它基于某一份服务端快照
+ * （basis）；只有调用方交来的 initial 在内容上与 basis 不同时 —— 保存改变了
+ * 服务端的值，表单才对齐到新的快照，显示服务端实际存下的值。内容没变时
+ * （刷新失败、data 仍是上一份，或者这次保存没有改变服务端的值）表单值只
+ * 随用户输入变化。对齐发生在渲染期、不重新挂载，输入框的焦点因此保留。
+ *
+ * 保存在途时（busy）控件不接受修改：保存落定后表单可能对齐到新的快照，这
+ * 段时间里敲进去的内容会随之丢掉。输入框用只读而不是禁用 —— 禁用会让
+ * 正在输入的那个框失去焦点。
  *
  * 提交按钮在页头（PageHeader 的 actions），通过 form 属性指向这里的 <form>，
  * 所以点按钮与在输入框里按回车走的是同一个 onSubmit。
@@ -44,13 +55,20 @@ function parsePoolSize(text) {
  * @param {{
  *   id: string,
  *   initial: ReturnType<typeof toForm>,
+ *   busy: boolean,
  *   onSave: (payload: { panel_url: string, panel_name: string, show_rate_to_user: boolean, pool_size: number }) => void,
  * }} props
  */
-function SettingsForm({ id, initial, onSave }) {
+function SettingsForm({ id, initial, busy, onSave }) {
   const [form, setForm] = useState(initial)
+  const [basis, setBasis] = useState(initial)
   // 校验提示在第一次提交之后才显示，之后随输入实时重算，不会留下过期的红字。
   const [attempted, setAttempted] = useState(false)
+  if (!sameForm(basis, initial)) {
+    setBasis(initial)
+    setForm(initial)
+    setAttempted(false)
+  }
   const set = (key, value) => setForm(f => ({ ...f, [key]: value }))
 
   const poolSize = parsePoolSize(form.pool_size)
@@ -79,6 +97,7 @@ function SettingsForm({ id, initial, onSave }) {
           <Field label="面板地址" layout="row" hint="节点通过这个地址连接面板；它会写进节点安装命令和新建用户的登录信息。">
             <Input
               mono
+              readOnly={busy}
               value={form.panel_url}
               onChange={v => set('panel_url', v)}
               placeholder="https://panel.example.com"
@@ -88,7 +107,7 @@ function SettingsForm({ id, initial, onSave }) {
             />
           </Field>
           <Field label="面板名称" layout="row" hint="显示在登录页、侧栏和浏览器标签页上。留空时显示 nft-forward。">
-            <Input value={form.panel_name} onChange={v => set('panel_name', v)} placeholder="nft-forward" />
+            <Input readOnly={busy} value={form.panel_name} onChange={v => set('panel_name', v)} placeholder="nft-forward" />
           </Field>
         </CardSection>
       </Card>
@@ -98,7 +117,7 @@ function SettingsForm({ id, initial, onSave }) {
         <CardSection className="flex flex-col gap-4">
           <Field label="显示倍率" layout="row">
             <div className="flex min-h-control items-center">
-              <Checkbox checked={form.show_rate_to_user} onChange={v => set('show_rate_to_user', v)}>
+              <Checkbox disabled={busy} checked={form.show_rate_to_user} onChange={v => set('show_rate_to_user', v)}>
                 向普通用户显示节点与链路的计费倍率
               </Checkbox>
             </div>
@@ -114,6 +133,7 @@ function SettingsForm({ id, initial, onSave }) {
               min={0}
               max={POOL_SIZE_MAX}
               step={1}
+              readOnly={busy}
               value={form.pool_size}
               onChange={v => set('pool_size', v)}
               className="w-28"
@@ -153,14 +173,7 @@ export default function Settings() {
         )}
       />
       <ResourceView resource={settings}>
-        {data => {
-          const initial = toForm(data)
-          // 以服务端设置的内容作 key：重新读到的设置与表单所基于的那份不同时
-          // （保存改变了服务端的值），表单按新内容重建，显示服务端实际存下的
-          // 值。内容没变时 —— 刷新失败、data 仍是上一份，或者这次保存没有
-          // 改变服务端的值 —— 表单原样保留，用户的输入不会被冲掉。
-          return <SettingsForm key={JSON.stringify(initial)} id={formId} initial={initial} onSave={save.run} />
-        }}
+        {data => <SettingsForm id={formId} initial={toForm(data)} busy={save.pending} onSave={save.run} />}
       </ResourceView>
       <ApiTokenSection />
     </Page>
