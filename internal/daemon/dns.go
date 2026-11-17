@@ -24,6 +24,33 @@ func defaultResolver(r *resolver.Resolver) resolveFunc {
 	}
 }
 
+// carryResolvedTargets 返回 rules 的一份拷贝，其中还没有地址的域名规则填上 live 里
+// 同一域名已解析出的地址；live 里没有该域名时保持为空。
+//
+// live 是上一次真正下到数据面的规则集（d.lastResolved，由 reconcileOwners 在提交时
+// 写入），其中域名规则的 DestIP 就是该域名此刻生效的地址。按域名而不是按规则匹配：
+// 地址是域名的属性，规则的目标一旦改成别的域名，就不会取到旧域名的地址。
+//
+// 返回拷贝而不就地修改 rules：传进来的规则取自归属段，归属段保存的是用户或面板
+// 给出的规则原样（域名规则不带地址），落盘到 state.json 的也是它；解析出的地址只
+// 进 d.lastResolved 与数据面。
+func carryResolvedTargets(rules, live []nft.Rule) []nft.Rule {
+	known := make(map[string]string, len(live))
+	for _, r := range live {
+		if r.DestHost != "" && r.DestIP != "" {
+			known[r.DestHost] = r.DestIP
+		}
+	}
+	out := make([]nft.Rule, len(rules))
+	copy(out, rules)
+	for i := range out {
+		if out[i].DestHost != "" && out[i].DestIP == "" {
+			out[i].DestIP = known[out[i].DestHost]
+		}
+	}
+	return out
+}
+
 // partitionResolved splits rules into those safe to apply now (a literal IP,
 // or a hostname that already resolved to an IP) and those still unresolved (a
 // hostname with no IP yet). Unresolved rules are held back so one bad target

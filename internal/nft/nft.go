@@ -374,8 +374,10 @@ func EnableIPForward() error {
 //   - out: the resolved rule slice (callers should use this in nft.Apply)
 //   - changed: true when at least one DestIP differs from the input
 //   - err: aggregated lookup failure (non-nil when at least one host failed to
-//     resolve, but out still contains the best-effort state — failed entries
-//     keep their previous DestIP so live traffic isn't torn down by DNS hiccups)
+//     resolve, but out still contains the best-effort state — a failed entry
+//     keeps the DestIP it came in with, which is empty unless the caller put
+//     one there. A caller that wants a DNS hiccup to leave the live address in
+//     place must pass that address in; the daemon's reconcileOwners does)
 func ResolveHosts(ctx context.Context, rules []Rule, r *resolver.Resolver) ([]Rule, bool, error) {
 	out := make([]Rule, len(rules))
 	copy(out, rules)

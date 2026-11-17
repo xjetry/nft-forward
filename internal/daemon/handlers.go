@@ -91,9 +91,11 @@ func (d *Daemon) applySerialized(ctx context.Context, resolved []nft.Rule) error
 // d.owners; it may modify the map freely. A nil mutate means re-resolve
 // with the current owners unchanged (used by the DNS refresh loop).
 //
-// DNS resolution is best-effort: a rule whose host doesn't resolve is held
-// back rather than failing the whole call, so one bad target can't red the
-// rest of the node. *resolved* is the rules that were actually applied;
+// DNS resolution is best-effort: a host whose lookup fails keeps the address
+// it currently has in the data plane; a rule whose host fails to resolve and
+// has no live address is held back rather than failing the whole call, so one
+// bad target can't red the rest of the node. *resolved* is the rules that were
+// actually applied;
 // *unresolved* is the rules skipped for lack of an IP -- still persisted (via
 // candidate) so the refresh loop retries them, but never handed to the data
 // plane. *committed* reports whether d.owners/d.lastResolved were actually
@@ -126,13 +128,17 @@ func (d *Daemon) reconcileOwners(
 		return nil, nil, false, err
 	}
 
+	// 归属段里存的是未解析的规则（域名规则的 DestIP 为空），每一轮都从头解析。
+	// 解析失败的那一项要沿用该域名此刻在数据面里生效的地址，否则一次 DNS 抖动就
+	// 会把正在转发的规则摘掉。所以先把 prev（上一次真正下到数据面的规则集）里同一
+	// 域名的地址填进待解析的规则：nft.ResolveHosts 对解析失败的项保持输入的 DestIP
+	// 不动，对解析成功的项写入新地址。
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resolved, _, rerr := d.resolveFn(rctx, merged)
+	resolved, _, rerr := d.resolveFn(rctx, carryResolvedTargets(merged, prev))
 	cancel()
-	// DNS is best-effort: resolveFn returns the best-effort slice even on
-	// partial failure (unresolved hostnames keep their previous DestIP, empty
-	// if never resolved). Hold back the still-unresolved ones instead of
-	// failing the whole apply, so one bad target can't red the whole node.
+	// 解析是尽力而为的：到这里仍没有地址的，是这一轮解析失败、数据面里也没有该
+	// 域名现成地址的规则。把它们扣下而不是让整次下发失败，一个坏目标不拖累同节点
+	// 的其他规则。
 	applyable, unresolved := partitionResolved(resolved)
 	if len(unresolved) > 0 {
 		log.Printf("reconcile: holding back %d rule(s) with unresolved target (retry in refresh loop): %v", len(unresolved), rerr)
