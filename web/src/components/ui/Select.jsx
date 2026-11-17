@@ -27,9 +27,15 @@ function CheckMark({ on }) {
  * options: `[{ value, label, icon?, disabled? }]`，或 `{ heading }` 形式的
  * 不可选分隔行。label 必须是纯字符串（搜索按它过滤），图形标记放 icon。
  *
- * - 单选（默认）：value 是标量，onChange 收到所选值的字符串，选中即关闭。
- * - 多选（multiple）：value 是数组，onChange 收到新的字符串数组，菜单保持
- *   打开以便连续勾选。
+ * - 单选（默认）：value 是标量，onChange 收到所选选项的 value，选中即关闭。
+ * - 多选（multiple）：value 是数组，onChange 收到新的数组，菜单保持打开以便
+ *   连续勾选。
+ *
+ * 不变式：onChange 交回的是选项自身的 value，类型与 options 里写的一致
+ * （数字进、数字出）。调用方因此不需要、也不应该再做 Number() / String()
+ * 转换 —— 值在“状态 → 控件 → 状态”的一圈里类型不变，`===` 比较才可靠。
+ * 匹配已选项时内部按字符串比较，所以传入的 value 与选项的类型不一致
+ * （如服务端给的是字符串 id）也能正确显示。
  * - groups：`[{ label, options }]` 分组；配合 tabs 时每组一个页签。
  *
  * 不变式：触发器显示的内容必须对应真实的 value。value 非空却不在 options
@@ -80,6 +86,13 @@ export function Select({
   const sections = groups || [{ label: null, options }]
   const allOptions = sections.flatMap(s => s.options).filter(o => !o.heading)
   const selectedValues = multiple ? (Array.isArray(value) ? value.map(String) : []) : []
+  // 把内部用的字符串键还原成调用方的值：优先取选项自身的 value；已选但
+  // 不在当前选项里的（选项已失效）保留传入时的原值。
+  const restore = (keys) => {
+    const fromOptions = new Map(allOptions.map(o => [String(o.value), o.value]))
+    const fromValue = new Map((Array.isArray(value) ? value : []).map(v => [String(v), v]))
+    return keys.map(k => (fromOptions.has(k) ? fromOptions.get(k) : fromValue.get(k)))
+  }
   const isSelected = (o) => (multiple ? selectedValues.includes(String(o.value)) : String(o.value) === String(value))
   const selected = multiple ? null : allOptions.find(o => String(o.value) === String(value))
   const hasValue = multiple ? selectedValues.length > 0 : value != null && value !== ''
@@ -108,15 +121,15 @@ export function Select({
   const shownValues = shownSections.flatMap(s => s.options).filter(o => !o.heading && !o.disabled).map(o => String(o.value))
   const allShownSelected = shownValues.length > 0 && shownValues.every(v => selectedValues.includes(v))
   const toggleAll = () => {
-    if (allShownSelected) onChange(selectedValues.filter(v => !shownValues.includes(v)))
-    else onChange([...new Set([...selectedValues, ...shownValues])])
+    if (allShownSelected) onChange(restore(selectedValues.filter(v => !shownValues.includes(v))))
+    else onChange(restore([...new Set([...selectedValues, ...shownValues])]))
   }
   const choose = (o) => {
     const sv = String(o.value)
     if (multiple) {
-      onChange(selectedValues.includes(sv) ? selectedValues.filter(x => x !== sv) : [...selectedValues, sv])
+      onChange(restore(selectedValues.includes(sv) ? selectedValues.filter(x => x !== sv) : [...selectedValues, sv]))
     } else {
-      onChange(sv)
+      onChange(o.value)
       close(true)
     }
   }

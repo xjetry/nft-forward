@@ -1,5 +1,6 @@
-const MB = 1048576
-const GB = 1073741824
+/* 字节单位。配额在界面上按 GB 填写、按字节存储；换算一律用这里的常量。 */
+export const MB = 1048576
+export const GB = 1073741824
 
 /** Format a byte count with an adaptive unit (B/KB/MB/GB/TB), one decimal. */
 export function fmtBytes(n) {

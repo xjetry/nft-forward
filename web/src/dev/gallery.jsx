@@ -46,8 +46,8 @@ function Gallery() {
   const confirm = useConfirm()
   const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'))
   const [text, setText] = useState('hk-01')
-  const [node, setNode] = useState('2')
-  const [nodes, setNodes] = useState(['1'])
+  const [node, setNode] = useState(2)
+  const [nodes, setNodes] = useState([1])
   const [seg, setSeg] = useState('single')
   const [proto, setProto] = useState('tcp')
   const [on, setOn] = useState(true)
@@ -146,7 +146,7 @@ function Gallery() {
               <Field label="入口节点">
                 <Select searchable value={node} onChange={setNode} options={NODE_OPTIONS} />
               </Field>
-              <Field label="授权用户" optional>
+              <Field label="授权用户" optional hint={<span data-testid="select-values">状态里的值：{JSON.stringify(node)} / {JSON.stringify(nodes)}</span>}>
                 <Select multiple searchable selectAll value={nodes} onChange={setNodes} options={NODE_OPTIONS.filter(o => !o.heading)} placeholder="不授权" />
               </Field>
               <Field label="已失效的选项">
