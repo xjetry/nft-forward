@@ -17,7 +17,6 @@ import (
 	"nft-forward/internal/forward"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/portutil"
-	"nft-forward/internal/resolver"
 	"nft-forward/internal/wsproto"
 )
 
@@ -462,14 +461,10 @@ func (d *Daemon) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		Comment:  req.Comment,
 		Mode:     req.Mode,
 	}
-	if net.ParseIP(req.ExitHost) == nil {
-		if !resolver.PlausibleHostname(req.ExitHost) {
-			http.Error(w, "出口地址非法："+req.ExitHost+" 不是合法 IP 或域名", http.StatusBadRequest)
-			return
-		}
-		rule.DestHost = req.ExitHost
-	} else {
-		rule.DestIP = req.ExitHost
+	setLocalRuleTarget(&rule, req.ExitHost)
+	if err := nft.Validate(rule); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	_, _, _, err := d.reconcileOwners(r.Context(),
@@ -552,48 +547,58 @@ func (d *Daemon) handleUpdatePanelRule(w http.ResponseWriter, r *http.Request, r
 	writeJSON(w, http.StatusOK, map[string]string{"entry": ack.Entry})
 }
 
+// setLocalRuleTarget 把请求里的出口地址放进本地规则：是 IP 字面量就进 DestIP，否则
+// 当作域名进 DestHost，另一个字段清空。它不判断地址合不合法，那是 nft.Validate 的事。
+func setLocalRuleTarget(r *nft.Rule, exitHost string) {
+	if net.ParseIP(exitHost) != nil {
+		r.DestIP, r.DestHost = exitHost, ""
+	} else {
+		r.DestIP, r.DestHost = "", exitHost
+	}
+}
+
 // handleUpdateLocalRule 修改本地段里 ID 等于 id 的那条规则。
+//
+// 请求里没给的字段沿用原值，所以合不合法要看改完之后的整条规则（nft.Validate），
+// 不能只看请求：把一条 UDP 规则的模式改成用户态，请求里的每个字段单看都合法。不
+// 合法时本地段保持原样。
 func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, id string) {
 	req, ok := decodeUpdateRuleReq(w, r)
 	if !ok {
 		return
 	}
-	if req.ExitHost != "" && net.ParseIP(req.ExitHost) == nil && !resolver.PlausibleHostname(req.ExitHost) {
-		http.Error(w, "出口地址非法："+req.ExitHost+" 不是合法 IP 或域名", http.StatusBadRequest)
-		return
-	}
 
 	found := false
+	var invalid error
 	_, _, _, err := d.reconcileOwners(r.Context(),
 		func(candidate OwnerRuleset) {
 			rules := candidate[segLocal]
 			for i := range rules {
-				if rules[i].ID == id {
-					if req.Proto != "" {
-						rules[i].Proto = req.Proto
-					}
-					if req.ExitHost != "" {
-						if ip := net.ParseIP(req.ExitHost); ip != nil {
-							rules[i].DestIP = req.ExitHost
-							rules[i].DestHost = ""
-						} else {
-							rules[i].DestHost = req.ExitHost
-							rules[i].DestIP = ""
-						}
-					}
-					if req.ExitPort != 0 {
-						rules[i].DestPort = req.ExitPort
-					}
-					if req.ListenPort != 0 {
-						rules[i].SrcPort = req.ListenPort
-					}
-					if req.Mode != "" {
-						rules[i].Mode = req.Mode
-					}
-					rules[i].Comment = req.Comment
-					found = true
-					break
+				if rules[i].ID != id {
+					continue
 				}
+				found = true
+				edited := rules[i]
+				if req.Proto != "" {
+					edited.Proto = req.Proto
+				}
+				if req.ExitHost != "" {
+					setLocalRuleTarget(&edited, req.ExitHost)
+				}
+				if req.ExitPort != 0 {
+					edited.DestPort = req.ExitPort
+				}
+				if req.ListenPort != 0 {
+					edited.SrcPort = req.ListenPort
+				}
+				if req.Mode != "" {
+					edited.Mode = req.Mode
+				}
+				edited.Comment = req.Comment
+				if invalid = nft.Validate(edited); invalid == nil {
+					rules[i] = edited
+				}
+				return
 			}
 		}, nil, true)
 	if err != nil {
@@ -602,6 +607,10 @@ func (d *Daemon) handleUpdateLocalRule(w http.ResponseWriter, r *http.Request, i
 	}
 	if !found {
 		http.Error(w, "rule not found", http.StatusNotFound)
+		return
+	}
+	if invalid != nil {
+		http.Error(w, invalid.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

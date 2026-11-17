@@ -171,6 +171,12 @@ func IsLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// Validate 判断一条本地规则合不合法：协议、两个端口的范围、目标（IP 字面量或可能
+// 解析得出来的域名）、转发模式，以及模式与协议的搭配。
+//
+// daemon 的本机控制口在把规则写进本地段之前调用它（建，以及改完之后的整条规则），
+// 本地规则的合法性只在这里定义；TUI 的表单只做粗检。面板下发的规则不经过这里：它们
+// 合不合法由面板在建规则时裁决。
 func Validate(r Rule) error {
 	switch r.Proto {
 	case "tcp", "udp", "tcp+udp":
@@ -190,12 +196,12 @@ func Validate(r Rule) error {
 	}
 	if hasIP {
 		if net.ParseIP(r.DestIP) == nil {
-			return fmt.Errorf("目标 IP 格式非法")
+			return fmt.Errorf("目标 %q 不是合法的 IP", r.DestIP)
 		}
 	}
 	if hasHost {
-		if !resolver.IsHostname(r.DestHost) {
-			return fmt.Errorf("目标域名格式非法")
+		if !resolver.PlausibleHostname(r.DestHost) {
+			return fmt.Errorf("目标 %q 不是合法的 IP 或域名", r.DestHost)
 		}
 	}
 	switch r.Mode {
