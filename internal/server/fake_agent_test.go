@@ -131,8 +131,9 @@ func helloOver(t *testing.T, url string, hello wsproto.Hello) (*websocket.Conn, 
 	return c, ack
 }
 
-// connectFakeAgent 握手成功后启动后台应答。configure 在后台应答开始前调用，用来
-// 设置 applyWarning / probe，避免与读循环竞争。
+// connectFakeAgent 握手成功后启动后台应答，并等面板把这次握手带来的状态落完库才
+// 返回。configure 在后台应答开始前调用，用来设置 applyWarning / probe，避免与读循环
+// 竞争。
 func connectFakeAgent(t *testing.T, url string, hello wsproto.Hello, configure func(*fakeAgent)) *fakeAgent {
 	t.Helper()
 	c, ack := helloOver(t, url, hello)
@@ -148,6 +149,8 @@ func connectFakeAgent(t *testing.T, url string, hello wsproto.Hello, configure f
 		b, _ := json.Marshal(wsproto.Envelope{Type: typ, ID: id, Payload: p})
 		_ = c.Write(context.Background(), websocket.MessageText, b)
 	}
+	const settlePing = "handshake-settled"
+	settled := make(chan struct{})
 	go func() {
 		for {
 			_, b, err := c.Read(context.Background())
@@ -168,9 +171,24 @@ func connectFakeAgent(t *testing.T, url string, hello wsproto.Hello, configure f
 				reply(wsproto.TypeProbeAck, env.ID, a.probe)
 			case wsproto.TypeRuleCmdAck:
 				a.cmdAcks <- env
+			case wsproto.TypePong:
+				if env.ID == settlePing {
+					close(settled)
+				}
 			}
 		}
 	}()
+
+	// hello_ack 之后面板还要把这次握手带来的状态落库（在线标记、数据面地址、端口段，
+	// 见 Hub.serveAgent），然后才在同一个协程里进读循环。pong 由读循环应答
+	// （Hub.readerLoop），所以收到它就说明那些写入都已完成：调用方拿到返回值后可以
+	// 直接读库断言，不必各自等待。
+	reply(wsproto.TypePing, settlePing, wsproto.Ping{})
+	select {
+	case <-settled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("握手后面板没有应答 ping：读循环没有起来")
+	}
 	return a
 }
 
