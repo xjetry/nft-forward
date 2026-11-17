@@ -316,6 +316,12 @@ func runGETs(t *testing.T, seed faultSeed, fault *dbFault) (map[faultCall]faultR
 				rec := httptest.NewRecorder()
 				router.ServeHTTP(rec, req)
 				body, _ := io.ReadAll(rec.Body)
+				if rec.Code == http.StatusTooManyRequests {
+					// Refused by the per-token limit, the request never got to
+					// its route, and its reply would compare equal under any
+					// fault.
+					t.Fatalf("%s GET %s was rate limited: %s", who, url, body)
+				}
 				replies[faultCall{who, url}] = faultReply{rec.Code, string(body)}
 			}
 		}

@@ -25,19 +25,35 @@ import (
 // that could not be made is not "not found". The tests here pin the folds on
 // the other side of the same predicate (lookupErr, and the errors.Is checks
 // against sql.ErrNoRows that stand next to it): a row that is not there is
-// not an internal error, and "no such row" is still what frees a name.
+// neither an internal error nor quietly treated as there, and "no such row"
+// is still what frees a name.
 
 // noSuchID is an id no seeded row has.
 const noSuchID = 987654
 
-// TestMissingRowIsNotAnInternalError asks every route that names rows in its
+// goneIsDone lists the routes that answer success for a row that is not
+// there, because what they are asked for is that the row be gone. Asking
+// again after it went — a retry, a second admin — is then not an error.
+var goneIsDone = map[string]string{
+	"DELETE /api/rules/{id}":                    "deletes the rule",
+	"DELETE /api/users/{id}/grants/{nodeID}":    "revokes the grant",
+	"POST /api/users/{id}/grants/batch-revoke":  "revokes the grants",
+	"DELETE /api/v1/users/{id}/grants/{nodeId}": "revokes the grant",
+	"DELETE /api/v1/users/{id}/token":           "deletes the user's token",
+}
+
+// TestMissingRowIsAnsweredAsMissing asks every route that names rows in its
 // path for rows that do not exist: all of them at once, and each one alone
-// with the others real. Whatever the route makes of that — not found, a
-// refusal, in a few places success — it is the caller's request that is off,
-// so the answer is never a 5xx. One would mean a lookup reports a missing row
-// with something other than sql.ErrNoRows, a handler went on to use the row
-// it did not get, or a write was left to trip over a foreign key.
-func TestMissingRowIsNotAnInternalError(t *testing.T) {
+// with the others real. The caller's request is what is off, so:
+//
+//   - the answer is never a 5xx. One would mean a lookup reports a missing
+//     row with something other than sql.ErrNoRows, a handler went on to use
+//     the row it did not get, or a write was left to trip over a foreign key;
+//   - the answer is never success either, outside goneIsDone. An UPDATE that
+//     matches no row changes nothing and fails nothing, and a list of what
+//     belongs to a row that is not there is empty; reported as "done" or
+//     "none", both tell the caller the row exists.
+func TestMissingRowIsAnsweredAsMissing(t *testing.T) {
 	seed := seedFaultDB(t)
 	path := filepath.Join(t.TempDir(), "copy.db")
 	if err := os.WriteFile(path, seed.image, 0o600); err != nil {
@@ -52,6 +68,9 @@ func TestMissingRowIsNotAnInternalError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The requests below come several dozen to a token within a second, and
+	// the per-token limit would refuse most of them before their route.
+	s.tokenLimiter = nil
 	router := s.Router()
 
 	// A write route gets the body and the real ids of its sweep call, so that
@@ -64,7 +83,8 @@ func TestMissingRowIsNotAnInternalError(t *testing.T) {
 			realURL[c.method+" "+c.pattern] = strings.SplitN(c.url, "?", 2)[0]
 		}
 	}
-	var internal []string
+	var internal, success []string
+	done := map[string]bool{}
 	notFound := 0
 	routes := 0
 	err = chi.Walk(router.(chi.Routes), func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -110,8 +130,18 @@ func TestMissingRowIsNotAnInternalError(t *testing.T) {
 				seed.authenticate(req, who)
 				rec := httptest.NewRecorder()
 				router.ServeHTTP(rec, req)
-				if rec.Code >= 500 {
-					internal = append(internal, fmt.Sprintf("%s %s %s: %d %s", who, method, url, rec.Code, strings.TrimSpace(rec.Body.String())))
+				answer := fmt.Sprintf("%s %s %s: %d %s", who, method, url, rec.Code, strings.TrimSpace(rec.Body.String()))
+				switch {
+				case rec.Code == http.StatusTooManyRequests:
+					return fmt.Errorf("refused before its route was reached: %s", answer)
+				case rec.Code >= 500:
+					internal = append(internal, answer)
+				case rec.Code < 300:
+					if _, ok := goneIsDone[method+" "+pattern]; ok {
+						done[method+" "+pattern] = true
+					} else {
+						success = append(success, answer)
+					}
 				}
 				answered404 = answered404 || rec.Code == http.StatusNotFound
 			}
@@ -127,6 +157,15 @@ func TestMissingRowIsNotAnInternalError(t *testing.T) {
 	sort.Strings(internal)
 	if len(internal) > 0 {
 		t.Errorf("a row that does not exist was answered as an internal error:\n%s", strings.Join(internal, "\n"))
+	}
+	sort.Strings(success)
+	if len(success) > 0 {
+		t.Errorf("a row that does not exist was answered with success:\n%s", strings.Join(success, "\n"))
+	}
+	for route := range goneIsDone {
+		if !done[route] {
+			t.Errorf("goneIsDone lists %s, which does not answer success for a missing row (or is not a route)", route)
+		}
 	}
 	// Most of these routes look their row up first. If hardly any says "not
 	// found", the requests are being stopped before the lookups.

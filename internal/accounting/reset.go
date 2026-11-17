@@ -15,9 +15,14 @@ import (
 // 会与用户的已用流量对不上。“用户重置”只有这一份定义，管理员手动重置（ResetUser）
 // 与按周期自动重置（ResetCycleIfDue）都走这里；新增账本时加在这里，两种重置同时
 // 生效。
+//
+// 没有这个用户时返回 sql.ErrNoRows：必须存在的只有用户自己那一行（db.UpdateRow），
+// 其后的语句清的是他名下的东西，可以一样都没有。
 func zeroUser(tx *sql.Tx, userID int64) error {
+	if err := db.UpdateRow(tx, `UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
+		return err
+	}
 	for _, q := range []string{
-		`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`,
 		`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`,
 		`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`,
 		`UPDATE rules SET weighted_bytes = 0 WHERE owner_id = ?`,
@@ -31,7 +36,8 @@ func zeroUser(tx *sql.Tx, userID int64) error {
 }
 
 // ResetUser 是管理员手动重置：把该用户的全部用量账本归零（范围见 zeroUser）。不动
-// last_traffic_reset_at，周期重置的节拍不受手动重置影响。
+// last_traffic_reset_at，周期重置的节拍不受手动重置影响。没有这个用户时返回
+// sql.ErrNoRows。
 func ResetUser(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -81,10 +87,10 @@ func ResetCycleIfDue(d *sql.DB, u *db.User) (bool, error) {
 	return true, tx.Commit()
 }
 
-// ResetGrant 把用户在一个节点上的授权已用量归零，只动这一本账。
+// ResetGrant 把用户在一个节点上的授权已用量归零，只动这一本账。用户在这个节点上没有
+// 授权时返回 sql.ErrNoRows。
 func ResetGrant(d *sql.DB, userID, nodeID int64) error {
-	_, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=? AND node_id=?`, userID, nodeID)
-	return err
+	return db.UpdateRow(d, `UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=? AND node_id=?`, userID, nodeID)
 }
 
 // ResetExit 把用户的一个落地出口账归零（合计与上下行三列一起），只动这一本账。

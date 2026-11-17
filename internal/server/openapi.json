@@ -865,6 +865,16 @@
         "responses": {
           "200": {
             "description": "token 元信息"
+          },
+          "404": {
+            "description": "用户不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       },
@@ -1275,7 +1285,7 @@
             "description": "更新结果"
           },
           "404": {
-            "description": "用户不存在",
+            "description": "用户不存在，或该用户没有这个节点的授权",
             "content": {
               "application/json": {
                 "schema": {
@@ -1334,7 +1344,7 @@
             "description": "更新结果"
           },
           "404": {
-            "description": "用户不存在",
+            "description": "用户不存在，或该用户没有这个节点的授权",
             "content": {
               "application/json": {
                 "schema": {

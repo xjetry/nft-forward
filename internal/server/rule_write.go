@@ -124,7 +124,11 @@ func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, cerr := s.Rules.Delete(rulechange.Actor{User: userFromCtx(r.Context())}, id)
-	if cerr != nil {
+	// 这个接口要的是“这条规则不在了”。规则已经不在时这个结果已经成立，按成功回答：
+	// 重试，或另一位管理员晚到的同一个请求，不是错误。这时 res 是空的，没有节点要
+	// 重推。用户侧的删除（apiMyDeleteRule）不这样回答：发起方只能删自己名下的规则，
+	// 读不到规则就无从判断它是不是他的。
+	if cerr != nil && cerr.Kind != rulechange.NotFound {
 		writeRuleChangeErr(w, cerr)
 		return
 	}
