@@ -7,11 +7,10 @@ import (
 	"nft-forward/internal/db"
 )
 
-// Creating a composite via the API accepts a top-level rate_multiplier, the
-// same field the remote-node branch uses, and persists it on the composite's
-// own node row. Per-hop traffic_multiplier input is accepted (for backward
-// compatibility with older clients) but ignored: hops are always stored with
-// a dormant 0, since composite pricing no longer sums hop multipliers.
+// 建组合时顶层的 rate_multiplier 落在组合自己那一行上，组合的价格只有这一个出处。
+// 成员上的 traffic_multiplier 是早先“组合价格 = 成员倍率之和”时的字段，已经没有
+// 对应的列；请求里仍带着它的调用方不会被拒绝（请求体里不认识的键一律忽略），
+// 成员照常建出来。
 func TestCompositeHopMultCreateUsesOwnRateMultiplier(t *testing.T) {
 	d := openDB(t)
 	a, _ := db.CreateNode(d, "hop-a", "", "")
@@ -55,13 +54,8 @@ func TestCompositeHopMultCreateUsesOwnRateMultiplier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hops) != 2 {
-		t.Fatalf("hops = %d, want 2", len(hops))
-	}
-	for i, h := range hops {
-		if h.TrafficMultiplier != 0 {
-			t.Errorf("hop%d multiplier = %v, want dormant 0", i, h.TrafficMultiplier)
-		}
+	if len(hops) != 2 || hops[0].HopNodeID != a.ID || hops[1].HopNodeID != b.ID {
+		t.Fatalf("成员应为 [a b]，实际 %+v", hops)
 	}
 
 	// The node list endpoint reads rate_multiplier straight off the row —
@@ -90,9 +84,8 @@ func TestCompositeHopMultCreateUsesOwnRateMultiplier(t *testing.T) {
 	}
 }
 
-// Editing a composite's hop chain accepts (and ignores) per-hop
-// traffic_multiplier input, storing a dormant 0 instead. The composite's own
-// rate_multiplier column is untouched by a hop-chain edit.
+// 改组合的成员时，成员上带着 traffic_multiplier 的请求同样照常生效、那个键被忽略；
+// 组合自己的 rate_multiplier 不受改成员影响。
 func TestCompositeHopMultUpdateIgnoresTrafficMultiplier(t *testing.T) {
 	d := openDB(t)
 	a, _ := db.CreateNode(d, "hop-a", "", "")
@@ -131,13 +124,11 @@ func TestCompositeHopMultUpdateIgnoresTrafficMultiplier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hops) != 3 {
-		t.Fatalf("hops = %d, want 3", len(hops))
+	if len(hops) != 3 || hops[0].HopNodeID != a.ID || hops[1].HopNodeID != b.ID || hops[2].HopNodeID != c.ID {
+		t.Fatalf("成员应为 [a b c]，实际 %+v", hops)
 	}
-	for i, h := range hops {
-		if h.TrafficMultiplier != 0 {
-			t.Errorf("hop%d multiplier = %v, want dormant 0", i, h.TrafficMultiplier)
-		}
+	if hops[1].Mode != "kernel" {
+		t.Fatalf("第二个成员的模式应为 kernel，实际 %q", hops[1].Mode)
 	}
 
 	comp, err := db.GetNode(d, compID)

@@ -8,18 +8,19 @@ import (
 )
 
 type NodeHop struct {
-	NodeID            int64   `json:"node_id"`
-	Position          int     `json:"position"`
-	HopNodeID         int64   `json:"hop_node_id"`
-	Mode              string  `json:"mode"`
-	TrafficMultiplier float64 `json:"traffic_multiplier"`
+	NodeID    int64  `json:"node_id"`
+	Position  int    `json:"position"`
+	HopNodeID int64  `json:"hop_node_id"`
+	Mode      string `json:"mode"`
 }
 
 type UserNode struct {
 	UserID      int64 `json:"user_id"`
 	NodeID      int64 `json:"node_id"`
 	MaxForwards int   `json:"max_forwards"`
-	// TrafficQuotaBytes is the per-grant quota override; 0 means fall back to the global user quota.
+	// TrafficQuotaBytes 是这条授权自己的配额，0 表示这条授权不设上限。它与用户的全局
+	// 配额各自独立判定（suppressedRulesSQL 里各一条子句）：全局配额用尽，该用户的规则
+	// 全部不转发；授权配额用尽，只是他经过这个逻辑节点的规则不转发。
 	TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	// TrafficUsedBytes 是这条授权本周期的已用量，折算字节（accounting.Folded）：不乘
 	// 倍率与费率；用户每条经过这个逻辑节点的规则，在这个节点那一段的段首跳记一次。
@@ -55,16 +56,12 @@ func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 		return ErrNotComposite
 	}
 	for _, h := range hops {
-		mult := h.TrafficMultiplier
-		if mult < 0 {
-			mult = 0
-		}
 		mode, err := chain.InterNodeLegMode(h.Mode)
 		if err != nil {
 			return err
 		}
-		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode, traffic_multiplier) VALUES (?,?,?,?,?)`,
-			nodeID, h.Position, h.HopNodeID, mode, mult); err != nil {
+		if _, err := d.Exec(`INSERT INTO node_hops(node_id, position, hop_node_id, mode) VALUES (?,?,?,?)`,
+			nodeID, h.Position, h.HopNodeID, mode); err != nil {
 			return err
 		}
 	}
@@ -73,20 +70,20 @@ func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 
 func scanNodeHop(r rowScanner) (*NodeHop, error) {
 	h := &NodeHop{}
-	if err := r.Scan(&h.NodeID, &h.Position, &h.HopNodeID, &h.Mode, &h.TrafficMultiplier); err != nil {
+	if err := r.Scan(&h.NodeID, &h.Position, &h.HopNodeID, &h.Mode); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
 func ListNodeHops(d *sql.DB, nodeID int64) ([]*NodeHop, error) {
-	return queryAll(d, `SELECT node_id, position, hop_node_id, mode, traffic_multiplier FROM node_hops WHERE node_id=? ORDER BY position`, scanNodeHop, nodeID)
+	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops WHERE node_id=? ORDER BY position`, scanNodeHop, nodeID)
 }
 
 // ListAllNodeHops returns every composite node's hops in one query, ordered so
 // callers can group by node_id without an N+1 fan-out.
 func ListAllNodeHops(d DBTX) ([]*NodeHop, error) {
-	return queryAll(d, `SELECT node_id, position, hop_node_id, mode, traffic_multiplier FROM node_hops ORDER BY node_id, position`, scanNodeHop)
+	return queryAll(d, `SELECT node_id, position, hop_node_id, mode FROM node_hops ORDER BY node_id, position`, scanNodeHop)
 }
 
 func DeleteNodeHops(d DBTX, nodeID int64) error {

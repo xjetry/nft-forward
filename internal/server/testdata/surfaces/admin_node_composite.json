@@ -70,16 +70,14 @@
       "mode": "kernel",
       "node_id": 6,
       "node_name": "edge-a",
-      "position": 0,
-      "traffic_multiplier": 0
+      "position": 0
     },
     {
       "hop_node_id": 3,
       "mode": "userspace",
       "node_id": 6,
       "node_name": "edge-b",
-      "position": 1,
-      "traffic_multiplier": 0
+      "position": 1
     }
   ],
   "panel_url": "",

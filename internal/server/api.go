@@ -339,12 +339,6 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		Hops           []struct {
 			NodeID int64  `json:"node_id"`
 			Mode   string `json:"mode"`
-			// TrafficMultiplier is deprecated and ignored: a composite's
-			// billing multiplier is its own rate_multiplier column now
-			// (set via the top-level RateMultiplier field), not a per-hop
-			// sum. The field stays so older clients still get a valid
-			// decode.
-			TrafficMultiplier *float64 `json:"traffic_multiplier"`
 		} `json:"hops"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -588,10 +582,6 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	type hopUpdate struct {
 		NodeID int64  `json:"node_id"`
 		Mode   string `json:"mode"`
-		// TrafficMultiplier is deprecated and ignored: a composite's billing
-		// multiplier is its own rate_multiplier column now, not a per-hop
-		// sum. The field stays so older clients still get a valid decode.
-		TrafficMultiplier float64 `json:"traffic_multiplier"`
 	}
 	var body struct {
 		Hops []hopUpdate `json:"hops"`
@@ -625,7 +615,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hu.NodeID, Mode: mode, TrafficMultiplier: 0}
+		hops[i] = db.NodeHop{NodeID: id, Position: i, HopNodeID: hu.NodeID, Mode: mode}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

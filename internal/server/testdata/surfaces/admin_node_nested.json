@@ -64,16 +64,14 @@
       "mode": "kernel",
       "node_id": 7,
       "node_name": "combo-k",
-      "position": 0,
-      "traffic_multiplier": 0
+      "position": 0
     },
     {
       "hop_node_id": 4,
       "mode": "userspace",
       "node_id": 7,
       "node_name": "tail-c",
-      "position": 1,
-      "traffic_multiplier": 0
+      "position": 1
     }
   ],
   "panel_url": "",
