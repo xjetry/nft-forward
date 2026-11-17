@@ -1440,7 +1440,8 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		status, _ := pushErrAnswer(err)
+		jsonErr(w, status, err.Error())
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.upgrade", strconv.FormatInt(id, 10), version)
@@ -1632,7 +1633,8 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if _, err := s.loadAgentArtifact(arch); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
+			status, _ := pushErrAnswer(err)
+			jsonErr(w, status, err.Error())
 			return
 		}
 	}

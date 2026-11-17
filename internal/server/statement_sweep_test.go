@@ -71,9 +71,9 @@ func writeCalls(seed faultSeed) []sweepCall {
 	add("admin", "POST", "/api/nodes/{id}/relay-host-v6", id(n0), m{"relay_host_v6": ""})
 	add("admin", "POST", "/api/nodes/{id}/port-range", id(spare), m{"port_range": "20000-20100"})
 	// No agent is connected in this test, and a push to a node that is not
-	// connected is answered 500.
-	add("admin", "POST", "/api/nodes/{id}/resync", id(n0), nil, http.StatusInternalServerError)
-	add("admin", "POST", "/api/nodes/{id}/upgrade", id(n0), nil, http.StatusInternalServerError)
+	// connected is answered 409 (pushErrAnswer).
+	add("admin", "POST", "/api/nodes/{id}/resync", id(n0), nil, http.StatusConflict)
+	add("admin", "POST", "/api/nodes/{id}/upgrade", id(n0), nil, http.StatusConflict)
 	add("admin", "DELETE", "/api/nodes/{id}", id(spare), nil)
 	// A node the seeded rule runs through, and a member of the composite.
 	add("admin", "DELETE", "/api/nodes/{id}", id(n1), nil)
@@ -162,7 +162,7 @@ func writeCalls(seed faultSeed) []sweepCall {
 	add("admin-token", "PUT", "/api/v1/users/{id}/nodes/{nodeId}/quota", id(u, n0), m{"traffic_quota_bytes": 1 << 20})
 	add("admin-token", "PUT", "/api/v1/users/{id}/nodes/{nodeId}/rate-limit", id(u, n0), m{"rate_limit_mbytes": 10})
 	add("admin-token", "POST", "/api/v1/grants/batch-apply", nil, m{"user_ids": []int64{u}, "grants": []m{{"node_name": "fault-spare", "max_forwards": 3}}})
-	add("admin-token", "POST", "/api/v1/nodes/{id}/resync", id(n0), nil, http.StatusInternalServerError)
+	add("admin-token", "POST", "/api/v1/nodes/{id}/resync", id(n0), nil, http.StatusConflict)
 	add("admin-token", "POST", "/api/v1/nodes/resync-all", nil, nil)
 	add("admin-token", "PUT", "/api/v1/users/{id}/landing-sub-url", id(u), m{"landing_sub_url": ""})
 	return calls
@@ -372,7 +372,7 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 			jobs = append(jobs, job{c, k})
 		}
 	}
-	var misreported, partial []string
+	var misreported, blamed, partial []string
 	checked := 0
 	for _, o := range runAll(jobs) {
 		if o.err != nil {
@@ -388,19 +388,32 @@ func TestEveryStatementFailureIsReportedAsAFailure(t *testing.T) {
 			where += "\n    (the statement belongs to " + o.run.failedIn + ")"
 		}
 		isGET := o.call.method == http.MethodGet
+		// A statement of best-effort work that fails leaves the answer what
+		// it was without the fault, whatever that was.
+		asWithout := !isGET && o.run.status == b.run.status && o.run.failedIn != ""
 		switch {
 		case o.run.status >= 500:
+			// A statement is the panel's own work. The other 5xx answers say
+			// that someone else failed (502, pushErrAnswer), and would send
+			// the caller looking at a node or a remote host.
+			if o.run.status != http.StatusInternalServerError && !asWithout {
+				blamed = append(blamed, where)
+			}
 			if !isGET && o.run.changed && !savedButFailed.MatchString(o.run.body) {
 				partial = append(partial, where)
 			}
 		case isGET && o.run.status == b.run.status && len(differingPaths(b.run.body, o.run.body, b.timeFields)) == 0:
-		case !isGET && o.run.status == b.run.status && o.run.failedIn != "":
+		case asWithout:
 		default:
 			misreported = append(misreported, where)
 		}
 	}
 	sort.Strings(misreported)
+	sort.Strings(blamed)
 	sort.Strings(partial)
+	if len(blamed) > 0 {
+		t.Errorf("%d failed statement(s) were answered as a failure of something other than the panel:\n%s", len(blamed), strings.Join(blamed, "\n"))
+	}
 	if len(misreported) > 0 {
 		t.Errorf("%d failed statement(s) were not answered as a failure:\n%s", len(misreported), strings.Join(misreported, "\n"))
 	}

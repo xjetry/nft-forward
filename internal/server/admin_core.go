@@ -372,14 +372,15 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	return granted, kept, skipped, nil
 }
 
-// resyncNode re-pushes one node's rules to it. A push that fails — the node
-// is not connected, or did not apply the rules — is the error.
+// resyncNode re-pushes one node's rules to it. A push that fails is the
+// error, answered by whose failure it was (pushErrAnswer).
 func (s *Server) resyncNode(nodeID int64) *adminError {
 	if _, err := db.GetNode(s.DB, nodeID); err != nil {
 		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "节点不存在")
 	}
 	if err := s.dispatchToNode(nodeID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		status, code := pushErrAnswer(err)
+		return &adminError{status, code, err.Error()}
 	}
 	return nil
 }

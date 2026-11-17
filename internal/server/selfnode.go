@@ -37,7 +37,13 @@ func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) (strin
 		if send == nil {
 			send = sendLocalDefault
 		}
-		return send(rules)
+		// The self-node's "node" is the daemon behind the unix socket; a
+		// failure to hand it the rules is that side's, as a remote node's is.
+		warning, err := send(rules)
+		if err != nil {
+			return "", pushUpstream(err)
+		}
+		return warning, nil
 	}
 	if d.Hub == nil {
 		return "", fmt.Errorf("hub not wired; cannot dispatch to remote node %d", nodeID)

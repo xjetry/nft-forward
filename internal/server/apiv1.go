@@ -43,7 +43,9 @@ const (
 	codeNotFound      = "not_found"
 	codeConflict      = "conflict"
 	codeDuplicateHop  = "duplicate_chain_node"
-	codeInternal      = "internal"
+	// codeUpstream: a party other than the panel failed — see pushUpstream.
+	codeUpstream = "upstream_failed"
+	codeInternal = "internal"
 )
 
 // v1OK writes the standard success envelope: {"data": ...}.
