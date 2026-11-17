@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # nft-forward 一键安装脚本
 # 从 GitHub release 下载 nft-server / nft-agent 二进制并配置 server / agent / tui / uninstall
+# 按本机架构（amd64 / arm64）自动选择对应的发布产物
 # 用法：见 --help
 
 set -euo pipefail
@@ -276,6 +277,7 @@ nft-forward 一键安装/卸载/升级脚本（nft-server 面板 + nft-agent 节
   nft-server  面板（web 前端 embed + sqlite + chi）；装于 $INSTALL_DIR/nft-server
   nft-agent   节点（daemon + TUI）；装于 $INSTALL_DIR/nft-agent
               daemon: nft-agent daemon [--connect …]；TUI: nft-agent
+  架构按 uname -m 自动识别：amd64（x86_64）与 arm64（aarch64）各有一套发布产物
 
 示例:
   sudo $0                                # 交互式
@@ -381,28 +383,32 @@ write_agent_identity() {
   printf '%s' "$sha" >"$ETC_DIR/agent.sha"
 }
 
-# Download one release asset through the proxy and strong-verify it against the
-# release's SHA256SUMS. Echoes the verified sha256 hex on success.
-#   $1 = base URL (releases/download root), $2 = asset name, $3 = dest path
-#   $4 = "strict" to hard-fail when SHA256SUMS is unavailable (binaries), or
-#        "soft" to warn and skip (legacy tolerance for optional fetches)
+# 下载一个 release 资产并对照该 release 的 SHA256SUMS 强校验。成功时 stdout 只输出
+# 已校验的 sha256 十六进制串（调用方把它捕获进身份文件），其余输出一律走 stderr。
+#   $1 = base URL（releases/download 根）  $2 = 资产名  $3 = 落盘路径
+#
+# SHA256SUMS 在这里同时充当 release 的资产清单，所以先取它：
+#   - 取不到 → 无从校验，拒绝继续；不存在“跳过校验直接装”的路径。
+#   - 清单里没有 $2 → 在下载之前就报出原因。arm64 产物是后来才加入发布的，
+#     --release 指向更早的版本时走到的就是这一支。
+# 期望值按资产名从清单里取出，再与落盘文件的实际 sha256 比对；不用
+# `sha256sum -c`，因为它按清单里写的文件名去找文件，而资产名（如
+# nft-agent-arm64）与落盘用的安装名（nft-agent）并不相同。
 fetch_and_verify() {
-  local base="$1" asset="$2" dest="$3" strictness="${4:-strict}"
+  local base="$1" asset="$2" dest="$3"
+  local sums want got
+  sums="$(curl -fsSL "$base/SHA256SUMS")" \
+    || die "未取到 SHA256SUMS：必须强校验，拒绝裸跑（检查网络/代理或稍后重试）"
+  want="$(awk -v a="$asset" '$2 == a { print $1 }' <<<"$sums")"
+  [[ -n "$want" ]] \
+    || die "SHA256SUMS 中没有 ${asset}：该 release 未发布当前架构（${arch}）的产物，或取到的清单不完整。arm64 产物只在较新的 release 中提供，可改用更新的 --release"
   curl -fL --progress-bar "$base/$asset" -o "$dest" \
     || die "下载失败: $base/$asset"
-  local ddir
-  ddir="$(dirname "$dest")"
-  if curl -fLs "$base/SHA256SUMS" -o "$ddir/SHA256SUMS" 2>/dev/null; then
-    # Verification chatter must go to stderr — stdout carries only the hash the
-    # caller captures into the identity file.
-    (cd "$ddir" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c - >&2) \
-      || die "sha256 校验失败: $asset"
-  elif [[ "$strictness" == "strict" ]]; then
-    die "未取到 SHA256SUMS：必须强校验，拒绝裸跑（检查网络/代理或稍后重试）"
-  else
-    echo "    (SHA256SUMS 不可用，跳过校验)" >&2
-  fi
-  sha256sum "$dest" | awk '{print $1}'
+  got="$(sha256sum "$dest" | awk '{print $1}')"
+  [[ "$got" == "$want" ]] \
+    || die "sha256 校验失败: ${asset}（期望 ${want}，实际 ${got}）"
+  echo "sha256 OK: $asset" >&2
+  echo "$got"
 }
 
 rollback_update() {
@@ -442,18 +448,19 @@ do_update() {
   local tag agent_sha
   tag="$(resolve_release_tag)"
 
-  note "[1/5] 下载二进制 ($tag) ..."
-  agent_sha="$(fetch_and_verify "$base" nft-agent "$_update_tmp/nft-agent" strict)"
+  note "[1/5] 下载二进制 ($tag, $arch) ..."
+  agent_sha="$(fetch_and_verify "$base" "$agent_asset" "$_update_tmp/nft-agent")"
   if [[ "$want_server" -eq 1 ]]; then
-    fetch_and_verify "$base" nft-server "$_update_tmp/nft-server" strict >/dev/null
+    fetch_and_verify "$base" "$server_asset" "$_update_tmp/nft-server" >/dev/null
   fi
 
-  # No product-side arch probe here. The host arch is already gated by the
-  # uname -m check before any mode runs, and the sha256 above pins this
-  # download to the published amd64 asset byte-for-byte — together those
-  # already guarantee the binary's architecture. Whether the binary can
-  # actually run is proven by the post-install health-check (a daemon that
-  # fails to start rolls the swap back automatically).
+  # 这里不对下载到的二进制再做架构探测，它的架构由三件事合起来保证：
+  #   - 资产名在进入任何模式之前就由 uname -m 定下（见下方“架构 → release 资产名”）；
+  #   - 上面的 sha256 把下载内容逐字节钉在 release 里以该名字发布的那份资产上；
+  #   - “以该名字发布的资产确实是该架构的 ELF”由发版时 scripts/build-release.sh
+  #     对每个产物的 ELF 头自检保证。
+  # 二进制在本机是否真的能跑，由替换后的 health-check 证明：daemon 起不来会
+  # 自动回滚到 .bak。
 
   # ---- 备份旧二进制 ----
   note "[2/5] 备份旧二进制到 $INSTALL_DIR/*.bak ..."
@@ -638,12 +645,23 @@ normalize_gh_proxy
 
 [[ $EUID -eq 0 ]] || die "请以 root 运行（sudo $0 ...）"
 
-# 架构检测
+# 架构 → release 资产名
+# release 为每种架构各发布一套 nft-agent / nft-server。这里按 uname -m 定下本机要取
+# 的资产名，此后的下载与 sha256 校验都只认这两个名字；装到 $INSTALL_DIR 时仍用不带
+# 后缀的安装名，unit 文件与升级回滚逻辑因此与架构无关。
+# amd64 沿用无后缀资产名：更早的 release 只发布过这一套，--release 指向它们时仍要
+# 装得上；arm64 带 -arm64 后缀。较新的 release 里还有内容相同的 nft-agent-amd64 /
+# nft-server-amd64，那是供按架构名手工取用的别名，这里不取。
+# 同一口径还有两处落点——scripts/build-release.sh 的构建矩阵、面板推送升级用的
+# internal/server/upgrade.go agentAssets——增删架构必须三处同改。
 arch=$(uname -m)
 case "$arch" in
-  x86_64|amd64) ;;
-  *) die "目前仅 amd64 二进制可用（当前: $arch）。请等待后续 release 或自行交叉编译。" ;;
+  x86_64|amd64)  asset_suffix="" ;;
+  aarch64|arm64) asset_suffix="-arm64" ;;
+  *) die "不支持的架构: ${arch}（release 仅提供 amd64 / arm64 二进制，可自行交叉编译）" ;;
 esac
+agent_asset="nft-agent$asset_suffix"
+server_asset="nft-server$asset_suffix"
 
 # Mode selection (interactive when no TTY arg).
 if [[ -z "$mode" ]]; then
@@ -768,11 +786,11 @@ release_tag="$(resolve_release_tag)"
 
 # Every role installs nft-agent (the node daemon + TUI); only server adds the
 # panel binary on top.
-note "[1/3] 下载 nft-agent ($RELEASE) ..."
-agent_sha="$(fetch_and_verify "$base" nft-agent "$tmp/nft-agent" strict)"
+note "[1/3] 下载 nft-agent ($RELEASE, $arch) ..."
+agent_sha="$(fetch_and_verify "$base" "$agent_asset" "$tmp/nft-agent")"
 if [[ "$mode" == "server" ]]; then
-  note "      下载 nft-server ($RELEASE) ..."
-  fetch_and_verify "$base" nft-server "$tmp/nft-server" strict >/dev/null
+  note "      下载 nft-server ($RELEASE, $arch) ..."
+  fetch_and_verify "$base" "$server_asset" "$tmp/nft-server" >/dev/null
 fi
 
 note "[2/3] 安装到 $INSTALL_DIR ..."
