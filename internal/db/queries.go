@@ -134,7 +134,6 @@ type Rule struct {
 	ExitPort        int           `json:"exit_port"`
 	EntryListenPort int           `json:"entry_listen_port"`
 	Comment         string        `json:"comment"`
-	Disabled        bool          `json:"disabled"`
 	CreatedAt       int64         `json:"created_at"`
 	// EntryFamily selects which of the entry node's relay addresses the entry
 	// endpoint advertises: "v4" (default), "v6", or "both". Validated and
@@ -767,16 +766,14 @@ func RecordUpgradeResult(d DBTX, nodeID int64, version, status, errText string) 
 
 // Rules
 
-const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,disabled,created_at,entry_family,via_node_ids`
+const ruleCols = `id,node_id,owner_id,name,proto,exit_host,exit_port,entry_listen_port,comment,created_at,entry_family,via_node_ids`
 
 func scanRule(r rowScanner) (*Rule, error) {
 	rl := &Rule{}
-	var disabled int
 	var viaJSON string
-	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &disabled, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
+	if err := r.Scan(&rl.ID, &rl.NodeID, &rl.OwnerID, &rl.Name, &rl.Proto, &rl.ExitHost, &rl.ExitPort, &rl.EntryListenPort, &rl.Comment, &rl.CreatedAt, &rl.EntryFamily, &viaJSON); err != nil {
 		return nil, err
 	}
-	rl.Disabled = disabled == 1
 	rl.ViaNodeIDs = decodeViaNodeIDs(viaJSON)
 	return rl, nil
 }
@@ -806,62 +803,16 @@ func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=?`, userID)
 }
 
-// ExpiredUserNodeIDs returns the distinct node IDs that have rule_hops
-// owned by users whose expires_at is in the past. Only non-disabled users
-// are included — disabled users are already filtered by other paths.
+// ExpiredUserNodeIDs 返回承载着“已到期且未被停用的用户”的规则跳的节点。已停用的
+// 用户不算在内：他们的规则在停用那一刻就由停用入口重推撤掉了，到期与否不再改变
+// 节点上的规则集。
 func ExpiredUserNodeIDs(d *sql.DB) ([]int64, error) {
 	return queryInt64s(d, `
 		SELECT DISTINCT rh.node_id
 		FROM rule_hops rh
 		JOIN rules r ON r.id = rh.rule_id
 		JOIN users u ON u.id = r.owner_id
-		WHERE u.disabled = 0
-		  AND u.expires_at IS NOT NULL
-		  AND u.expires_at > 0
-		  AND u.expires_at < strftime('%s','now')`)
-}
-
-// ActiveRuleHopsForPush 返回应当下发到 nodeID 的规则跳，是“一条规则此刻转不转发”
-// 的唯一判定。一条规则只要命中下面任一条就整条不下发（它在每个节点上的跳都被
-// 排除）：规则被停用；属主账号被停用或已过期；属主的全局流量配额用尽；规则经过
-// 的某条授权的配额用尽；规则指向的落地出口的配额用尽。
-//
-// 这些条件读的都是库里的当前值，而判定只在下发时求值。所以每个改动配额、已用量、
-// 停用标志或到期时间的入口，改完都必须重新下发受影响的节点（Server.redispatchUser
-// 及各自的定向重推），否则变化要等到下一次无关的下发才生效。
-func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
-	q := `SELECT ` + ruleHopCols + ` FROM rule_hops rh
-		WHERE rh.node_id=?
-		AND NOT EXISTS (
-		  SELECT 1 FROM rules r
-		  WHERE r.id = rh.rule_id AND r.disabled = 1
-		)
-		AND NOT EXISTS (
-		  SELECT 1 FROM rules r JOIN users u ON u.id = r.owner_id
-		  WHERE r.id = rh.rule_id
-		  AND (u.disabled = 1
-		    OR (u.expires_at IS NOT NULL AND u.expires_at > 0 AND u.expires_at < strftime('%s','now'))
-		    OR (u.traffic_quota_bytes > 0 AND u.traffic_used_bytes >= u.traffic_quota_bytes))
-		)
-		AND NOT EXISTS (
-		  SELECT 1 FROM rule_hops rh2
-		  JOIN rules r2 ON r2.id = rh2.rule_id
-		  JOIN user_nodes un ON un.user_id = r2.owner_id AND un.node_id = rh2.via_node_id
-		  WHERE rh2.rule_id = rh.rule_id
-		    AND un.traffic_quota_bytes > 0
-		    AND un.traffic_used_bytes >= un.traffic_quota_bytes
-		)
-		AND NOT EXISTS (
-		  SELECT 1 FROM rules r4
-		  JOIN user_landing_exits ule ON ule.user_id = r4.owner_id
-		    AND ule.host = r4.exit_host AND ule.port = r4.exit_port
-		  WHERE r4.id = rh.rule_id
-		    AND ule.present = 1
-		    AND ule.quota_bytes > 0
-		    AND ule.used_bytes >= ule.quota_bytes
-		)
-		ORDER BY rh.listen_port`
-	return queryAll(d, q, scanRuleHop, nodeID)
+		WHERE u.disabled = 0 AND `+userExpiredSQL)
 }
 
 func RuleHopMapByNode(d *sql.DB, nodeID int64) (map[string]*RuleHop, error) {

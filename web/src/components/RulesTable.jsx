@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, Spinner, NodeTypeIcon, ChainProbeResult, chainProbeText } from './ui'
+import { Badge, ProtoBadge, SensText, CopyText, Tooltip, ExitKindBadge, SuppressedBadge, Spinner, NodeTypeIcon, ChainProbeResult, chainProbeText } from './ui'
 import { useCopyFmt } from './Layout'
 import { fmtBytes } from '../lib/fmt'
 import { uriToClashYaml } from '../lib/yaml-convert'
@@ -88,7 +88,11 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
               onClick={onRowClick ? () => onRowClick(r) : undefined}>
               {isAdmin && <td className="font-mono text-xs text-ink-mut">#{r.id}</td>}
               <td className="font-semibold">
-                <span className={!isAdmin ? 'route-name' : ''}>{r.name}</span>
+                {/* 徽标放在名称下面而不是右边：并排会把这一列撑宽，挤窄右边的入口/出口列。 */}
+                <span className="inline-flex flex-col items-start gap-1">
+                  <span className={!isAdmin ? 'route-name' : ''}>{r.name}</span>
+                  <SuppressedBadge reason={r.suppressed} />
+                </span>
               </td>
               <td>
                 <span className={!isAdmin ? 'route-node font-mono' : 'inline-flex items-center gap-1.5 font-mono text-ink-soft'}>
@@ -189,6 +193,7 @@ export function RulesTable({ rules, nodeMap, blurred, variant = 'my', onDelete, 
                 <ProtoBadge proto={r.proto} />
               </div>
             </div>
+            {r.suppressed && <div className="mb-1.5"><SuppressedBadge reason={r.suppressed} detailed /></div>}
             <div className="flex items-center gap-2 text-xs text-ink-soft mb-1.5 flex-wrap">
               <span className="inline-flex items-center gap-1 font-mono">
                 <NodeTypeIcon type={node?.node_type} />{node?.name || `#${r.node_id}`}

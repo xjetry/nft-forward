@@ -157,7 +157,7 @@ func (s *Server) revokeUserNode(adminID, userID, nodeID int64) (int, *adminError
 	if err != nil {
 		return 0, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	db.WriteAudit(s.DB, adminID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
 	return len(affected), nil
 }
@@ -189,10 +189,7 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 		mbytes, userID, nodeID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
-	for _, n := range affected {
-		_ = s.dispatchToNode(n)
-	}
+	s.redispatchUserGrant(userID, nodeID, "设置授权限速")
 	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
 	return nil
@@ -272,7 +269,7 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	for n := range affected {
 		nodeIDs = append(nodeIDs, n)
 	}
-	s.apiDispatchFanout(nodeIDs)
+	s.dispatchNodes("规则变更", nodeIDs)
 	return granted, skipped, nil
 }
 

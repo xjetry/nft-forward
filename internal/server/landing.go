@@ -88,24 +88,9 @@ func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) {
 	}
 	go func() {
 		for _, k := range flipped {
-			s.redispatchUserExit(u.ID, k.Host, k.Port)
+			s.redispatchUserExit(u.ID, k.Host, k.Port, "落地出口集合变更")
 		}
 	}()
-}
-
-// redispatchUserExit re-pushes every node carrying rules that exit to the
-// given landing exit so a changed ledger/quota state reaches the data plane.
-func (s *Server) redispatchUserExit(userID int64, host string, port int) {
-	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
-	if err != nil {
-		log.Printf("landing: nodes for user %d exit %s:%d: %v", userID, host, port, err)
-		return
-	}
-	for _, n := range nodes {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("landing: re-dispatch node %d for exit %s:%d: %v", n, host, port, err)
-		}
-	}
 }
 
 // landingIndexFromDB builds the exit-classification index from the user's
@@ -324,7 +309,7 @@ func (s *Server) apiSetLandingExitQuota(w http.ResponseWriter, r *http.Request) 
 	// A lowered quota may start excluding immediately; a raised/cleared one
 	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
 	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
+		go s.redispatchUserExit(id, body.Host, body.Port, "设置落地出口流量配额")
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
@@ -353,7 +338,7 @@ func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
+		go s.redispatchUserExit(id, body.Host, body.Port, "重置落地出口流量")
 	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_exit_traffic", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d", body.Host, body.Port))

@@ -111,6 +111,25 @@ export function ExitKindBadge({ kind, protocol }) {
   return <Badge color="gray">自定义</Badge>
 }
 
+/* ---------- SuppressedBadge ---------- */
+// 规则此刻没有转发时显示“未生效”。reason 是接口里规则对象的 suppressed 字段，取值
+// 与服务端的 db.SuppressReason 一一对应；空值表示规则照常转发，不渲染任何东西。
+// 表格里只显示“未生效”、原因放在悬停提示里；detailed 用在卡片与详情页（没有悬停，
+// 位置也够），把原因直接写出来。
+const suppressReasonText = {
+  user_disabled: '账号已被停用',
+  user_expired: '账号已到期',
+  user_quota: '账号流量配额已用尽',
+  node_disabled: '经过的节点已被停用',
+  grant_quota: '节点授权的流量配额已用尽',
+  exit_quota: '落地出口的流量配额已用尽',
+}
+export function SuppressedBadge({ reason, detailed = false }) {
+  if (!reason) return null
+  const text = suppressReasonText[reason] || reason
+  return <Badge color="amber" title={text}>{detailed ? `未生效 · ${text}` : '未生效'}</Badge>
+}
+
 /* ---------- ProtoBadge ---------- */
 export function ProtoBadge({ proto }) {
   if (!proto) return null

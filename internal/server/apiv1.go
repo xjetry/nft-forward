@@ -257,6 +257,8 @@ type v1Rule struct {
 	Chain            []v1RuleChainHop `json:"chain,omitempty"`
 	TrafficUsedBytes int64            `json:"traffic_used_bytes"`
 	CreatedAt        int64            `json:"created_at"`
+	// Suppressed 非空表示这条规则此刻不转发，值是原因（db.SuppressReason 的取值）。
+	Suppressed string `json:"suppressed,omitempty"`
 }
 
 func toV1Rule(it ruleListItem) v1Rule {
@@ -273,6 +275,7 @@ func toV1Rule(it ruleListItem) v1Rule {
 		Entry: it.Entry, EntryV6: it.EntryV6, EntryFamily: it.EntryFamily,
 		Exit: it.Exit, ExitMode: it.ExitMode, Comment: it.Comment,
 		ViaNodeIDs: via, Chain: chain, TrafficUsedBytes: it.TotalBytes, CreatedAt: it.CreatedAt,
+		Suppressed: string(it.Suppressed),
 	}
 }
 
@@ -287,6 +290,7 @@ func (s *Server) v1RulesFromDB(rules []*db.Rule) []v1Rule {
 		items = append(items, s.buildRuleListItem(rl, ""))
 	}
 	s.fillRuleChains(items, allByID)
+	s.markSuppressed(items)
 	out := make([]v1Rule, 0, len(items))
 	for _, it := range items {
 		out = append(out, toV1Rule(it))

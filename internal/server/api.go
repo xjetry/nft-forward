@@ -135,20 +135,6 @@ func (s *Server) requireTokenAuth(next http.Handler) http.Handler {
 	})
 }
 
-// --- Dispatch helpers for JSON handlers (no flash cookies) ---
-
-func (s *Server) apiDispatch(nodeID int64) error {
-	return s.dispatchToNode(nodeID)
-}
-
-func (s *Server) apiDispatchFanout(nodeIDs []int64) {
-	for _, n := range nodeIDs {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("api dispatch node %d: %v", n, err)
-		}
-	}
-}
-
 // --- Auth endpoints ---
 
 func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
@@ -477,7 +463,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
 	s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-	_ = s.apiDispatch(n.ID)
+	s.dispatchNodes("新建节点", []int64{n.ID})
 	jsonOK(w, map[string]any{"node": n})
 }
 
@@ -1271,7 +1257,7 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
-		s.apiDispatchFanout(rerun)
+		s.dispatchNodes("规则变更", rerun)
 		jsonOK(w, map[string]any{"ok": true})
 		return
 	}
@@ -1304,6 +1290,9 @@ func (s *Server) apiToggleNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.toggle", strconv.FormatInt(id, 10), "")
+	// 节点启停是压制条件的输入：经过它的规则随之整条撤下或恢复，链上的每个节点都要
+	// 重推，不只是它自己。
+	s.redispatchThroughNode(id, "节点启停")
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1614,6 +1603,7 @@ func (s *Server) apiListRules(w http.ResponseWriter, r *http.Request) {
 		views = append(views, item)
 	}
 	s.fillRuleChains(views, nodeByID)
+	s.markSuppressed(views)
 	jsonOK(w, map[string]any{"rules": views, "nodes": nodes, "users": userList})
 }
 
@@ -1762,7 +1752,7 @@ func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.create", strconv.FormatInt(id, 10), name)
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"rule": rl, "entry": entry, "entry_v6": entryV6})
 }
 
@@ -1802,6 +1792,9 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 		item.RateMultiplier = 1
 	}
 	item.BillingRate = billingRate
+	views := []ruleListItem{item}
+	s.markSuppressed(views)
+	item = views[0]
 	jsonOK(w, map[string]any{
 		"rule": item, "hops": hops, "nodes": nodes, "node_by_id": nodeByID,
 	})
@@ -2217,7 +2210,7 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.save", strconv.FormatInt(id, 10), name)
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true, "entry": entry, "entry_v6": entryV6})
 }
 
@@ -2234,7 +2227,7 @@ func (s *Server) apiDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.delete", strconv.FormatInt(id, 10), "")
-	s.apiDispatchFanout(nodes)
+	s.dispatchNodes("规则变更", nodes)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2291,7 +2284,7 @@ func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.reallocate", strconv.FormatInt(id, 10), strconv.Itoa(pos))
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2459,7 +2452,7 @@ func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
 		affected = append(affected, nodes...)
 		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
 	}
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -2529,7 +2522,7 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
 		revoked++
 	}
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true, "granted": granted, "revoked": revoked})
 }
 
@@ -2769,7 +2762,7 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	db.WriteAudit(s.DB, u.ID, "user.delete", strconv.FormatInt(id, 10), "")
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -2857,6 +2850,7 @@ func (s *Server) apiMyListRules(w http.ResponseWriter, r *http.Request) {
 		views = append(views, item)
 	}
 	s.fillRuleChains(views, allByID)
+	s.markSuppressed(views)
 	grantedSet := make(map[int64]bool)
 	for _, n := range grantedNodes {
 		grantedSet[n.ID] = true
@@ -2921,6 +2915,7 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	views := []ruleListItem{item}
 	s.fillRuleChains(views, allByID)
+	s.markSuppressed(views)
 	item = views[0]
 	showRate, _ := db.GetSetting(s.DB, "show_rate_to_user")
 	jsonOK(w, map[string]any{
@@ -3019,7 +3014,7 @@ func (s *Server) createUserRule(u *db.User, p userRuleParams, dryRun bool) (rule
 	if u.Disabled {
 		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "用户已被禁用"}
 	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.Expired(time.Now()) {
 		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusForbidden, msg: "用户已过期"}
 	}
 	name := strings.TrimSpace(p.Name)
@@ -3115,7 +3110,7 @@ func (s *Server) createUserRule(u *db.User, p userRuleParams, dryRun bool) (rule
 		return ruleCreateOutcome{}, &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_create", strconv.FormatInt(id, 10), name)
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	return ruleCreateOutcome{RuleID: id, Entry: entry, EntryV6: entryV6, Affected: affected, Hops: hops}, nil
 }
 
@@ -3197,7 +3192,7 @@ func (s *Server) updateUserRule(u *db.User, id int64, p updateUserRuleParams) (s
 	if u.Disabled {
 		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "用户已被禁用"}
 	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.Expired(time.Now()) {
 		return "", "", &ruleMutationError{status: http.StatusForbidden, msg: "用户已过期"}
 	}
 	rl, err := db.GetRule(s.DB, id)
@@ -3301,7 +3296,7 @@ func (s *Server) updateUserRule(u *db.User, id int64, p updateUserRuleParams) (s
 		return "", "", &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_save", strconv.FormatInt(id, 10), name)
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 	return entry, entryV6, nil
 }
 
@@ -3335,7 +3330,7 @@ func (s *Server) deleteUserRule(u *db.User, id int64) *ruleMutationError {
 		return &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
 	}
 	db.WriteAudit(s.DB, u.ID, "rule.user_delete", strconv.FormatInt(id, 10), "")
-	s.apiDispatchFanout(nodes)
+	s.dispatchNodes("规则变更", nodes)
 	return nil
 }
 
@@ -3422,7 +3417,7 @@ func (s *Server) apiRewireRules(ruleIDs []int64) {
 			}
 		}
 	}
-	s.apiDispatchFanout(affected)
+	s.dispatchNodes("规则变更", affected)
 }
 
 // toInt64 converts various JSON number representations to int64.

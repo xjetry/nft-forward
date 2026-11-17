@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,9 +19,11 @@ import (
 )
 
 type Server struct {
-	DB              *sql.DB
-	Hub             *Hub
-	Landing         *landing.Fetcher
+	DB      *sql.DB
+	Hub     *Hub
+	Landing *landing.Fetcher
+	// dispatch 让对同一个节点的下发串行、合并；所有下发都经 dispatchToNode 走它。
+	dispatch        *nodeDispatchQueue
 	loginLimiter    *loginLimiter
 	tokenLimiter    *tokenLimiter
 	stopExpiry      chan struct{}
@@ -43,8 +42,9 @@ func New(d *sql.DB) (*Server, error) {
 	}
 	hub := NewHub(d)
 	s := &Server{DB: d, Hub: hub, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
-	hub.OnTrafficUpdate = func(userID int64, nodeID int64) {
-		s.enforcePerNodeQuota(userID, nodeID)
+	s.dispatch = newNodeDispatchQueue(s.dispatchRound)
+	hub.OnTrafficUpdate = func(userID int64, _ int64) {
+		s.enforcePerNodeQuota(userID)
 		s.enforceUserQuota(userID)
 		s.enforceExitQuota(userID)
 	}
@@ -56,9 +56,11 @@ func New(d *sql.DB) (*Server, error) {
 	return s, nil
 }
 
-// expiryEnforcer periodically scans for users whose expires_at has passed
-// and re-dispatches the affected nodes so their forwarding rules are
-// removed from the kernel.
+// expiryEnforcer 定时重推承载着已到期用户规则的节点，让这些规则撤出数据面。
+//
+// 到期是压制条件里唯一不由写入触发的输入：时间走过到期时刻时没有任何入口被调用，
+// 只能靠定时检查。它不记“哪个用户已经处理过”，所以只要还有到期且未停用的用户
+// 挂着规则，每一轮都会重推他们的节点（内容不变的重推在节点侧不动数据面）。
 func (s *Server) expiryEnforcer() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -72,11 +74,7 @@ func (s *Server) expiryEnforcer() {
 				log.Printf("expiry: query expired-user nodes: %v", err)
 				continue
 			}
-			for _, n := range nodes {
-				if err := s.dispatchToNode(n); err != nil {
-					log.Printf("expiry: re-dispatch node %d: %v", n, err)
-				}
-			}
+			s.dispatchNodes("账号到期", nodes)
 		}
 	}
 }
@@ -163,39 +161,6 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 	}
 }
 
-// redispatchUser 重新下发承载 userID 规则跳的每一个节点。
-//
-// 一条规则下不下发由 db.ActiveRuleHopsForPush 在下发时按库里的当前值判定。凡是改了
-// 这个用户的账号级状态（停用标志、到期时间、全局配额、全局已用量）的入口，改完
-// 都调这里，让节点上的规则集立刻跟上；why 只用于日志。
-func (s *Server) redispatchUser(userID int64, why string) {
-	nodes, err := db.DistinctUserNodes(s.DB, userID)
-	if err != nil {
-		log.Printf("redispatch user %d (%s): list nodes: %v", userID, why, err)
-		return
-	}
-	for _, n := range nodes {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("redispatch user %d (%s): node %d: %v", userID, why, n, err)
-		}
-	}
-}
-
-// redispatchUserGrant 重新下发 userID 经由授权节点 nodeID 的规则所在的节点。改动
-// 这条授权的配额或已用量之后调用，理由同 redispatchUser。
-func (s *Server) redispatchUserGrant(userID, nodeID int64, why string) {
-	nodes, err := db.RulesAffectedByNode(s.DB, userID, nodeID)
-	if err != nil {
-		log.Printf("redispatch user %d grant %d (%s): list nodes: %v", userID, nodeID, why, err)
-		return
-	}
-	for _, n := range nodes {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("redispatch user %d grant %d (%s): node %d: %v", userID, nodeID, why, n, err)
-		}
-	}
-}
-
 // enforceUserQuota 在一批计数入账后调用：用户的全局流量配额用尽时重新下发他的
 // 节点，由 db.ActiveRuleHopsForPush 把他的规则排除出去。账号本身不停用，用户仍能
 // 登录查看用量；配额调高或用量归零后，各自的入口重推即可恢复，这里不留任何需要
@@ -216,32 +181,22 @@ func (s *Server) enforceUserQuota(userID int64) {
 	s.redispatchUser(userID, "全局流量配额用尽")
 }
 
-// enforcePerNodeQuota re-dispatches nodes affected by any per-node quota
-// overrun for userID. Only nodes whose rules include a hop where quota > 0
-// and used >= quota are targeted, so unrelated nodes are never churned.
-func (s *Server) enforcePerNodeQuota(userID int64, nodeID int64) {
+// enforcePerNodeQuota 在一批计数入账后调用：对 userID 每条配额用尽的授权，重新下发
+// 经由它的规则所在的节点，由 db.ActiveRuleHopsForPush 把这些规则排除出去。只动
+// 用尽的授权涉及的节点，其余节点不受打扰。
+func (s *Server) enforcePerNodeQuota(userID int64) {
 	exceeded, err := db.NodesExceedingQuota(s.DB, userID)
 	if err != nil {
 		log.Printf("quota: per-node check user %d: %v", userID, err)
 		return
 	}
-	for _, excNode := range exceeded {
-		affectedNodes, err := db.RulesAffectedByNode(s.DB, userID, excNode)
-		if err != nil {
-			log.Printf("quota: affected nodes for user %d node %d: %v", userID, excNode, err)
-			continue
-		}
-		for _, n := range affectedNodes {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("quota: re-dispatch node %d after per-node quota user %d: %v", n, userID, err)
-			}
-		}
+	for _, grantNode := range exceeded {
+		s.redispatchUserGrant(userID, grantNode, "授权流量配额用尽")
 	}
 }
 
-// enforceExitQuota re-pushes the nodes carrying rules whose landing-exit
-// ledger reached quota, so ActiveRuleHopsForPush drops exactly the rules
-// pointed at the exhausted exit.
+// enforceExitQuota 在一批计数入账后调用：对 userID 每个配额用尽的落地出口，重新下发
+// 指向它的规则所在的节点。
 func (s *Server) enforceExitQuota(userID int64) {
 	exceeded, err := db.ExitsExceedingQuota(s.DB, userID)
 	if err != nil {
@@ -249,92 +204,7 @@ func (s *Server) enforceExitQuota(userID int64) {
 		return
 	}
 	for _, k := range exceeded {
-		s.redispatchUserExit(userID, k.Host, k.Port)
-	}
-}
-
-// dispatchToNode builds the panel-segment ruleset for nodeID from the
-// rule_hops DB and sends it over the node's agent connection. Every node —
-// the self node included — is reached the same way, through the Hub; a node
-// with no connection yields an error that lands in last_error.
-//
-// The outcome is reflected on the nodes row so the panel UI can show
-// sync status: success stamps last_apply_at and clears last_error;
-// failure stamps last_error while preserving last_apply_at.
-func (s *Server) dispatchToNode(nodeID int64) error {
-	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
-	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
-		return err
-	}
-	rules := buildRules(s.DB, ruleHops)
-	rev := computeRev(rules)
-	warning, err := s.Hub.SendApplyRuleset(nodeID, rules, rev)
-	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
-		return err
-	}
-	_ = db.MarkNodeApplied(s.DB, nodeID, warning)
-	return nil
-}
-
-// dispatchAfterMutation wraps the common "CRUD-handler dispatches to a
-// node and wants to surface failure to the admin doing the mutation"
-// pattern.
-func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, action string) {
-	if err := s.dispatchToNode(nodeID); err != nil {
-		setFlash(w, fmt.Sprintf("%s 已保存，但下发到节点失败：%v", action, err))
-		log.Printf("dispatch node %d (%s): %v", nodeID, action, err)
-		return
-	}
-	if n, err := db.GetNode(s.DB, nodeID); err == nil && n.LastWarning != "" {
-		setFlash(w, fmt.Sprintf("%s 已保存，但 %s", action, n.LastWarning))
-	}
-}
-
-// dispatchAfterFanout dispatches to every node touched by a user-scope
-// mutation. Per-node errors are aggregated into a single flash because
-// the flash cookie holds only one message.
-func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, action string) {
-	type result struct {
-		nodeID int64
-		err    error
-	}
-	results := make(chan result, len(nodeIDs))
-	var wg sync.WaitGroup
-	for _, n := range nodeIDs {
-		wg.Add(1)
-		go func(nodeID int64) {
-			defer wg.Done()
-			results <- result{nodeID: nodeID, err: s.dispatchToNode(nodeID)}
-		}(n)
-	}
-	wg.Wait()
-	close(results)
-
-	var failed []string
-	for r := range results {
-		if r.err != nil {
-			log.Printf("dispatch node %d (%s): %v", r.nodeID, action, r.err)
-			failed = append(failed, fmt.Sprintf("节点 %d: %v", r.nodeID, r.err))
-		}
-	}
-	if len(failed) > 0 {
-		sort.Strings(failed)
-		setFlash(w, fmt.Sprintf("%s 已保存，但下发到 %d 个节点失败（%s）",
-			action, len(failed), strings.Join(failed, "；")))
-	}
-}
-
-// redispatchNodes re-pushes kernel state to every node a background (WS-driven)
-// rule mutation touched. Dispatches run off the caller's goroutine.
-func (s *Server) redispatchNodes(nodeIDs []int64) {
-	for _, n := range nodeIDs {
-		go func(n int64) {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("dispatch node %d (规则变更): %v", n, err)
-			}
-		}(n)
+		s.redispatchUserExit(userID, k.Host, k.Port, "落地出口流量配额用尽")
 	}
 }
 

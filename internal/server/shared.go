@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -87,6 +88,24 @@ type ruleListItem struct {
 	// deployed, not a composite's current definition. Empty until the rule's
 	// first regeneration.
 	Chain []chainNode `json:"chain,omitempty"`
+	// Suppressed 非空表示这条规则此刻不转发，值是原因。由 markSuppressed 填，与决定
+	// 下发的是同一个判定（db.RuleSuppressions 与 db.ActiveRuleHopsForPush 共用一份
+	// 压制条件）。
+	Suppressed db.SuppressReason `json:"suppressed,omitempty"`
+}
+
+// markSuppressed 给每个规则项填上它此刻不转发的原因；照常转发的规则留空。规则的
+// 每个对外面（管理员与用户的列表、详情，/api/v1）装配完都要调它，
+// TestEveryRuleSurfaceReportsTheSuppression 逐面对照。
+func (s *Server) markSuppressed(items []ruleListItem) {
+	reasons, err := db.RuleSuppressions(s.DB)
+	if err != nil {
+		log.Printf("rules: load suppressions: %v", err)
+		return
+	}
+	for i := range items {
+		items[i].Suppressed = reasons[items[i].ID]
+	}
 }
 
 // chainNode is one physical hop in a rule's flattened chain, resolved to its

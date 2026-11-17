@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge, ProbeChainButton } from '../../components/ui'
+import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge, SuppressedBadge, ProbeChainButton } from '../../components/ui'
 import { TableBox } from '../../components/page'
 import { copyToClipboard } from '../../lib/clipboard'
 import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
@@ -93,7 +93,7 @@ export default function RulesDetail() {
           ) : <span className="text-ink-mut text-sm">尚未分配入口</span>}
           <div className="grid grid-cols-[90px_1fr] gap-4 items-center mt-5 text-sm">
             <span className="text-ink-soft font-semibold">名称</span>
-            <span className="font-semibold">{rule.name}</span>
+            <span className="font-semibold inline-flex items-center gap-2 flex-wrap">{rule.name}<SuppressedBadge reason={rule.suppressed} detailed /></span>
             {rule.owner_id?.Valid && <><span className="text-ink-soft font-semibold">用户</span>
             <span className="font-semibold">
               <Link to={`/users/${rule.owner_id.Int64}`} className="text-blue-600 hover:underline">{rule.owner_name}</Link>

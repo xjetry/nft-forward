@@ -307,21 +307,6 @@ func TestNodeSideRuleCommandsStillCapRegularOwners(t *testing.T) {
 	}
 }
 
-// 被停用的节点不能接入，self 节点也一样（对外入口对停用节点的 token 同样拒绝）。
-func TestDisabledSelfNodeIsRefused(t *testing.T) {
-	e := newLocalAgentEnv(t)
-	if _, err := e.d.Exec(`UPDATE nodes SET disabled=1 WHERE id=?`, e.self.ID); err != nil {
-		t.Fatal(err)
-	}
-	_, ack := helloOver(t, wsURL(e.local), wsproto.Hello{OS: "linux", Arch: "amd64"})
-	if ack.Error == "" {
-		t.Fatal("self 节点被停用时本机入口应拒绝握手")
-	}
-	if e.s.Hub.IsOnline(e.self.ID) {
-		t.Fatal("被拒绝的握手不应让 self 节点上线")
-	}
-}
-
 // 面板启动时连接表是空的，所以 nodes.online 必须全为 0：上一个进程退出时没来得及
 // 标记离线的节点（含 self 节点）不能在新进程里继续显示在线。
 func TestPanelStartMarksEveryNodeOffline(t *testing.T) {

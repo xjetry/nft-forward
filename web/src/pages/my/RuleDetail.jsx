@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
 import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge } from '../../components/ui'
+import { Loading, Empty, Badge, ProtoBadge, SensText, useConfirm, ExitKindBadge, SuppressedBadge } from '../../components/ui'
 import { copyToClipboard } from '../../lib/clipboard'
 import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
 import { uriToClashYaml } from '../../lib/yaml-convert'
@@ -184,7 +184,7 @@ export default function MyRuleDetail() {
           <div className="detail-grid">
             <div className="detail-item">
               <span className="detail-label">名称</span>
-              <span className="detail-value">{rule.name}</span>
+              <span className="detail-value inline-flex items-center gap-2 flex-wrap">{rule.name}<SuppressedBadge reason={rule.suppressed} detailed /></span>
             </div>
             <div className="detail-item">
               <span className="detail-label">节点</span>

@@ -120,8 +120,13 @@ type agentPeer struct {
 const localAgentOrigin = "本机"
 
 // ServeWS 是对外的 agent 入口（HTTP 路由上的 /v1/agents）：节点凭 hello 里的 token
-// 认定，token 对不上任何未停用的节点就拒绝。空 token 一律拒绝（lookupNodeBySecret），
-// 所以没有 token 的 self 节点不可能从这里接入。
+// 认定，token 对不上任何节点就拒绝。空 token 一律拒绝（lookupNodeBySecret），所以
+// 没有 token 的 self 节点不可能从这里接入。
+//
+// 被停用的节点照样可以接入（两个入口都是）。停用的含义是“不承载转发”，由压制条件
+// 落实：经过它的规则不下发，它收到的规则集是空的。它必须连得上才收得到这次撤销——
+// 拒绝它接入的话，离线期间被停用的节点重连不上，会一直转发停用之前的那份规则集，
+// 而且流量不再入账。
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.serveAgent(w, r, func(hello wsproto.Hello) (agentPeer, string) {
 		node, err := lookupNodeBySecret(h.DB, hello.NodeToken)
@@ -142,9 +147,6 @@ func (h *Hub) ServeLocalWS(w http.ResponseWriter, r *http.Request) {
 		node, err := db.GetSelfNode(h.DB)
 		if err != nil {
 			return agentPeer{}, "panel has no self node"
-		}
-		if node.Disabled {
-			return agentPeer{}, "node disabled"
 		}
 		return agentPeer{node: node, origin: localAgentOrigin}, ""
 	})
@@ -614,7 +616,7 @@ func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
 		return nil, errors.New("empty secret")
 	}
 	var id int64
-	err := d.QueryRow(`SELECT id FROM nodes WHERE secret=? AND disabled=0`, secret).Scan(&id)
+	err := d.QueryRow(`SELECT id FROM nodes WHERE secret=?`, secret).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1085,7 +1087,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 		sendRuleAckErr(ac, env.ID, "用户已被禁用")
 		return
 	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.Expired(time.Now()) {
 		sendRuleAckErr(ac, env.ID, "用户已过期")
 		return
 	}
@@ -1240,7 +1242,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 		sendRuleAckErr(ac, env.ID, "用户已被禁用")
 		return
 	}
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < time.Now().Unix() {
+	if u.Expired(time.Now()) {
 		sendRuleAckErr(ac, env.ID, "用户已过期")
 		return
 	}
