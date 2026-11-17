@@ -2,6 +2,8 @@ package landing
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -112,49 +114,34 @@ func TestParseURIs_Protocols(t *testing.T) {
 	}
 }
 
-func TestParseURIs_StripsPanelDedupSuffix(t *testing.T) {
-	cases := []struct {
-		name string
-		uri  string
-		want string
-	}{
-		{
-			name: "authority fragment",
-			uri:  "vless://uuid@example.com:443?security=tls#boil-hkt%20%5E~2~%5E",
-			want: "boil-hkt",
-		},
-		{
-			name: "ss fragment",
-			uri:  "ss://" + base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:secret")) + "@ss.example.com:8388#boil-hkt%20%5E~13~%5E",
-			want: "boil-hkt",
-		},
-		{
-			name: "vmess ps",
-			uri: "vmess://" + base64.StdEncoding.EncodeToString([]byte(
-				`{"ps":"boil-hkt ^~3~^","add":"v.example.com","port":"443"}`)),
-			want: "boil-hkt",
-		},
-		{
-			name: "suffix-only name kept",
-			uri:  "vless://uuid@example.com:443#%5E~2~%5E",
-			want: "^~2~^",
-		},
-		{
-			name: "mid-name marker untouched",
-			uri:  "vless://uuid@example.com:443#a%20%5E~2~%5E%20b",
-			want: "a ^~2~^ b",
-		},
+// A node's name is the one its URI carries, whatever a panel put in it — a
+// trailing "^~2~^" counter included. testdata/node_names.json is read by the
+// browser parser's test as well (web/src/lib/landing.test.ts), so the two
+// parsers are held to the same name for the same URI.
+func TestParseURIs_NameIsTheOneTheURICarries(t *testing.T) {
+	raw, err := os.ReadFile("testdata/node_names.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		URI  string `json:"uri"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("testdata/node_names.json holds no case")
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			nodes := ParseURIs([]string{c.uri})
-			if len(nodes) != 1 {
-				t.Fatalf("expected 1 node, got %d", len(nodes))
-			}
-			if nodes[0].Name != c.want {
-				t.Errorf("name = %q, want %q", nodes[0].Name, c.want)
-			}
-		})
+		nodes := ParseURIs([]string{c.URI})
+		if len(nodes) != 1 {
+			t.Errorf("%s: parsed into %d nodes, want 1", c.URI, len(nodes))
+			continue
+		}
+		if nodes[0].Name != c.Name {
+			t.Errorf("%s: name = %q, want %q", c.URI, nodes[0].Name, c.Name)
+		}
 	}
 }
 

@@ -694,8 +694,8 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
       <CardHeader title="落地节点" description={nodes.length ? `${nodes.length} 个节点` : undefined} />
       <CardSection>
         <form noValidate className="flex max-w-2xl flex-col gap-4" onSubmit={e => { e.preventDefault(); save.run() }}>
-          <Field label="订阅地址" optional error={urlError} hint="支持 Remnawave 等面板的订阅链接。">
-            <Input mono className={blurred ? 'blur-sm' : undefined} value={url} onChange={setUrl} placeholder="https://example.com/api/sub/xxxx" />
+          <Field label="订阅地址" optional error={urlError} hint="订阅内容是代理 URI 列表，base64 编码或纯文本均可。">
+            <Input mono className={blurred ? 'blur-sm' : undefined} value={url} onChange={setUrl} placeholder="https://example.com/sub/xxxx" />
           </Field>
           <Field label="节点 URI" optional hint="每行一条，可以与订阅地址同时使用。">
             <Textarea mono rows={8} className={blurred ? 'blur-sm' : undefined} value={uris} onChange={setUris} placeholder={'vless://…\ntrojan://…'} />

@@ -1,0 +1,26 @@
+[
+  {
+    "uri": "vless://uuid@example.com:443?security=tls#boil-hkt%20%5E~2~%5E",
+    "name": "boil-hkt ^~2~^"
+  },
+  {
+    "uri": "ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388#boil-hkt%20%5E~13~%5E",
+    "name": "boil-hkt ^~13~^"
+  },
+  {
+    "uri": "vmess://eyJwcyI6ImJvaWwtaGt0IF5+M35eIiwiYWRkIjoidi5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMifQ==",
+    "name": "boil-hkt ^~3~^"
+  },
+  {
+    "uri": "vless://uuid@example.com:443#%5E~2~%5E",
+    "name": "^~2~^"
+  },
+  {
+    "uri": "trojan://pw@t.example.com:443#%E4%B8%9C%E4%BA%AC%2001",
+    "name": "东京 01"
+  },
+  {
+    "uri": "vmess://eyJwcyI6InRva3lvIDAxIiwiYWRkIjoidjIuZXhhbXBsZS5jb20iLCJwb3J0IjoiODQ0MyJ9",
+    "name": "tokyo 01"
+  }
+]
