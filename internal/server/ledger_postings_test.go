@@ -181,8 +181,9 @@ func (f *ledgerFixture) report() {
 		{Proto: "tcp", ListenPort: f.port(f.r3, 0), BytesUp: 100, BytesDown: 201},
 		{Proto: "udp", ListenPort: f.port(f.r3, 0), BytesUp: 50, BytesDown: 51},
 	})
-	// P2 是 kernel：tcp+udp 以一个聚合样本上报。
-	h.applyCounters(f.p2, []wsproto.CounterSample{{Proto: "tcp+udp", ListenPort: f.port(f.r3, 1), BytesUp: 150, BytesDown: 252}})
+	// P2 是 kernel：tcp+udp 以一个聚合样本上报。它报的字节与 P1 不同，落地出口账记的
+	// 是哪一跳的样本才看得出来。
+	h.applyCounters(f.p2, []wsproto.CounterSample{{Proto: "tcp+udp", ListenPort: f.port(f.r3, 1), BytesUp: 150, BytesDown: 260}})
 }
 
 func (f *ledgerFixture) one(t *testing.T, q string, args ...any) int64 {
@@ -231,7 +232,7 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 		{"M1 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.m1), 1001},
 		{"M2 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.m2), 1001},
 		{"P1 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.p1), 301 + 101},
-		{"P2 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.p2), 402},
+		{"P2 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.p2), 410},
 		{"C 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.c), 0},
 		{"CE 原始", f.one(t, `SELECT raw_bytes FROM node_raw_traffic WHERE node_id=?`, f.ce), 0},
 
@@ -254,9 +255,9 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 		{"U 8.8.8.8 上行", f.one(t, `SELECT used_bytes_up FROM user_landing_exits WHERE user_id=? AND host='8.8.8.8'`, f.u), 300},
 		{"U 8.8.8.8 下行", f.one(t, `SELECT used_bytes_down FROM user_landing_exits WHERE user_id=? AND host='8.8.8.8'`, f.u), 700},
 		{"U 9.9.9.9 不在册", f.one(t, `SELECT used_bytes FROM user_landing_exits WHERE user_id=? AND host='9.9.9.9'`, f.u), 0},
-		{"U 7.7.7.7 合计（末跳 P2 单向也取原始）", f.one(t, `SELECT used_bytes FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 402},
+		{"U 7.7.7.7 合计（末跳 P2 单向也取原始）", f.one(t, `SELECT used_bytes FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 410},
 		{"U 7.7.7.7 上行", f.one(t, `SELECT used_bytes_up FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 150},
-		{"U 7.7.7.7 下行", f.one(t, `SELECT used_bytes_down FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 252},
+		{"U 7.7.7.7 下行", f.one(t, `SELECT used_bytes_down FROM user_landing_exits WHERE user_id=? AND host='7.7.7.7'`, f.u), 260},
 		{"A 6.6.6.6 合计", f.one(t, `SELECT used_bytes FROM user_landing_exits WHERE user_id=? AND host='6.6.6.6'`, f.a), 100},
 
 		// 逐跳累计：每一跳都记各自物理节点的折算，入口跳也一样。
@@ -265,7 +266,7 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 		{"R2#1（M1 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][1].ID), 901},
 		{"R2#2（M2 双向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r2][2].ID), 1001},
 		{"R3#0（tcp 与 udp 扇入）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][0].ID), 301 + 101},
-		{"R3#1（P2 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][1].ID), 252},
+		{"R3#1（P2 单向）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r3][1].ID), 260},
 		{"R4#0", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r4][0].ID), 100},
 		{"R5#0（无属主）", f.one(t, `SELECT total_bytes FROM rule_hops WHERE id=?`, f.hops[f.r5][0].ID), 40},
 
@@ -285,7 +286,7 @@ func TestCounterBatchesPostEveryLedger(t *testing.T) {
 	}{
 		{f.r1, 3000, []int64{1000}},
 		{f.r2, 676, []int64{901, 901, 1001}},
-		{f.r3, 1355 + 455, []int64{402, 252}},
+		{f.r3, 1355 + 455, []int64{402, 260}},
 		{f.r4, 200, []int64{100}},
 		{f.r5, 40, []int64{40}},
 	} {
