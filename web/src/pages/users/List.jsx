@@ -336,7 +336,7 @@ function CreateUserModal({ onClose, onCreated }) {
             </Field>
             <ExpiryField value={form.expiresAt} onChange={set('expiresAt')} />
             <Field label="订阅地址" optional error={errors.subURL} hint="落地节点的订阅链接，之后可以在用户详情页修改。">
-              <Input mono value={form.subURL} onChange={set('subURL')} placeholder="https://example.com/api/sub/xxxx" />
+              <Input mono value={form.subURL} onChange={set('subURL')} placeholder="https://example.com/sub/xxxx" />
             </Field>
             <Field label="管理备注" optional hint="只有管理员能看到。">
               <Input value={form.adminNote} onChange={set('adminNote')} />

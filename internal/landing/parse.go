@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -26,7 +25,9 @@ type Node struct {
 }
 
 // ParseURIs parses each proxy URI, skipping blank lines, comments (lines
-// starting with '#') and anything that doesn't parse into host:port.
+// starting with '#') and anything that doesn't parse into host:port. A node's
+// name is the one its URI carries: the package is panel-agnostic, so it does
+// not undo any one panel's naming convention.
 func ParseURIs(uris []string) []Node {
 	out := make([]Node, 0, len(uris))
 	for _, raw := range uris {
@@ -35,25 +36,8 @@ func ParseURIs(uris []string) []Node {
 			continue
 		}
 		if n, ok := parseOne(raw); ok {
-			n.Name = StripDedupSuffix(n.Name)
 			out = append(out, n)
 		}
-	}
-	return out
-}
-
-// dedupSuffixRe matches the trailing "^~2~^"-style counters some panels (e.g.
-// Remnawave) append when a subscription carries same-named nodes — typically
-// the same node exported once per protocol. Nodes are identified by host:port
-// everywhere downstream, so the counter is display noise.
-var dedupSuffixRe = regexp.MustCompile(`(\s*\^~\d+~\^)+$`)
-
-// StripDedupSuffix drops the trailing dedup counter, keeping the name as-is
-// when the counter is all there is (an empty name would render worse).
-func StripDedupSuffix(name string) string {
-	out := strings.TrimSpace(dedupSuffixRe.ReplaceAllString(name, ""))
-	if out == "" {
-		return name
 	}
 	return out
 }
@@ -103,7 +87,8 @@ func parseAuthority(uri, proto string) (Node, bool) {
 }
 
 // parseSnell handles Surge-style snell config lines:
-//   Name = snell, host, port, psk = xxx, version = 5, ...
+//
+//	Name = snell, host, port, psk = xxx, version = 5, ...
 func parseSnell(line string) (Node, bool) {
 	eqIdx := strings.Index(line, "=")
 	if eqIdx < 0 {
