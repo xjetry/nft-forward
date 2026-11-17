@@ -102,6 +102,8 @@ export default function UserList() {
                     <td>
                       {u.disabled ? (
                         <Badge color="amber" title={nullStr(u.disable_reason)}>已禁用</Badge>
+                      ) : u.over_quota ? (
+                        <Badge color="red" title="全局流量配额已用尽，规则已暂停转发；账号仍可登录">已超额</Badge>
                       ) : <Badge color="green">正常</Badge>}
                     </td>
                     <ExpiryCell unix={nullInt(u.expires_at)} />

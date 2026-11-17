@@ -2508,7 +2508,14 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
 		granted++
 	}
+	// db.GrantNode 对已有授权是覆盖写：名单里若有已授权的用户，他这条授权的配额被
+	// 写回 0（不限量），此前因授权配额用尽被排除的规则要恢复下发。
 	var affected []int64
+	for _, uid := range body.AddUserIDs {
+		if nodes, err := db.RulesAffectedByNode(s.DB, uid, nodeID); err == nil {
+			affected = append(affected, nodes...)
+		}
+	}
 	revoked := 0
 	for _, uid := range body.RemoveUserIDs {
 		if err := db.RevokeNode(s.DB, uid, nodeID); err != nil {
@@ -2612,18 +2619,8 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// If the user was disabled for exceeding quota, lift the ban so the
-	// subsequent re-dispatch pushes their rules back to the kernel.
-	if target, err := db.GetUserByID(s.DB, id); err == nil &&
-		target.Disabled && target.DisableReason.Valid && target.DisableReason.String == "流量超额" {
-		_ = db.SetUserDisabled(s.DB, id, false, "")
-	}
-	// re-dispatch rules on nodes that may have been excluded by per-node quota
-	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
-		for _, n := range nodes {
-			_ = s.dispatchToNode(n)
-		}
-	}
+	// 用量归零后，此前因全局配额、授权配额或落地出口配额用尽被排除的规则都应恢复。
+	s.redispatchUser(id, "重置流量")
 	db.WriteAudit(s.DB, u.ID, "user.reset_traffic", strconv.FormatInt(id, 10), "")
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -2689,11 +2686,8 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	db.WriteAudit(s.DB, u.ID, "user.update_profile", strconv.FormatInt(id, 10), "")
-	if nodes, err := db.DistinctUserNodes(s.DB, id); err == nil {
-		for _, n := range nodes {
-			_ = s.dispatchToNode(n)
-		}
-	}
+	// 这里一次改了到期时间与全局配额，两者都是下发判定的条件。
+	s.redispatchUser(id, "修改用户资料")
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -3391,6 +3385,7 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["max_forwards"] = u.MaxForwards
 	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
 	m["traffic_used_bytes"] = u.TrafficUsedBytes
+	m["over_quota"] = u.OverQuota
 	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
 		m["expires_at"] = u.ExpiresAt.Int64
 	} else {
@@ -3608,11 +3603,7 @@ func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// re-dispatch rules that may have been excluded due to this node's quota
-	affected, _ := db.RulesAffectedByNode(s.DB, userID, nodeID)
-	for _, n := range affected {
-		_ = s.dispatchToNode(n)
-	}
+	s.redispatchUserGrant(userID, nodeID, "重置授权流量")
 	db.WriteAudit(s.DB, u.ID, "user.reset_node_traffic", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
 	jsonOK(w, map[string]any{"ok": true})
 }

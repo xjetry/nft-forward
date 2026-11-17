@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,8 +89,11 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	return created, nil
 }
 
-// setUserQuota sets the user's absolute traffic quota (bytes). Shared by SPA and
-// v1; declarative, so a repeated call is a no-op.
+// setUserQuota sets the user's absolute traffic quota (bytes) and re-dispatches
+// their nodes: the quota is a condition of the push predicate, so raising it
+// restores the user's rules and lowering it below current usage withdraws them.
+// Shared by SPA and v1; declarative, so a repeated call converges on the same
+// state.
 func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
 	if bytes < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
@@ -99,6 +101,7 @@ func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
 	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, bytes, userID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
+	s.redispatchUser(userID, "设置全局流量配额")
 	db.WriteAudit(s.DB, adminID, "user.set_quota_bytes", strconv.FormatInt(userID, 10), strconv.FormatInt(bytes, 10))
 	return nil
 }
@@ -121,19 +124,16 @@ func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError
 	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
-		for _, n := range nodes {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("expiry: re-dispatch node %d after setting user %d expiry: %v", n, userID, err)
-			}
-		}
-	}
+	s.redispatchUser(userID, "设置到期时间")
 	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
 	return nil
 }
 
 // grantUserNode ensures the user is granted the node with the given caps
 // (create-or-update via db.GrantNode). maxForwards<=0 falls back to the default.
+//
+// db.GrantNode 对已存在的授权是覆盖写，配额也在其中，所以这里可能改动一条已有授权
+// 的配额：重新下发经过这条授权的规则。
 func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, quotaBytes int64) *adminError {
 	if maxForwards <= 0 {
 		maxForwards = defaultGrantMaxForwards
@@ -141,6 +141,7 @@ func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, q
 	if err := db.GrantNode(s.DB, userID, nodeID, maxForwards, quotaBytes); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
+	s.redispatchUserGrant(userID, nodeID, "授权节点")
 	db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
 	return nil
 }
@@ -161,7 +162,9 @@ func (s *Server) revokeUserNode(adminID, userID, nodeID int64) (int, *adminError
 	return len(affected), nil
 }
 
-// setPerNodeQuota sets a grant's absolute traffic quota (bytes) on user_nodes.
+// setPerNodeQuota sets a grant's absolute traffic quota (bytes) on user_nodes
+// and re-dispatches the nodes carrying rules that run through the grant, since
+// the grant's quota is a condition of the push predicate.
 func (s *Server) setPerNodeQuota(adminID, userID, nodeID, bytes int64) *adminError {
 	if bytes < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
@@ -170,6 +173,7 @@ func (s *Server) setPerNodeQuota(adminID, userID, nodeID, bytes int64) *adminErr
 		bytes, userID, nodeID); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
+	s.redispatchUserGrant(userID, nodeID, "设置授权流量配额")
 	db.WriteAudit(s.DB, adminID, "user.set_node_quota", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d bytes=%d", nodeID, bytes))
 	return nil
@@ -340,9 +344,7 @@ func (s *Server) setUserEnabled(adminID, userID int64, enabled bool) *adminError
 	if err := db.SetUserDisabled(s.DB, userID, !enabled, reason); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	if nodes, err := db.DistinctUserNodes(s.DB, userID); err == nil {
-		s.apiDispatchFanout(nodes)
-	}
+	s.redispatchUser(userID, "启用/停用账号")
 	db.WriteAudit(s.DB, adminID, "user.toggle", strconv.FormatInt(userID, 10), fmt.Sprintf("disabled=%v", !enabled))
 	return nil
 }

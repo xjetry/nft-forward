@@ -77,6 +77,11 @@ export default function MyDashboard() {
             您的账号已被禁用：{nullStr(user.disable_reason)}。请联系管理员。
           </div>
         )}
+        {!user.disabled && user.over_quota && (
+          <div className="user-alert">
+            流量配额已用尽，您的转发规则已暂停。配额调整或流量重置后会自动恢复。
+          </div>
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.12fr)_minmax(420px,0.88fr)] gap-5">
           <section className="user-hero">

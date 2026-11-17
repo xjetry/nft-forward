@@ -1,0 +1,259 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"nft-forward/internal/db"
+	"nft-forward/internal/nft"
+	"nft-forward/internal/wsproto"
+)
+
+// pushLog 记录一个模拟节点收到的每一次规则下发。节点是先记录、再回 apply_ack，
+// 而面板的下发要等到 ack 才返回，所以一次同步下发返回时它必然已经记在这里。
+type pushLog struct {
+	mu     sync.Mutex
+	pushes [][]nft.Rule
+}
+
+func (p *pushLog) record(rules []nft.Rule) {
+	p.mu.Lock()
+	p.pushes = append(p.pushes, rules)
+	p.mu.Unlock()
+}
+
+// forwards 报告最近一次下发里是否有监听 port 的规则；ok=false 表示还没有收到过下发。
+func (p *pushLog) forwards(port int) (has, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.pushes) == 0 {
+		return false, false
+	}
+	for _, r := range p.pushes[len(p.pushes)-1] {
+		if r.SrcPort == port {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// waitForwarding 等到最近一次下发里“是否转发 port”等于 want。下发可能由计数入账或
+// 节点上线触发，是异步的，所以轮询；超时即失败。
+func (p *pushLog) waitForwarding(t *testing.T, port int, want bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		has, ok := p.forwards(port)
+		if ok && has == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s：期望端口 %d 转发=%v，最近一次下发里转发=%v（收到过下发=%v）", what, port, want, has, ok)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+type quotaEnv struct {
+	*upgradeTestEnv
+	node  *db.Node
+	agent *websocket.Conn
+	log   *pushLog
+	uid   int64
+	user  *http.Cookie
+}
+
+const quotaRulePort = 12001
+
+// newQuotaEnv 起一个面板、一个走真实握手接入的模拟节点，和一个在该节点上有一条规则
+// 的普通用户。返回时节点已经收到包含这条规则的下发。
+func newQuotaEnv(t *testing.T) *quotaEnv {
+	t.Helper()
+	e := &quotaEnv{upgradeTestEnv: newUpgradeTestEnv(t), log: &pushLog{}}
+	n, err := db.CreateNode(e.d, "edge", "https://panel.example.com", "tok-edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.node = n
+	e.uid, e.user = loginAsUser(t, e.d, 10)
+	if err := db.GrantNode(e.d, e.uid, n.ID, 10, 0); err != nil {
+		t.Fatal(err)
+	}
+	createStandaloneRuleHop(t, e.d, n.ID, "tcp", quotaRulePort, "10.0.0.30", 9200, sql.NullInt64{Int64: e.uid, Valid: true})
+
+	c, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(e.srv.URL, "http")+"/v1/agents", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close(websocket.StatusNormalClosure, "") })
+	e.agent = c
+	hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-edge", AgentVersion: "v0.0.1", OS: "linux", Arch: "amd64"})
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+	var ack wsproto.HelloAck
+	if env := recvEnvelope(t, c); json.Unmarshal(env.Payload, &ack) != nil || ack.Error != "" {
+		t.Fatalf("hello 被拒绝: %+v", ack)
+	}
+	go func() {
+		for {
+			_, b, err := c.Read(context.Background())
+			if err != nil {
+				return
+			}
+			var env wsproto.Envelope
+			if json.Unmarshal(b, &env) != nil {
+				return
+			}
+			if env.Type != wsproto.TypeApplyRuleset {
+				continue
+			}
+			var a wsproto.ApplyRuleset
+			_ = json.Unmarshal(env.Payload, &a)
+			e.log.record(a.Rules)
+			p, _ := json.Marshal(wsproto.ApplyAck{Rev: a.Rev, OK: true})
+			out, _ := json.Marshal(wsproto.Envelope{Type: wsproto.TypeApplyAck, ID: env.ID, Payload: p})
+			_ = c.Write(context.Background(), websocket.MessageText, out)
+		}
+	}()
+	e.log.waitForwarding(t, quotaRulePort, true, "前置条件：节点上线后应收到这条规则")
+	return e
+}
+
+// reportTraffic 让节点上报这条规则的一批计数。
+func (e *quotaEnv) reportTraffic(t *testing.T, up, down int64) {
+	t.Helper()
+	p, _ := json.Marshal(wsproto.Counters{Samples: []wsproto.CounterSample{{ListenPort: quotaRulePort, Proto: "tcp", BytesUp: up, BytesDown: down}}})
+	sendJSON(t, e.agent, wsproto.Envelope{Type: wsproto.TypeCounters, ID: "c", Payload: p})
+}
+
+func (e *quotaEnv) call(t *testing.T, cookie *http.Cookie, method, path string, body any) (int, string) {
+	t.Helper()
+	buf, _ := json.Marshal(body)
+	req, err := http.NewRequest(method, e.srv.URL+path, bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func (e *quotaEnv) admin(t *testing.T, method, path string, body any) {
+	t.Helper()
+	if code, out := e.call(t, e.cookie, method, path, body); code != http.StatusOK {
+		t.Fatalf("%s %s: %d %s", method, path, code, out)
+	}
+}
+
+// 全局流量配额用尽只停转发：这个用户的规则不再下发到节点，但账号没有被停用，他
+// 仍能登录看到自己的用量。
+func TestOverQuotaStopsForwardingButKeepsAccount(t *testing.T) {
+	e := newQuotaEnv(t)
+	e.admin(t, "POST", fmt.Sprintf("/api/users/%d/quota", e.uid), map[string]any{"traffic_quota_bytes": 1000})
+
+	e.reportTraffic(t, 600, 600)
+	e.log.waitForwarding(t, quotaRulePort, false, "用量达到全局配额后规则应撤出节点")
+
+	u, err := db.GetUserByID(e.d, e.uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Disabled {
+		t.Fatalf("超额不应停用账号（disable_reason=%q）", u.DisableReason.String)
+	}
+	code, body := e.call(t, e.user, "GET", "/api/me", nil)
+	if code != http.StatusOK {
+		t.Fatalf("超额用户应仍能访问面板，/api/me 返回 %d %s", code, body)
+	}
+	var me struct {
+		User struct {
+			OverQuota bool `json:"over_quota"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal([]byte(body), &me); err != nil || !me.User.OverQuota {
+		t.Fatalf("/api/me 应标出 over_quota=true：%s", body)
+	}
+}
+
+// 配额状态只在下发时求值，所以每一个改动全局配额或用量的入口都必须重新下发，否则
+// 调高配额之后规则要等到下一次无关的下发才恢复。
+func TestRaisingGlobalQuotaRestoresForwarding(t *testing.T) {
+	writers := map[string]func(t *testing.T, e *quotaEnv){
+		"设置配额": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/quota", e.uid), map[string]any{"traffic_quota_bytes": 5000})
+		},
+		"修改用户资料": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "PATCH", fmt.Sprintf("/api/users/%d/profile", e.uid), map[string]any{"max_forwards": 10, "traffic_quota_gb": 1})
+		},
+		"重置流量": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/reset-traffic", e.uid), nil)
+		},
+	}
+	for name, raise := range writers {
+		t.Run(name, func(t *testing.T) {
+			e := newQuotaEnv(t)
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/quota", e.uid), map[string]any{"traffic_quota_bytes": 1000})
+			e.reportTraffic(t, 600, 600)
+			e.log.waitForwarding(t, quotaRulePort, false, "前置条件：超额后规则应撤出")
+
+			raise(t, e)
+
+			// 这些接口同步下发：返回时节点已经收到新的规则集。
+			if has, _ := e.log.forwards(quotaRulePort); !has {
+				t.Fatalf("%s之后规则应立即恢复转发", name)
+			}
+			if u, _ := db.GetUserByID(e.d, e.uid); u.Disabled {
+				t.Fatalf("%s之后账号不应处于停用状态", name)
+			}
+		})
+	}
+}
+
+// 授权配额同理：改动一条授权的配额（直接设置、重新授权、在节点侧批量加授权）都要
+// 重新下发经过这条授权的规则。
+func TestRaisingGrantQuotaRestoresForwarding(t *testing.T) {
+	writers := map[string]func(t *testing.T, e *quotaEnv){
+		"设置授权配额": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/nodes/%d/quota", e.uid, e.node.ID), map[string]any{"traffic_quota_bytes": 5000})
+		},
+		"重新授权": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/grants", e.uid), map[string]any{"node_id": e.node.ID, "max_forwards": 10, "traffic_quota_bytes": 5000})
+		},
+		"节点侧批量加授权": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/nodes/%d/grants/batch", e.node.ID), map[string]any{"add_user_ids": []int64{e.uid}, "max_forwards": 10})
+		},
+		"重置授权流量": func(t *testing.T, e *quotaEnv) {
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/nodes/%d/reset-traffic", e.uid, e.node.ID), nil)
+		},
+	}
+	for name, raise := range writers {
+		t.Run(name, func(t *testing.T) {
+			e := newQuotaEnv(t)
+			e.admin(t, "POST", fmt.Sprintf("/api/users/%d/nodes/%d/quota", e.uid, e.node.ID), map[string]any{"traffic_quota_bytes": 1000})
+			e.reportTraffic(t, 600, 600)
+			e.log.waitForwarding(t, quotaRulePort, false, "前置条件：授权超额后规则应撤出")
+
+			raise(t, e)
+
+			if has, _ := e.log.forwards(quotaRulePort); !has {
+				t.Fatalf("%s之后规则应立即恢复转发", name)
+			}
+		})
+	}
+}

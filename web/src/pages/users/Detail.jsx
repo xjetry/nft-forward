@@ -87,6 +87,8 @@ export default function UserDetail() {
                 <span>
                   {user.disabled ? (
                     <><Badge color="amber">已禁用</Badge> <span className="text-ink-soft text-xs ml-1">原因：{nullStr(user.disable_reason)}</span></>
+                  ) : user.over_quota ? (
+                    <><Badge color="red">已超额</Badge> <span className="text-ink-soft text-xs ml-1">全局流量配额已用尽，规则已暂停转发；调高配额或重置流量后恢复</span></>
                   ) : <Badge color="green">正常</Badge>}
                 </span>
                 {user.admin_note && (

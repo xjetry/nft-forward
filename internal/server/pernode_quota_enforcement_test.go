@@ -100,23 +100,3 @@ func TestChainExcludedWhenOneHopExceedsQuota(t *testing.T) {
 		}
 	}
 }
-
-func TestGlobalQuotaStillDisablesUser(t *testing.T) {
-	d := openDB(t)
-	uid, _ := loginAsUser(t, d, 100)
-
-	n1, _ := db.CreateNode(d, "gq1", "", "")
-	db.UpdateNodeRelayHost(d, n1.ID, "1.1.1.1")
-	db.GrantNode(d, uid, n1.ID, 10, 0)
-
-	// set global quota
-	d.Exec(`UPDATE users SET traffic_quota_bytes=2000, traffic_used_bytes=2000 WHERE id=?`, uid)
-
-	s, _ := New(d)
-	s.enforceUserQuota(uid)
-
-	u, _ := db.GetUserByID(d, uid)
-	if !u.Disabled {
-		t.Fatal("user should be disabled when global quota exceeded")
-	}
-}

@@ -78,19 +78,14 @@ func (s *Server) expiryEnforcer() {
 	}
 }
 
-// cycleResetEnforcer periodically checks every user's traffic reset window.
-// When the window rolls over it re-enables any user who was disabled for
-// exceeding quota and re-dispatches their nodes, restoring their rules to
-// the kernel for the fresh cycle.
+// cycleResetEnforcer 定期检查每个用户的流量重置周期，周期翻转时把用量账本归零并
+// 重新下发该用户的节点，让因配额用尽被排除的规则在新周期恢复转发。
 //
-// This covers users who are globally disabled (all rules already removed from
-// the kernel) and therefore receive no traffic — without this goroutine they
-// would never reach the cycle-reset check in applyCounters.
+// 计数入账路径（Hub.applyCounters）里也有同样的周期检查，但它只在该用户有流量
+// 上报时才走到；规则已全部撤出节点的用户不再产生计数，要靠这里的定时检查。
 //
-// The re-push runs unconditionally after a reset, not only for re-enabled
-// users: per-grant quota exclusions are evaluated at push time only, so a
-// suppressed rule stays dead until something re-pushes even when the user was
-// never globally disabled.
+// 重置之后无条件重推：配额条件只在下发时求值（db.ActiveRuleHopsForPush），归零本身
+// 不会让节点上的规则集变化。
 func (s *Server) cycleResetEnforcer() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -116,21 +111,7 @@ func (s *Server) cycleResetEnforcer() {
 				if !reset {
 					continue
 				}
-				if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-					if err := db.SetUserDisabled(s.DB, u.ID, false, ""); err != nil {
-						log.Printf("cycle: re-enable user %d: %v", u.ID, err)
-						continue
-					}
-				}
-				// Quota exclusions are evaluated at push time only; a fresh
-				// cycle must re-push or suppressed rules stay dead.
-				if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
-					for _, n := range nodes {
-						if err := s.dispatchToNode(n); err != nil {
-							log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
-						}
-					}
-				}
+				s.redispatchUser(u.ID, "流量周期重置")
 			}
 		}
 	}
@@ -179,33 +160,57 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 	}
 }
 
-// enforceUserQuota disables a user that has reached its traffic quota and
-// re-pushes every node it had rule hops on so ActiveRuleHopsForPush (which
-// excludes disabled users) removes them from the kernel. Quota 0 = unlimited.
+// redispatchUser 重新下发承载 userID 规则跳的每一个节点。
+//
+// 一条规则下不下发由 db.ActiveRuleHopsForPush 在下发时按库里的当前值判定。凡是改了
+// 这个用户的账号级状态（停用标志、到期时间、全局配额、全局已用量）的入口，改完
+// 都调这里，让节点上的规则集立刻跟上；why 只用于日志。
+func (s *Server) redispatchUser(userID int64, why string) {
+	nodes, err := db.DistinctUserNodes(s.DB, userID)
+	if err != nil {
+		log.Printf("redispatch user %d (%s): list nodes: %v", userID, why, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("redispatch user %d (%s): node %d: %v", userID, why, n, err)
+		}
+	}
+}
+
+// redispatchUserGrant 重新下发 userID 经由授权节点 nodeID 的规则所在的节点。改动
+// 这条授权的配额或已用量之后调用，理由同 redispatchUser。
+func (s *Server) redispatchUserGrant(userID, nodeID int64, why string) {
+	nodes, err := db.RulesAffectedByNode(s.DB, userID, nodeID)
+	if err != nil {
+		log.Printf("redispatch user %d grant %d (%s): list nodes: %v", userID, nodeID, why, err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("redispatch user %d grant %d (%s): node %d: %v", userID, nodeID, why, n, err)
+		}
+	}
+}
+
+// enforceUserQuota 在一批计数入账后调用：用户的全局流量配额用尽时重新下发他的
+// 节点，由 db.ActiveRuleHopsForPush 把他的规则排除出去。账号本身不停用，用户仍能
+// 登录查看用量；配额调高或用量归零后，各自的入口重推即可恢复，这里不留任何需要
+// 事后撤销的状态。
+//
+// 这里没有“已经处理过”的记号：只要用户处于用尽状态，每入账一批带他流量的计数就
+// 重推一次他的节点（授权配额的 enforcePerNodeQuota 也是这样）。
 func (s *Server) enforceUserQuota(userID int64) {
 	u, err := db.GetUserByID(s.DB, userID)
 	if err != nil {
 		log.Printf("quota: load user %d: %v", userID, err)
 		return
 	}
-	if u.Disabled || u.TrafficQuotaBytes <= 0 || u.TrafficUsedBytes < u.TrafficQuotaBytes {
+	if !u.OverQuota {
 		return
 	}
-	if err := db.SetUserDisabled(s.DB, userID, true, "流量超额"); err != nil {
-		log.Printf("quota: disable user %d: %v", userID, err)
-		return
-	}
-	log.Printf("user %d disabled: traffic quota reached (%d/%d bytes)", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
-	nodes, err := db.DistinctUserNodes(s.DB, userID)
-	if err != nil {
-		log.Printf("quota: user %d nodes: %v", userID, err)
-		return
-	}
-	for _, n := range nodes {
-		if err := s.dispatchToNode(n); err != nil {
-			log.Printf("quota: re-dispatch node %d after disabling user %d: %v", n, userID, err)
-		}
-	}
+	log.Printf("user %d reached traffic quota (%d/%d bytes): withdrawing rules", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
+	s.redispatchUser(userID, "全局流量配额用尽")
 }
 
 // enforcePerNodeQuota re-dispatches nodes affected by any per-node quota

@@ -767,9 +767,6 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				userCache[userID] = u
 				if u != nil {
 					if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
-						if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-							_ = db.SetUserDisabled(h.DB, userID, false, "")
-						}
 						// Quota exclusions are evaluated at push time only; a
 						// fresh cycle must re-push or suppressed rules stay dead.
 						if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {

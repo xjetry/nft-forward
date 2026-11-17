@@ -37,6 +37,10 @@ type User struct {
 	MaxForwards       int            `json:"max_forwards"`
 	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
 	TrafficUsedBytes  int64          `json:"traffic_used_bytes"`
+	// OverQuota 不是 users 表的列：scanUser 在读出这一行时用 QuotaReached 从上面两个
+	// 字段算出，供页面显示“已超额”。全局配额用尽只停转发（见 ActiveRuleHopsForPush），
+	// 与 Disabled 无关：超额的账号仍可登录。
+	OverQuota bool `json:"over_quota"`
 	// TrafficResetDays is the rolling window length in days; 0 means never auto-reset.
 	TrafficResetDays   int           `json:"traffic_reset_days"`
 	LastTrafficResetAt int64         `json:"last_traffic_reset_at"`
@@ -215,7 +219,15 @@ func scanUser(r rowScanner) (*User, error) {
 		return nil, err
 	}
 	u.Disabled = disabled == 1
+	u.OverQuota = QuotaReached(u.TrafficQuotaBytes, u.TrafficUsedBytes)
 	return u, nil
+}
+
+// QuotaReached 是“流量配额用尽”的判定：配额为 0 表示不限量，永不用尽；否则已用
+// 达到配额即用尽（恰好相等也算）。ActiveRuleHopsForPush 的 SQL 里对全局配额写的
+// 是同一个条件，两处由 TestGlobalQuotaPushPredicateMatchesQuotaReached 对照。
+func QuotaReached(quotaBytes, usedBytes int64) bool {
+	return quotaBytes > 0 && usedBytes >= quotaBytes
 }
 
 const userCols = `id, username, pw_hash, role, disabled, disable_reason, max_forwards, traffic_quota_bytes, traffic_used_bytes, traffic_reset_days, last_traffic_reset_at, expires_at, landing_sub_url, landing_uris, admin_note, billing_rate`
@@ -809,6 +821,14 @@ func ExpiredUserNodeIDs(d *sql.DB) ([]int64, error) {
 		  AND u.expires_at < strftime('%s','now')`)
 }
 
+// ActiveRuleHopsForPush 返回应当下发到 nodeID 的规则跳，是“一条规则此刻转不转发”
+// 的唯一判定。一条规则只要命中下面任一条就整条不下发（它在每个节点上的跳都被
+// 排除）：规则被停用；属主账号被停用或已过期；属主的全局流量配额用尽；规则经过
+// 的某条授权的配额用尽；规则指向的落地出口的配额用尽。
+//
+// 这些条件读的都是库里的当前值，而判定只在下发时求值。所以每个改动配额、已用量、
+// 停用标志或到期时间的入口，改完都必须重新下发受影响的节点（Server.redispatchUser
+// 及各自的定向重推），否则变化要等到下一次无关的下发才生效。
 func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 	q := `SELECT ` + ruleHopCols + ` FROM rule_hops rh
 		WHERE rh.node_id=?
@@ -819,7 +839,9 @@ func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 		AND NOT EXISTS (
 		  SELECT 1 FROM rules r JOIN users u ON u.id = r.owner_id
 		  WHERE r.id = rh.rule_id
-		  AND (u.disabled = 1 OR (u.expires_at IS NOT NULL AND u.expires_at > 0 AND u.expires_at < strftime('%s','now')))
+		  AND (u.disabled = 1
+		    OR (u.expires_at IS NOT NULL AND u.expires_at > 0 AND u.expires_at < strftime('%s','now'))
+		    OR (u.traffic_quota_bytes > 0 AND u.traffic_used_bytes >= u.traffic_quota_bytes))
 		)
 		AND NOT EXISTS (
 		  SELECT 1 FROM rule_hops rh2

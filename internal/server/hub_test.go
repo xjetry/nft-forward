@@ -287,7 +287,9 @@ func TestHubCountersAccumulatesUserTrafficAndNotifies(t *testing.T) {
 	}
 }
 
-func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
+// 全局配额用尽时 enforceUserQuota 只重推节点（下发判定把该用户的规则排除出去），
+// 不停用账号。
+func TestEnforceUserQuotaWithdrawsRulesWithoutDisabling(t *testing.T) {
 	d := openDB(t)
 	s, err := New(d)
 	if err != nil {
@@ -298,8 +300,10 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dispatched bool
+	var pushed []nft.Rule
 	s.Dispatcher.SendLocal = func(rules []nft.Rule) (string, error) {
 		dispatched = true
+		pushed = rules
 		return "", nil
 	}
 
@@ -322,19 +326,32 @@ func TestEnforceUserQuotaDisablesOverQuotaUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Disabled {
-		t.Fatalf("expected user %d disabled after exceeding quota", uid)
+	if got.Disabled {
+		t.Fatalf("user %d must stay enabled after exceeding quota (reason=%q)", uid, got.DisableReason.String)
 	}
 	if !dispatched {
-		t.Fatalf("expected re-dispatch to the user's node after disabling")
+		t.Fatalf("expected re-dispatch to the user's node once the quota is reached")
+	}
+	if len(pushed) != 0 {
+		t.Fatalf("the over-quota user's only rule must be left out of the push, got %+v", pushed)
 	}
 }
 
-func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
+// 反方向：配额没用尽时 enforceUserQuota 什么都不做——不重推、不动账号。
+func TestEnforceUserQuotaLeavesUnderQuotaUserAlone(t *testing.T) {
 	d := openDB(t)
 	s, err := New(d)
 	if err != nil {
 		t.Fatal(err)
+	}
+	self, err := EnsureSelfNode(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dispatched bool
+	s.Dispatcher.SendLocal = func(rules []nft.Rule) (string, error) {
+		dispatched = true
+		return "", nil
 	}
 	hash, _ := HashPassword("pw")
 	uid, err := db.CreateUser(d, "under", hash, "user")
@@ -347,6 +364,7 @@ func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
 	if _, err := d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 200, uid); err != nil {
 		t.Fatal(err)
 	}
+	createStandaloneRuleHop(t, d, self.ID, "tcp", 0, "10.0.0.31", 9201, sql.NullInt64{Int64: uid, Valid: true})
 	s.enforceUserQuota(uid)
 	got, err := db.GetUserByID(d, uid)
 	if err != nil {
@@ -354,6 +372,9 @@ func TestEnforceUserQuotaLeavesUnderQuotaUserEnabled(t *testing.T) {
 	}
 	if got.Disabled {
 		t.Fatalf("user under quota should stay enabled, got disabled")
+	}
+	if dispatched {
+		t.Fatalf("a user under quota must not trigger a re-dispatch")
 	}
 }
 
