@@ -140,7 +140,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			poolSize = n
 		}
 	}
-	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name, PoolSize: poolSize})
+	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name, PoolSize: &poolSize})
 	if err := writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ackPayload}); err != nil {
 		ws.Close(websocket.StatusInternalError, "ack write failed")
 		return

@@ -736,3 +736,40 @@ func TestHubAppliesDeclaredRelayHostV6(t *testing.T) {
 		t.Error("RelayHostV6Declared should be true after a hello carrying DeclaredRelayHostV6")
 	}
 }
+
+// The hello ack states the panel's pool size on the wire for every stored
+// value, 0 included: an agent that has just restarted learns the setting
+// from this frame alone.
+func TestHubHelloAckCarriesPoolSize(t *testing.T) {
+	for _, tc := range []struct {
+		setting string
+		stored  bool
+		want    int
+	}{
+		{setting: "0", stored: true, want: 0},
+		{setting: "9", stored: true, want: 9},
+		{stored: false, want: 4},
+	} {
+		srv, hub, _ := newHubTestServer(t)
+		if tc.stored {
+			if err := db.SetSetting(hub.DB, "pool_size", tc.setting); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c := dialWS(t, srv)
+		hp, _ := json.Marshal(wsproto.Hello{NodeToken: "tok-good", AgentVersion: "v1.0", OS: "linux", Arch: "amd64"})
+		sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, ID: "1", Payload: hp})
+		env := recvEnvelope(t, c)
+		var onWire map[string]json.RawMessage
+		if err := json.Unmarshal(env.Payload, &onWire); err != nil {
+			t.Fatal(err)
+		}
+		raw, present := onWire["pool_size"]
+		if !present {
+			t.Fatalf("setting %q: hello_ack carries no pool_size: %s", tc.setting, env.Payload)
+		}
+		if string(raw) != strconv.Itoa(tc.want) {
+			t.Fatalf("setting %q: pool_size on the wire = %s, want %d", tc.setting, raw, tc.want)
+		}
+	}
+}
