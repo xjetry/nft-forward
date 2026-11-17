@@ -58,39 +58,25 @@ func TestBuildRulesStampsRuleMeta(t *testing.T) {
 	}
 }
 
-func TestComputeRevIgnoresRuleMeta(t *testing.T) {
-	base := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001}}
-	withMeta := []nft.Rule{{Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001,
-		RuleID: 5, RuleName: "seednet-vless"}}
-	if computeRev(base) != computeRev(withMeta) {
-		t.Fatalf("rule metadata must not affect rev: %q vs %q", computeRev(base), computeRev(withMeta))
-	}
-}
-
-// rev 对规则的每个字段都与 nft.Rule.Dataplane 的归类一致：只改一个字段，rev 变当且
-// 仅当数据面投影变了。字段从 nft.Rule 的定义里枚举（nfttest.FieldVariants），这里
-// 不抄字段清单——daemon 判断数据面要不要重放用的是同一个投影（internal/daemon 的
-// TestDataplaneIsReappliedExactlyWhenTheProjectionChanges），两边对“变没变”的回答
-// 由此钉在一起。
-func TestComputeRevChangesExactlyWhenTheDataplaneProjectionDoes(t *testing.T) {
+// rev 标识整份下发载荷：同一份载荷算出同一个 rev，任何一个字段变了 rev 都变——
+// 包括数据面不读的规则名、备注、跳数，节点要靠 rev 不同才会在重连后收到它们的新值。
+// 字段从 nft.Rule 的定义里枚举（nfttest.FieldVariants），加了字段不用改这里。
+func TestComputeRevIdentifiesTheWholePayload(t *testing.T) {
 	base := nft.Rule{
 		RuleID: 5, RuleName: "seednet-vless", HopCount: 1, Comment: "c",
 		Proto: "tcp", SrcPort: 20000, DestIP: "10.0.0.2", DestPort: 20001,
 	}
-	for field, variant := range nfttest.FieldVariants(base) {
-		changed := computeRev([]nft.Rule{variant}) != computeRev([]nft.Rule{base})
-		if want := variant.Dataplane() != base.Dataplane(); changed != want {
-			t.Errorf("只改 %s：rev 变了=%v，按数据面投影应为 %v", field, changed, want)
-		}
+	if computeRev([]nft.Rule{base}) != computeRev([]nft.Rule{base}) {
+		t.Fatal("同一份载荷两次算出的 rev 不同")
 	}
-}
-
-// Mode 的空值与 "kernel" 在数据面上是同一回事，rev 不区分它们。
-func TestComputeRevTreatsEmptyModeAsKernel(t *testing.T) {
-	implicit := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80}}
-	explicit := []nft.Rule{{Proto: "tcp", SrcPort: 80, DestIP: "10.0.0.1", DestPort: 80, Mode: nft.ModeKernel}}
-	if computeRev(implicit) != computeRev(explicit) {
-		t.Fatal("空 Mode 与 kernel 的 rev 应相同")
+	variants := nfttest.FieldVariants(base)
+	if len(variants) == 0 {
+		t.Fatal("前置条件：FieldVariants 没有给出任何字段")
+	}
+	for field, variant := range variants {
+		if computeRev([]nft.Rule{variant}) == computeRev([]nft.Rule{base}) {
+			t.Errorf("只改 %s：rev 没变，节点重连后收不到这个字段的新值", field)
+		}
 	}
 }
 

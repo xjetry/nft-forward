@@ -77,9 +77,7 @@ func TestPanelPushThatChangesNoDataplaneFieldDoesNotReapply(t *testing.T) {
 
 // “数据面要不要重放”对规则的每个字段都与 nft.Rule.Dataplane 的归类一致：只改一个
 // 字段再下发，重放当且仅当数据面投影变了。字段从 nft.Rule 的定义里枚举
-// （nfttest.FieldVariants），这里不抄字段清单——面板算 rev 用的是同一个投影
-// （internal/server 的 TestComputeRevChangesExactlyWhenTheDataplaneProjectionDoes），
-// 两边对“变没变”的回答由此钉在一起。
+// （nfttest.FieldVariants），这里不抄字段清单。
 //
 // 不论重放与否，新的规则都要记进归属段。
 func TestDataplaneIsReappliedExactlyWhenTheProjectionChanges(t *testing.T) {

@@ -272,28 +272,24 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	return rules
 }
 
-// computeRev 给一组规则算出版本号。它回答的问题是“节点的数据面是否已经是这组规则”：
-// 重连的节点在握手里报上它上次应用的 rev，与这里算出的相同就不再下发
-// （reconcileOnConnect）。同一组规则两次算出的 rev 是否相同，取决于
-// ActiveRuleHopsForPush 两次返回的顺序是否相同（它按 listen_port 排序）。
+// computeRev 给一份下发的规则载荷算出版本号。rev 标识的是载荷本身：节点把收下的
+// rev 与规则在同一次落盘里存下（daemon 的 SetPanelRuleset），重连握手时报回来；
+// 面板此刻要发的载荷算出同一个 rev，就说明节点存着的面板段与这份载荷逐字段相同，
+// 不再下发（reconcileOnConnect）。
 //
-// 所以 rev 只覆盖数据面读的字段，取的是 nft.Rule.Dataplane 这个投影——daemon 判断
-// 数据面要不要重放用的是同一个投影（nft.SameDataplane），两边对“变没变”的回答因此
-// 一致，这里不另列一份字段清单。
+// 所以 rev 覆盖载荷的每个字段，包括数据面不读的规则名、备注、跳数。节点存着这些
+// 值并且在用：TUI 显示规则名与备注，本机发起的编辑把表单里的备注带回面板，daemon
+// 按跳数决定编辑走哪条命令（handleUpdatePanelRule）。它们在节点离线期间变了，重连
+// 时 rev 不同、补发一次，节点上的副本才不会停在旧值上。
 //
-// 由此而来的后果：规则名、备注、跳数这些数据面不读的字段如果在节点离线期间变了、
-// 而这个节点上的数据面字段没变，重连时 rev 相同、不会补发，节点本地存的这些值停在
-// 旧值上，直到下一次向它下发（dispatchRound 每次都发完整的规则，不看 rev）。这期间
-// 节点本机的 TUI 显示的是旧值，从本机提交的编辑会把旧备注带回面板。跳数旧了只影响
-// 本机选哪条编辑命令，改成什么仍由面板按数据库里的跳数裁决：handleRuleUpdate 拒绝
-// 不是单跳的规则，applyRuleHopEdit 只改本节点那一跳的端口、模式、备注。
+// “要不要下发”与“数据面要不要重放”是两个问题。后者由节点收到载荷后自己按数据面
+// 投影判断（nft.SameDataplane）：只变了数据面不读的字段时，它存下新值、不动数据面。
+//
+// 同一份载荷两次算出的 rev 是否相同，取决于 ActiveRuleHopsForPush 两次返回的顺序
+// 是否相同（它按 listen_port 排序）。
 func computeRev(rules []nft.Rule) string {
-	dataplane := make([]nft.Rule, len(rules))
-	for i, r := range rules {
-		dataplane[i] = r.Dataplane()
-	}
 	h := sha256.New()
-	b, _ := json.Marshal(dataplane)
+	b, _ := json.Marshal(rules)
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }

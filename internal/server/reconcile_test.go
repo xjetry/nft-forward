@@ -49,6 +49,18 @@ func TestReconcileOnConnect(t *testing.T) {
 	// A stale rev → redispatch again.
 	hub.reconcileOnConnect(n.ID, "deadbeefdeadbeef")
 	expectDispatch(true, "stale rev")
+
+	// 节点离线期间只改了规则名：数据面字段没变，但节点存着的规则名是旧的，重连时
+	// 要补发一次。
+	res, err := hub.DB.Exec(`UPDATE rules SET name = 'renamed' WHERE node_id = ?`, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, _ := res.RowsAffected(); changed != 1 {
+		t.Fatalf("前置条件：应改到 1 条规则的名字，实际 %d", changed)
+	}
+	hub.reconcileOnConnect(n.ID, rev)
+	expectDispatch(true, "rule renamed while the node was offline")
 }
 
 // Revoking a node grant deletes the user's rules that enter at that node and
