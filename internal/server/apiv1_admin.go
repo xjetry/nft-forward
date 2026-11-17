@@ -178,11 +178,14 @@ func (s *Server) v1AdminSetLandingSubURL(w http.ResponseWriter, r *http.Request)
 		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
 		return
 	}
-	if aerr := s.setUserLandingSubURL(admin.ID, id, body.LandingSubURL); aerr != nil {
+	// nil for the manual URIs: this endpoint sets the subscription only.
+	saved, aerr := s.saveUserLandingSource(admin.ID, id, body.LandingSubURL, nil)
+	if aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
-	v1OK(w, map[string]any{"updated": true})
+	// sub_error is "" unless the URL was stored but could not be fetched.
+	v1OK(w, map[string]any{"updated": true, "sub_error": saved.SubError})
 }
 
 func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
