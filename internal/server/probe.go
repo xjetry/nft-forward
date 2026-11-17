@@ -114,30 +114,35 @@ func probeProto(p string) string {
 }
 
 func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string) probeResult {
-	hops, err := db.ListNodeHops(s.DB, compositeID)
-	if err != nil || len(hops) == 0 {
-		return probeResult{Error: "no hops"}
+	// 探测面对的是展平后的物理节点，与建规则时用的是同一份展平（flattenComposite）。
+	// 组合的成员可以还是组合，而探测帧只能发给有 agent 连接的节点（Hub.SendProbe
+	// 按节点 id 找连接）；只遍历 node_hops 的第一层，会把嵌套的组合当成一台机器
+	// 去探测，得到的永远是“未连接”。
+	count := 0
+	hops, err := s.flattenComposite(compositeID, compositeID, map[int64]bool{}, &count)
+	if err != nil {
+		return probeResult{Error: err.Error()}
 	}
-	// Only the last child dials the real target, so it's the only leg with a
-	// concrete data-plane endpoint to probe outside a rule — inter-child legs
-	// have no listen port until the composite is instantiated in a rule (use the
-	// rule-level chain probe for full per-hop latency). Still, report every
-	// child: a dead middle child means the composite can't work, so its liveness
-	// must fold into the overall result rather than being ignored while the exit
-	// leg alone reports OK.
+	// Only the last physical node dials the real target, so it's the only leg
+	// with a concrete data-plane endpoint to probe outside a rule — the legs
+	// between members have no listen port until the composite is instantiated
+	// in a rule (use the rule-level chain probe for full per-hop latency).
+	// Still, report every node: a dead middle node means the composite can't
+	// work, so its liveness must fold into the overall result rather than being
+	// ignored while the exit leg alone reports OK.
 	results := make([]hopProbe, len(hops))
 	allOK := true
 	total := 0
 	for i, h := range hops {
-		n, gerr := db.GetNode(s.DB, h.HopNodeID)
-		name := fmt.Sprintf("#%d", h.HopNodeID)
+		n, gerr := db.GetNode(s.DB, h.NodeID)
+		name := fmt.Sprintf("#%d", h.NodeID)
 		if gerr == nil {
 			name = n.Name
 		}
 		hp := hopProbe{Node: name}
 		if i == len(hops)-1 {
 			hp.Target = target
-			ack, perr := s.Hub.SendProbe(h.HopNodeID, target, proto)
+			ack, perr := s.Hub.SendProbe(h.NodeID, target, proto)
 			switch {
 			case perr != nil:
 				hp.Error = perr.Error()
