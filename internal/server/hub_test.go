@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -369,17 +370,51 @@ func seedTwoHopRuleDB(t *testing.T, d *sql.DB) (*db.Rule, int64, int64) {
 	return rl, n0.ID, n1.ID
 }
 
-func TestHubApplyRuleHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
-	_, hub, _ := newHubTestServer(t)
-	rl, n0, n1 := seedTwoHopRuleDB(t, hub.DB)
-	var got []int64
-	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
+// nodeRuleCommand 让节点 nodeID 的连接发一条规则命令，经 Hub 的读循环走完整条路径
+// （解码 → rulechange → Redispatch → 应答），返回应答。
+func nodeRuleCommand(t *testing.T, c *websocket.Conn, typ string, payload any) wsproto.RuleCmdAck {
+	t.Helper()
+	p, _ := json.Marshal(payload)
+	sendJSON(t, c, wsproto.Envelope{Type: typ, ID: "cmd-" + typ, Payload: p})
+	for {
+		env := recvEnvelope(t, c)
+		if env.Type != wsproto.TypeRuleCmdAck {
+			continue
+		}
+		var ack wsproto.RuleCmdAck
+		if err := json.Unmarshal(env.Payload, &ack); err != nil {
+			t.Fatal(err)
+		}
+		return ack
+	}
+}
 
-	entry, err := hub.applyRuleHopEdit(n1, rl.ID, 11222, "kernel", "renamed")
-	if err != nil {
+// connectAs 让一个已存在的节点接入 Hub。
+func connectAs(t *testing.T, srv *httptest.Server, d *sql.DB, nodeID int64) *websocket.Conn {
+	t.Helper()
+	token := "tok-node-" + strconv.FormatInt(nodeID, 10)
+	if _, err := d.Exec(`UPDATE nodes SET secret=? WHERE id=?`, token, nodeID); err != nil {
 		t.Fatal(err)
 	}
-	if entry == "" {
+	c := dialWS(t, srv)
+	sendJSON(t, c, wsproto.Envelope{Type: wsproto.TypeHello, Payload: mustJSON(wsproto.Hello{NodeToken: token, OS: "linux", Arch: "amd64"})})
+	if env := recvEnvelope(t, c); env.Type != wsproto.TypeHelloAck {
+		t.Fatalf("期望 hello_ack，实际 %s", env.Type)
+	}
+	return c
+}
+
+func TestHubRuleHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
+	srv, hub, _ := newHubTestServer(t)
+	rl, n0, n1 := seedTwoHopRuleDB(t, hub.DB)
+	redispatched := captureRedispatch(hub)
+
+	ack := nodeRuleCommand(t, connectAs(t, srv, hub.DB, n1), wsproto.TypeRuleHopEdit,
+		wsproto.RuleHopEdit{RuleID: rl.ID, ListenPort: 11222, Mode: "kernel", Comment: "renamed"})
+	if !ack.OK {
+		t.Fatalf("改自己那一跳应成功，实际被拒: %s", ack.Error)
+	}
+	if ack.Entry == "" {
 		t.Fatal("expected entry endpoint returned")
 	}
 	hops, _ := db.ListRuleHops(hub.DB, rl.ID)
@@ -393,28 +428,58 @@ func TestHubApplyRuleHopEditSyncsUpstreamAndRedispatches(t *testing.T) {
 	if byNode[n0].TargetPort != 11222 {
 		t.Fatalf("upstream n0 target_port = %d, want 11222", byNode[n0].TargetPort)
 	}
-	if len(got) == 0 {
-		t.Fatal("Redispatch was not called")
+	// n1 的监听端口变了，上游 n0 那一跳的目标端口跟着变：两台都要重推。n0 只可能来自
+	// 这条命令（接入时的重推只涉及接入的那台节点）。
+	if got := redispatched(); !got[n0] || !got[n1] {
+		t.Fatalf("Redispatch 应覆盖 n0=%d 与 n1=%d，实际 %v", n0, n1, got)
 	}
 }
 
-func TestHubApplyRuleHopEditRejectsForeignNode(t *testing.T) {
-	_, hub, _ := newHubTestServer(t)
+// captureRedispatch 接管 hub.Redispatch，返回的函数给出到目前为止被要求重推的节点。
+// Redispatch 不只由规则命令触发（节点接入时也会），所以它可能被调用任意多次。
+func captureRedispatch(hub *Hub) func() map[int64]bool {
+	var mu sync.Mutex
+	got := map[int64]bool{}
+	hub.Redispatch = func(nodes []int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, id := range nodes {
+			got[id] = true
+		}
+	}
+	return func() map[int64]bool {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make(map[int64]bool, len(got))
+		for id := range got {
+			out[id] = true
+		}
+		return out
+	}
+}
+
+func TestHubRuleHopEditRejectsForeignNode(t *testing.T) {
+	srv, hub, _ := newHubTestServer(t)
 	rl, _, _ := seedTwoHopRuleDB(t, hub.DB)
 	other, _ := db.CreateNode(hub.DB, "outsider", "https://x", "tokx")
-	if _, err := hub.applyRuleHopEdit(other.ID, rl.ID, 21000, "kernel", ""); err == nil {
-		t.Fatal("node not on rule must be rejected")
+	for _, typ := range []string{wsproto.TypeRuleHopEdit, wsproto.TypeRuleDelete} {
+		ack := nodeRuleCommand(t, connectAs(t, srv, hub.DB, other.ID), typ, map[string]any{"rule_id": rl.ID, "listen_port": 21000, "mode": "kernel"})
+		if ack.OK || !strings.Contains(ack.Error, "节点不在该规则上") {
+			t.Fatalf("%s：不在规则上的节点应被拒绝，实际 %+v", typ, ack)
+		}
+	}
+	if _, err := db.GetRule(hub.DB, rl.ID); err != nil {
+		t.Fatalf("被拒的命令不应删掉规则: %v", err)
 	}
 }
 
-func TestHubApplyRuleDeleteRemovesRuleAndRedispatches(t *testing.T) {
-	_, hub, _ := newHubTestServer(t)
+func TestHubRuleDeleteRemovesRuleAndRedispatches(t *testing.T) {
+	srv, hub, _ := newHubTestServer(t)
 	rl, n0, n1 := seedTwoHopRuleDB(t, hub.DB)
-	var got []int64
-	hub.Redispatch = func(nodes []int64) { got = append(got, nodes...) }
+	redispatched := captureRedispatch(hub)
 
-	if err := hub.applyRuleDelete(n0, rl.ID); err != nil {
-		t.Fatal(err)
+	if ack := nodeRuleCommand(t, connectAs(t, srv, hub.DB, n0), wsproto.TypeRuleDelete, wsproto.RuleDelete{RuleID: rl.ID}); !ack.OK {
+		t.Fatalf("删经过自己的规则应成功，实际被拒: %s", ack.Error)
 	}
 	if _, err := db.GetRule(hub.DB, rl.ID); err == nil {
 		t.Fatal("rule row should be gone")
@@ -423,11 +488,8 @@ func TestHubApplyRuleDeleteRemovesRuleAndRedispatches(t *testing.T) {
 	if len(hops) != 0 {
 		t.Fatalf("rule hops should be gone, got %d", len(hops))
 	}
-	gotSet := map[int64]bool{}
-	for _, id := range got {
-		gotSet[id] = true
-	}
-	if !gotSet[n0] || !gotSet[n1] {
+	// 应答在 Redispatch 之后发出，所以此刻它已被调用。n1 只可能来自这条命令。
+	if got := redispatched(); !got[n0] || !got[n1] {
 		t.Fatalf("Redispatch nodes = %v, want both n0=%d and n1=%d", got, n0, n1)
 	}
 }

@@ -1,9 +1,9 @@
-package server
+package rulechange
 
 import "testing"
 
 func TestParseExitBareIPv6Hint(t *testing.T) {
-	_, _, err := parseExit("2001:db8::1:1080")
+	_, _, err := ParseExit("2001:db8::1:1080")
 	if err == nil {
 		t.Fatal("expected error for bare IPv6 without brackets")
 	}
@@ -14,7 +14,7 @@ func TestParseExitBareIPv6Hint(t *testing.T) {
 }
 
 func TestParseExitBracketedIPv6Succeeds(t *testing.T) {
-	host, port, err := parseExit("[2001:db8::1]:1080")
+	host, port, err := ParseExit("[2001:db8::1]:1080")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestParseExitBracketedIPv6Succeeds(t *testing.T) {
 }
 
 func TestParseExitGenericFormatError(t *testing.T) {
-	_, _, err := parseExit("not-an-address")
+	_, _, err := ParseExit("not-an-address")
 	if err == nil {
 		t.Fatal("expected error for malformed input")
 	}
@@ -35,7 +35,7 @@ func TestParseExitGenericFormatError(t *testing.T) {
 }
 
 func TestParseExitValidIPv4(t *testing.T) {
-	host, port, err := parseExit("10.0.0.1:80")
+	host, port, err := ParseExit("10.0.0.1:80")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestParseExit(t *testing.T) {
 		{"nohostport", true},
 	}
 	for _, c := range cases {
-		_, _, err := parseExit(c.raw)
+		_, _, err := ParseExit(c.raw)
 		if (err != nil) != c.wantErr {
-			t.Errorf("parseExit(%q) err = %v, wantErr = %v", c.raw, err, c.wantErr)
+			t.Errorf("ParseExit(%q) err = %v, wantErr = %v", c.raw, err, c.wantErr)
 		}
 	}
 }

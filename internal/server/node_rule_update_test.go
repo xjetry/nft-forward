@@ -54,6 +54,10 @@ func TestNodeRuleUpdateLeavesRuleNameAlone(t *testing.T) {
 			if _, err := hub.DB.Exec(`UPDATE nodes SET owner_id=? WHERE id=?`, uid, n.ID); err != nil {
 				t.Fatal(err)
 			}
+			// 属主是普通用户：他得持有这台节点的授权，节点侧的命令才改得动他的规则。
+			if err := db.GrantNode(hub.DB, uid, n.ID, 10, 0); err != nil {
+				t.Fatal(err)
+			}
 			// createStandaloneRuleHop 建出的规则名为 "test"。
 			ruleID, _ := createStandaloneRuleHop(t, hub.DB, n.ID, "tcp", 0, "10.0.0.10", 9000, sql.NullInt64{Int64: uid, Valid: true})
 

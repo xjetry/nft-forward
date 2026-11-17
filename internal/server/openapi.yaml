@@ -100,7 +100,6 @@ components:
         via_node_names:
           type: array
           items: { type: string }
-        entry_family: { type: string }
         dry_run: { type: boolean }
 security:
   - bearerAuth: []

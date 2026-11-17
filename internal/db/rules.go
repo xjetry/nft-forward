@@ -424,7 +424,7 @@ func ListRuleHops(d DBTX, ruleID int64) ([]*RuleHop, error) {
 // re-dispatched (i.e. the nodes its hops lived on). The ON DELETE CASCADE on
 // rule_hops clears the hop rows; we collect nodes first so the caller can
 // re-push them after the rules are gone.
-func DeleteRule(d *sql.DB, id int64) ([]int64, error) {
+func DeleteRule(d DBTX, id int64) ([]int64, error) {
 	nodes, err := queryInt64s(d, `SELECT DISTINCT node_id FROM rule_hops WHERE rule_id=?`, id)
 	if err != nil {
 		return nil, err
@@ -435,7 +435,11 @@ func DeleteRule(d *sql.DB, id int64) ([]int64, error) {
 	return nodes, nil
 }
 
-func CountRulesForUser(d *sql.DB, userID int64) (int, error) {
+// CountRulesForUser 数 userID 名下的规则条数，是账号的条数上限（users.max_forwards）
+// 比较的那个数：一条规则占一个名额，与它的链有几跳无关。
+//
+// 接受事务：上限检查与插入要在同一个事务里（见 internal/rulechange）。
+func CountRulesForUser(d DBTX, userID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM rules WHERE owner_id=?`, userID)
 }
 

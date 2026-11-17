@@ -16,11 +16,15 @@ import (
 	"nft-forward/internal/landing"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/resolver"
+	"nft-forward/internal/rulechange"
 )
 
 type Server struct {
-	DB      *sql.DB
-	Hub     *Hub
+	DB  *sql.DB
+	Hub *Hub
+	// Rules 是规则写入的唯一入口，与 Hub 用的是同一个：面板上的接口与节点发来的命令
+	// 过同一套判定。
+	Rules   *rulechange.Changes
 	Landing *landing.Fetcher
 	// dispatch 让对同一个节点的下发串行、合并；所有下发都经 dispatchToNode 走它。
 	dispatch        *nodeDispatchQueue
@@ -41,7 +45,7 @@ func New(d *sql.DB) (*Server, error) {
 		return nil, fmt.Errorf("mark nodes offline: %w", err)
 	}
 	hub := NewHub(d)
-	s := &Server{DB: d, Hub: hub, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
+	s := &Server{DB: d, Hub: hub, Rules: hub.Rules, Landing: landing.NewFetcher(), loginLimiter: newLoginLimiter(), tokenLimiter: newTokenLimiter(), stopExpiry: make(chan struct{}), stopCycle: make(chan struct{}), stopLandingSync: make(chan struct{})}
 	s.dispatch = newNodeDispatchQueue(s.dispatchRound)
 	hub.OnTrafficUpdate = func(userID int64, _ int64) {
 		s.enforcePerNodeQuota(userID)

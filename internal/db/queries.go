@@ -659,6 +659,13 @@ func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
 		userID, action, target, payload, now())
 }
 
+// WriteAuditNoUser 记一条不落在任何账号名下的审计：发起方是一台没有属主的节点。
+// user_id 写 NULL，不写 0——0 不是任何账号的 id，读的人无法区分“没有人”与“写错了”。
+func WriteAuditNoUser(d *sql.DB, action, target, payload string) {
+	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (NULL,?,?,?,?)`,
+		action, target, payload, now())
+}
+
 // NodeIDsByNames resolves a slice of node names to their database IDs. Names
 // that do not exist in the nodes table are silently omitted from the result so
 // the caller can report them as skipped rather than treating them as errors.

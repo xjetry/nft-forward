@@ -10,7 +10,6 @@ import (
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/landing"
-	"nft-forward/internal/resolver"
 )
 
 // ruleView is the per-rule row the list/detail API renders.
@@ -191,61 +190,6 @@ func splitEntry(entry string) (host string, port int, ok bool) {
 	return h, pp, true
 }
 
-// validRuleProto reports whether proto is an accepted forward protocol. tcp+udp
-// is accepted: the data plane splits it into a udp kernel DNAT plus a tcp
-// userspace relay when the hop runs in userspace mode (see forward.Partition).
-func validRuleProto(proto string) bool {
-	switch proto {
-	case "tcp", "udp", "tcp+udp":
-		return true
-	default:
-		return false
-	}
-}
-
-// normalizeEntryFamily validates a client-supplied entry_family. Empty passes
-// through as empty so callers can tell "not sent" apart from an explicit
-// value: create defaults it to v4, while edit keeps the rule's stored family —
-// a client predating the field must not silently downgrade a v6/both rule.
-func normalizeEntryFamily(v string) (string, error) {
-	v = strings.ToLower(strings.TrimSpace(v))
-	switch v {
-	case "", "v4", "v6", "both":
-		return v, nil
-	default:
-		return "", fmt.Errorf("entry_family 须为 v4、v6 或 both")
-	}
-}
-
-func parseExit(raw string) (string, int, error) {
-	raw = strings.TrimSpace(raw)
-	host, portStr, err := net.SplitHostPort(raw)
-	if err != nil {
-		if looksLikeBareIPv6(raw) {
-			return "", 0, fmt.Errorf("IPv6 地址需要用方括号包裹，例如 [::1]:1080")
-		}
-		return "", 0, fmt.Errorf("出口需为 host:port 形式")
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
-		return "", 0, fmt.Errorf("出口端口非法")
-	}
-	if host == "" {
-		return "", 0, fmt.Errorf("出口地址不能为空")
-	}
-	if net.ParseIP(host) == nil && !resolver.PlausibleHostname(host) {
-		return "", 0, fmt.Errorf("出口地址非法：%q 不是合法 IP 或域名", host)
-	}
-	return host, port, nil
-}
-
-// looksLikeBareIPv6 reports whether raw is very likely an IPv6 literal
-// missing the brackets host:port syntax requires: multiple colons with no
-// leading '[' isn't ambiguous with any valid IPv4/hostname:port form.
-func looksLikeBareIPv6(raw string) bool {
-	return !strings.HasPrefix(raw, "[") && strings.Count(raw, ":") >= 2
-}
-
 func validateCIDRList(s string) error {
 	for _, part := range strings.Split(s, ",") {
 		part = strings.TrimSpace(part)
@@ -293,57 +237,3 @@ func targetIPInCIDR(ip net.IP, list string) bool {
 }
 
 func nullInt64(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: true} }
-
-// viasOf dereferences the optional middle-layer path from a request body: a
-// nil pointer (field absent) yields a nil slice so callers keep the stored
-// path, while a non-nil pointer — including an explicit empty array — yields
-// its value so the client can deliberately clear the layers.
-func viasOf(p *[]int64) []int64 {
-	if p == nil {
-		return nil
-	}
-	return *p
-}
-
-// checkUserRuleQuota verifies a user hasn't exceeded their global max_forwards
-// limit or per-node grant limits.
-func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops int) error {
-	total, _ := db.CountRulesForUser(s.DB, u.ID)
-	if (total-existingRuleHops)+hopCount > u.MaxForwards {
-		return fmt.Errorf("超出用户最大转发数（%d）", u.MaxForwards)
-	}
-	return nil
-}
-
-// regenerateRuleByID loads a rule and its hops, then calls RegenerateRule
-// inside a transaction. Returns the set of affected node IDs.
-func (s *Server) regenerateRuleByID(ruleID int64) ([]int64, error) {
-	r, err := db.GetRule(s.DB, ruleID)
-	if err != nil {
-		return nil, err
-	}
-	hops, err := db.ListRuleHops(s.DB, ruleID)
-	if err != nil {
-		return nil, err
-	}
-	if len(hops) == 0 {
-		return nil, nil
-	}
-	inputs := make([]db.HopInput, len(hops))
-	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	_, _, affected, err := db.RegenerateRule(tx, r, inputs, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return affected, nil
-}

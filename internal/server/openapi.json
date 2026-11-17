@@ -235,9 +235,6 @@
               "type": "string"
             }
           },
-          "entry_family": {
-            "type": "string"
-          },
           "dry_run": {
             "type": "boolean"
           }

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nft-forward/internal/db"
+	"nft-forward/internal/rulechange"
 )
 
 // The /api/v1 surface is the stable, token-authenticated contract for
@@ -436,7 +437,6 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 		ExitMode     string    `json:"exit_mode"`
 		ViaNodeIDs   *[]int64  `json:"via_node_ids"`
 		ViaNodeNames *[]string `json:"via_node_names"`
-		EntryFamily  string    `json:"entry_family"`
 		DryRun       bool      `json:"dry_run"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -465,11 +465,10 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out, merr := s.createUserRule(u, userRuleParams{
-		NodeID: nodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
-		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
-		ExitMode: body.ExitMode, ViaNodeIDs: vias, EntryFamily: body.EntryFamily,
-	}, dryRun)
+	out, merr := s.Rules.Create(rulechange.Actor{User: u},
+		rulechange.Fields{Name: body.Name, Proto: body.Proto, Exit: body.Exit, Comment: body.Comment},
+		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, LegacyMode: body.Mode, EntryPort: body.EntryPort},
+		dryRun)
 	if merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
@@ -483,10 +482,11 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.ruleChanged(out)
 	if idemKey != "" {
-		_ = db.SaveIdempotentRule(s.DB, u.ID, idemKey, out.RuleID)
+		_ = db.SaveIdempotentRule(s.DB, u.ID, idemKey, out.Rule.ID)
 	}
-	rl, err := db.GetRule(s.DB, out.RuleID)
+	rl, err := db.GetRule(s.DB, out.Rule.ID)
 	if err != nil {
 		v1Err(w, http.StatusInternalServerError, codeInternal, "读取新建规则失败")
 		return
@@ -514,31 +514,29 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		ExitMode     string    `json:"exit_mode"`
 		ViaNodeIDs   *[]int64  `json:"via_node_ids"`
 		ViaNodeNames *[]string `json:"via_node_names"`
-		EntryFamily  string    `json:"entry_family"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
 		return
 	}
 	// node_name resolves to node_id only when a node was actually named; leaving
-	// both empty keeps the stored entry node (NodeID 0 in updateUserRule).
+	// both empty keeps the stored entry node (Entry 0 in rulechange.Path).
 	nodeID, vias, merr := s.resolveRuleNodeRefs(body.NodeID, body.NodeName, body.ViaNodeIDs, body.ViaNodeNames)
 	if merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
 	}
-	entry, entryV6, merr := s.updateUserRule(u, id, updateUserRuleParams{
-		NodeID: nodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
-		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
-		ExitMode: body.ExitMode, ViaNodeIDs: vias, EntryFamily: body.EntryFamily,
-	})
+	out, merr := s.Rules.Update(rulechange.Actor{User: u}, id,
+		rulechange.Fields{Name: body.Name, Proto: body.Proto, Exit: body.Exit, Comment: body.Comment},
+		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, LegacyMode: body.Mode, EntryPort: body.EntryPort})
 	if merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
 	}
+	s.ruleChanged(out)
 	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		v1OK(w, map[string]any{"entry": entry, "entry_v6": entryV6})
+		v1OK(w, map[string]any{"entry": out.Entry, "entry_v6": out.EntryV6})
 		return
 	}
 	views := s.v1RulesFromDB([]*db.Rule{rl})
@@ -552,10 +550,12 @@ func (s *Server) v1MyDeleteRule(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
-	if merr := s.deleteUserRule(u, id); merr != nil {
+	out, merr := s.Rules.Delete(rulechange.Actor{User: u}, id)
+	if merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
 	}
+	s.ruleChanged(out)
 	v1OK(w, map[string]any{"deleted": true})
 }
 
@@ -606,7 +606,7 @@ func (s *Server) v1Dashboard(w http.ResponseWriter, r *http.Request) {
 // via_node_names, when present, resolves the whole ordered path (an explicit
 // empty list clears the path). A named node that doesn't exist is a validation
 // error rather than a silent skip.
-func (s *Server) resolveRuleNodeRefs(nodeID int64, nodeName string, viaIDs *[]int64, viaNames *[]string) (int64, *[]int64, *ruleMutationError) {
+func (s *Server) resolveRuleNodeRefs(nodeID int64, nodeName string, viaIDs *[]int64, viaNames *[]string) (int64, *[]int64, *rulechange.Error) {
 	if nodeID == 0 && strings.TrimSpace(nodeName) != "" {
 		id, merr := s.resolveNodeName(nodeName)
 		if merr != nil {
@@ -630,23 +630,24 @@ func (s *Server) resolveRuleNodeRefs(nodeID int64, nodeName string, viaIDs *[]in
 	return nodeID, vias, nil
 }
 
-func (s *Server) resolveNodeName(name string) (int64, *ruleMutationError) {
+func (s *Server) resolveNodeName(name string) (int64, *rulechange.Error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return 0, &ruleMutationError{status: http.StatusBadRequest, msg: "节点名不能为空"}
+		return 0, &rulechange.Error{Kind: rulechange.Invalid, Msg: "节点名不能为空"}
 	}
 	m, err := db.NodeIDsByNames(s.DB, []string{name})
 	if err != nil {
-		return 0, &ruleMutationError{status: http.StatusInternalServerError, msg: err.Error()}
+		return 0, &rulechange.Error{Kind: rulechange.Internal, Msg: err.Error()}
 	}
 	id, ok := m[name]
 	if !ok {
 		// A name that doesn't resolve is reported exactly like a node that exists
-		// but wasn't granted (the GetNodeGrant path below returns the same 403):
-		// NodeIDsByNames is unscoped, so a distinct "doesn't exist" answer would
-		// let a token enumerate node names it was never authorized to see. A user
-		// can only legitimately name nodes listed by /api/v1/my/nodes.
-		return 0, &ruleMutationError{status: http.StatusForbidden, msg: "无权使用该节点"}
+		// but wasn't granted (rulechange refuses that with the same 403 and
+		// message): NodeIDsByNames is unscoped, so a distinct "doesn't exist"
+		// answer would let a token enumerate node names it was never authorized
+		// to see. A user can only legitimately name nodes listed by
+		// /api/v1/my/nodes.
+		return 0, &rulechange.Error{Kind: rulechange.Forbidden, Msg: "无权使用该节点"}
 	}
 	return id, nil
 }
@@ -669,25 +670,21 @@ func (s *Server) hopsChainPreview(hops []db.HopInput) []v1RuleChainHop {
 // writeRuleMutationV1 renders a rule create/edit failure in the v1 error
 // envelope, mapping the shared error's status onto a stable code (and the
 // duplicate-hop RegenerateRule failure onto 409 + duplicate_chain_node).
-func writeRuleMutationV1(w http.ResponseWriter, e *ruleMutationError) {
-	if e.regenerate {
-		if errors.Is(e.cause, db.ErrDuplicateChainNode) {
-			v1Err(w, http.StatusConflict, codeDuplicateHop, e.msg)
-			return
-		}
-		v1Err(w, http.StatusBadRequest, codeValidation, e.msg)
-		return
-	}
+func writeRuleMutationV1(w http.ResponseWriter, e *rulechange.Error) {
 	code := codeValidation
-	switch e.status {
-	case http.StatusForbidden:
+	switch e.Kind {
+	case rulechange.Forbidden:
 		code = codeForbidden
-	case http.StatusConflict:
+	case rulechange.Conflict:
 		code = codeConflict
-	case http.StatusNotFound:
+		// 同一个物理节点在链上出现两次有自己的错误码，调用方据此提示换一组入口/中转层。
+		if errors.Is(e, db.ErrDuplicateChainNode) {
+			code = codeDuplicateHop
+		}
+	case rulechange.NotFound:
 		code = codeNotFound
-	case http.StatusInternalServerError:
+	case rulechange.Internal:
 		code = codeInternal
 	}
-	v1Err(w, e.status, code, e.msg)
+	v1Err(w, ruleChangeStatus(e), code, e.Msg)
 }

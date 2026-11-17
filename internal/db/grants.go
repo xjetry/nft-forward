@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 
 	"nft-forward/internal/chain"
 )
@@ -182,8 +183,12 @@ func ListNodesForUser(d *sql.DB, userID int64) ([]*Node, []*UserNode, error) {
 	return nodes, grants, rows.Err()
 }
 
-// CountRulesForUserNode counts rules owned by a user on a specific node.
-func CountRulesForUserNode(d *sql.DB, userID, nodeID int64) (int, error) {
+// CountRulesForUserNode 数 userID 名下以逻辑节点 nodeID 为入口的规则条数，是授权的
+// 条数上限（user_nodes.max_forwards）比较的那个数：按规则计，一条经组合展开成多跳
+// 的规则也只算一条；只把节点用作中转层的规则不计在这个节点的授权上。
+//
+// 接受事务：上限检查与插入要在同一个事务里（见 internal/rulechange）。
+func CountRulesForUserNode(d DBTX, userID, nodeID int64) (int, error) {
 	return count(d, `SELECT COUNT(*) FROM rules WHERE owner_id=? AND node_id=?`, userID, nodeID)
 }
 
@@ -234,15 +239,32 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 	return out, rows.Err()
 }
 
-// CheckNodeAccess validates that a user has access to a node. Node owners
-// automatically bypass the grant check.
-func CheckNodeAccess(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
-	var ownerID sql.NullInt64
-	_ = d.QueryRow(`SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID)
-	if ownerID.Valid && ownerID.Int64 == userID {
-		return &UserNode{UserID: userID, NodeID: nodeID, MaxForwards: 9999, TrafficQuotaBytes: 0, TrafficUsedBytes: 0}, nil
+// NodeAccess 回答“用户 u 能否使用逻辑节点 nodeID”——把它选进自己的规则（入口或中转
+// 层），或经它向外探测。这个问题只在这里回答，规则写入（internal/rulechange）与探测
+// 接口都调它：
+//
+//   - 管理员能用任何节点，不受授权约束：ok 为真，grant 为 nil；
+//   - 其余人必须持有这个节点的授权（user_nodes 的一行）：ok 为真，grant 是那一行，
+//     它带着条数上限、流量配额、限速与角色覆盖；
+//   - 没有授权：ok 为假。
+//
+// 节点的属主（nodes.owner_id）不在判定里。属主只表示“这台机器的节点侧命令以谁的名义
+// 执行”；条数上限、配额、限速、按授权计流量都挂在授权行上，一条不经授权的使用路径
+// 会绕开全部这些约束。属主要用自己的节点，同样由管理员给他授权。
+//
+// 读库失败时返回 err、ok 为假：调用方必须按无权处理，不能把读失败当成放行。
+func NodeAccess(d *sql.DB, u *User, nodeID int64) (grant *UserNode, ok bool, err error) {
+	if u.Role == "admin" {
+		return nil, true, nil
 	}
-	return GetNodeGrant(d, userID, nodeID)
+	g, err := GetNodeGrant(d, u.ID, nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return g, true, nil
 }
 
 // GrantShape carries the shaping identity and limit of one rate-limited grant.

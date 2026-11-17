@@ -63,10 +63,10 @@ func (s *Server) runProbe(ctx context.Context, target, nodeStr, protoRaw string)
 		if err != nil {
 			return probeResult{Error: "node not found"}, http.StatusOK
 		}
-		// A non-admin may probe only through nodes they've been granted, so the
-		// node can't be used as a scanning proxy against arbitrary targets.
-		if actor != nil && actor.Role != "admin" {
-			if _, err := db.CheckNodeAccess(s.DB, actor.ID, nodeID); err != nil {
+		// 经一个节点向外探测，与把它用进规则是同一个问题（db.NodeAccess）：否则任何
+		// 登录用户都能拿别人的节点当扫描代理。读授权失败按无权处理。
+		if actor != nil {
+			if _, ok, err := db.NodeAccess(s.DB, actor, nodeID); err != nil || !ok {
 				return probeResult{Error: "无权操作该节点"}, http.StatusForbidden
 			}
 		}

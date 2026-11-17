@@ -20,6 +20,7 @@ import (
 
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
+	"nft-forward/internal/rulechange"
 	"nft-forward/internal/wsproto"
 )
 
@@ -38,8 +39,13 @@ type Hub struct {
 	// re-dispatch it may trigger) to the owner that wires this callback.
 	OnTrafficUpdate func(userID int64, nodeID int64)
 
-	// Redispatch re-pushes kernel state to a set of nodes after the hub
-	// mutates rule state on their behalf. Keeps the hub transport-only.
+	// Rules 执行节点发来的规则命令（见 handleRuleCommand）。Hub 自己不判定谁能改
+	// 什么、也不碰规则表。
+	Rules *rulechange.Changes
+
+	// Redispatch 在一条规则命令改动了规则之后被调用，参数是规则集因此变化的节点。
+	// 它必须立即返回：调用发生在发命令那台节点的读循环里，而下发要等节点应答，应答
+	// 正是由这个读循环收的。
 	Redispatch func(nodeIDs []int64)
 
 	// OnRelayHostChange 在一次 hello 改写了节点的 relay_host 之后被调用（另起
@@ -54,7 +60,7 @@ type Hub struct {
 }
 
 func NewHub(d *sql.DB) *Hub {
-	return &Hub{DB: d, conns: make(map[int64]*agentConn), speedCache: newSpeedCache()}
+	return &Hub{DB: d, Rules: rulechange.New(d), conns: make(map[int64]*agentConn), speedCache: newSpeedCache()}
 }
 
 type agentConn struct {
@@ -340,38 +346,9 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn) {
 				continue
 			}
 			h.applyCounters(ac.nodeID, co.Samples)
-		case wsproto.TypeRuleCreate:
-			h.handleRuleCreate(ac, env)
-		case wsproto.TypeRuleUpdate:
-			h.handleRuleUpdate(ac, env)
-		case wsproto.TypeMigrateRules:
-			h.handleMigrateRules(ac, env)
-		case wsproto.TypeRuleHopEdit:
-			var e wsproto.RuleHopEdit
-			if err := json.Unmarshal(env.Payload, &e); err != nil {
-				sendRuleAckErr(ac, env.ID, "malformed payload")
-				continue
-			}
-			entry, cerr := h.applyRuleHopEdit(ac.nodeID, e.RuleID, e.ListenPort, e.Mode, e.Comment)
-			ack := wsproto.RuleCmdAck{OK: cerr == nil, Entry: entry}
-			if cerr != nil {
-				ack.Error = cerr.Error()
-			}
-			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeRuleDelete:
-			var dl wsproto.RuleDelete
-			if err := json.Unmarshal(env.Payload, &dl); err != nil {
-				sendRuleAckErr(ac, env.ID, "malformed payload")
-				continue
-			}
-			cerr := h.applyRuleDelete(ac.nodeID, dl.RuleID)
-			ack := wsproto.RuleCmdAck{OK: cerr == nil}
-			if cerr != nil {
-				ack.Error = cerr.Error()
-			}
-			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+		case wsproto.TypeRuleCreate, wsproto.TypeRuleUpdate, wsproto.TypeMigrateRules,
+			wsproto.TypeRuleHopEdit, wsproto.TypeRuleDelete:
+			h.handleRuleCommand(ac, env)
 		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
 			ac.dispatchAck(env)
 		default:
@@ -981,348 +958,4 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 			}
 		}()
 	}
-}
-
-// applyRuleHopEdit folds a node-reported edit to its hop in ruleID back
-// into the rule skeleton and re-dispatches every node the regeneration
-// touched, returning the rule's copyable entry endpoint. The hop is located
-// by (ruleID, nodeID): a rule can't repeat a node, so that pair is unique.
-func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comment string) (string, error) {
-	r, err := db.GetRule(h.DB, ruleID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("规则不存在")
-	}
-	if err != nil {
-		return "", err
-	}
-	hops, err := db.ListRuleHops(h.DB, ruleID)
-	if err != nil {
-		return "", err
-	}
-	found := false
-	inputs := make([]db.HopInput, len(hops))
-	for i, hp := range hops {
-		in := db.HopInput{NodeID: hp.NodeID, Mode: hp.Mode, ViaNodeID: hp.ViaNodeID}
-		if hp.NodeID == nodeID {
-			found = true
-			in.DesiredPort = listenPort
-			in.Mode = mode
-			in.Comment = comment
-		}
-		inputs[i] = in
-	}
-	if !found {
-		return "", fmt.Errorf("节点不在该规则上")
-	}
-	tx, err := h.DB.Begin()
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	entry, _, affected, err := db.RegenerateRule(tx, r, inputs, nil)
-	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	if h.Redispatch != nil {
-		h.Redispatch(affected)
-	}
-	return entry, nil
-}
-
-// applyRuleDelete removes the whole rule (all hops on all nodes) on behalf
-// of a node that participates in it, then re-dispatches every node that ran
-// its hops so the deleted rules leave the kernel.
-func (h *Hub) applyRuleDelete(nodeID, ruleID int64) error {
-	hops, err := db.ListRuleHops(h.DB, ruleID)
-	if err != nil {
-		return err
-	}
-	onRule := false
-	for _, hp := range hops {
-		if hp.NodeID == nodeID {
-			onRule = true
-			break
-		}
-	}
-	if !onRule {
-		return fmt.Errorf("节点不在该规则上")
-	}
-	nodes, err := db.DeleteRule(h.DB, ruleID)
-	if err != nil {
-		return err
-	}
-	if h.Redispatch != nil {
-		h.Redispatch(nodes)
-	}
-	return nil
-}
-
-// handleRuleCreate creates a new single-hop rule on the requesting node.
-// The node must have an owner (via node.owner_id) who is active and within quota.
-func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
-	var req wsproto.RuleCreate
-	if err := json.Unmarshal(env.Payload, &req); err != nil {
-		sendRuleAckErr(ac, env.ID, "malformed payload")
-		return
-	}
-	node, err := db.GetNode(h.DB, ac.nodeID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
-		return
-	}
-	if node.OwnerID == nil {
-		sendRuleAckErr(ac, env.ID, "节点无归属用户")
-		return
-	}
-	ownerID := *node.OwnerID
-	u, err := db.GetUserByID(h.DB, ownerID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "归属用户不存在")
-		return
-	}
-	if u.Disabled {
-		sendRuleAckErr(ac, env.ID, "用户已被禁用")
-		return
-	}
-	if u.Expired(time.Now()) {
-		sendRuleAckErr(ac, env.ID, "用户已过期")
-		return
-	}
-	total, _ := db.CountRulesForUser(h.DB, ownerID)
-	if ownerForwardCapExceeded(u, total, 1) {
-		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d）", u.MaxForwards))
-		return
-	}
-
-	tx, err := h.DB.Begin()
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
-		return
-	}
-	defer tx.Rollback()
-
-	rl := &db.Rule{
-		NodeID:   ac.nodeID,
-		OwnerID:  sql.NullInt64{Int64: ownerID, Valid: true},
-		Name:     req.Name,
-		Proto:    req.Proto,
-		ExitHost: req.ExitHost,
-		ExitPort: req.ExitPort,
-		Comment:  req.Comment,
-	}
-	id, err := db.CreateRule(tx, rl)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
-		return
-	}
-	rl.ID = id
-
-	hop := db.HopInput{NodeID: ac.nodeID, Mode: req.Mode, ViaNodeID: ac.nodeID}
-	if req.ListenPort > 0 {
-		hop.DesiredPort = req.ListenPort
-	}
-	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
-		return
-	}
-	if h.Redispatch != nil {
-		go h.Redispatch(affected)
-	}
-	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: entry})
-	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-}
-
-// handleRuleUpdate modifies a single-hop rule's header and regenerates it.
-// Only rules with exactly 1 hop that belong to the node's owner are editable.
-func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
-	var req wsproto.RuleUpdate
-	if err := json.Unmarshal(env.Payload, &req); err != nil {
-		sendRuleAckErr(ac, env.ID, "malformed payload")
-		return
-	}
-	node, err := db.GetNode(h.DB, ac.nodeID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
-		return
-	}
-	if node.OwnerID == nil {
-		sendRuleAckErr(ac, env.ID, "节点无归属用户")
-		return
-	}
-	rl, err := db.GetRule(h.DB, req.RuleID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "规则不存在")
-		return
-	}
-	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != *node.OwnerID {
-		sendRuleAckErr(ac, env.ID, "无权操作该规则")
-		return
-	}
-	// Only single-hop rules are editable from a node
-	hops, err := db.ListRuleHops(h.DB, req.RuleID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "读取跳数失败")
-		return
-	}
-	if len(hops) != 1 {
-		sendRuleAckErr(ac, env.ID, "仅支持编辑单跳规则")
-		return
-	}
-
-	// 只落节点表单能编辑的字段。规则名不在其中：它只在面板上编辑，
-	// wsproto.RuleUpdate 不携带它，rl.Name 保持上面 GetRule 读出的值。
-	rl.Proto = req.Proto
-	rl.ExitHost = req.ExitHost
-	rl.ExitPort = req.ExitPort
-	rl.Comment = req.Comment
-
-	tx, err := h.DB.Begin()
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
-		return
-	}
-	defer tx.Rollback()
-
-	if err := db.UpdateRuleHeader(tx, rl); err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
-		return
-	}
-	hop := db.HopInput{NodeID: ac.nodeID, Mode: req.Mode, ViaNodeID: ac.nodeID}
-	if req.ListenPort > 0 {
-		hop.DesiredPort = req.ListenPort
-	}
-	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
-		return
-	}
-	if h.Redispatch != nil {
-		go h.Redispatch(affected)
-	}
-	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true, Entry: entry})
-	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-}
-
-// handleMigrateRules bulk-imports rules from an agent's local state.
-// Each rule becomes a new single-hop rule owned by the node's owner.
-func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
-	var req wsproto.MigrateRules
-	if err := json.Unmarshal(env.Payload, &req); err != nil {
-		sendRuleAckErr(ac, env.ID, "malformed payload")
-		return
-	}
-	node, err := db.GetNode(h.DB, ac.nodeID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
-		return
-	}
-	if node.OwnerID == nil {
-		sendRuleAckErr(ac, env.ID, "节点无归属用户")
-		return
-	}
-	ownerID := *node.OwnerID
-	u, err := db.GetUserByID(h.DB, ownerID)
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "归属用户不存在")
-		return
-	}
-	if u.Disabled {
-		sendRuleAckErr(ac, env.ID, "用户已被禁用")
-		return
-	}
-	if u.Expired(time.Now()) {
-		sendRuleAckErr(ac, env.ID, "用户已过期")
-		return
-	}
-
-	total, _ := db.CountRulesForUser(h.DB, ownerID)
-	if ownerForwardCapExceeded(u, total, len(req.Rules)) {
-		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d），当前 %d 条，迁入 %d 条", u.MaxForwards, total, len(req.Rules)))
-		return
-	}
-
-	tx, err := h.DB.Begin()
-	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
-		return
-	}
-	defer tx.Rollback()
-
-	var allAffected []int64
-	for _, r := range req.Rules {
-		exitHost := r.DestIP
-		if r.DestHost != "" {
-			exitHost = r.DestHost
-		}
-		name := r.Comment
-		if name == "" {
-			name = r.RuleName
-		}
-		rl := &db.Rule{
-			NodeID:   ac.nodeID,
-			OwnerID:  sql.NullInt64{Int64: ownerID, Valid: true},
-			Name:     name,
-			Proto:    r.Proto,
-			ExitHost: exitHost,
-			ExitPort: r.DestPort,
-		}
-		id, err := db.CreateRule(tx, rl)
-		if err != nil {
-			sendRuleAckErr(ac, env.ID, fmt.Sprintf("创建规则失败: %v", err))
-			return
-		}
-		rl.ID = id
-		hop := db.HopInput{NodeID: ac.nodeID, Mode: r.Mode, ViaNodeID: ac.nodeID}
-		if r.SrcPort > 0 {
-			hop.DesiredPort = r.SrcPort
-		}
-		_, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
-		if err != nil {
-			sendRuleAckErr(ac, env.ID, fmt.Sprintf("生成规则失败: %v", err))
-			return
-		}
-		allAffected = append(allAffected, affected...)
-	}
-
-	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
-		return
-	}
-	if h.Redispatch != nil {
-		go h.Redispatch(allAffected)
-	}
-	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
-	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-}
-
-// ownerForwardCapExceeded 报告节点属主 owner 在已有 total 条规则之上再加 adding 条，
-// 是否超出其转发数上限。节点侧的规则命令（rule_create、migrate_rules）以节点属主的
-// 身份建规则，两处都用这一个判定。
-//
-// 管理员没有上限：users.max_forwards 只约束普通用户。管理员账号的这一列默认是 0，
-// 管理员建规则的 HTTP 接口（apiCreateRule）也从不检查它；这里若照样拿 0 去比，
-// 管理员名下的节点——面板机自己的 self 节点属主就是管理员——从节点侧一条规则都建
-// 不了，本地规则也迁不进来。
-func ownerForwardCapExceeded(owner *db.User, total, adding int) bool {
-	if owner.Role == "admin" {
-		return false
-	}
-	return total+adding > owner.MaxForwards
-}
-
-func sendRuleAckErr(ac *agentConn, id, msg string) {
-	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: false, Error: msg})
-	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: id, Payload: ackP})
 }

@@ -282,6 +282,10 @@ func TestNodeSideRuleCommandsStillCapRegularOwners(t *testing.T) {
 	if err := db.UpdateNodeOwner(e.d, node.ID, &uid); err != nil {
 		t.Fatal(err)
 	}
+	// 属主要用自己的节点同样需要授权；授权的条数上限给足，让下面咬住的是账号的上限。
+	if err := db.GrantNode(e.d, uid, node.ID, 10, 0); err != nil {
+		t.Fatal(err)
+	}
 	a := connectFakeAgent(t, wsURL(e.public), wsproto.Hello{NodeToken: "tok-user-edge", OS: "linux", Arch: "amd64", ProbedV4: "203.0.113.8"}, nil)
 
 	ack := a.ruleCmd(t, wsproto.TypeMigrateRules, wsproto.MigrateRules{Rules: []nft.Rule{

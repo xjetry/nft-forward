@@ -226,7 +226,6 @@ export function RuleFormModal({ open, onClose, title, submitLabel = '保存', no
                 <span className="font-mono">
                   {[...flatChainNames, '目标'].filter(Boolean).join(' → ')}
                 </span>
-                <span className="ml-2">链路更长的规则占用更多全局转发名额</span>
               </div>
             </>
           )}
