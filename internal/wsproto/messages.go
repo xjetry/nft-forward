@@ -55,6 +55,9 @@ type RuleCreate struct {
 	Name       string `json:"name"`
 }
 
+// RuleUpdate 是节点对自己那条单跳规则的修改。它不携带规则名：规则名只在面板上
+// 编辑，节点 TUI 的规则表单没有这一栏，面板的 handleRuleUpdate 也不从这一帧取
+// 规则名。旧版节点的帧里还带着 name 字段，面板解码时把它当未知字段丢弃。
 type RuleUpdate struct {
 	RuleID     int64  `json:"rule_id"`
 	Proto      string `json:"proto"`
@@ -63,7 +66,6 @@ type RuleUpdate struct {
 	ListenPort int    `json:"listen_port"`
 	Mode       string `json:"mode"`
 	Comment    string `json:"comment"`
-	Name       string `json:"name"`
 }
 
 type MigrateRules struct {

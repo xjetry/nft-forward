@@ -1119,7 +1119,8 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 		return
 	}
 
-	rl.Name = req.Name
+	// 只落节点表单能编辑的字段。规则名不在其中：它只在面板上编辑，
+	// wsproto.RuleUpdate 不携带它，rl.Name 保持上面 GetRule 读出的值。
 	rl.Proto = req.Proto
 	rl.ExitHost = req.ExitHost
 	rl.ExitPort = req.ExitPort

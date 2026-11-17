@@ -235,7 +235,6 @@ type UpdateRuleReq struct {
 	ListenPort int    `json:"listen_port"`
 	Mode       string `json:"mode"`
 	Comment    string `json:"comment"`
-	Name       string `json:"name"`
 }
 
 // UpdateRule updates an existing rule identified by id. Server rules use

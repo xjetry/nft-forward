@@ -395,7 +395,6 @@ func (d *Daemon) handleUpdateRule(w http.ResponseWriter, r *http.Request, id str
 		ListenPort int    `json:"listen_port"`
 		Mode       string `json:"mode"`
 		Comment    string `json:"comment"`
-		Name       string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
@@ -633,7 +632,6 @@ func updateToWSProto(ruleID int64, req struct {
 	ListenPort int    `json:"listen_port"`
 	Mode       string `json:"mode"`
 	Comment    string `json:"comment"`
-	Name       string `json:"name"`
 }) wsproto.RuleUpdate {
 	return wsproto.RuleUpdate{
 		RuleID:     ruleID,
@@ -643,6 +641,5 @@ func updateToWSProto(ruleID int64, req struct {
 		ListenPort: req.ListenPort,
 		Mode:       req.Mode,
 		Comment:    req.Comment,
-		Name:       req.Name,
 	}
 }
