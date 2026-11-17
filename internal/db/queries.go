@@ -670,9 +670,9 @@ func resolveCompositeOnline(nodes []*Node, hops []*NodeHop) {
 	}
 }
 
+// RenameNode renames a node; sql.ErrNoRows if there is no such node.
 func RenameNode(d *sql.DB, id int64, name string) error {
-	_, err := d.Exec(`UPDATE nodes SET name=? WHERE id=?`, name, id)
-	return err
+	return UpdateRow(d, `UPDATE nodes SET name=? WHERE id=?`, name, id)
 }
 
 func DeleteNode(d DBTX, id int64) error {

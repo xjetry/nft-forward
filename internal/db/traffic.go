@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// ResetUserNodeTraffic zeroes the traffic counter for a single user/node grant.
+// ResetUserNodeTraffic zeroes the traffic counter for a single user/node
+// grant; sql.ErrNoRows if the user has no grant on the node.
 func ResetUserNodeTraffic(d *sql.DB, userID, nodeID int64) error {
-	_, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=? AND node_id=?`, userID, nodeID)
-	return err
+	return UpdateRow(d, `UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=? AND node_id=?`, userID, nodeID)
 }
 
 // DisableReasonOverQuota is the users.disable_reason recorded when a user is
@@ -37,13 +37,17 @@ func liftOverQuotaBan(tx *sql.Tx, userID int64) error {
 // zeroing them would re-bill the full counter value on the next sample.
 //
 // The over-quota ban is lifted in the same transaction (liftOverQuotaBan).
+//
+// The error is sql.ErrNoRows if there is no such user.
 func ResetAllUserTraffic(d *sql.DB, userID int64) error {
 	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
+	// The user's own row is the one that has to exist; the statements after
+	// it address everything the user has, which may be nothing.
+	if err := UpdateRow(tx, `UPDATE users SET traffic_used_bytes = 0 WHERE id=?`, userID); err != nil {
 		return err
 	}
 	if err := liftOverQuotaBan(tx, userID); err != nil {

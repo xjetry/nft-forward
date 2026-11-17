@@ -515,6 +515,19 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 // created without an explicit value.
 const defaultGrantMaxForwards = 10
 
+// nodeExists reports whether id names a node, answering the request (404)
+// when it does not. It is for the handlers that read what belongs to a node
+// — its members, its bindings — without reading the node itself: for a node
+// that is not there such a list comes back empty, and an empty list would
+// say "this node has none".
+func (s *Server) nodeExists(w http.ResponseWriter, id int64) bool {
+	if _, err := db.GetNode(s.DB, id); err != nil {
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
+		return false
+	}
+	return true
+}
+
 // usersExist reports whether every id names a user, answering the request
 // (400, naming the id) when one does not. Ids taken from a request body are
 // looked up before they are written as grants. The foreign key on user_nodes
@@ -824,6 +837,9 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	if !s.nodeExists(w, id) {
+		return
+	}
 	nodeHops, err := db.ListNodeHops(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -953,6 +969,9 @@ func (s *Server) apiListNodeBindings(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	if !s.nodeExists(w, id) {
+		return
+	}
 	bs, err := db.ListBindingsForDownstream(s.DB, id)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1040,6 +1059,9 @@ func (s *Server) apiListNodeDownstreamBindings(w http.ResponseWriter, r *http.Re
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if !s.nodeExists(w, id) {
 		return
 	}
 	bs, err := db.ListBindingsForUpstream(s.DB, id)
@@ -1141,7 +1163,7 @@ func (s *Server) apiRenameNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.RenameNode(s.DB, id, body.Name); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.rename", strconv.FormatInt(id, 10), body.Name)
@@ -3013,7 +3035,7 @@ func (s *Server) apiResetUserTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.ResetAllUserTraffic(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	// If the user was disabled for exceeding quota, lift the ban so the
@@ -3086,11 +3108,11 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 	if billingRate <= 0 {
 		billingRate = 1.0
 	}
-	if _, err := s.DB.Exec(
+	if err := db.UpdateRow(s.DB,
 		`UPDATE users SET expires_at=?, max_forwards=?, traffic_quota_bytes=?, traffic_reset_days=?, admin_note=?, billing_rate=? WHERE id=?`,
 		expiresAt, body.MaxForwards, trafficQuotaBytes, body.TrafficResetDays, strings.TrimSpace(body.AdminNote), billingRate, id,
 	); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 
@@ -3888,8 +3910,8 @@ func (s *Server) apiSetAdminNote(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET admin_note=? WHERE id=?`, strings.TrimSpace(body.AdminNote), id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if err := db.UpdateRow(s.DB, `UPDATE users SET admin_note=? WHERE id=?`, strings.TrimSpace(body.AdminNote), id); err != nil {
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_admin_note", strconv.FormatInt(id, 10), "")
@@ -3998,9 +4020,9 @@ func (s *Server) apiSetPerNodeMaxForwards(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "规则数上限至少为 1")
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE user_nodes SET max_forwards=? WHERE user_id=? AND node_id=?`,
+	if err := db.UpdateRow(s.DB, `UPDATE user_nodes SET max_forwards=? WHERE user_id=? AND node_id=?`,
 		body.MaxForwards, userID, nodeID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, msgNoGrant)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_node_max_forwards", strconv.FormatInt(userID, 10),
@@ -4090,7 +4112,7 @@ func (s *Server) apiSetPerNodeRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.SetGrantRoles(s.DB, userID, nodeID, body.Roles); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, msgNoGrant)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_node_roles", strconv.FormatInt(userID, 10),
@@ -4111,7 +4133,7 @@ func (s *Server) apiResetPerNodeTraffic(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.ResetUserNodeTraffic(s.DB, userID, nodeID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonLookupErr(w, err, http.StatusNotFound, msgNoGrant)
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_node_traffic", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
@@ -4145,8 +4167,8 @@ func (s *Server) apiSetResetDays(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "天数无效")
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET traffic_reset_days=? WHERE id=?`, body.TrafficResetDays, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if err := db.UpdateRow(s.DB, `UPDATE users SET traffic_reset_days=? WHERE id=?`, body.TrafficResetDays, id); err != nil {
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "user.set_reset_days", strconv.FormatInt(id, 10), strconv.Itoa(body.TrafficResetDays))

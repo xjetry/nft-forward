@@ -150,10 +150,9 @@ func RevokeNode(d DBTX, userID, nodeID int64) error {
 
 // SetGrantRoles overrides the role mask for one existing grant (0 = inherit the
 // node's mask). It targets an existing (user, node) row; if the user was never
-// granted the node the UPDATE affects nothing.
+// granted the node the error is sql.ErrNoRows.
 func SetGrantRoles(d *sql.DB, userID, nodeID, roles int64) error {
-	_, err := d.Exec(`UPDATE user_nodes SET roles=? WHERE user_id=? AND node_id=?`, roles, userID, nodeID)
-	return err
+	return UpdateRow(d, `UPDATE user_nodes SET roles=? WHERE user_id=? AND node_id=?`, roles, userID, nodeID)
 }
 
 func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {

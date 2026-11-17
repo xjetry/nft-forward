@@ -327,6 +327,7 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: token 元信息 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     post:
       summary: 为用户铸/轮换 token
       description: admin 角色、readwrite scope。用户已有 token 时视为轮换（rotated=true）。
@@ -467,7 +468,7 @@ paths:
                 traffic_quota_bytes: { type: integer }
       responses:
         "200": { description: 更新结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "用户不存在，或该用户没有这个节点的授权", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /users/{id}/nodes/{nodeId}/rate-limit:
     put:
@@ -486,7 +487,7 @@ paths:
                 rate_limit_mbytes: { type: integer, description: MB/s，0 表示不限速 }
       responses:
         "200": { description: 更新结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "用户不存在，或该用户没有这个节点的授权", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /users/{id}/landing-sub-url:
     put:

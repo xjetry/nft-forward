@@ -103,6 +103,11 @@ func (s *Server) v1AdminGetUserToken(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
+	// "No token" is an answer about a user; for an id that names none the
+	// token lookup finds no row either, and would give the same answer.
+	if !s.v1RequireUser(w, id) {
+		return
+	}
 	t, err := db.GetAPITokenByUser(s.DB, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		v1OK(w, map[string]any{"has_token": false})

@@ -24,6 +24,11 @@ type adminError struct {
 
 func (e *adminError) Error() string { return e.msg }
 
+// msgNoGrant answers a change to a grant the user does not have. It covers a
+// user or a node that does not exist as well: either way there is no such
+// (user, node) row to change.
+const msgNoGrant = "该用户没有这个节点的授权"
+
 // adminLookupErr is lookupErr as an adminError: the caller's status, code and
 // message when the row does not exist, an internal error carrying err
 // otherwise. err is not nil.
@@ -130,8 +135,8 @@ func (s *Server) setUserQuota(adminID, userID, bytes int64) *adminError {
 	if bytes < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET traffic_quota_bytes=? WHERE id=?`, bytes, userID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	if err := db.UpdateRow(s.DB, `UPDATE users SET traffic_quota_bytes=? WHERE id=?`, bytes, userID); err != nil {
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_quota_bytes", strconv.FormatInt(userID, 10), strconv.FormatInt(bytes, 10))
 	return nil
@@ -142,8 +147,8 @@ func (s *Server) setUserMaxForwards(adminID, userID int64, n int) *adminError {
 	if n < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "配额数无效"}
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET max_forwards=? WHERE id=?`, n, userID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	if err := db.UpdateRow(s.DB, `UPDATE users SET max_forwards=? WHERE id=?`, n, userID); err != nil {
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_max_forwards", strconv.FormatInt(userID, 10), strconv.Itoa(n))
 	return nil
@@ -152,8 +157,8 @@ func (s *Server) setUserMaxForwards(adminID, userID int64, n int) *adminError {
 // setUserExpiry sets the user's absolute expiry (unix seconds; 0 = no expiry)
 // and re-dispatches their nodes so the change lands in the kernel immediately.
 func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError {
-	if _, err := s.DB.Exec(`UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	if err := db.UpdateRow(s.DB, `UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
 	// The expiry is stored; it reaches the nodes only through this
@@ -217,9 +222,9 @@ func (s *Server) setPerNodeQuota(adminID, userID, nodeID, bytes int64) *adminErr
 	if bytes < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "字节数无效"}
 	}
-	if _, err := s.DB.Exec(`UPDATE user_nodes SET traffic_quota_bytes=? WHERE user_id=? AND node_id=?`,
+	if err := db.UpdateRow(s.DB, `UPDATE user_nodes SET traffic_quota_bytes=? WHERE user_id=? AND node_id=?`,
 		bytes, userID, nodeID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, msgNoGrant)
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_node_quota", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d bytes=%d", nodeID, bytes))
@@ -232,9 +237,9 @@ func (s *Server) setPerNodeRateLimit(adminID, userID, nodeID, mbytes int64) *adm
 	if mbytes < 0 {
 		return &adminError{http.StatusBadRequest, codeValidation, "限速不能为负"}
 	}
-	if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`,
+	if err := db.UpdateRow(s.DB, `UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`,
 		mbytes, userID, nodeID); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, msgNoGrant)
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_node_rate_limit", strconv.FormatInt(userID, 10),
 		fmt.Sprintf("node=%d mbytes=%d", nodeID, mbytes))
