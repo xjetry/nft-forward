@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,7 +21,7 @@ func TestLoadState_MissingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestSaveLoad_RoundTrip_V2(t *testing.T) {
+func TestSaveLoad_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	in := OwnerRuleset{
 		"tui": []nft.Rule{
@@ -43,30 +44,33 @@ func TestSaveLoad_RoundTrip_V2(t *testing.T) {
 	}
 }
 
-func TestLoadState_V1CompatibilityReadsAsTuiSegment(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	v1 := []byte(`{
-		"version": 1,
-		"rules": [
-			{"id":"x1","proto":"tcp","src_port":8080,"dest_ip":"1.2.3.4","dest_port":80}
-		]
-	}`)
-	if err := os.WriteFile(path, v1, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	out, _, err := LoadState(path)
-	if err != nil {
-		t.Fatalf("load v1: %v", err)
-	}
-	if len(out) != 1 {
-		t.Fatalf("expected 1 owner segment, got %d: %+v", len(out), out)
-	}
-	tui, ok := out["tui"]
-	if !ok {
-		t.Fatalf("expected 'tui' owner from v1 migration, got owners: %v", keysOf(out))
-	}
-	if len(tui) != 1 || tui[0].ID != "x1" {
-		t.Fatalf("tui segment after v1 read: %+v", tui)
+// 状态文件只读当前版本。第 1–3 版（v0.5.0 之前的版本写下的）与没有版本号的文件都
+// 报错，报错里写明读到的是第几版；不转换，不当成空状态，也不改动文件。
+func TestLoadStateRefusesEarlierVersions(t *testing.T) {
+	for version, content := range map[int]string{
+		0: `{"owners":{"tui":[{"id":"a","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]}}`,
+		1: `{"version":1,"rules":[{"id":"x1","proto":"tcp","src_port":8080,"dest_ip":"1.2.3.4","dest_port":80}]}`,
+		2: `{"version":2,"owners":{"tui":[{"proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]}}`,
+		3: `{"version":3,"owners":{"tui":[{"id":"a","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]},"agent_meta":{}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		owners, _, err := LoadState(path)
+		if err == nil {
+			t.Errorf("第 %d 版的状态文件应被拒绝，实际读出了 %+v", version, owners)
+			continue
+		}
+		if want := fmt.Sprintf("version %d", version); !strings.Contains(err.Error(), want) {
+			t.Errorf("第 %d 版：报错应写明读到的版本（%q），实际 %q", version, want, err)
+		}
+		if owners != nil {
+			t.Errorf("第 %d 版：被拒绝时不应返回规则集，实际 %+v", version, owners)
+		}
+		if after, rerr := os.ReadFile(path); rerr != nil || string(after) != content {
+			t.Errorf("第 %d 版：文件不应被改动（读取错误 %v）", version, rerr)
+		}
 	}
 }
 
@@ -106,33 +110,11 @@ func TestSaveState_EmptyOwnersWritesValidFile(t *testing.T) {
 	}
 }
 
-func TestLoadStateV2UpgradesToV3WithZeroAgentMeta(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "state.json")
-	v2 := `{"version":2,"owners":{"tui":[{"proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]}}`
-	if err := os.WriteFile(p, []byte(v2), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	owners, meta, err := LoadState(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(owners["tui"]) != 1 {
-		t.Fatalf("expected 1 tui rule, got %d", len(owners["tui"]))
-	}
-	if meta.LastAppliedRev != "" {
-		t.Fatalf("expected empty LastAppliedRev, got %q", meta.LastAppliedRev)
-	}
-}
-
-func TestSaveLoadStateV3Roundtrip(t *testing.T) {
+func TestSaveLoadStateKeepsAgentMeta(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "state.json")
 	owners := OwnerRuleset{"panel": {{Proto: "tcp", SrcPort: 443, DestIP: "10.0.0.2", DestPort: 443}}}
-	meta := AgentMeta{
-		LastAppliedRev: "abc123",
-		PanelURL:       "wss://panel/v1/agents",
-	}
+	meta := AgentMeta{LastAppliedRev: "abc123"}
 	if err := SaveState(p, owners, meta); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +125,7 @@ func TestSaveLoadStateV3Roundtrip(t *testing.T) {
 	if len(got["panel"]) != 1 {
 		t.Fatalf("expected 1 panel rule, got %d", len(got["panel"]))
 	}
-	if gotMeta.LastAppliedRev != "abc123" || gotMeta.PanelURL != "wss://panel/v1/agents" {
+	if gotMeta != meta {
 		t.Fatalf("meta roundtrip mismatch: %+v", gotMeta)
 	}
 }
@@ -165,24 +147,7 @@ func TestSaveStateAlwaysSerializesAgentMetaBlock(t *testing.T) {
 	}
 }
 
-func TestLoadState_V3FillsKernelMode(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-	v3 := `{"version":3,"owners":{"tui":[{"id":"a","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]},"agent_meta":{}}`
-	if err := os.WriteFile(path, []byte(v3), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	owners, _, err := LoadState(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := owners["tui"][0]
-	if r.Mode != nft.ModeKernel {
-		t.Fatalf("v3 rule should be normalized to kernel, got %q", r.Mode)
-	}
-}
-
-func TestSaveLoad_V4RoundTripUserspace(t *testing.T) {
+func TestSaveLoad_RoundTripUserspace(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	in := OwnerRuleset{"tui": {{ID: "a", Proto: "tcp", SrcPort: 8443, DestIP: "10.0.0.1", DestPort: 443, Mode: nft.ModeUserspace}}}
@@ -254,12 +219,4 @@ func TestLoadStateReadsRulesThatStillCarryOwnerName(t *testing.T) {
 	if meta.LastAppliedRev != "abc" {
 		t.Fatalf("rev 应原样读出，实际 %q", meta.LastAppliedRev)
 	}
-}
-
-func keysOf(m OwnerRuleset) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }

@@ -240,84 +240,35 @@ func TestRun_AcceptsSocketTrafficAndShutsDown(t *testing.T) {
 	}
 }
 
-func TestBootstrap_MigratesLegacyTuiFile(t *testing.T) {
-	root := t.TempDir()
-	tuiPath := filepath.Join(root, "etc", "nft-forward", "rules.json")
-	if err := os.MkdirAll(filepath.Dir(tuiPath), 0o755); err != nil {
+// 启动时读到更早版本的状态文件：启动失败，文件原样留着，数据面一次也没有被调用。
+// 不能当成“没有状态”继续——那样节点带着空规则集起来，之后的第一次保存就把原文件盖掉。
+func TestBootstrapRefusesAnEarlierStateVersion(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	old := `{"version":3,"owners":{"tui":[{"id":"a","proto":"tcp","src_port":80,"dest_ip":"10.0.0.1","dest_port":80}]},"agent_meta":{}}`
+	if err := os.WriteFile(statePath, []byte(old), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	legacy := []byte(`[{"id":"legacy1","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]`)
-	if err := os.WriteFile(tuiPath, legacy, 0o640); err != nil {
-		t.Fatal(err)
-	}
-
 	fa := &fakeDataplane{}
-	statePath := filepath.Join(root, "state.json")
 	d, err := New(Config{
 		StatePath:  statePath,
 		SocketPath: filepath.Join(shortSockDir(t), "s.sock"),
 		Dataplane:  fa,
-		LegacyPaths: LegacyMigrationPaths{
-			TUI:           tuiPath,
-			Agent:         filepath.Join(root, "no-such-agent.json"),
-			EmbeddedAgent: filepath.Join(root, "no-such-embedded.json"),
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := d.Bootstrap(); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+	err = d.Bootstrap()
+	if err == nil {
+		t.Fatalf("第 3 版的状态文件应让启动失败，实际启动成功，规则集 %+v", d.owners)
 	}
-	if len(d.owners["tui"]) != 1 || d.owners["tui"][0].ID != "legacy1" {
-		t.Fatalf("legacy TUI rule not imported into tui segment: %+v", d.owners)
+	if !strings.Contains(err.Error(), "version 3") {
+		t.Errorf("报错应写明读到的版本，实际 %q", err)
 	}
-	if len(fa.nftCalls) != 1 || len(fa.nftCalls[0]) != 1 {
-		t.Fatalf("Apply should see merged ruleset (1 rule): nftCalls=%+v", fa.nftCalls)
+	if after, rerr := os.ReadFile(statePath); rerr != nil || string(after) != old {
+		t.Errorf("状态文件不应被改动（读取错误 %v），现在的内容 %s", rerr, after)
 	}
-	if _, err := os.Stat(statePath); err != nil {
-		t.Fatalf("state.json not created post-migration: %v", err)
-	}
-	if _, err := os.Stat(tuiPath + ".migrated"); err != nil {
-		t.Fatalf("legacy file should be renamed: %v", err)
-	}
-}
-
-func TestBootstrap_NoMigrationWhenStateAlreadyExists(t *testing.T) {
-	root := t.TempDir()
-	statePath := filepath.Join(root, "state.json")
-	if err := SaveState(statePath, OwnerRuleset{
-		"tui": []nft.Rule{{ID: "from-v2", Proto: "tcp", SrcPort: 90, DestIP: "9.0.0.0", DestPort: 90}},
-	}, AgentMeta{}); err != nil {
-		t.Fatal(err)
-	}
-	legacyPath := filepath.Join(root, "rules.json")
-	if err := os.WriteFile(legacyPath, []byte(`[{"id":"ghost","proto":"tcp","src_port":80,"dest_ip":"1.0.0.0","dest_port":80}]`), 0o640); err != nil {
-		t.Fatal(err)
-	}
-
-	fa := &fakeDataplane{}
-	d, err := New(Config{
-		StatePath:   statePath,
-		SocketPath:  filepath.Join(shortSockDir(t), "s.sock"),
-		Dataplane:   fa,
-		LegacyPaths: LegacyMigrationPaths{TUI: legacyPath},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Bootstrap(); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
-	if d.owners["tui"][0].ID != "from-v2" {
-		t.Fatalf("expected v2 state, got: %+v", d.owners["tui"])
-	}
-	if _, err := os.Stat(legacyPath); err != nil {
-		t.Fatalf("legacy file should still exist (not migrated): %v", err)
-	}
-	if _, err := os.Stat(legacyPath + ".migrated"); !os.IsNotExist(err) {
-		t.Fatalf(".migrated marker should NOT exist when state already there: %v", err)
+	if len(fa.nftCalls) != 0 {
+		t.Errorf("启动失败时不应碰数据面，实际调用了 %d 次", len(fa.nftCalls))
 	}
 }
 

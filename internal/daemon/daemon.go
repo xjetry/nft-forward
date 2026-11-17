@@ -38,11 +38,7 @@ type Config struct {
 	// defaults to forward.New (wired with Iface); tests inject a fake.
 	Dataplane Dataplane
 
-	// LegacyPaths configures where to look for the three pre-daemon state
-	// files (TUI rules.json, agent-state.json, embedded-agent-state.json).
-	// Production defaults populated by New; tests inject a temp dir.
-	LegacyPaths LegacyMigrationPaths
-	Iface       string
+	Iface string
 
 	// Mode 是这个 daemon 的运行形态：单机（零值）、由远端面板托管、面板机本机。
 	// 见 RunMode。
@@ -68,9 +64,6 @@ func New(cfg Config) (*Daemon, error) {
 	if cfg.GroupName == "" {
 		cfg.GroupName = DefaultGroupName
 	}
-	if cfg.LegacyPaths == (LegacyMigrationPaths{}) {
-		cfg.LegacyPaths = DefaultLegacyPaths()
-	}
 	iface := cfg.Iface
 	if iface == "" {
 		iface = tc.DefaultIface()
@@ -91,7 +84,6 @@ func New(cfg Config) (*Daemon, error) {
 		statePath:           cfg.StatePath,
 		groupName:           cfg.GroupName,
 		dp:                  cfg.Dataplane,
-		legacyPaths:         cfg.LegacyPaths,
 		countersFn:          cfg.Dataplane.Counters,
 		resolveFn:           defaultResolver(resolver.New()),
 		mode:                cfg.Mode,
@@ -114,23 +106,6 @@ func downgradePanelRule(r nft.Rule) nft.Rule {
 // reflects the last known good configuration immediately on daemon startup.
 // Must be called before Run.
 func (d *Daemon) Bootstrap() error {
-	// If daemon's own state.json does not exist, this is potentially a
-	// first-boot upgrade from the pre-daemon binaries — try importing
-	// their legacy state files. We only attempt migration on first boot
-	// so a later legacy file showing up after the daemon has been running
-	// (e.g. a stale leftover) does not silently overwrite live state.
-	if _, err := os.Stat(d.statePath); os.IsNotExist(err) {
-		migrated, mErr := migrateLegacyState(d.legacyPaths)
-		if mErr != nil {
-			return fmt.Errorf("migrate legacy state: %w", mErr)
-		}
-		if len(migrated) > 0 {
-			if err := SaveState(d.statePath, migrated, AgentMeta{}); err != nil {
-				return fmt.Errorf("save migrated state: %w", err)
-			}
-		}
-	}
-
 	owners, meta, err := LoadState(d.statePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
@@ -342,9 +317,9 @@ func (d *Daemon) RunWithSignals() error {
 }
 
 // SetPanelRuleset 把 "panel" 段整体替换为 rules，走统一的 reconcileOwners 写路径。
-// daemon 对外服务期间 "panel" 段只在这里被写（另外两处写入——Bootstrap 的降级与旧
-// 状态文件迁移——都在启动阶段、开始服务之前）。调用方有两个：拨号器收到
-// apply_ruleset 帧时（rev 取帧里的值），以及本机清空 panel 段时（rev 为空）。
+// daemon 对外服务期间 "panel" 段只在这里被写（另一处写入是 Bootstrap 的降级，在
+// 启动阶段、开始服务之前）。调用方有两个：拨号器收到 apply_ruleset 帧时（rev 取
+// 帧里的值），以及本机清空 panel 段时（rev 为空）。
 //
 // rev 与规则在同一次 SaveState 里落盘，所以 agent_meta.LastAppliedRev 始终是“当前
 // panel 段对应面板的哪个版本”：握手时 daemon 把它报给面板，面板算出的版本与它相同

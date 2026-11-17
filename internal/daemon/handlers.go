@@ -24,13 +24,12 @@ import (
 // shared by the HTTP handlers and the lifecycle code.
 // Fields are unexported; production callers go through New().
 type Daemon struct {
-	socketPath  string
-	statePath   string
-	groupName   string
-	dp          Dataplane
-	legacyPaths LegacyMigrationPaths
-	countersFn  func() ([]forward.Counter, error)
-	resolveFn   resolveFunc
+	socketPath string
+	statePath  string
+	groupName  string
+	dp         Dataplane
+	countersFn func() ([]forward.Counter, error)
+	resolveFn  resolveFunc
 
 	// countersMu guards lastCounters, the per-rule byte total observed on the
 	// previous counterSamples call. The sampler computes deltas against it.

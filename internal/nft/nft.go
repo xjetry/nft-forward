@@ -66,9 +66,8 @@ type Rule struct {
 	RateMBytes int   `json:"rate_mbytes,omitempty"`
 }
 
-// EffectiveMode normalizes the mode: an empty or unrecognized value means
-// kernel, so old state files and old-panel pushes (no mode field) default to
-// the existing zero-copy behavior. This is the single source of the default.
+// EffectiveMode 把 Mode 归一：只有 ModeUserspace 是用户态转发，空值与其余任何值都
+// 按内核转发。
 func (r Rule) EffectiveMode() string {
 	if r.Mode == ModeUserspace {
 		return ModeUserspace

@@ -10,9 +10,8 @@ import (
 	"nft-forward/internal/nft"
 )
 
-// stateSchemaVersion is bumped whenever the on-disk layout changes in a way
-// that requires migration. LoadState accepts older versions and converts in
-// memory; SaveState always writes the current version.
+// stateSchemaVersion 是状态文件的版本号，磁盘上的布局变了就加一。LoadState 只读这
+// 一版，SaveState 只写这一版。
 const stateSchemaVersion = 4
 
 // OwnerRuleset 是按归属段分开的规则集，内存里与 state.json 里都是这个形状。键只有
@@ -20,49 +19,19 @@ const stateSchemaVersion = 4
 // 合成一个规则集（MergedRuleset）。
 type OwnerRuleset map[string][]nft.Rule
 
-// stateFile is the on-disk JSON layout for the current schema version.
-// New fields go here; reading older versions converts into this shape.
+// stateFile 是状态文件在磁盘上的 JSON 布局。
 type stateFile struct {
 	Version   int          `json:"version"`
 	Owners    OwnerRuleset `json:"owners"`
 	AgentMeta AgentMeta    `json:"agent_meta"`
 }
 
-// legacyV1File is the pre-v2 on-disk layout where rules were stored as a
-// single flat slice keyed by "rules". We keep this type defined purely
-// to recognize and migrate it; we do not write v1 anymore.
-type legacyV1File struct {
-	Version int        `json:"version"`
-	Rules   []nft.Rule `json:"rules"`
-}
-
-// legacyV2File is the pre-v3 on-disk layout: owner-segmented rules without
-// the agent_meta block. We keep this type defined purely to recognize and
-// migrate it; we do not write v2 anymore. Migration produces a zero
-// AgentMeta so the dialer re-runs the local→panel handoff on its first
-// connect after upgrade.
-type legacyV2File struct {
-	Version int          `json:"version"`
-	Owners  OwnerRuleset `json:"owners"`
-}
-
-// legacyV3File is the pre-v4 layout: owner-segmented rules + agent_meta, but
-// rules had no per-rule mode. Migration stamps Mode="kernel" on every rule so
-// the on-disk data is explicit after upgrade. (The normalization is also done
-// defensively at ingest via Rule.EffectiveMode, so wire pushes are covered.)
-type legacyV3File struct {
-	Version   int          `json:"version"`
-	Owners    OwnerRuleset `json:"owners"`
-	AgentMeta AgentMeta    `json:"agent_meta"`
-}
-
-// LoadState reads ruleset state from path. Missing file returns an empty
-// OwnerRuleset (not nil, so callers can range / index without nil checks).
-// v1 files are read transparently and exposed as a single "tui" segment —
-// in practice v1 only ever contained rules submitted through the bare
-// /v1/ruleset endpoint, which was used by manual smoke tests; assigning
-// them to "tui" preserves the data without forcing users to re-submit.
-// v2 files are read transparently with a zero AgentMeta.
+// LoadState 从 path 读出规则集与 agent 元数据。文件不存在时返回空的 OwnerRuleset
+// （不是 nil，调用方可以直接遍历、取下标）。
+//
+// 只读 stateSchemaVersion 这一版，别的版本一律报错，不做转换；第 1–3 版是 v0.5.0
+// 之前的版本写下的。报错而不是当成空状态：Bootstrap 拿到空状态会带着空规则集起来，
+// 之后的第一次 SaveState 就把原文件盖掉。
 func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -72,68 +41,27 @@ func LoadState(path string) (OwnerRuleset, AgentMeta, error) {
 		return nil, AgentMeta{}, err
 	}
 
-	// Peek at the version field first so we don't decode v1 into a v2/v3
-	// shape (which would silently drop the "rules" field).
+	// 先只看版本号：别的版本的布局不同，直接按当前布局解出来的内容不可信。
 	var probe struct {
 		Version int `json:"version"`
 	}
 	if err := json.Unmarshal(b, &probe); err != nil {
 		return nil, AgentMeta{}, fmt.Errorf("parse state version: %w", err)
 	}
-
-	switch probe.Version {
-	case stateSchemaVersion:
-		var sf stateFile
-		if err := json.Unmarshal(b, &sf); err != nil {
-			return nil, AgentMeta{}, fmt.Errorf("parse v%d state: %w", stateSchemaVersion, err)
-		}
-		if sf.Owners == nil {
-			sf.Owners = OwnerRuleset{}
-		}
-		return sf.Owners, sf.AgentMeta, nil
-	case 3:
-		var v3 legacyV3File
-		if err := json.Unmarshal(b, &v3); err != nil {
-			return nil, AgentMeta{}, fmt.Errorf("parse v3 state: %w", err)
-		}
-		if v3.Owners == nil {
-			v3.Owners = OwnerRuleset{}
-		}
-		normalizeModes(v3.Owners)
-		return v3.Owners, v3.AgentMeta, nil
-	case 2:
-		var v2 legacyV2File
-		if err := json.Unmarshal(b, &v2); err != nil {
-			return nil, AgentMeta{}, fmt.Errorf("parse v2 state: %w", err)
-		}
-		if v2.Owners == nil {
-			v2.Owners = OwnerRuleset{}
-		}
-		return v2.Owners, AgentMeta{}, nil
-	case 1:
-		var v1 legacyV1File
-		if err := json.Unmarshal(b, &v1); err != nil {
-			return nil, AgentMeta{}, fmt.Errorf("parse v1 state: %w", err)
-		}
-		out := OwnerRuleset{}
-		if len(v1.Rules) > 0 {
-			out[segLocal] = v1.Rules
-		}
-		return out, AgentMeta{}, nil
-	default:
-		return nil, AgentMeta{}, fmt.Errorf("unsupported state version %d (want 4, 3, 2, or 1)", probe.Version)
+	if probe.Version != stateSchemaVersion {
+		return nil, AgentMeta{}, fmt.Errorf(
+			"state file %s is version %d, and only version %d is read (versions 1 to 3 were written by releases before v0.5.0)",
+			path, probe.Version, stateSchemaVersion)
 	}
-}
 
-// normalizeModes stamps the kernel default onto any rule whose mode is empty,
-// making upgraded state explicit on disk.
-func normalizeModes(owners OwnerRuleset) {
-	for owner, rules := range owners {
-		for i := range rules {
-			rules[i].Mode = rules[i].EffectiveMode()
-		}
-		owners[owner] = rules
+	var sf stateFile
+	if err := json.Unmarshal(b, &sf); err != nil {
+		return nil, AgentMeta{}, fmt.Errorf("parse v%d state: %w", stateSchemaVersion, err)
 	}
+	if sf.Owners == nil {
+		sf.Owners = OwnerRuleset{}
+	}
+	return sf.Owners, sf.AgentMeta, nil
 }
 
 // SaveState writes owners atomically at the filesystem-rename level: write
