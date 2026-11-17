@@ -176,13 +176,19 @@ const COPY_TONE = { idle: undefined, copied: 'text-ok-ink', failed: 'text-danger
 
 /**
  * 可点击复制的行内文字（表格里的地址等）。是真正的 <button>，键盘可达。
- * @param {{ text: string, className?: string, children?: import('react').ReactNode }} props
+ *
+ * `label` 是无障碍名称。显示的文字每一行都相同时（如“复制链接”）必须给：
+ * 读屏与语音控制只靠名称分辨这是哪一行的按钮。名称要包含显示的文字，否则
+ * 照着屏幕上的字说出来的语音指令匹配不上。
+ *
+ * @param {{ text: string, label?: string, className?: string, children?: import('react').ReactNode }} props
  */
-export function CopyText({ text, className, children }) {
+export function CopyText({ text, label, className, children }) {
   const [status, copy] = useCopy()
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={(e) => { e.stopPropagation(); copy(text) }}
       title={status === 'idle' ? '点击复制' : COPY_LABEL[status]}
       className={cx('group inline-flex max-w-full items-center gap-1 rounded-chip text-left', className)}

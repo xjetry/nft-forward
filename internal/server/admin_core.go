@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -203,16 +204,39 @@ type batchGrantSpec struct {
 	RateLimitMBytes   int64
 }
 
-// batchApplyGrants grants each named node to every listed user (with per-grant
-// caps + rate limit) and re-dispatches nodes whose active rules are affected.
-// Node names that don't resolve are skipped and reported — for the admin caller
-// this is a convenience, not an enumeration oracle (admin may see all nodes).
-func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batchGrantSpec) (int, []string, *adminError) {
+// batchApplyGrants writes the given grants for every listed user.
+//
+// The batch is a set of (user, node) pairs: a node named more than once keeps
+// its last spec, a user listed more than once counts once. All pairs are
+// written in one transaction (db.ApplyGrants), so the request either takes
+// effect for every pair or for none.
+//
+// An existing grant has its caps overwritten unless keepExisting is set, in
+// which case it is left untouched and counted in kept. Node names that match
+// no node are returned in skipped — for the admin caller this is a
+// convenience, not an enumeration oracle (admin may see all nodes). A user id
+// that matches no user fails the whole request before anything is written.
+func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batchGrantSpec, keepExisting bool) (granted, kept int, skipped []string, aerr *adminError) {
 	if len(userIDs) == 0 {
-		return 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请选择目标用户"}
+		return 0, 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请选择目标用户"}
 	}
 	if len(grants) == 0 {
-		return 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请提供授权节点"}
+		return 0, 0, nil, &adminError{http.StatusBadRequest, codeValidation, "请提供授权节点"}
+	}
+	users := make([]int64, 0, len(userIDs))
+	seenUser := map[int64]bool{}
+	for _, uid := range userIDs {
+		if seenUser[uid] {
+			continue
+		}
+		seenUser[uid] = true
+		if _, err := db.GetUserByID(s.DB, uid); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, 0, nil, &adminError{http.StatusBadRequest, codeValidation, fmt.Sprintf("用户 #%d 不存在", uid)}
+			}
+			return 0, 0, nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		}
+		users = append(users, uid)
 	}
 	names := make([]string, len(grants))
 	for i, g := range grants {
@@ -220,49 +244,59 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	}
 	nameToID, err := db.NodeIDsByNames(s.DB, names)
 	if err != nil {
-		return 0, nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		return 0, 0, nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	var skipped []string
-	var granted int
+	// One spec per node, the last one given; nodeOrder keeps first-seen order
+	// so writes and audit rows come out in a stable sequence.
+	specByNode := map[int64]batchGrantSpec{}
+	var nodeOrder []int64
 	for _, g := range grants {
 		nid, ok := nameToID[g.NodeName]
 		if !ok {
 			skipped = append(skipped, g.NodeName)
 			continue
 		}
+		if _, seen := specByNode[nid]; !seen {
+			nodeOrder = append(nodeOrder, nid)
+		}
+		specByNode[nid] = g
+	}
+	writes := make([]db.GrantWrite, 0, len(nodeOrder)*len(users))
+	for _, nid := range nodeOrder {
+		g := specByNode[nid]
 		mf := g.MaxForwards
 		if mf <= 0 {
-			mf = 10
+			mf = defaultGrantMaxForwards
 		}
-		for _, uid := range userIDs {
-			if err := db.GrantNode(s.DB, uid, nid, mf, g.TrafficQuotaBytes); err != nil {
-				return granted, skipped, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-			}
-			mb := g.RateLimitMBytes
-			if mb < 0 {
-				mb = 0
-			}
-			if _, err := s.DB.Exec(`UPDATE user_nodes SET rate_limit_mbytes=? WHERE user_id=? AND node_id=?`, mb, uid, nid); err != nil {
-				return granted, skipped, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-			}
-			db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nid, 10))
-			granted++
+		mb := g.RateLimitMBytes
+		if mb < 0 {
+			mb = 0
+		}
+		for _, uid := range users {
+			writes = append(writes, db.GrantWrite{UserID: uid, NodeID: nid, MaxForwards: mf, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: mb})
 		}
 	}
+	written, err := db.ApplyGrants(s.DB, writes, keepExisting)
+	if err != nil {
+		return 0, 0, skipped, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	// Only pairs that were actually written can change what a node enforces;
+	// a kept grant has the same caps as before and needs no re-push.
 	affected := map[int64]bool{}
-	for _, g := range grants {
-		nid, ok := nameToID[g.NodeName]
-		if !ok {
+	for i, w := range writes {
+		if !written[i] {
+			kept++
 			continue
 		}
-		for _, uid := range userIDs {
-			ns, err := db.RulesAffectedByNode(s.DB, uid, nid)
-			if err != nil {
-				continue
-			}
-			for _, n := range ns {
-				affected[n] = true
-			}
+		granted++
+		db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(w.UserID, 10), strconv.FormatInt(w.NodeID, 10))
+		ns, err := db.RulesAffectedByNode(s.DB, w.UserID, w.NodeID)
+		if err != nil {
+			log.Printf("grants: list nodes to re-push for user %d node %d: %v", w.UserID, w.NodeID, err)
+			continue
+		}
+		for _, n := range ns {
+			affected[n] = true
 		}
 	}
 	nodeIDs := make([]int64, 0, len(affected))
@@ -270,7 +304,7 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 		nodeIDs = append(nodeIDs, n)
 	}
 	s.dispatchNodes("规则变更", nodeIDs)
-	return granted, skipped, nil
+	return granted, kept, skipped, nil
 }
 
 // errNotAMachine 是对组合发起只有机器才能执行的操作（下发规则、推送升级）时的错误。

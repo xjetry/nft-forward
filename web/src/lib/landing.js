@@ -190,22 +190,23 @@ export async function fetchNodeRoles() {
 
 /* 服务端角色表的写入口。
 
-   服务端接口是“整表覆盖”：POST 的内容就是新的全表，而这张表是全局的
-   （所有用户、所有节点共用一行设置）。所以写入必须基于最新的表来改，
-   不能基于页面加载时读到的那份：
-   - 每次写入都先重新读表，再把改动（mutate）应用上去，然后整表写回；
-   - 写入排成一条串行队列，同一个页面连续点击不会并发发出多份整表、
-     以到达顺序决定谁覆盖谁。
-   这把“用旧表覆盖别人的改动”的窗口从“页面打开期间”缩到“一次读写之间”；
-   要彻底消除需要服务端提供按键更新的接口。
+   这张表是全局的一行设置，所有管理员共用。写入表达的是一次改动（这些
+   节点、这一位、开或关），由服务端在锁内读表、应用、写回（internal/server
+   的 apiSetNodeRoles），所以两个人同时改不同的节点、或同一个节点的两个
+   角色，都会生效，谁也不会用自己页面上的旧表盖掉别人的改动。
+
+   同一个页面的写入排成一条串行队列：对同一个节点的同一位先开后关，两次
+   请求必须按点击的顺序到达服务端，而并发的请求之间顺序没有保证。
 
    返回写入后的整表。 */
 let roleWriteQueue = Promise.resolve()
-export function mutateNodeRoles(mutate) {
+export function setNodeRoleBit(nodes, bit, on) {
+  const keys = nodes.map(nodeRoleKey).filter(Boolean)
   const task = roleWriteQueue.then(async () => {
-    const next = cleanRoles(mutate(await fetchNodeRoles()))
-    await api.post('/node-roles', { roles: next })
-    return next
+    // 没有可写的节点时不发请求（服务端会拒绝空的改动），结果就是当前的表。
+    if (keys.length === 0) return fetchNodeRoles()
+    const d = await api.post('/node-roles', { keys, role: bit, on })
+    return cleanRoles(d?.roles)
   })
   // 队列本身不能因某次失败而中断；失败由 task 的调用方处理。
   roleWriteQueue = task.catch(() => {})
@@ -276,9 +277,10 @@ export function setLocalRoleBatch(serverRoles, localRoles, nodes, bit, on) {
   return next
 }
 
-/* 下面两个函数直接改一张角色表，用于管理员编辑服务端角色表（配合
-   mutateNodeRoles）。用户侧编辑的是本地覆盖，用上面的 toggleLocalRole /
-   setLocalRoleBatch。 */
+/* 下面两个函数在一张角色表上算出改动后的样子，不写任何地方。管理员侧用它
+   在请求落定前把改动先显示出来，真正的写入走 setNodeRoleBit，由服务端把
+   同样的改动应用到它自己的表上。用户侧编辑的是本地覆盖，用上面的
+   toggleLocalRole / setLocalRoleBatch。 */
 
 // Toggle a single role bit for one node, leaving its other bit untouched.
 export function applyNodeRole(roles, n, bit) {

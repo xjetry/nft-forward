@@ -382,7 +382,9 @@ func (s *Server) v1AdminBatchApplyGrants(w http.ResponseWriter, r *http.Request)
 	for i, g := range body.Grants {
 		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
-	granted, skipped, aerr := s.batchApplyGrants(admin.ID, body.UserIDs, specs)
+	// The public API always overwrites: its request and response shapes are
+	// fixed by openapi.yaml and carry no keep-existing option.
+	granted, _, skipped, aerr := s.batchApplyGrants(admin.ID, body.UserIDs, specs, false)
 	if aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return

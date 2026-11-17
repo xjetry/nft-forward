@@ -2,9 +2,10 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { copyToClipboard } from '../../lib/clipboard'
-import { GB, fmtBytes, fmtDate, fmtDateInput, fmtTrafficGB, nullStr, pct } from '../../lib/fmt'
+import { GB, bytesToGBText, fmtBytes, fmtDate, fmtDateInput, fmtGrantTraffic, fmtTrafficGB, nullStr, pct } from '../../lib/fmt'
+import { formatGrantLine } from '../../lib/grantText'
 import {
-  ROLE_DIRECT, ROLE_LANDING, applyNodeRoleBatch, fetchNodeRoles, hostPortKey, mergeLanding, mutateNodeRoles,
+  ROLE_DIRECT, ROLE_LANDING, applyNodeRoleBatch, fetchNodeRoles, hostPortKey, mergeLanding, setNodeRoleBit,
   nodeRoleKey, rolesFirstOrder,
 } from '../../lib/landing'
 import { combineResources } from '../../lib/resource'
@@ -18,7 +19,7 @@ import {
   Meter, Modal, ModalActions, Segmented, Select, SensText, Spinner, Stat, Tag, TextLink, Textarea, ToggleChip,
   useAction, useConfirm, useToast,
 } from '../../components/ui'
-import { ExpiryField, NewPasswordModal, bytesToGBText, expiryAlert, parseNumber, userConfirms } from './common'
+import { ExpiryField, NewPasswordModal, expiryAlert, parseNumber, userConfirms } from './common'
 import PasteGrantsModal from './PasteGrantsModal'
 
 /* 授权上的用途：0 = 沿用节点自己的用途，其余是只对这个用户生效的
@@ -371,10 +372,7 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
   }
 
   const copyGrants = () => {
-    const text = nodes.map((n) => {
-      const g = grantByNode.get(n.id)
-      return [n.name, `max=${g.max_forwards}`, `quota=${bytesToGBText(g.traffic_quota_bytes)}GB`, `rate=${g.rate_limit_mbytes || 0}`].join(' | ')
-    }).join('\n')
+    const text = nodes.map(n => formatGrantLine(n.name, grantByNode.get(n.id))).join('\n')
     copyToClipboard(text).then(
       () => toast(`已复制 ${nodes.length} 个节点的授权`),
       () => toast('没能写入剪贴板，请检查浏览器的剪贴板权限', 'error'),
@@ -461,7 +459,7 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
                         <td className="num">
                           <span className="inline-flex items-center gap-1.5">
                             {exceeded && <Badge tone="danger">已超额</Badge>}
-                            {fmtTrafficGB(g.traffic_used_bytes, g.traffic_quota_bytes)}
+                            {fmtGrantTraffic(g.traffic_used_bytes, g.traffic_quota_bytes, user.traffic_quota_bytes)}
                           </span>
                         </td>
                         <td className="num">{g.rate_limit_mbytes > 0 ? `${g.rate_limit_mbytes} MB/s` : '不限'}</td>
@@ -731,9 +729,10 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
 
   /* 标记的写入。
 
-     标记表是全局的一行设置，写入口 mutateNodeRoles 自己排队，并且每次都
-     基于最新读到的表去改；这里提交的是“目标值”（打开 / 关闭某一位），同一
-     改动重复提交结果不变。所以连续点击不需要互相等待，每一次都入队。
+     标记表是全局的一行设置。这里提交的是一次改动（打开 / 关闭某一位），由
+     服务端应用到它当时的表上（见 lib/landing.js 的 setNodeRoleBit），同一改动
+     重复提交结果不变；写入口自己按点击顺序排队，所以连续点击不需要互相
+     等待，每一次都入队。
 
      显示 = 服务端的表 + 尚未落定的改动（pendingOps）：
      - 点击后立即生效在显示上；
@@ -749,13 +748,13 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
     const op = { nodes: targets, bit, on }
     writesInFlight.current += 1
     setPendingOps(ops => [...ops, op])
-    mutateNodeRoles(table => applyNodeRoleBatch(table, targets, bit, on)).then(
+    setNodeRoleBit(targets, bit, on).then(
       onRoles,
       (err) => {
         toast(`标记没有保存：${err instanceof Error ? err.message : '请求失败'}`, 'error')
         // 失败时服务端的表有没有变并不确定（响应可能丢在半路）。后面还有写入
-        // 在排队时，它们各自会重新读表并带回整表；只有这是最后一笔时才需要
-        // 主动重读，而且此时没有别的写入会与这次重读交错。
+        // 在排队时，它们各自会带回写入后的整表；只有这是最后一笔时才需要主动
+        // 重读，而且此时没有别的写入会与这次重读交错。
         if (writesInFlight.current === 1) void reloadRoles()
       },
     ).finally(() => {

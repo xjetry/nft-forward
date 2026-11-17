@@ -447,9 +447,22 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
-	ruleHops, _ := db.ListRuleHopsByNode(s.DB, n.ID)
+	// The detail page treats each list below as the node's complete state: an
+	// empty rule list reads as "nothing runs here", an empty user list as "no
+	// one is granted this node", and a composite's member list seeds its
+	// editor. A failed query must therefore fail the request; served as an
+	// empty list it would be indistinguishable from a true empty one.
+	ruleHops, err := db.ListRuleHopsByNode(s.DB, n.ID)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if n.NodeType == "composite" {
-		compositeHops, _ := db.ListRuleHopsByCompositeNode(s.DB, n.ID)
+		compositeHops, err := db.ListRuleHopsByCompositeNode(s.DB, n.ID)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		ruleHops = append(ruleHops, compositeHops...)
 	}
 	panelURL, _ := db.GetSetting(s.DB, "panel_url")
@@ -492,7 +505,11 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		views[i] = ruleHopView{RuleHop: rh, TotalHops: m.hopCount, NodeType: m.nodeType, RuleNodeID: m.nodeID, OwnerID: m.ownerID, OwnerName: m.ownerName}
 	}
 
-	grantedUsers, _ := db.ListUsersForNode(s.DB, n.ID)
+	grantedUsers, err := db.ListUsersForNode(s.DB, n.ID)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// Composite nodes that directly list this node as a member hop, so the detail
 	// page can show where this node is referenced. Only direct referrers: nesting
 	// is resolved on the composite's own page, not transitively here. A query
@@ -519,7 +536,11 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 
 	// Include node_hops if composite, enriched with each child's name.
 	if n.NodeType == "composite" {
-		nodeHops, _ := db.ListNodeHops(s.DB, n.ID)
+		nodeHops, err := db.ListNodeHops(s.DB, n.ID)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		views := make([]nodeHopView, len(nodeHops))
 		for i, h := range nodeHops {
 			nm := ""
@@ -1414,55 +1435,112 @@ const (
 	roleMask    = roleLanding | roleDirect
 )
 
-func (s *Server) apiGetNodeRoles(w http.ResponseWriter, r *http.Request) {
-	val, _ := db.GetSetting(s.DB, "node_roles")
+// loadNodeRoles reads the global node-role table (the "node_roles" settings
+// row). Values stored before the role became a bitmask — the strings
+// "landing" / "direct" — are read as their bit; a row that is not valid JSON
+// is an error rather than an empty table, because the caller of a write would
+// otherwise replace the whole table with its own change.
+func (s *Server) loadNodeRoles() (map[string]int, error) {
+	val, err := db.GetSetting(s.DB, "node_roles")
+	if err != nil {
+		return nil, err
+	}
 	roles := map[string]int{}
-	if val != "" {
-		var raw map[string]json.RawMessage
-		json.Unmarshal([]byte(val), &raw)
-		for k, v := range raw {
-			var n int
-			if err := json.Unmarshal(v, &n); err == nil {
-				if n &= roleMask; n != 0 {
-					roles[k] = n
-				}
-				continue
+	if val == "" {
+		return roles, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(val), &raw); err != nil {
+		return nil, fmt.Errorf("node_roles setting: %w", err)
+	}
+	for k, v := range raw {
+		var n int
+		if err := json.Unmarshal(v, &n); err == nil {
+			if n &= roleMask; n != 0 {
+				roles[k] = n
 			}
-			// Pre-bitmask data stored the role as the string 'landing'/'direct'.
-			var str string
-			if err := json.Unmarshal(v, &str); err == nil {
-				switch str {
-				case "landing":
-					roles[k] = roleLanding
-				case "direct":
-					roles[k] = roleDirect
-				}
+			continue
+		}
+		var str string
+		if err := json.Unmarshal(v, &str); err == nil {
+			switch str {
+			case "landing":
+				roles[k] = roleLanding
+			case "direct":
+				roles[k] = roleDirect
 			}
 		}
+	}
+	return roles, nil
+}
+
+func (s *Server) apiGetNodeRoles(w http.ResponseWriter, r *http.Request) {
+	roles, err := s.loadNodeRoles()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	jsonOK(w, map[string]any{"roles": roles})
 }
 
+// apiSetNodeRoles turns role bits on or off for a set of node keys and
+// returns the resulting table.
+//
+// The table is one settings row shared by every admin, so a write is a
+// read-modify-write of the whole row. It is expressed as a change (these
+// keys, these bits, on or off) and applied here under nodeRolesMu: two admins
+// editing different nodes, or the same node's two roles, both take effect
+// whatever order their requests arrive in. This handler is the row's only
+// writer.
 func (s *Server) apiSetNodeRoles(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Roles map[string]int `json:"roles"`
+		Keys []string `json:"keys"`
+		Role int      `json:"role"`
+		On   bool     `json:"on"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	clean := make(map[string]int)
-	for k, v := range body.Roles {
-		if v &= roleMask; v != 0 {
-			clean[k] = v
+	if len(body.Keys) == 0 {
+		jsonErr(w, http.StatusBadRequest, "请选择节点")
+		return
+	}
+	if body.Role == 0 || body.Role&^roleMask != 0 {
+		jsonErr(w, http.StatusBadRequest, "无效的用途")
+		return
+	}
+	s.nodeRolesMu.Lock()
+	defer s.nodeRolesMu.Unlock()
+	roles, err := s.loadNodeRoles()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, k := range body.Keys {
+		if k == "" {
+			continue
+		}
+		next := roles[k] &^ body.Role
+		if body.On {
+			next = roles[k] | body.Role
+		}
+		if next == 0 {
+			delete(roles, k)
+		} else {
+			roles[k] = next
 		}
 	}
-	b, _ := json.Marshal(clean)
+	b, err := json.Marshal(roles)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := db.SetSetting(s.DB, "node_roles", string(b)); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"ok": true})
+	jsonOK(w, map[string]any{"ok": true, "roles": roles})
 }
 
 // --- Rules ---
@@ -2011,6 +2089,8 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
+	// 节点带的是这个用户授权生效后的角色（myNodeOf），与规则表单筛选入口、中转层时
+	// 用的是同一个值，不是节点自身的掩码。
 	nodes, grants, _, err := s.grantedNodes(u)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -2411,6 +2491,10 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 			TrafficQuotaBytes int64  `json:"traffic_quota_bytes"`
 			RateLimitMBytes   int64  `json:"rate_limit_mbytes"`
 		} `json:"grants"`
+		// OnlyMissing leaves a (user, node) pair that already has a grant
+		// untouched instead of overwriting its caps; such pairs are counted
+		// in the response's "kept".
+		OnlyMissing bool `json:"only_missing"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
@@ -2420,10 +2504,10 @@ func (s *Server) apiBatchApplyGrants(w http.ResponseWriter, r *http.Request) {
 	for i, g := range body.Grants {
 		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
-	granted, skipped, aerr := s.batchApplyGrants(u.ID, body.UserIDs, specs)
+	granted, kept, skipped, aerr := s.batchApplyGrants(u.ID, body.UserIDs, specs, body.OnlyMissing)
 	if aerr != nil {
 		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	jsonOK(w, map[string]any{"ok": true, "granted": granted, "skipped_nodes": skipped})
+	jsonOK(w, map[string]any{"ok": true, "granted": granted, "kept": kept, "skipped_nodes": skipped})
 }

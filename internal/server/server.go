@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +35,9 @@ type Server struct {
 	stopExpiry      chan struct{}
 	stopCycle       chan struct{}
 	stopLandingSync chan struct{}
+	// nodeRolesMu serializes apiSetNodeRoles' read-modify-write of the
+	// "node_roles" settings row.
+	nodeRolesMu sync.Mutex
 }
 
 func New(d *sql.DB) (*Server, error) {
