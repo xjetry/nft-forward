@@ -117,6 +117,11 @@ func scopeSatisfies(have, want string) bool {
 // behind requireTokenAuth (which also rate-limits and stamps last_used); role and
 // scope gates layer on top per group.
 func (s *Server) registerV1Routes(r chi.Router) {
+	// 没有这个接口：按 /api/v1 的错误信封回 404（理由同 Router 里 /api 的那一处）。
+	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+		v1Err(w, http.StatusNotFound, codeNotFound, "接口不存在")
+	})
+
 	// The OpenAPI document is the public contract itself — served without a
 	// token. It must be registered before the authenticated group so
 	// requireTokenAuth doesn't gate it.

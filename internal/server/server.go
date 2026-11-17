@@ -362,6 +362,11 @@ func (s *Server) Router() http.Handler {
 
 	// --- JSON API ---
 	r.Route("/api", func(r chi.Router) {
+		// /api 之下没有页面：路由表里没有的路径回 404。不设的话它会继承根路由的 NotFound
+		// （见本函数末尾），把写错的接口地址答成 200 加前端入口页。
+		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			jsonErr(w, http.StatusNotFound, "接口不存在")
+		})
 		r.Post("/login", s.apiLogin)
 		r.Post("/logout", s.apiLogout)
 		r.Get("/branding", s.apiBranding)
@@ -485,6 +490,9 @@ func (s *Server) Router() http.Handler {
 	// Public API (token auth) — the stable programmatic / AI-agent surface.
 	r.Route("/api/v1", s.registerV1Routes)
 
+	// 其余没有匹配的路径回前端入口页：前端自己的路由（/nodes、/users/3 ……）在刷新或直接
+	// 打开时靠它回到页面。chi 把这里的处理器传给还没有自己设过 NotFound 的子路由；/api 与
+	// /api/v1 各自设了 404，所以落到这里的只有页面路径。
 	r.NotFound(s.spaHandler().ServeHTTP)
 
 	return r

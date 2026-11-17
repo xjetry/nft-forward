@@ -57,12 +57,9 @@ func TestAPIRuleBandwidthEndpointRemoved(t *testing.T) {
 	req.AddCookie(adminCookie)
 	rec := httptest.NewRecorder()
 	s.Router().ServeHTTP(rec, req)
-	// The router's catch-all serves the SPA index for any unmatched path with
-	// status 200, so an absent JSON handler cannot be told apart from a live
-	// one by status code alone; the response Content-Type is the reliable
-	// signal that no API handler processed the request.
-	if ct := rec.Header().Get("Content-Type"); ct == "application/json" {
-		t.Fatalf("want removed endpoint to fall through to non-JSON response, got Content-Type %q body %s", ct, rec.Body.String())
+	// 这个接口已经删除：路由表里没有它，按“没有这个接口”回 404。
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("已删除的接口应回 404，实际 %d %s", rec.Code, rec.Body.String())
 	}
 }
 
