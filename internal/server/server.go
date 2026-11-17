@@ -31,9 +31,31 @@ type Server struct {
 	stopExpiry      chan struct{}
 	stopCycle       chan struct{}
 	stopLandingSync chan struct{}
+	// nodeRolesMu serializes apiSetNodeRoles' read-modify-write of the
+	// "node_roles" settings row.
+	nodeRolesMu sync.Mutex
+	// pushInline makes redispatchNodes push on the caller's goroutine instead
+	// of one goroutine per node. Tests set it, so that a push's statements
+	// are issued where they can be counted and failed like the caller's own.
+	pushInline bool
 }
 
 func New(d *sql.DB) (*Server, error) {
+	s, err := newServer(d)
+	if err != nil {
+		return nil, err
+	}
+	go s.expiryEnforcer()
+	go s.cycleResetEnforcer()
+	go s.landingSyncEnforcer()
+	return s, nil
+}
+
+// newServer builds a server that answers requests but runs none of the
+// periodic work New starts. Everything it does to the database is then the
+// doing of the requests it is given, which is what a test that counts or
+// fails individual statements needs.
+func newServer(d *sql.DB) (*Server, error) {
 	if _, err := EnsureSelfNode(d); err != nil {
 		return nil, fmt.Errorf("ensure self node: %w", err)
 	}
@@ -46,9 +68,6 @@ func New(d *sql.DB) (*Server, error) {
 		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
-	go s.expiryEnforcer()
-	go s.cycleResetEnforcer()
-	go s.landingSyncEnforcer()
 	return s, nil
 }
 
@@ -63,16 +82,21 @@ func (s *Server) expiryEnforcer() {
 		case <-s.stopExpiry:
 			return
 		case <-ticker.C:
-			nodes, err := db.ExpiredUserNodeIDs(s.DB)
-			if err != nil {
-				log.Printf("expiry: query expired-user nodes: %v", err)
-				continue
-			}
-			for _, n := range nodes {
-				if err := s.dispatchToNode(n); err != nil {
-					log.Printf("expiry: re-dispatch node %d: %v", n, err)
-				}
-			}
+			s.expiryPass()
+		}
+	}
+}
+
+// expiryPass is one round of expiryEnforcer.
+func (s *Server) expiryPass() {
+	nodes, err := db.ExpiredUserNodeIDs(s.DB)
+	if err != nil {
+		log.Printf("expiry: query expired-user nodes: %v", err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("expiry: re-dispatch node %d: %v", n, err)
 		}
 	}
 }
@@ -98,38 +122,36 @@ func (s *Server) cycleResetEnforcer() {
 		case <-s.stopCycle:
 			return
 		case <-ticker.C:
-			users, err := db.ListUsers(s.DB)
-			if err != nil {
-				log.Printf("cycle: list users: %v", err)
-				continue
-			}
-			for _, u := range users {
-				if u.TrafficResetDays <= 0 {
-					continue
-				}
-				reset, err := db.CheckAndResetTrafficCycle(s.DB, u)
-				if err != nil {
-					log.Printf("cycle: check reset for user %d: %v", u.ID, err)
-					continue
-				}
-				if !reset {
-					continue
-				}
-				if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-					if err := db.SetUserDisabled(s.DB, u.ID, false, ""); err != nil {
-						log.Printf("cycle: re-enable user %d: %v", u.ID, err)
-						continue
-					}
-				}
-				// Quota exclusions are evaluated at push time only; a fresh
-				// cycle must re-push or suppressed rules stay dead.
-				if nodes, err := db.DistinctUserNodes(s.DB, u.ID); err == nil {
-					for _, n := range nodes {
-						if err := s.dispatchToNode(n); err != nil {
-							log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
-						}
-					}
-				}
+			s.cycleResetPass()
+		}
+	}
+}
+
+// cycleResetPass is one round of cycleResetEnforcer.
+func (s *Server) cycleResetPass() {
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("cycle: list users: %v", err)
+		return
+	}
+	for _, u := range users {
+		if u.TrafficResetDays <= 0 {
+			continue
+		}
+		// A reset comes with the nodes to re-push, or does not happen
+		// (db.CheckAndResetTrafficCycle); one that failed is due again on
+		// the next pass.
+		reset, nodes, err := db.CheckAndResetTrafficCycle(s.DB, u)
+		if err != nil {
+			log.Printf("cycle: check reset for user %d: %v", u.ID, err)
+			continue
+		}
+		if !reset {
+			continue
+		}
+		for _, n := range nodes {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
 			}
 		}
 	}
@@ -170,11 +192,12 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 		if !includeManualOnly && !hasDynamicSource(u) {
 			continue
 		}
-		nodes, ok := s.resolveLandingExits(u, false)
-		if !ok {
+		nodes, err := s.resolveLandingExits(u, false)
+		if err != nil {
+			log.Printf("landing: sync pass resolve user %d: %v", u.ID, err)
 			continue
 		}
-		s.syncLandingExits(u, nodes)
+		s.refreshLandingLedger(u, nodes)
 	}
 }
 
@@ -190,16 +213,15 @@ func (s *Server) enforceUserQuota(userID int64) {
 	if u.Disabled || u.TrafficQuotaBytes <= 0 || u.TrafficUsedBytes < u.TrafficQuotaBytes {
 		return
 	}
-	if err := db.SetUserDisabled(s.DB, userID, true, "流量超额"); err != nil {
+	// Disabling comes with the nodes to re-push, or does not happen
+	// (db.DisableUserOverQuota). A user left enabled here is still over
+	// quota at the next counters batch, which brings this function back.
+	nodes, err := db.DisableUserOverQuota(s.DB, userID)
+	if err != nil {
 		log.Printf("quota: disable user %d: %v", userID, err)
 		return
 	}
 	log.Printf("user %d disabled: traffic quota reached (%d/%d bytes)", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
-	nodes, err := db.DistinctUserNodes(s.DB, userID)
-	if err != nil {
-		log.Printf("quota: user %d nodes: %v", userID, err)
-		return
-	}
 	for _, n := range nodes {
 		if err := s.dispatchToNode(n); err != nil {
 			log.Printf("quota: re-dispatch node %d after disabling user %d: %v", n, userID, err)
@@ -252,19 +274,31 @@ func (s *Server) enforceExitQuota(userID int64) {
 // sync status: success stamps last_apply_at and clears last_error;
 // failure stamps last_error while preserving last_apply_at.
 func (s *Server) dispatchToNode(nodeID int64) error {
-	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
-	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
+	// The marks on the nodes row are what the panel shows about a dispatch;
+	// the dispatch's own outcome is what this function returns. A mark that
+	// cannot be stored is logged, so the row is not silently out of step.
+	fail := func(err error) error {
+		if merr := db.MarkNodeDispatchError(s.DB, nodeID, err.Error()); merr != nil {
+			log.Printf("dispatch node %d: record failure (%v): %v", nodeID, err, merr)
+		}
 		return err
 	}
-	rules := buildRules(s.DB, ruleHops)
+	ruleHops, err := db.ActiveRuleHopsForPush(s.DB, nodeID)
+	if err != nil {
+		return fail(err)
+	}
+	rules, err := buildRules(s.DB, ruleHops)
+	if err != nil {
+		return fail(err)
+	}
 	rev := computeRev(rules)
 	warning, err := s.Dispatcher.Dispatch(nodeID, rules, rev)
 	if err != nil {
-		_ = db.MarkNodeDispatchError(s.DB, nodeID, err.Error())
-		return err
+		return fail(err)
 	}
-	_ = db.MarkNodeApplied(s.DB, nodeID, warning)
+	if err := db.MarkNodeApplied(s.DB, nodeID, warning); err != nil {
+		log.Printf("dispatch node %d: record success: %v", nodeID, err)
+	}
 	return nil
 }
 
@@ -277,7 +311,12 @@ func (s *Server) dispatchAfterMutation(w http.ResponseWriter, nodeID int64, acti
 		log.Printf("dispatch node %d (%s): %v", nodeID, action, err)
 		return
 	}
-	if n, err := db.GetNode(s.DB, nodeID); err == nil && n.LastWarning != "" {
+	n, err := db.GetNode(s.DB, nodeID)
+	if err != nil {
+		log.Printf("dispatch node %d (%s): read back its warning: %v", nodeID, action, err)
+		return
+	}
+	if n.LastWarning != "" {
 		setFlash(w, fmt.Sprintf("%s 已保存，但 %s", action, n.LastWarning))
 	}
 }
@@ -319,26 +358,38 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 // redispatchNodes re-pushes kernel state to every node a background (WS-driven)
 // rule mutation touched. Dispatches run off the caller's goroutine.
 func (s *Server) redispatchNodes(nodeIDs []int64) {
+	push := func(n int64) {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d (规则变更): %v", n, err)
+		}
+	}
 	for _, n := range nodeIDs {
-		go func(n int64) {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("dispatch node %d (规则变更): %v", n, err)
-			}
-		}(n)
+		if s.pushInline {
+			push(n)
+		} else {
+			go push(n)
+		}
 	}
 }
 
 // buildRules converts panel-side RuleHop rows into kernel-side nft.Rule
 // values. Lookup tables are preloaded in bulk so the conversion is
 // O(ruleHops) with no per-row queries.
-func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
-	ruleMap, _ := db.RulesByID(d)
-	if ruleMap == nil {
-		ruleMap = map[int64]*db.Rule{}
+//
+// A lookup table that fails to load fails the build. The result is what a
+// node is told to install, and each table supplies part of it: the rules give
+// a hop its rule id and name and lead to its owner, the users the owner's
+// name, the hop counts HopCount, the grant shapes the shaping group and rate.
+// Built with one of them empty, the ruleset would still list every hop, just
+// without that part.
+func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
+	ruleMap, err := db.RulesByID(d)
+	if err != nil {
+		return nil, err
 	}
-	users, _ := db.UsersByID(d)
-	if users == nil {
-		users = map[int64]*db.User{}
+	users, err := db.UsersByID(d)
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect distinct rule IDs for a single bulk hop-count query
@@ -350,11 +401,14 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 	for id := range ruleIDSet {
 		ruleIDs = append(ruleIDs, id)
 	}
-	hopCounts, _ := db.RuleHopCounts(d, ruleIDs)
-	if hopCounts == nil {
-		hopCounts = map[int64]int{}
+	hopCounts, err := db.RuleHopCounts(d, ruleIDs)
+	if err != nil {
+		return nil, err
 	}
-	shapes, _ := db.GrantShapes(d)
+	shapes, err := db.GrantShapes(d)
+	if err != nil {
+		return nil, err
+	}
 
 	rules := make([]nft.Rule, 0, len(ruleHops))
 	for _, rh := range ruleHops {
@@ -392,7 +446,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 		}
 		rules = append(rules, rule)
 	}
-	return rules
+	return rules, nil
 }
 
 // computeRev returns a stable hash of the ruleset so a reconnecting
@@ -436,7 +490,6 @@ func (s *Server) Router() http.Handler {
 			r.Post("/change-password", s.apiChangePassword)
 			r.Get("/probe", s.probeEndpoint)
 			r.Get("/probe-chain", s.probeChainEndpoint)
-			r.Get("/dashboard", s.apiDashboard)
 			r.Post("/sub-fetch", s.apiSubFetch)
 			r.Get("/node-roles", s.apiGetNodeRoles)
 		})
@@ -445,6 +498,7 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAPIAuth, s.requireRole("admin"))
 
+			r.Get("/dashboard", s.apiDashboard)
 			r.Get("/nodes", s.apiListNodes)
 			r.Post("/nodes", s.apiCreateNode)
 			r.Get("/nodes/{id}", s.apiGetNode)

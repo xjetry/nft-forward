@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -184,10 +186,12 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// tokenPrefix returns the first 8 chars of a token for display, or the whole
+// TokenPrefix returns the first 8 chars of a plaintext API token, or the whole
 // token if shorter. It lets the UI show a recognizable prefix without keeping
-// the full plaintext at rest.
-func tokenPrefix(token string) string {
+// the full plaintext at rest. Every write of api_tokens.token_prefix goes
+// through it, so a caller holding the plaintext can derive the stored prefix
+// without reading it back.
+func TokenPrefix(token string) string {
 	if len(token) < 8 {
 		return token
 	}
@@ -198,7 +202,7 @@ func now() int64 { return time.Now().Unix() }
 
 // Users
 
-func CreateUser(d *sql.DB, username, pwHash, role string) (int64, error) {
+func CreateUser(d DBTX, username, pwHash, role string) (int64, error) {
 	res, err := d.Exec(`INSERT INTO users(username, pw_hash, role, created_at) VALUES (?,?,?,?)`,
 		username, pwHash, role, now())
 	if err != nil {
@@ -232,7 +236,7 @@ func SetUserDisabled(d *sql.DB, id int64, disabled bool, reason string) error {
 	return err
 }
 
-func DeleteUser(d *sql.DB, id int64) error {
+func DeleteUser(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM users WHERE id=?`, id)
 	return err
 }
@@ -241,7 +245,7 @@ func GetUserByUsername(d *sql.DB, username string) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE username = ?`, username))
 }
 
-func GetUserByID(d *sql.DB, id int64) (*User, error) {
+func GetUserByID(d DBTX, id int64) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
 }
 
@@ -296,6 +300,36 @@ func GetSessionUser(d *sql.DB, token string) (*User, error) {
 		WHERE s.token = ? AND s.expires_at > strftime('%s','now')`, HashToken(token)))
 }
 
+// SetPassword stores a new password hash and ends the user's sessions in one
+// transaction, keeping only the session whose plaintext token is keepSession
+// (the session making the change; "" keeps none). The two belong together: a
+// password is changed to lock out whoever holds the old one, and if the hash
+// were written but the sessions survived, the caller would be told the
+// password changed while the old sessions kept working.
+//
+// sessions.token holds HashToken of the plaintext (CreateSession), so the
+// session to keep is matched in that form; compared as plaintext it would
+// match no row and the caller's own session would be ended with the rest.
+func SetPassword(d *sql.DB, userID int64, pwHash, keepSession string) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET pw_hash=? WHERE id=?`, pwHash, userID); err != nil {
+		return err
+	}
+	if keepSession == "" {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
+	} else {
+		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=? AND token<>?`, userID, HashToken(keepSession))
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func DeleteSession(d *sql.DB, token string) error {
 	_, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, HashToken(token))
 	return err
@@ -315,7 +349,7 @@ func GetSetting(d *sql.DB, key string) (string, error) {
 }
 
 // SetSetting upserts a global setting key.
-func SetSetting(d *sql.DB, key, value string) error {
+func SetSetting(d DBTX, key, value string) error {
 	_, err := d.Exec(
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -325,21 +359,10 @@ func SetSetting(d *sql.DB, key, value string) error {
 
 // Nodes
 
+// CreateNode creates a plain node with the default settings; see
+// CreateNodeFrom for the rest.
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
-	if secret == "" {
-		secret = RandToken(32)
-	}
-	// New agent nodes default to both roles (entry|via = 3) so a freshly
-	// registered node can be picked as an entry or bound as a middle layer
-	// without an extra edit; the numeric literal mirrors NodeRoleEntry|NodeRoleVia.
-	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, roles, sort_order, created_at)
-		VALUES (?,?,?,3, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
-		name, address, secret, now())
-	if err != nil {
-		return nil, err
-	}
-	id, _ := res.LastInsertId()
-	return GetNode(d, id)
+	return CreateNodeFrom(d, NewNode{Name: name, Address: address, Secret: secret})
 }
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
@@ -352,7 +375,7 @@ const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_hos
 // same-named columns make the SELECT ambiguous.
 var nodeColsQualified = "n." + strings.Join(strings.Split(nodeCols, ","), ",n.")
 
-func GetNode(d *sql.DB, id int64) (*Node, error) {
+func GetNode(d DBTX, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
 	return scanNode(row)
 }
@@ -425,7 +448,11 @@ func ReorderNodes(d *sql.DB, ids []int64) error {
 // and not disabled), and offline if any child is offline or it has no children.
 // Composite nodes have no agent of their own, so their stored online column is
 // always 0 — this aggregation is the only source of truth for their status.
-func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
+//
+// A failed membership query is returned, not swallowed: left as they are, the
+// composites would read as offline, which is a statement about the nodes that
+// nothing has established.
+func ResolveCompositeOnline(d *sql.DB, nodes []*Node) error {
 	hasComposite := false
 	for _, n := range nodes {
 		if n.NodeType == "composite" {
@@ -434,24 +461,26 @@ func ResolveCompositeOnline(d *sql.DB, nodes []*Node) {
 		}
 	}
 	if !hasComposite {
-		return
+		return nil
 	}
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeOnline(nodes, hops)
+	return nil
 }
 
 // ResolveCompositeRelayStack fills each composite node's EntryRelayHost/
 // EntryRelayHostV6/ExitRelayHostV6 from its hop chain's first and last node —
 // see the Node struct's doc comment for why these aren't real columns.
-func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) {
+func ResolveCompositeRelayStack(d *sql.DB, nodes []*Node) error {
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeRelayStack(nodes, hops)
+	return nil
 }
 
 // maxCompositeResolveDepth caps recursion when flattening composite membership
@@ -528,12 +557,13 @@ func resolveCompositeRelayStack(nodes []*Node, hops []*NodeHop) {
 // throughput. See the design note (admin panel raw-traffic) for why this
 // approximation — the entry node's raw includes its other rules/composites too —
 // is acceptable at the display layer.
-func FillCompositeRawTraffic(d *sql.DB, nodes []*Node, raw map[int64]int64) {
+func FillCompositeRawTraffic(d *sql.DB, nodes []*Node, raw map[int64]int64) error {
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	fillCompositeRawTraffic(nodes, hops, raw)
+	return nil
 }
 
 // fillCompositeRawTraffic is the pure aggregation, split out so tests don't need
@@ -565,7 +595,7 @@ func fillCompositeRawTraffic(nodes []*Node, hops []*NodeHop, raw map[int64]int64
 // child nodes (resolved to name/type), so the UI can flatten a composite into
 // its physical chain. See the Node struct's doc comment for why Hops isn't a
 // real column.
-func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
+func ResolveCompositeHops(d *sql.DB, nodes []*Node) error {
 	hasComposite := false
 	for _, n := range nodes {
 		if n.NodeType == "composite" {
@@ -574,13 +604,14 @@ func ResolveCompositeHops(d *sql.DB, nodes []*Node) {
 		}
 	}
 	if !hasComposite {
-		return
+		return nil
 	}
 	hops, err := ListAllNodeHops(d)
 	if err != nil {
-		return
+		return err
 	}
 	resolveCompositeHops(nodes, hops)
+	return nil
 }
 
 // resolveCompositeHops is the pure aggregation, split out so tests don't need a
@@ -639,19 +670,19 @@ func resolveCompositeOnline(nodes []*Node, hops []*NodeHop) {
 	}
 }
 
+// RenameNode renames a node; sql.ErrNoRows if there is no such node.
 func RenameNode(d *sql.DB, id int64, name string) error {
-	_, err := d.Exec(`UPDATE nodes SET name=? WHERE id=?`, name, id)
-	return err
+	return UpdateRow(d, `UPDATE nodes SET name=? WHERE id=?`, name, id)
 }
 
-func DeleteNode(d *sql.DB, id int64) error {
+func DeleteNode(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	return err
 }
 
 // UpdateNodeRelayHost sets a node's data-plane reachable address (empty clears
 // it). Validation of the value (IPv4 / hostname) is the caller's job.
-func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
+func UpdateNodeRelayHost(d DBTX, id int64, relayHost string) error {
 	_, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, relayHost, id)
 	return err
 }
@@ -661,12 +692,12 @@ func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
 	return err
 }
 
-func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
+func UpdateNodeRateMultiplier(d DBTX, id int64, mult float64) error {
 	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
 	return err
 }
 
-func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
+func UpdateNodeUnidirectional(d DBTX, id int64, uni bool) error {
 	v := 0
 	if uni {
 		v = 1
@@ -691,7 +722,7 @@ func UpdateNodeNoDirectExit(d *sql.DB, id int64, v bool) error {
 
 // UpdateNodePortRange sets a node's port_range spec. An empty string resets to
 // the default range. Callers must validate with ValidatePortRange first.
-func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
+func UpdateNodePortRange(d DBTX, id int64, portRange string) error {
 	if portRange == "" {
 		portRange = DefaultPortRange
 	}
@@ -754,7 +785,7 @@ func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	return h, nil
 }
 
-func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
+func DeleteRulesForUser(d DBTX, userID int64) ([]int64, error) {
 	nodes, err := DistinctUserNodes(d, userID)
 	if err != nil {
 		return nil, err
@@ -765,7 +796,7 @@ func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
 	return nodes, nil
 }
 
-func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
+func DistinctUserNodes(d DBTX, userID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=?`, userID)
 }
 
@@ -875,9 +906,16 @@ func ListRuleHopsByCompositeNode(d *sql.DB, compositeNodeID int64) ([]*RuleHop, 
 
 // Audit
 
+// WriteAudit records an action in the audit log. It returns nothing on
+// purpose: every caller writes the row after the action it describes has
+// already taken effect, so there is nothing left to undo and no reason to fail
+// the request. A row that could not be written is reported in the server log
+// instead, so that a gap in the audit trail is not silent.
 func WriteAudit(d *sql.DB, userID int64, action, target, payload string) {
-	_, _ = d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
-		userID, action, target, payload, now())
+	if _, err := d.Exec(`INSERT INTO audit_logs(user_id, action, target, payload, at) VALUES (?,?,?,?,?)`,
+		userID, action, target, payload, now()); err != nil {
+		log.Printf("audit: record %s (user %d, target %q): %v", action, userID, target, err)
+	}
 }
 
 // NodeIDsByNames resolves a slice of node names to their database IDs. Names
@@ -891,8 +929,11 @@ func NodeIDsByNames(d *sql.DB, names []string) (map[string]int64, error) {
 	for _, name := range names {
 		var id int64
 		err := d.QueryRow(`SELECT id FROM nodes WHERE name = ?`, name).Scan(&id)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		out[name] = id
 	}
@@ -915,9 +956,11 @@ func UpsertSelfNode(d *sql.DB) (*Node, error) {
 		return nil, err
 	}
 	// Set owner_id to first admin if not yet assigned.
-	_, _ = d.Exec(`UPDATE nodes SET owner_id = (
+	if _, err := d.Exec(`UPDATE nodes SET owner_id = (
 		SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1
-	) WHERE node_type = 'self' AND owner_id IS NULL`)
+	) WHERE node_type = 'self' AND owner_id IS NULL`); err != nil {
+		return nil, err
+	}
 	row := d.QueryRow(`SELECT ` + nodeCols + ` FROM nodes WHERE node_type='self'`)
 	return scanNode(row)
 }

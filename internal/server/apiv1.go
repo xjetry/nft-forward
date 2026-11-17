@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,13 +43,26 @@ const (
 	codeNotFound      = "not_found"
 	codeConflict      = "conflict"
 	codeDuplicateHop  = "duplicate_chain_node"
-	codeInternal      = "internal"
+	// codeUpstream: a party other than the panel failed — see pushUpstream.
+	codeUpstream = "upstream_failed"
+	codeInternal = "internal"
 )
 
 // v1OK writes the standard success envelope: {"data": ...}.
 func v1OK(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+}
+
+// v1LookupErr is lookupErr for the v1 envelope: the caller's status, code and
+// message when the row does not exist, an internal error carrying err
+// otherwise. err is not nil.
+func v1LookupErr(w http.ResponseWriter, err error, status int, code, message string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		v1Err(w, status, code, message)
+		return
+	}
+	v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
 }
 
 // v1Err writes the standard error envelope: {"error":{"code","message"}}.
@@ -278,33 +292,56 @@ func toV1Rule(it ruleListItem) v1Rule {
 
 // v1RulesFromDB resolves a batch of rules into their slim DTOs, filling traffic
 // and the flattened chain (resolved over all nodes so composite members show).
-func (s *Server) v1RulesFromDB(rules []*db.Rule) []v1Rule {
-	db.FillRuleTraffic(s.DB, rules)
-	allNodes, _ := db.ListNodes(s.DB)
+func (s *Server) v1RulesFromDB(rules []*db.Rule) ([]v1Rule, error) {
+	if err := db.FillRuleTraffic(s.DB, rules); err != nil {
+		return nil, err
+	}
+	allNodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		return nil, err
+	}
 	allByID := buildMap(allNodes, func(n *db.Node) int64 { return n.ID })
 	items := make([]ruleListItem, 0, len(rules))
 	for _, rl := range rules {
-		items = append(items, s.buildRuleListItem(rl, ""))
+		item, err := s.buildRuleListItem(rl, "")
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
 	}
-	s.fillRuleChains(items, allByID)
+	if err := s.fillRuleChains(items, allByID); err != nil {
+		return nil, err
+	}
 	out := make([]v1Rule, 0, len(items))
 	for _, it := range items {
 		out = append(out, toV1Rule(it))
 	}
-	return out
+	return out, nil
 }
 
 // --- Handlers: self + shared ---
 
 func (s *Server) v1Info(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
-	ruleCount, _ := db.CountRulesForUser(s.DB, u.ID)
+	grantedNodes, grants, err := db.ListNodesForUser(s.DB, u.ID)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	ruleCount, err := db.CountRulesForUser(s.DB, u.ID)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 
 	nodeViews := make([]map[string]any, 0, len(grantedNodes))
 	for i, n := range grantedNodes {
 		g := grants[i]
-		nRules, _ := db.CountRulesForUserNode(s.DB, u.ID, n.ID)
+		nRules, err := db.CountRulesForUserNode(s.DB, u.ID, n.ID)
+		if err != nil {
+			v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+			return
+		}
 		nodeViews = append(nodeViews, map[string]any{
 			"id":              n.ID,
 			"name":            n.Name,
@@ -378,12 +415,23 @@ func probeStatusCode(status int) string {
 
 func (s *Server) v1MyListNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	grantedNodes, grants, _ := db.ListNodesForUser(s.DB, u.ID)
+	grantedNodes, grants, err := db.ListNodesForUser(s.DB, u.ID)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	applyEffectiveRoles(grantedNodes, grants)
 	// A composite's online state derives from its children, which may be outside
 	// the granted set; resolve over all nodes then project onto the granted ones.
-	allNodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, allNodes)
+	allNodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.ResolveCompositeOnline(s.DB, allNodes); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	onlineByID := make(map[int64]int, len(allNodes))
 	for _, n := range allNodes {
 		onlineByID[n.ID] = n.Online
@@ -398,8 +446,17 @@ func (s *Server) v1MyListNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) v1MyListRules(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	rules, _ := db.ListRulesByUser(s.DB, u.ID)
-	v1OK(w, s.v1RulesFromDB(rules))
+	rules, err := db.ListRulesByUser(s.DB, u.ID)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	views, err := s.v1RulesFromDB(rules)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	v1OK(w, views)
 }
 
 func (s *Server) v1MyGetRule(w http.ResponseWriter, r *http.Request) {
@@ -410,11 +467,21 @@ func (s *Server) v1MyGetRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rl, err := db.GetRule(s.DB, id)
-	if err != nil || !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+	if err != nil {
+		v1LookupErr(w, err, http.StatusNotFound, codeNotFound, "规则不存在")
+		return
+	}
+	// Someone else's rule is answered exactly as one that does not exist, so
+	// that rule ids cannot be probed.
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
 		v1Err(w, http.StatusNotFound, codeNotFound, "规则不存在")
 		return
 	}
-	views := s.v1RulesFromDB([]*db.Rule{rl})
+	views, err := s.v1RulesFromDB([]*db.Rule{rl})
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	v1OK(w, views[0])
 }
 
@@ -452,9 +519,27 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 	// (non-dry-run) creates are recorded/replayed.
 	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if !dryRun && idemKey != "" {
-		if rid, ok, _ := db.LookupIdempotentRule(s.DB, u.ID, idemKey); ok {
-			if rl, err := db.GetRule(s.DB, rid); err == nil && rl.OwnerID.Valid && rl.OwnerID.Int64 == u.ID {
-				views := s.v1RulesFromDB([]*db.Rule{rl})
+		// Every lookup here has to succeed before a create may go ahead: a
+		// failed one read as "this key is new" would create the very
+		// duplicate the key exists to prevent. Only a recorded rule that no
+		// longer exists lets the request through as a fresh create.
+		rid, ok, err := db.LookupIdempotentRule(s.DB, u.ID, idemKey)
+		if err != nil {
+			v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+			return
+		}
+		if ok {
+			rl, err := db.GetRule(s.DB, rid)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+				return
+			}
+			if err == nil && rl.OwnerID.Valid && rl.OwnerID.Int64 == u.ID {
+				views, err := s.v1RulesFromDB([]*db.Rule{rl})
+				if err != nil {
+					v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+					return
+				}
 				v1OK(w, map[string]any{"rule": views[0], "idempotent_replay": true})
 				return
 			}
@@ -471,23 +556,35 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dryRun {
+		chain, err := s.hopsChainPreview(out.Hops)
+		if err != nil {
+			v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+			return
+		}
 		v1OK(w, map[string]any{
 			"dry_run":  true,
 			"entry":    out.Entry,
 			"entry_v6": out.EntryV6,
-			"chain":    s.hopsChainPreview(out.Hops),
+			"chain":    chain,
 		})
 		return
 	}
 	if idemKey != "" {
-		_ = db.SaveIdempotentRule(s.DB, u.ID, idemKey, out.RuleID)
+		if err := db.SaveIdempotentRule(s.DB, u.ID, idemKey, out.RuleID); err != nil {
+			v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+			return
+		}
 	}
 	rl, err := db.GetRule(s.DB, out.RuleID)
 	if err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, "读取新建规则失败")
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已创建，但没能读回: "+err.Error())
 		return
 	}
-	views := s.v1RulesFromDB([]*db.Rule{rl})
+	views, err := s.v1RulesFromDB([]*db.Rule{rl})
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已创建，但没能读回: "+err.Error())
+		return
+	}
 	v1OK(w, map[string]any{"rule": views[0]})
 }
 
@@ -523,21 +620,26 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		writeRuleMutationV1(w, merr)
 		return
 	}
-	entry, entryV6, merr := s.updateUserRule(u, id, updateUserRuleParams{
+	if _, _, merr := s.updateUserRule(u, id, updateUserRuleParams{
 		NodeID: nodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
 		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
 		ExitMode: body.ExitMode, ViaNodeIDs: vias, EntryFamily: body.EntryFamily,
-	})
-	if merr != nil {
+	}); merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
 	}
+	// The update is stored. The reply is the rule as stored, so a rule that
+	// cannot be read back is a failure that says the update went through.
 	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		v1OK(w, map[string]any{"entry": entry, "entry_v6": entryV6})
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
 		return
 	}
-	views := s.v1RulesFromDB([]*db.Rule{rl})
+	views, err := s.v1RulesFromDB([]*db.Rule{rl})
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
+		return
+	}
 	v1OK(w, map[string]any{"rule": views[0]})
 }
 
@@ -558,14 +660,28 @@ func (s *Server) v1MyDeleteRule(w http.ResponseWriter, r *http.Request) {
 // --- Handlers: admin reads ---
 
 func (s *Server) v1ListNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.ResolveCompositeOnline(s.DB, nodes); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	v1OK(w, toV1Nodes(nodes))
 }
 
 func (s *Server) v1ListUsers(w http.ResponseWriter, r *http.Request) {
-	users, _ := db.ListUsers(s.DB)
-	db.FillUserRuleCounts(s.DB, users)
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.FillUserRuleCounts(s.DB, users); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	out := make([]v1User, 0, len(users))
 	for _, u := range users {
 		out = append(out, toV1User(u))
@@ -574,17 +690,36 @@ func (s *Server) v1ListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) v1Dashboard(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.ResolveCompositeOnline(s.DB, nodes); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	online := 0
 	for _, n := range nodes {
 		if n.Online == 1 {
 			online++
 		}
 	}
-	ruleCount, _ := db.CountAllRules(s.DB)
-	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
-	userCount, _ := db.CountUsers(s.DB)
+	ruleCount, err := db.CountAllRules(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	totalBytes, err := db.TotalRuleTrafficBytes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	userCount, err := db.CountUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	v1OK(w, map[string]any{
 		"nodes_total":         len(nodes),
 		"nodes_online":        online,
@@ -649,29 +784,26 @@ func (s *Server) resolveNodeName(name string) (int64, *ruleMutationError) {
 
 // hopsChainPreview resolves the physical hops of a would-be rule (dry run) to
 // their node names for the preview chain.
-func (s *Server) hopsChainPreview(hops []db.HopInput) []v1RuleChainHop {
+func (s *Server) hopsChainPreview(hops []db.HopInput) ([]v1RuleChainHop, error) {
 	out := make([]v1RuleChainHop, 0, len(hops))
 	for _, h := range hops {
-		hop := v1RuleChainHop{NodeID: h.NodeID}
-		if n, err := db.GetNode(s.DB, h.NodeID); err == nil {
-			hop.Name = n.Name
-			hop.NodeType = n.NodeType
+		// The hops come from a dry run that has just resolved every one of
+		// these nodes, so each lookup is expected to find its row.
+		n, err := db.GetNode(s.DB, h.NodeID)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, hop)
+		out = append(out, v1RuleChainHop{NodeID: h.NodeID, Name: n.Name, NodeType: n.NodeType})
 	}
-	return out
+	return out, nil
 }
 
 // writeRuleMutationV1 renders a rule create/edit failure in the v1 error
 // envelope, mapping the shared error's status onto a stable code (and the
 // duplicate-hop RegenerateRule failure onto 409 + duplicate_chain_node).
 func writeRuleMutationV1(w http.ResponseWriter, e *ruleMutationError) {
-	if e.regenerate {
-		if errors.Is(e.cause, db.ErrDuplicateChainNode) {
-			v1Err(w, http.StatusConflict, codeDuplicateHop, e.msg)
-			return
-		}
-		v1Err(w, http.StatusBadRequest, codeValidation, e.msg)
+	if errors.Is(e.cause, db.ErrDuplicateChainNode) {
+		v1Err(w, http.StatusConflict, codeDuplicateHop, e.msg)
 		return
 	}
 	code := codeValidation

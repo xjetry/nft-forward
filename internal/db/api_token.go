@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"errors"
+)
 
 // Token scopes. read clears only safe (GET) endpoints on /api/v1; readwrite also
 // clears mutating ones. readwrite implies read.
@@ -34,12 +37,38 @@ type APIToken struct {
 	LastUsedAt sql.NullInt64 `json:"last_used_at"`
 }
 
+// ErrAPITokenExists is CreateAPIToken's error for a user who already has a
+// token.
+var ErrAPITokenExists = errors.New("api token already exists")
+
+// CreateAPIToken gives a user who has no API token one, and returns its
+// plaintext. A user has at most one; for a user who has one the error is
+// ErrAPITokenExists.
+//
+// "Has one" is decided by looking, in the transaction that inserts. The
+// UNIQUE constraint on api_tokens.user_id would refuse a second row too, but
+// as a failed insert, and callers do not read a failed insert for its cause:
+// they answer it as an internal error, and ErrAPITokenExists as a conflict.
 func CreateAPIToken(d *sql.DB, userID int64, scope string) (string, error) {
-	token := RandToken(32)
-	_, err := d.Exec(
-		`INSERT INTO api_tokens(user_id, token, token_prefix, scope, created_at) VALUES (?,?,?,?,?)`,
-		userID, HashToken(token), tokenPrefix(token), NormalizeTokenScope(scope), now())
+	tx, err := d.Begin()
 	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM api_tokens WHERE user_id=?`, userID).Scan(&existing); err != nil {
+		return "", err
+	}
+	if existing > 0 {
+		return "", ErrAPITokenExists
+	}
+	token := RandToken(32)
+	if _, err := tx.Exec(
+		`INSERT INTO api_tokens(user_id, token, token_prefix, scope, created_at) VALUES (?,?,?,?,?)`,
+		userID, HashToken(token), TokenPrefix(token), NormalizeTokenScope(scope), now()); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -87,11 +116,14 @@ func RefreshAPIToken(d *sql.DB, userID int64) (string, error) {
 	token := RandToken(32)
 	res, err := d.Exec(
 		`UPDATE api_tokens SET token=?, token_prefix=?, created_at=?, last_used_at=NULL, disabled=0 WHERE user_id=?`,
-		HashToken(token), tokenPrefix(token), now(), userID)
+		HashToken(token), TokenPrefix(token), now(), userID)
 	if err != nil {
 		return "", err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
 	if n == 0 {
 		return "", sql.ErrNoRows
 	}
@@ -124,16 +156,24 @@ func IssueUserToken(d *sql.DB, userID int64, scope string) (string, bool, error)
 	token := RandToken(32)
 	res, err := d.Exec(
 		`UPDATE api_tokens SET token=?, token_prefix=?, scope=?, created_at=?, last_used_at=NULL, disabled=0 WHERE user_id=?`,
-		HashToken(token), tokenPrefix(token), scope, now(), userID)
+		HashToken(token), TokenPrefix(token), scope, now(), userID)
 	if err != nil {
 		return "", false, err
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
+	// The count decides between "rotated" and "insert a first token". Read as
+	// 0 on failure, a user whose token the UPDATE above had just rotated would
+	// reach the INSERT, which user_id's UNIQUE constraint rejects: the old
+	// token would be gone and the new one never returned.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", false, err
+	}
+	if n > 0 {
 		return token, true, nil
 	}
 	if _, err := d.Exec(
 		`INSERT INTO api_tokens(user_id, token, token_prefix, scope, created_at) VALUES (?,?,?,?,?)`,
-		userID, HashToken(token), tokenPrefix(token), scope, now()); err != nil {
+		userID, HashToken(token), TokenPrefix(token), scope, now()); err != nil {
 		return "", false, err
 	}
 	return token, false, nil

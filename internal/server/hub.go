@@ -26,7 +26,14 @@ import (
 const (
 	hubWriteTimeout = 10 * time.Second
 	hubReadTimeout  = 30 * time.Second
-	applyAckTimeout = 30 * time.Second
+)
+
+// applyAckTimeout and upgradeAckTimeout are how long a push waits for the
+// node's ack before it is given up as unanswered. They are variables so that
+// a test of that branch can shorten them instead of waiting them out.
+var (
+	applyAckTimeout   = 30 * time.Second
+	upgradeAckTimeout = 60 * time.Second
 )
 
 type Hub struct {
@@ -149,11 +156,19 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.registerConn(ac)
 	defer h.unregisterConn(ac)
 
-	poolSize := 4
-	if psStr, err := db.GetSetting(h.DB, "pool_size"); err == nil {
-		if n, err := strconv.Atoi(psStr); err == nil && n >= 0 {
-			poolSize = n
+	// The agent applies whatever pool size the ack carries and keeps its own
+	// when the ack carries none (daemon.Dialer). So when the setting cannot be
+	// read, none is sent: a default sent in its place would overwrite the
+	// size the agent was configured with.
+	var poolSize *int
+	if psStr, err := db.GetSetting(h.DB, "pool_size"); err != nil {
+		log.Printf("hub: node %d: read pool_size, leaving the agent's as it is: %v", node.ID, err)
+	} else {
+		n := 4
+		if v, err := strconv.Atoi(psStr); err == nil && v >= 0 {
+			n = v
 		}
+		poolSize = &n
 	}
 	ackPayload, _ := json.Marshal(wsproto.HelloAck{NodeID: node.ID, Name: node.Name, PoolSize: poolSize})
 	if err := writeEnvelope(ctx, ws, wsproto.Envelope{Type: wsproto.TypeHelloAck, ID: helloEnv.ID, Payload: ackPayload}); err != nil {
@@ -165,11 +180,12 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
-	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+	h.settleHelloRelayHosts(node, connectIP, hello)
 	if hello.PortRange != "" {
-		if err := db.ValidatePortRange(hello.PortRange); err == nil {
-			_ = db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange)
+		if err := db.ValidatePortRange(hello.PortRange); err != nil {
+			log.Printf("hub: node %d reported invalid port range %q, ignoring: %v", node.ID, hello.PortRange, err)
+		} else if err := db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange); err != nil {
+			log.Printf("hub: node %d: store reported port range: %v", node.ID, err)
 		}
 	}
 
@@ -191,12 +207,17 @@ func (h *Hub) reconcileOnConnect(nodeID int64, lastAppliedRev string) {
 		return
 	}
 	ruleHops, err := db.ActiveRuleHopsForPush(h.DB, nodeID)
+	var rules []nft.Rule
+	if err == nil {
+		rules, err = buildRules(h.DB, ruleHops)
+	}
 	if err != nil {
 		// Can't compute the target rev — force a resync rather than risk drift.
+		log.Printf("hub: node %d: compute target rev on connect, forcing a resync: %v", nodeID, err)
 		go h.Redispatch([]int64{nodeID})
 		return
 	}
-	if lastAppliedRev != "" && computeRev(buildRules(h.DB, ruleHops)) == lastAppliedRev {
+	if lastAppliedRev != "" && computeRev(rules) == lastAppliedRev {
 		return
 	}
 	go h.Redispatch([]int64{nodeID})
@@ -219,7 +240,9 @@ func (h *Hub) unregisterConn(ac *agentConn) {
 	}
 	h.mu.Unlock()
 	ac.signalClose()
-	_ = db.MarkNodeOffline(h.DB, ac.nodeID)
+	if err := db.MarkNodeOffline(h.DB, ac.nodeID); err != nil {
+		log.Printf("hub: node %d: mark offline: %v", ac.nodeID, err)
+	}
 }
 
 // Close gracefully shuts down every agent connection.
@@ -268,54 +291,60 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn) {
 			log.Printf("hub: malformed envelope from node %d: %v", ac.nodeID, err)
 			continue
 		}
-		switch env.Type {
-		case wsproto.TypePing:
-			pong, _ := json.Marshal(wsproto.Pong{TS: time.Now().UnixMilli()})
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypePong, ID: env.ID, Payload: pong})
-		case wsproto.TypeCounters:
-			var co wsproto.Counters
-			if err := json.Unmarshal(env.Payload, &co); err != nil {
-				log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
-				continue
-			}
-			h.applyCounters(ac.nodeID, co.Samples)
-		case wsproto.TypeRuleCreate:
-			h.handleRuleCreate(ac, env)
-		case wsproto.TypeRuleUpdate:
-			h.handleRuleUpdate(ac, env)
-		case wsproto.TypeMigrateRules:
-			h.handleMigrateRules(ac, env)
-		case wsproto.TypeRuleHopEdit:
-			var e wsproto.RuleHopEdit
-			if err := json.Unmarshal(env.Payload, &e); err != nil {
-				sendRuleAckErr(ac, env.ID, "malformed payload")
-				continue
-			}
-			entry, cerr := h.applyRuleHopEdit(ac.nodeID, e.RuleID, e.ListenPort, e.Mode, e.Comment)
-			ack := wsproto.RuleCmdAck{OK: cerr == nil, Entry: entry}
-			if cerr != nil {
-				ack.Error = cerr.Error()
-			}
-			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeRuleDelete:
-			var dl wsproto.RuleDelete
-			if err := json.Unmarshal(env.Payload, &dl); err != nil {
-				sendRuleAckErr(ac, env.ID, "malformed payload")
-				continue
-			}
-			cerr := h.applyRuleDelete(ac.nodeID, dl.RuleID)
-			ack := wsproto.RuleCmdAck{OK: cerr == nil}
-			if cerr != nil {
-				ack.Error = cerr.Error()
-			}
-			ackP, _ := json.Marshal(ack)
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
-		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
-			ac.dispatchAck(env)
-		default:
-			log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
+		h.handleFrame(ac, env)
+	}
+}
+
+// handleFrame acts on one frame a node sent. Replies go out through
+// ac.enqueueWrite; nothing here touches the socket itself.
+func (h *Hub) handleFrame(ac *agentConn, env wsproto.Envelope) {
+	switch env.Type {
+	case wsproto.TypePing:
+		pong, _ := json.Marshal(wsproto.Pong{TS: time.Now().UnixMilli()})
+		ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypePong, ID: env.ID, Payload: pong})
+	case wsproto.TypeCounters:
+		var co wsproto.Counters
+		if err := json.Unmarshal(env.Payload, &co); err != nil {
+			log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
+			return
 		}
+		h.applyCounters(ac.nodeID, co.Samples)
+	case wsproto.TypeRuleCreate:
+		h.handleRuleCreate(ac, env)
+	case wsproto.TypeRuleUpdate:
+		h.handleRuleUpdate(ac, env)
+	case wsproto.TypeMigrateRules:
+		h.handleMigrateRules(ac, env)
+	case wsproto.TypeRuleHopEdit:
+		var e wsproto.RuleHopEdit
+		if err := json.Unmarshal(env.Payload, &e); err != nil {
+			sendRuleAckErr(ac, env.ID, "malformed payload")
+			return
+		}
+		entry, cerr := h.applyRuleHopEdit(ac.nodeID, e.RuleID, e.ListenPort, e.Mode, e.Comment)
+		ack := wsproto.RuleCmdAck{OK: cerr == nil, Entry: entry}
+		if cerr != nil {
+			ack.Error = ruleAckMessage(cerr)
+		}
+		ackP, _ := json.Marshal(ack)
+		ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+	case wsproto.TypeRuleDelete:
+		var dl wsproto.RuleDelete
+		if err := json.Unmarshal(env.Payload, &dl); err != nil {
+			sendRuleAckErr(ac, env.ID, "malformed payload")
+			return
+		}
+		cerr := h.applyRuleDelete(ac.nodeID, dl.RuleID)
+		ack := wsproto.RuleCmdAck{OK: cerr == nil}
+		if cerr != nil {
+			ack.Error = ruleAckMessage(cerr)
+		}
+		ackP, _ := json.Marshal(ack)
+		ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+	case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
+		ac.dispatchAck(env)
+	default:
+		log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
 	}
 }
 
@@ -347,7 +376,7 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (stri
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("node %d not connected", nodeID)
+		return "", errNodeNotConnected
 	}
 	id := ac.nextID()
 	ch := make(chan json.RawMessage, 1)
@@ -367,16 +396,16 @@ func (h *Hub) SendApplyRuleset(nodeID int64, rules []nft.Rule, rev string) (stri
 	case raw := <-ch:
 		var ack wsproto.ApplyAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return "", fmt.Errorf("malformed apply_ack: %w", err)
+			return "", pushUpstream(fmt.Errorf("malformed apply_ack: %w", err))
 		}
 		if !ack.OK {
-			return "", fmt.Errorf("apply rejected: %s", ack.Error)
+			return "", pushUpstream(fmt.Errorf("apply rejected: %s", ack.Error))
 		}
 		return ack.Warning, nil
 	case <-time.After(applyAckTimeout):
-		return "", errors.New("apply_ack timeout")
+		return "", pushUpstream(errors.New("apply_ack timeout"))
 	case <-ac.closed:
-		return "", errors.New("connection closed before ack")
+		return "", pushUpstream(errors.New("connection closed before ack"))
 	}
 }
 
@@ -385,7 +414,7 @@ func (h *Hub) SendProbe(nodeID int64, target, proto string) (wsproto.ProbeAck, e
 	ac, ok := h.conns[nodeID]
 	h.mu.RUnlock()
 	if !ok {
-		return wsproto.ProbeAck{}, fmt.Errorf("node %d not connected", nodeID)
+		return wsproto.ProbeAck{}, errNodeNotConnected
 	}
 	id := ac.nextID()
 	ch := make(chan json.RawMessage, 1)
@@ -408,13 +437,13 @@ func (h *Hub) SendProbe(nodeID int64, target, proto string) (wsproto.ProbeAck, e
 	case raw := <-ch:
 		var ack wsproto.ProbeAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return wsproto.ProbeAck{}, fmt.Errorf("malformed probe_ack: %w", err)
+			return wsproto.ProbeAck{}, pushUpstream(fmt.Errorf("malformed probe_ack: %w", err))
 		}
 		return ack, nil
 	case <-time.After(10 * time.Second):
-		return wsproto.ProbeAck{}, errors.New("probe timeout")
+		return wsproto.ProbeAck{}, pushUpstream(errors.New("probe timeout"))
 	case <-ac.closed:
-		return wsproto.ProbeAck{}, errors.New("connection closed")
+		return wsproto.ProbeAck{}, pushUpstream(errors.New("connection closed"))
 	}
 }
 
@@ -451,6 +480,54 @@ func extractIP(r *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
+// settleHelloRelayHosts stores what a hello says about the node's relay
+// addresses (storeHelloRelayHosts) and brings the rules in line with the
+// address the node then has.
+//
+// In every rule, the hop before one on this node targets the node's relay
+// address, as stored when the rule was generated. A hello can change that
+// address — the daemon declares another one, or an empty field is seeded —
+// and the hops that target the old one would go on sending traffic there.
+// db.RewireRulesIntoNode re-generates the rules that do not target the
+// stored address. It decides from the stored rows alone, so it is run on
+// every hello, including one whose store step failed or changed nothing:
+// that is what picks up a rule it could not re-generate on an earlier hello,
+// and a rule that is stale in the database the panel was started on.
+//
+// The nodes of the re-generated rules are re-pushed off-goroutine. The node
+// saying hello is among them, and its ack to a push cannot be read before
+// this hello has been handled (ServeWS starts reading frames after it).
+func (h *Hub) settleHelloRelayHosts(node *db.Node, connectIP string, hello wsproto.Hello) {
+	if err := storeHelloRelayHosts(h.DB, node, connectIP, hello); err != nil {
+		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
+	}
+	nodes, err := db.RewireRulesIntoNode(h.DB, node.ID)
+	if err != nil {
+		log.Printf("hub: node %d: rules left targeting an address the node no longer has: %v", node.ID, err)
+	}
+	if len(nodes) > 0 && h.Redispatch != nil {
+		go h.Redispatch(nodes)
+	}
+}
+
+// storeHelloRelayHosts brings a node's stored relay addresses in line with a
+// hello: what the daemon declares first (applyDeclaredRelayHosts), then the
+// seeding of whatever is still empty (fillNodeRelayHosts). node is the row as
+// loaded for this hello.
+//
+// It returns the first write's error. Both steps decide from node's fields
+// and advance them only after the write they mirror succeeded, so after a
+// failure node may no longer mirror the stored row; the seeding is therefore
+// not attempted on top of a failed first step. Nothing is lost by stopping:
+// every decision is a comparison against the stored row, so the next hello,
+// which loads the row afresh, makes the writes that are still outstanding.
+func storeHelloRelayHosts(d *sql.DB, node *db.Node, connectIP string, hello wsproto.Hello) error {
+	if err := applyDeclaredRelayHosts(d, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6); err != nil {
+		return err
+	}
+	return fillNodeRelayHosts(d, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+}
+
 // fillNodeRelayHosts seeds relay_host/relay_host_v6 for a node that hasn't
 // had them set yet. connectIP (the address the panel observed this WS
 // connection arrive from) is authoritative for whichever family it belongs
@@ -480,33 +557,49 @@ func extractIP(r *http.Request) string {
 // value suppresses auto-fill for its family regardless of whether it was
 // valid. Nodes that never declare anything see declaredV4/declaredV6 always
 // empty, so this guard is always true for them and behavior is unchanged.
-func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string) {
+//
+// It stops at the first write that fails and returns the error; node's fields
+// are advanced only after the write they mirror succeeded.
+func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6, declaredV4, declaredV6 string) error {
 	connectIsV6 := false
 	if ip := net.ParseIP(connectIP); ip != nil {
 		connectIsV6 = ip.To4() == nil
 	}
 	if ip := net.ParseIP(node.RelayHost); ip != nil && ip.To4() == nil {
 		if node.RelayHostV6 == "" && !(connectIsV6 && connectIP != "") {
-			_ = db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost)
+			if err := db.UpdateNodeRelayHostV6(d, node.ID, node.RelayHost); err != nil {
+				return err
+			}
 			node.RelayHostV6 = node.RelayHost
 		}
-		_ = db.UpdateNodeRelayHost(d, node.ID, "")
+		if err := db.UpdateNodeRelayHost(d, node.ID, ""); err != nil {
+			return err
+		}
 		node.RelayHost = ""
 	}
 	if node.RelayHost == "" && declaredV4 == "" {
+		seed := probedV4
 		if !connectIsV6 && connectIP != "" {
-			_ = db.UpdateNodeRelayHost(d, node.ID, connectIP)
-		} else if probedV4 != "" {
-			_ = db.UpdateNodeRelayHost(d, node.ID, probedV4)
+			seed = connectIP
+		}
+		if seed != "" {
+			if err := db.UpdateNodeRelayHost(d, node.ID, seed); err != nil {
+				return err
+			}
 		}
 	}
 	if node.RelayHostV6 == "" && declaredV6 == "" {
+		seed := probedV6
 		if connectIsV6 && connectIP != "" {
-			_ = db.UpdateNodeRelayHostV6(d, node.ID, connectIP)
-		} else if probedV6 != "" {
-			_ = db.UpdateNodeRelayHostV6(d, node.ID, probedV6)
+			seed = connectIP
+		}
+		if seed != "" {
+			if err := db.UpdateNodeRelayHostV6(d, node.ID, seed); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // applyDeclaredRelayHosts handles operator-declared relay_host/relay_host_v6
@@ -517,37 +610,54 @@ func fillNodeRelayHosts(d *sql.DB, node *db.Node, connectIP, probedV4, probedV6,
 // hello where it's present, so config drift self-heals. When the daemon
 // stops declaring a value (flag removed, daemon restarted), the DB field
 // unlocks but keeps its last value rather than going blank, so a live route
-// doesn't disappear out from under the running link.
-func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 string) {
+//
+// It stops at the first write that fails and returns the error; node's fields
+// are advanced only after the writes they mirror succeeded. A value whose
+// address was stored but whose declared flag was not is written again on the
+// next hello, because the comparison below still sees the flag unset.
+func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 string) error {
 	if declaredV4 != "" {
 		if isValidRelayHost(declaredV4) {
 			if node.RelayHost != declaredV4 || !node.RelayHostDeclared {
-				_ = db.UpdateNodeRelayHost(d, node.ID, declaredV4)
-				_ = db.SetNodeRelayHostDeclared(d, node.ID, true)
+				if err := db.UpdateNodeRelayHost(d, node.ID, declaredV4); err != nil {
+					return err
+				}
+				if err := db.SetNodeRelayHostDeclared(d, node.ID, true); err != nil {
+					return err
+				}
 				node.RelayHost, node.RelayHostDeclared = declaredV4, true
 			}
 		} else {
 			log.Printf("hub: node %d declared invalid relay_host %q, ignoring", node.ID, declaredV4)
 		}
 	} else if node.RelayHostDeclared {
-		_ = db.SetNodeRelayHostDeclared(d, node.ID, false)
+		if err := db.SetNodeRelayHostDeclared(d, node.ID, false); err != nil {
+			return err
+		}
 		node.RelayHostDeclared = false
 	}
 
 	if declaredV6 != "" {
 		if isValidRelayHostV6(declaredV6) {
 			if node.RelayHostV6 != declaredV6 || !node.RelayHostV6Declared {
-				_ = db.UpdateNodeRelayHostV6(d, node.ID, declaredV6)
-				_ = db.SetNodeRelayHostV6Declared(d, node.ID, true)
+				if err := db.UpdateNodeRelayHostV6(d, node.ID, declaredV6); err != nil {
+					return err
+				}
+				if err := db.SetNodeRelayHostV6Declared(d, node.ID, true); err != nil {
+					return err
+				}
 				node.RelayHostV6, node.RelayHostV6Declared = declaredV6, true
 			}
 		} else {
 			log.Printf("hub: node %d declared invalid relay_host_v6 %q, ignoring", node.ID, declaredV6)
 		}
 	} else if node.RelayHostV6Declared {
-		_ = db.SetNodeRelayHostV6Declared(d, node.ID, false)
+		if err := db.SetNodeRelayHostV6Declared(d, node.ID, false); err != nil {
+			return err
+		}
 		node.RelayHostV6Declared = false
 	}
+	return nil
 }
 
 func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
@@ -621,17 +731,28 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 	for id := range ruleIDSet {
 		ruleIDs = append(ruleIDs, id)
 	}
-	ruleMap, _ := db.RulesByIDs(h.DB, ruleIDs)
-	if ruleMap == nil {
-		ruleMap = map[int64]*db.Rule{}
+	// The rules tell which user each hop's bytes belong to. Without them every
+	// sample would be recorded as owned by no one — forwarded but billed to
+	// nobody — so the batch is dropped, as it is when the hop map fails above.
+	ruleMap, err := db.RulesByIDs(h.DB, ruleIDs)
+	if err != nil {
+		log.Printf("hub: node %d load rules for counters: %v", nodeID, err)
+		return
 	}
+	// The entry node's multiplier goes into the amount charged. It has no
+	// stand-in: read as "none set" every node would be billed at 1.0, which
+	// charges a free node's traffic and undercharges a node priced above 1.0.
+	// So the batch is dropped.
 	multipliers, err := db.NodeRateMultipliers(h.DB)
 	if err != nil {
 		log.Printf("hub: node %d load node rate multipliers: %v", nodeID, err)
-		multipliers = map[int64]float64{}
+		return
 	}
 	// Segment-first hops drive per-grant accounting: each logical segment's
-	// grant is charged once, at the hop where the segment begins.
+	// grant is charged once, at the hop where the segment begins. On a load
+	// error the empty map below means "no hop begins a segment", so this
+	// batch charges no grant: the per-node quotas go without these bytes,
+	// while the hop totals and the global quota still get them.
 	segFirst, err := db.SegmentFirstHops(h.DB, ruleIDs)
 	if err != nil {
 		log.Printf("hub: node %d load segment first hops: %v", nodeID, err)
@@ -672,9 +793,9 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 	type userNode struct{ userID, nodeID int64 }
 	touched := map[userNode]bool{}
-	// userCache holds each owning user loaded once per batch (nil on load error),
-	// serving both the cycle-reset check and the billing-rate lookup so the same
-	// user isn't queried twice per sample.
+	// userCache holds each owning user loaded once per batch (nil when the user
+	// row no longer exists), serving both the cycle-reset check and the
+	// billing-rate lookup so the same user isn't queried twice per sample.
 	userCache := map[int64]*db.User{}
 
 	// Accumulate all row mutations and flush them in one transaction after the
@@ -748,18 +869,32 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 
 			u, cached := userCache[userID]
 			if !cached {
-				u, _ = db.GetUserByID(h.DB, userID) // nil on error; cache either way
+				var err error
+				u, err = db.GetUserByID(h.DB, userID)
+				if errors.Is(err, sql.ErrNoRows) {
+					// The owner was deleted mid-batch: nobody is left to bill.
+					u = nil
+				} else if err != nil {
+					// The user's billing rate goes into the amount charged and
+					// has no stand-in value. This batch's own rows are written
+					// only after the loop, so returning here drops it whole.
+					log.Printf("hub: node %d load user %d for counters: %v", nodeID, userID, err)
+					return
+				}
 				userCache[userID] = u
 				if u != nil {
-					if reset, _ := db.CheckAndResetTrafficCycle(h.DB, u); reset {
-						if u.Disabled && u.DisableReason.Valid && u.DisableReason.String == "流量超额" {
-							_ = db.SetUserDisabled(h.DB, userID, false, "")
-						}
+					// A reset comes with the nodes to re-push, or does not
+					// happen (db.CheckAndResetTrafficCycle).
+					reset, nodes, err := db.CheckAndResetTrafficCycle(h.DB, u)
+					if err != nil {
+						// Not fatal to the batch: the reset is due until it
+						// happens, and the cycle enforcer checks it as well.
+						log.Printf("hub: node %d check traffic cycle for user %d: %v", nodeID, userID, err)
+					}
+					if reset && len(nodes) > 0 && h.Redispatch != nil {
 						// Quota exclusions are evaluated at push time only; a
 						// fresh cycle must re-push or suppressed rules stay dead.
-						if nodes, err := db.DistinctUserNodes(h.DB, userID); err == nil && h.Redispatch != nil {
-							go h.Redispatch(nodes)
-						}
+						go h.Redispatch(nodes)
 					}
 				}
 			}
@@ -932,7 +1067,7 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comment string) (string, error) {
 	r, err := db.GetRule(h.DB, ruleID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("规则不存在")
+		return "", db.ChainErrorf("规则不存在")
 	}
 	if err != nil {
 		return "", err
@@ -954,7 +1089,7 @@ func (h *Hub) applyRuleHopEdit(nodeID, ruleID int64, listenPort int, mode, comme
 		inputs[i] = in
 	}
 	if !found {
-		return "", fmt.Errorf("节点不在该规则上")
+		return "", db.ChainErrorf("节点不在该规则上")
 	}
 	tx, err := h.DB.Begin()
 	if err != nil {
@@ -990,7 +1125,7 @@ func (h *Hub) applyRuleDelete(nodeID, ruleID int64) error {
 		}
 	}
 	if !onRule {
-		return fmt.Errorf("节点不在该规则上")
+		return db.ChainErrorf("节点不在该规则上")
 	}
 	nodes, err := db.DeleteRule(h.DB, ruleID)
 	if err != nil {
@@ -1012,7 +1147,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	}
 	node, err := db.GetNode(h.DB, ac.nodeID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "节点不存在")
 		return
 	}
 	if node.OwnerID == nil {
@@ -1022,7 +1157,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	ownerID := *node.OwnerID
 	u, err := db.GetUserByID(h.DB, ownerID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "归属用户不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "归属用户不存在")
 		return
 	}
 	if u.Disabled {
@@ -1033,7 +1168,11 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 		sendRuleAckErr(ac, env.ID, "用户已过期")
 		return
 	}
-	total, _ := db.CountRulesForUser(h.DB, ownerID)
+	total, err := db.CountRulesForUser(h.DB, ownerID)
+	if err != nil {
+		sendRuleAckFailure(ac, env.ID, err)
+		return
+	}
 	if total >= u.MaxForwards {
 		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d）", u.MaxForwards))
 		return
@@ -1041,7 +1180,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 
 	tx, err := h.DB.Begin()
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	defer tx.Rollback()
@@ -1057,7 +1196,7 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	}
 	id, err := db.CreateRule(tx, rl)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	rl.ID = id
@@ -1068,11 +1207,11 @@ func (h *Hub) handleRuleCreate(ac *agentConn, env wsproto.Envelope) {
 	}
 	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if h.Redispatch != nil {
@@ -1092,7 +1231,7 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 	}
 	node, err := db.GetNode(h.DB, ac.nodeID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "节点不存在")
 		return
 	}
 	if node.OwnerID == nil {
@@ -1101,7 +1240,7 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 	}
 	rl, err := db.GetRule(h.DB, req.RuleID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "规则不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "规则不存在")
 		return
 	}
 	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != *node.OwnerID {
@@ -1111,7 +1250,7 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 	// Only single-hop rules are editable from a node
 	hops, err := db.ListRuleHops(h.DB, req.RuleID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "读取跳数失败")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if len(hops) != 1 {
@@ -1127,13 +1266,13 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 
 	tx, err := h.DB.Begin()
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	defer tx.Rollback()
 
 	if err := db.UpdateRuleHeader(tx, rl); err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	hop := db.HopInput{NodeID: ac.nodeID, Mode: db.NormalizeForwardMode(req.Mode), ViaNodeID: ac.nodeID}
@@ -1142,11 +1281,11 @@ func (h *Hub) handleRuleUpdate(ac *agentConn, env wsproto.Envelope) {
 	}
 	entry, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, err.Error())
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if h.Redispatch != nil {
@@ -1166,7 +1305,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 	}
 	node, err := db.GetNode(h.DB, ac.nodeID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "节点不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "节点不存在")
 		return
 	}
 	if node.OwnerID == nil {
@@ -1176,7 +1315,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 	ownerID := *node.OwnerID
 	u, err := db.GetUserByID(h.DB, ownerID)
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "归属用户不存在")
+		sendRuleAckLookupErr(ac, env.ID, err, "归属用户不存在")
 		return
 	}
 	if u.Disabled {
@@ -1188,7 +1327,11 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 		return
 	}
 
-	total, _ := db.CountRulesForUser(h.DB, ownerID)
+	total, err := db.CountRulesForUser(h.DB, ownerID)
+	if err != nil {
+		sendRuleAckFailure(ac, env.ID, err)
+		return
+	}
 	if total+len(req.Rules) > u.MaxForwards {
 		sendRuleAckErr(ac, env.ID, fmt.Sprintf("超出用户最大转发数（%d），当前 %d 条，迁入 %d 条", u.MaxForwards, total, len(req.Rules)))
 		return
@@ -1196,7 +1339,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 
 	tx, err := h.DB.Begin()
 	if err != nil {
-		sendRuleAckErr(ac, env.ID, "内部错误")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	defer tx.Rollback()
@@ -1221,7 +1364,7 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 		}
 		id, err := db.CreateRule(tx, rl)
 		if err != nil {
-			sendRuleAckErr(ac, env.ID, fmt.Sprintf("创建规则失败: %v", err))
+			sendRuleAckErr(ac, env.ID, "创建规则失败: "+ruleAckMessage(err))
 			return
 		}
 		rl.ID = id
@@ -1231,14 +1374,14 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 		}
 		_, _, affected, err := db.RegenerateRule(tx, rl, []db.HopInput{hop}, nil)
 		if err != nil {
-			sendRuleAckErr(ac, env.ID, fmt.Sprintf("生成规则失败: %v", err))
+			sendRuleAckErr(ac, env.ID, "生成规则失败: "+ruleAckMessage(err))
 			return
 		}
 		allAffected = append(allAffected, affected...)
 	}
 
 	if err := tx.Commit(); err != nil {
-		sendRuleAckErr(ac, env.ID, "提交失败")
+		sendRuleAckFailure(ac, env.ID, err)
 		return
 	}
 	if h.Redispatch != nil {
@@ -1246,6 +1389,32 @@ func (h *Hub) handleMigrateRules(ac *agentConn, env wsproto.Envelope) {
 	}
 	ackP, _ := json.Marshal(wsproto.RuleCmdAck{OK: true})
 	ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypeRuleCmdAck, ID: env.ID, Payload: ackP})
+}
+
+// ruleAckMessage is what a failed rule command tells the node that sent it.
+// A db.ChainError is about the command as asked — a port that is taken, a
+// rule this node is not on — and is passed on as it is. Anything else is a
+// statement that failed on the panel, and is said to be that: the node's
+// operator would otherwise be told to fix a rule there is nothing wrong with.
+func ruleAckMessage(err error) string {
+	if db.IsChainError(err) {
+		return err.Error()
+	}
+	return "面板内部错误: " + err.Error()
+}
+
+func sendRuleAckFailure(ac *agentConn, id string, err error) {
+	sendRuleAckErr(ac, id, ruleAckMessage(err))
+}
+
+// sendRuleAckLookupErr acks a failed lookup of a row the command depends on:
+// notFound when the row does not exist, ruleAckMessage otherwise.
+func sendRuleAckLookupErr(ac *agentConn, id string, err error, notFound string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		sendRuleAckErr(ac, id, notFound)
+		return
+	}
+	sendRuleAckFailure(ac, id, err)
 }
 
 func sendRuleAckErr(ac *agentConn, id, msg string) {

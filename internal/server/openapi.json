@@ -35,6 +35,7 @@
                   "not_found",
                   "conflict",
                   "duplicate_chain_node",
+                  "upstream_failed",
                   "internal"
                 ]
               },
@@ -865,6 +866,16 @@
         "responses": {
           "200": {
             "description": "token 元信息"
+          },
+          "404": {
+            "description": "用户不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       },
@@ -1175,7 +1186,7 @@
             "description": "授权结果"
           },
           "404": {
-            "description": "用户不存在",
+            "description": "用户或节点不存在",
             "content": {
               "application/json": {
                 "schema": {
@@ -1275,7 +1286,7 @@
             "description": "更新结果"
           },
           "404": {
-            "description": "用户不存在",
+            "description": "用户不存在，或该用户没有这个节点的授权",
             "content": {
               "application/json": {
                 "schema": {
@@ -1334,7 +1345,7 @@
             "description": "更新结果"
           },
           "404": {
-            "description": "用户不存在",
+            "description": "用户不存在，或该用户没有这个节点的授权",
             "content": {
               "application/json": {
                 "schema": {
@@ -1492,8 +1503,38 @@
           "200": {
             "description": "下发结果"
           },
+          "404": {
+            "description": "节点不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "节点未连接，没有可下发的对象（code=conflict）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
-            "description": "下发失败",
+            "description": "面板自身出错（code=internal）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "规则已发给节点，但节点拒绝应用、应答无法解析、在时限内没有应答或连接中断（code=upstream_failed）",
             "content": {
               "application/json": {
                 "schema": {

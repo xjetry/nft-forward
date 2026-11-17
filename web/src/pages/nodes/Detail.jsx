@@ -1,1020 +1,1033 @@
-import { useState, useEffect, useRef } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
-import { fmtTime, fmtBytes, nullStr } from '../../lib/fmt'
-import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, Badge, ProtoBadge, ModeBadge, SensText, NodeTypeBadge, NodeTypeIcon, NodeStackBadge, useConfirm, Select } from '../../components/ui'
-import { TableBox } from '../../components/page'
-import { copyToClipboard } from '../../lib/clipboard'
-import { PerNodeRolesForm } from '../users/Detail'
+import { fmtBytes, fmtTime, nullStr } from '../../lib/fmt'
+import { assertNever, combineResources } from '../../lib/resource'
+import { upgradeVerdict, upgradeWorthShowing } from '../../lib/upgrade'
+import { useDraft } from '../../lib/useDraft'
+import { useResource } from '../../lib/useResource'
+import { ModeTag, NodeStackTags, NodeStatus, NodeTypeIcon, NodeTypeTag, ProtoTag } from '../../components/net'
+import { Page, PageHeader, TableBox } from '../../components/page'
+import { PerNodeRolesForm } from '../../components/PerNodeRolesForm'
+import { useBlur } from '../../components/prefs'
+import { ResourceView } from '../../components/ResourceView'
+import {
+  Alert, Badge, Button, Card, CardHeader, CardSection, Checkbox, CodeBlock, DescItem, DescList, Empty, Field,
+  IconButton, IconRefresh, IconTrash, IconX, Input, Segmented, Select, SensText, TextLink, useAction, useConfirm,
+  useToast,
+} from '../../components/ui'
+import {
+  GrantUserSelect, HopListEditor, MODE_OPTIONS, ROLE_ENTRY, ROLE_VIA, hopRowsError, hopRowsPayload, removeNode,
+  useGrantableUsers,
+} from './common'
 
-const card = 'admin-detail-card bg-surface border border-line rounded-[14px] shadow-[0_1px_2px_rgba(16,24,40,0.04)]'
+/* ==========================================================================
+   详情页
+   ========================================================================== */
 
-function semverLT(a, b) {
-  const pa = (a || '').replace(/^v/, '').split('.').map(Number)
-  const pb = (b || '').replace(/^v/, '').split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0)
-  }
-  return false
+const BACK = { to: '/nodes', label: '节点' }
+
+/* 离线节点的刷新间隔：安装命令跑完、Agent 一连上面板，页面就切到在线视图。 */
+const OFFLINE_POLL_MS = 3000
+const UPGRADE_POLL_MS = 2000
+/* 等待升级结论的上限。服务端在推送被确认后的 90 秒内报 pending，之后改报
+   stuck（internal/server/upgrade_status.go 的 upgradeGrace），所以轮询只要
+   拿得到响应，结论由服务端给出；这个上限只在迟迟拿不到响应时才会先到。 */
+const UPGRADE_WAIT_MS = 120000
+
+/**
+ * `ms` 为数字期间反复调用 `tick`：上一次落定之后才开始计下一次的间隔，所以
+ * 响应比间隔慢时请求不会叠在一起。`ms` 为 null 时停止；卸载或 `ms` 变化时
+ * 清掉定时器，已经在途的那一次落定后不再续下一次。
+ *
+ * 前提：`tick` 不抛错（资源的 reload 把失败记进资源状态，自身不抛）。
+ */
+function usePolling(tick, ms) {
+  const latest = useRef(tick)
+  latest.current = tick
+  useEffect(() => {
+    if (ms == null) return
+    let stopped = false
+    let timer
+    const schedule = () => {
+      timer = setTimeout(async () => {
+        await latest.current()
+        if (!stopped) schedule()
+      }, ms)
+    }
+    schedule()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
+  }, [ms])
 }
 
 export default function NodeDetail() {
   const { id } = useParams()
-  const navigate = useNavigate()
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [name, setName] = useState('')
-  const [relayHost, setRelayHost] = useState('')
-  const [relayHostV6, setRelayHostV6] = useState('')
-  const [portRange, setPortRange] = useState('')
-  const [rateMult, setRateMult] = useState('1')
-  const [unidirectional, setUnidirectional] = useState(false)
-  const [noDirectExit, setNoDirectExit] = useState(false)
-  const [useGhProxy, setUseGhProxy] = useState(false)
-  const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
-  const [cmdRelayHost, setCmdRelayHost] = useState('')
-  const [cmdRelayHostV6, setCmdRelayHostV6] = useState('')
-  const toast = useToast()
-  const blurred = useBlur()
-  const confirm = useConfirm()
-
-  const applyData = (d) => {
-    setData(d)
-    setName(d.node?.name || '')
-    setRelayHost(d.node?.relay_host || '')
-    setRelayHostV6(d.node?.relay_host_v6 || '')
-    setPortRange(d.node?.port_range || '')
-    setRateMult(String(d.node?.rate_multiplier ?? 1))
-    setUnidirectional(!!d.node?.unidirectional)
-    setNoDirectExit(!!d.node?.no_direct_exit)
-  }
-  const load = () => {
-    setLoading(true)
-    api.get(`/nodes/${id}`).then(applyData).catch(console.error).finally(() => setLoading(false))
-  }
-  // Refresh without the full-page Loading swap: load() unmounts every card,
-  // which would wipe in-progress child edits (e.g. binding rows) — the silent
-  // path keeps them mounted and just refreshes the data underneath.
-  const reloadSilent = () => api.get(`/nodes/${id}`).then(applyData).catch(console.error)
-  useEffect(load, [id])
-
-  // 离线的实体节点每 3 秒静默轮询：安装命令跑完、agent 一连上面板，页面即自动
-  // 切到在线视图，无需手动刷新。上线后 offline 翻转，定时器随 effect 清理停止；
-  // 轮询期间只更新展示数据不动表单，避免覆盖正在编辑的输入。
-  const offline = !!data?.node && data.node.node_type !== 'composite' && data.node.online !== 1
-  useEffect(() => {
-    if (!offline) return
-    const t = setInterval(() => {
-      api.get(`/nodes/${id}`).then(d => {
-        if (d?.node?.online === 1) { applyData(d); toast('节点已上线') }
-        else setData(d)
-      }).catch(() => { /* 网络抖动，等下一轮 */ })
-    }, 3000)
-    return () => clearInterval(t)
-  }, [offline, id])
-
-  // 所有配置小表单/开关共用一个提交锁：慢网络下按钮置灰、重复点击不会重复提交。
-  const [busy, setBusy] = useState(false)
-  const run = async (fn) => {
-    if (busy) return
-    setBusy(true)
-    try { await fn() } catch (err) { toast(err.message, 'error') } finally { setBusy(false) }
-  }
-  // 升级轮询计时器挂在 ref 上并随组件卸载清理：离开页面后不再于后台轮询
-  // 两分钟、也不会在别的页面弹出升级 toast。
-  const upgradeTimers = useRef(null)
-  const stopUpgradePoll = () => {
-    if (!upgradeTimers.current) return
-    clearInterval(upgradeTimers.current.poll)
-    clearTimeout(upgradeTimers.current.timeout)
-    upgradeTimers.current = null
-  }
-  useEffect(() => stopUpgradePoll, [])
-
-  if (loading) return <Layout><Loading /></Layout>
-  if (!data) return <Layout><Empty title="节点不存在" /></Layout>
-
-  const { node, panel_url, panel_url_configured, latest_agent_version } = data
-  const ruleHops = data.rule_hops || []
-  const nodeHops = data.node_hops || []
-  const grantedUsers = data.granted_users || []
-  const referencedByComposites = data.referenced_by_composites || []
-  const isComposite = node.node_type === 'composite'
-  const agentOutdated = node.agent_version && semverLT(node.agent_version, latest_agent_version)
-  const up = data.upgrade || { status: 'none' }
-  const showUpgrade = up.status !== 'none'
-
-  // 保存成功后统一走 reloadSilent 而非 load()：load() 会整页换成 Loading、
-  // 卸载所有卡片，闪烁之余还会冲掉其他卡片里编辑中的内容。
-  const saveName = (e) => {
-    e.preventDefault()
-    run(async () => { await api.post(`/nodes/${id}/rename`, { name }); toast('名称已保存'); await reloadSilent() })
-  }
-  const saveRelay = (e) => {
-    e.preventDefault()
-    run(async () => { await api.post(`/nodes/${id}/relay-host`, { relay_host: relayHost }); toast('中继地址已保存'); await reloadSilent() })
-  }
-  const saveRelayV6 = (e) => {
-    e.preventDefault()
-    run(async () => { await api.post(`/nodes/${id}/relay-host-v6`, { relay_host_v6: relayHostV6 }); toast('IPv6 中继地址已保存'); await reloadSilent() })
-  }
-  // 端口范围在前端先校验格式，输错立即报错，不必等服务器打回。
-  const portRangeError = (s) => {
-    const t = s.trim()
-    if (!t) return null // 留空交由服务端处理
-    for (const part of t.split(',')) {
-      const p = part.trim()
-      const m = p.match(/^(\d{1,5})(?:-(\d{1,5}))?$/)
-      if (!m) return `「${p}」格式错误：应为端口或端口区间，如 23333 或 10001-19999`
-      const a = Number(m[1]); const b = m[2] ? Number(m[2]) : a
-      if (a < 1 || a > 65535 || b < 1 || b > 65535) return `「${p}」端口需在 1-65535 之间`
-      if (a > b) return `「${p}」区间起始端口不能大于结束端口`
-    }
-    return null
-  }
-  const savePortRange = (e) => {
-    e.preventDefault()
-    const msg = portRangeError(portRange)
-    if (msg) { toast(msg, 'error'); return }
-    run(async () => { await api.post(`/nodes/${id}/port-range`, { port_range: portRange }); toast('端口范围已保存'); await reloadSilent() })
-  }
-  const saveRateMult = (e) => {
-    e.preventDefault()
-    // 显式校验而不是把非法值静默替换成 1：用户必须知道输入没有被按原样保存。
-    const rm = Number(rateMult)
-    if (rateMult.trim() === '' || !Number.isFinite(rm) || rm < 0) { toast('倍率必须是大于等于 0 的数字', 'error'); return }
-    run(async () => { await api.post(`/nodes/${id}/rate-multiplier`, { rate_multiplier: rm }); toast('倍率已保存'); await reloadSilent() })
-  }
-  const toggleBillingDir = () => run(async () => {
-    const next = !unidirectional
-    await api.post(`/nodes/${id}/unidirectional`, { unidirectional: next })
-    setUnidirectional(next); toast(next ? '已切换为单向计费' : '已切换为双向计费')
-  })
-  const toggleNoDirectExit = () => run(async () => {
-    const next = !noDirectExit
-    await api.post(`/nodes/${id}/no-direct-exit`, { no_direct_exit: next })
-    setNoDirectExit(next); toast(next ? '已禁止直接转发' : '已允许直接转发')
-  })
-  const resync = () => run(async () => { await api.post(`/nodes/${id}/resync`); toast('已发起同步') })
-  const upgrade = async () => {
-    if (!(await confirm({ title: '升级节点', message: '推送 agent 二进制到此节点并重启？', confirmText: '升级' }))) return
-    try {
-      await api.post(`/nodes/${id}/upgrade`); toast('已发起升级')
-      stopUpgradePoll()
-      const poll = setInterval(async () => {
-        try {
-          const d = await api.get(`/nodes/${id}`)
-          const st = d?.upgrade?.status
-          if (st === 'ok' || st === 'error') {
-            stopUpgradePoll()
-            toast(st === 'ok' ? '升级成功' : '升级失败: ' + (d.upgrade.error || ''), st === 'ok' ? undefined : 'error')
-            reloadSilent()
-          }
-        } catch { stopUpgradePoll() }
-      }, 2000)
-      // 超时不再静默停止：明确告知状态未知，避免界面永远停在「升级中」。
-      const timeout = setTimeout(() => {
-        stopUpgradePoll()
-        toast('等待升级结果超时（2 分钟），请稍后刷新查看实际状态', 'error')
-        reloadSilent()
-      }, 120000)
-      upgradeTimers.current = { poll, timeout }
-    } catch (err) { toast(err.message, 'error') }
-  }
-  const toggle = () => run(async () => {
-    await api.post(`/nodes/${id}/toggle`); toast(node.disabled ? '已启用' : '已禁用'); await reloadSilent()
-  })
-
-  const remove = async () => {
-    if (!(await confirm({ title: '删除节点', message: `删除节点「${node.name}」？经过它的规则会被重新连接或清除，此操作不可撤销。`, confirmText: '删除', danger: true }))) return
-    try {
-      const res = await api.del(`/nodes/${id}`)
-      if (res?.needs_confirm) {
-        const names = (res.affected_composites || []).map(c => c.name).join('、')
-        if (!(await confirm({ title: '该节点被组合引用', message: `节点「${node.name}」是组合 ${names} 的成员，删除会将它从这些组合中移除、改变其定义。是否继续？`, confirmText: '仍然删除', danger: true }))) return
-        await api.del(`/nodes/${id}?confirm=1`)
-      }
-      toast('节点已删除'); navigate('/nodes')
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  // gh-proxy is a URL prefix: enabling it routes both the install.sh fetch and
-  // the binary downloads (via --gh-proxy passed to the script) through the mirror
-  // so nodes behind a GitHub-blocked network can still install.
-  const proxyPrefix = useGhProxy && ghProxy.trim()
-    ? (ghProxy.trim().endsWith('/') ? ghProxy.trim() : ghProxy.trim() + '/')
-    : ''
-  const portRangePart = node.port_range && node.port_range !== '10001-20000'
-    ? ` \\\n  --port-range ${node.port_range}`
-    : ''
-  const relayHostPart = cmdRelayHost.trim() ? ` \\\n  --relay-host ${cmdRelayHost.trim()}` : ''
-  const relayHostV6Part = cmdRelayHostV6.trim() ? ` \\\n  --relay-host-v6 ${cmdRelayHostV6.trim()}` : ''
-  const installCmd = `curl -fsSL ${proxyPrefix}https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh | bash -s agent \\\n  --panel-url ${panel_url} \\\n  --token ${node.secret}${portRangePart}${relayHostPart}${relayHostV6Part}${proxyPrefix ? ` \\\n  --gh-proxy ${proxyPrefix}` : ''}`
-
+  const resource = useResource(() => api.get(`/nodes/${id}`), [id])
   return (
-    <Layout>
-      <div className="admin-detail-page admin-node-detail-page mx-auto max-w-[1160px] flex flex-col gap-[18px]">
-
-        {/* back link */}
-        <Link to="/nodes" className="inline-flex items-center gap-1.5 w-fit text-[13.5px] text-ink-mut hover:text-ink transition-colors">
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-          返回节点列表
-        </Link>
-
-        {/* ===== HEADER ===== */}
-        <header className={`${card} px-[26px] py-[22px]`}>
-          <div className="flex items-start gap-5">
-            <div className="admin-node-avatar w-[52px] h-[52px] flex-none rounded-[14px] grid place-items-center text-blue-600 text-[22px] font-bold hidden md:grid">⬡</div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h1 className="m-0 text-[22px] font-bold tracking-[-0.01em]">{node.name}</h1>
-                <NodeTypeBadge type={node.node_type} />
-                <NodeStackBadge node={node} />
-                {isComposite
-                  ? (node.disabled && <Badge color="amber">已禁用</Badge>)
-                  : <HeaderStatus node={node} />}
-              </div>
-              {isComposite ? (
-                <div className="mt-2 text-[13px] text-ink-mut">虚拟链路节点，由下列各跳依次转发；自身无 Agent / IP / 同步状态</div>
-              ) : (
-                <div className="mt-2 flex items-center gap-[18px] flex-wrap text-[13px] text-ink-mut">
-                  <span>连接 IP&nbsp;&nbsp;{node.address
-                    ? <b className="text-ink-soft font-mono font-semibold"><SensText blurred={blurred}>{node.address}</SensText></b>
-                    : <span className="text-ink-mut">未连接</span>}</span>
-                  <span className="text-[#cfd6df] hidden sm:inline">|</span>
-                  <span className="hidden sm:inline">Agent&nbsp;&nbsp;{node.agent_version
-                    ? <><span className="font-mono text-ink-soft">{node.agent_version}</span>{agentOutdated && <span className="ml-1"><Badge color="amber">非最新</Badge></span>}</>
-                    : <span className="text-ink-mut">未知</span>}</span>
-                  <span className="text-[#cfd6df] hidden sm:inline">|</span>
-                  <span className="hidden sm:inline">最近同步&nbsp;&nbsp;<b className="text-ink-soft font-semibold">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</b></span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* header actions */}
-          <div className="flex flex-wrap gap-2.5 mt-4 md:mt-3">
-            {node.disabled ? (
-              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-[#eafaf1] text-[#0a8a4f] border border-[#c6ecd6] hover:brightness-95 transition cursor-pointer">启用节点</button>
-            ) : (
-              <button onClick={toggle} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">禁用节点</button>
-            )}
-            {!isComposite && (
-              <button onClick={resync} className="inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-ink-soft border border-[#d7dce3] hover:bg-[#f7f9fc] transition-colors cursor-pointer">重新同步</button>
-            )}
-            <button onClick={remove} className="hidden md:inline-flex items-center px-3.5 py-[9px] rounded-[10px] text-[13px] font-semibold bg-surface text-[#b42318] border border-[#f1c7c2] hover:bg-[#fef3f2] transition-colors cursor-pointer">删除节点</button>
-            {!isComposite && agentOutdated && (
-              <button onClick={upgrade} title={`推送升级到 ${latest_agent_version}`} className="hidden md:inline-flex items-center gap-1.5 px-4 py-[9px] rounded-[10px] text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 border-0 cursor-pointer transition-colors max-w-[280px] truncate">⤴ 推送升级到 {latest_agent_version}</button>
-            )}
-          </div>
-        </header>
-
-        {/* ===== 组合节点：仅名称配置（desktop only） ===== */}
-        {isComposite ? (
-          <section className={`${card} px-[26px] py-[22px] hidden md:flex flex-col gap-[18px]`}>
-            <h2 className="m-0 text-[15px] font-bold">节点配置</h2>
-            <ConfigField label="节点名称">
-              <form onSubmit={saveName} className="flex gap-2 max-w-md">
-                <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
-              </form>
-            </ConfigField>
-            <ConfigField label="倍率" hint="组合节点自身的计费倍率，作用于整条链路承担的流量">
-              <form onSubmit={saveRateMult} className="flex gap-2 max-w-md">
-                <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
-              </form>
-            </ConfigField>
-            <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
-              <div className="flex items-center gap-2">
-                <button onClick={toggleNoDirectExit} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${noDirectExit ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-                  {noDirectExit ? '禁止直接转发' : '允许直接转发'}
-                </button>
-                <span className="text-xs text-ink-mut">当前：{noDirectExit ? '禁止' : '允许'}</span>
-              </div>
-            </ConfigField>
-          </section>
-        ) : (
-        /* ===== TWO COLUMN: 基本信息 + 安装命令 | 节点配置 ===== */
-        <div className="grid grid-cols-1 lg:grid-cols-[1.55fr_1fr] gap-[18px] items-start">
-
-          <div className="flex flex-col gap-[18px] min-w-0">
-
-          {/* 基本信息 */}
-          <section className={`${card} px-[26px] py-[22px]`}>
-            <h2 className="m-0 mb-[18px] text-[15px] font-bold">基本信息</h2>
-            <div className="grid grid-cols-[auto_1fr]">
-              <InfoRow label="连接 IP" mono>
-                {node.address ? <SensText blurred={blurred}>{node.address}</SensText> : <span className="text-ink-mut">未连接</span>}
-              </InfoRow>
-              <InfoRow label="中继地址（数据面）" mono>
-                {node.relay_host ? <SensText blurred={blurred}>{node.relay_host}</SensText> : <span className="text-ink-mut">未设置（设置后才能进链路）</span>}
-              </InfoRow>
-              <InfoRow label="IPv6 中继地址" mono>
-                {node.relay_host_v6 ? <SensText blurred={blurred}>{node.relay_host_v6}</SensText> : <span className="text-ink-mut">未设置</span>}
-              </InfoRow>
-              <InfoRow label="Token" mono valueClass="text-[12.5px] break-all leading-relaxed">
-                <SensText blurred={blurred}>{node.secret}</SensText>
-              </InfoRow>
-              <InfoRow label="最近心跳">
-                {fmtTime(node.last_seen ?? null)}
-                <span className={`ml-1.5 font-semibold ${node.online === 1 ? 'text-[#0a8a4f]' : 'text-[#c2520a]'}`}>{node.online === 1 ? '在线' : '离线'}</span>
-              </InfoRow>
-              <InfoRow label="Agent 版本" mono valueClass="text-[12.5px]" last={!showUpgrade}>
-                {node.agent_version
-                  ? <>{node.agent_version} {agentOutdated ? <Badge color="amber">非最新</Badge> : <Badge color="green">最新</Badge>}</>
-                  : <span className="text-ink-mut">未知</span>}
-              </InfoRow>
-              {showUpgrade && (
-                <InfoRow label="升级状态" valueClass="text-[12.5px]" last>
-                  {up.status === 'ok' && <><Badge color="green">升级成功</Badge> <span className="ml-1 text-ink-mut">{up.version} · {fmtTime(up.at)}</span></>}
-                  {up.status === 'error' && <><Badge color="red">升级失败</Badge> <span className="ml-1 text-ink-mut break-all">{up.error}</span></>}
-                  {up.status === 'pending' && <><Badge color="blue">升级中</Badge> <span className="ml-1 text-ink-mut">已推送 {up.version} · {fmtTime(up.at)}</span></>}
-                  {up.status === 'stuck' && <><Badge color="amber">可能未生效</Badge> <span className="ml-1 text-ink-mut">已确认接收 {up.version}（{fmtTime(up.at)}），当前仍为 {node.agent_version || '未知'}，可能重启失败</span></>}
-                </InfoRow>
-              )}
-            </div>
-            {nullStr(node.last_error) && (
-              <div className="mt-2 text-[12.5px] text-red-700 dark:text-red-400 bg-red-500/[.08] border border-red-500/30 rounded-lg px-3 py-2 break-all">
-                {nullStr(node.last_error)}
-              </div>
-            )}
-            {node.last_warning && !nullStr(node.last_error) && (
-              <div className="mt-2 text-[12.5px] text-[#b25000] bg-[#fef6ec] border border-[#f6d9ac] rounded-lg px-3 py-2 break-all">
-                {node.last_warning}
-              </div>
-            )}
-          </section>
-
-          {/* 安装命令（实体节点专属）— desktop only */}
-          {node.node_type !== 'self' && (
-          <section className={`${card} px-[26px] py-[22px] hidden md:block`}>
-            <div className="flex items-baseline gap-3 mb-3.5 flex-wrap">
-              <h2 className="m-0 text-[15px] font-bold">节点安装命令</h2>
-              <span className="text-[12.5px] text-ink-mut">在目标节点（已安装 nftables，root 用户）执行下列命令即可</span>
-            </div>
-            {!panel_url_configured && (
-              <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-[13px]">
-                尚未设置面板地址，下面用你当前访问的域名 <code className="bg-amber-100 px-1 rounded">{panel_url}</code> 推断。如 agent 走不同地址，请到<Link to="/nodes" className="text-blue-600 font-semibold">节点页</Link>设置后再复制。
-              </div>
-            )}
-            <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
-              <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-                <input type="checkbox" checked={useGhProxy} onChange={e => setUseGhProxy(e.target.checked)} className="accent-blue-600" />
-                <span className="text-ink-soft">使用 gh-proxy（GitHub 受限网络）</span>
-              </label>
-              {useGhProxy && (
-                <input className="input-field font-mono" style={{ height: 30, maxWidth: 280 }} value={ghProxy}
-                  onChange={e => setGhProxy(e.target.value)} placeholder="https://gh-proxy.com/" />
-              )}
-            </div>
-            <div className="mb-3 flex items-center gap-2.5 flex-wrap text-[13px]">
-              <span className="text-ink-soft">中继地址声明（双出口机器用，可空）</span>
-              <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHost}
-                onChange={e => setCmdRelayHost(e.target.value)} placeholder="IPv4 / 域名（可选）" />
-              <input className="input-field font-mono" style={{ height: 30, maxWidth: 220 }} value={cmdRelayHostV6}
-                onChange={e => setCmdRelayHostV6(e.target.value)} placeholder="IPv6（可选）" />
-            </div>
-            <div className="relative bg-[#1e1e2e] dark:bg-app border border-line rounded-[10px] px-5 py-[18px]">
-              <button onClick={() => copyToClipboard(installCmd).then(() => toast('已复制')).catch(() => toast('复制失败', 'error'))}
-                className="absolute top-3.5 right-3.5 text-[12.5px] font-semibold text-[#a0a4b0] bg-[#2a2a3c] border border-[#3a3a4c] px-3.5 py-[6px] rounded-[7px] cursor-pointer hover:bg-[#33334a] transition-colors">复制</button>
-              <pre className="m-0 font-mono text-[13px] leading-[1.75] text-[#e8ecf3] whitespace-pre-wrap break-all">
-                <SensText blurred={blurred}>{installCmd}</SensText>
-              </pre>
-            </div>
-          </section>
-          )}
-
-          </div>
-
-          {/* 节点配置 — desktop only */}
-          <section className={`${card} px-6 py-[22px] flex-col gap-[18px] hidden md:flex`}>
-            <h2 className="m-0 text-[15px] font-bold">节点配置</h2>
-
-            <ConfigField label="节点名称">
-              <form onSubmit={saveName} className="flex gap-2">
-                <input className="input-field flex-1" value={name} onChange={e => setName(e.target.value)} required />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
-              </form>
-            </ConfigField>
-
-            <ConfigField
-              label="中继地址（数据面）"
-              hint={node.relay_host_declared ? '由 daemon 启动参数 --relay-host 管理，UI 不可修改；如需变更请更新节点配置后重启 daemon' : '中继链路用它作为上一跳打向本节点的目标地址'}
-            >
-              <form onSubmit={saveRelay} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={relayHost} onChange={e => setRelayHost(e.target.value)} placeholder="数据面公网 IP 或域名" disabled={node.relay_host_declared} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy || node.relay_host_declared}>保存</button>
-              </form>
-            </ConfigField>
-
-            <ConfigField
-              label="IPv6 中继地址"
-              hint={node.relay_host_v6_declared ? '由 daemon 启动参数 --relay-host-v6 管理，UI 不可修改；如需变更请更新节点配置后重启 daemon' : '设置后该节点可转发 IPv6 目标，留空表示不支持 IPv6'}
-            >
-              <form onSubmit={saveRelayV6} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={relayHostV6} onChange={e => setRelayHostV6(e.target.value)} placeholder="数据面公网 IPv6 地址" disabled={node.relay_host_v6_declared} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy || node.relay_host_v6_declared}>保存</button>
-              </form>
-            </ConfigField>
-
-            <ConfigField label="端口范围" hint="规则自动分配监听端口时从该范围中选取">
-              <form onSubmit={savePortRange} className="flex gap-2">
-                <input className="input-field font-mono flex-1" value={portRange} onChange={e => setPortRange(e.target.value)} placeholder="例如 10001-19999,23333,40000-42000" />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
-              </form>
-            </ConfigField>
-
-            <ConfigField label="倍率" hint="影响该节点承担流量的计费">
-              <form onSubmit={saveRateMult} className="flex gap-2">
-                <input className="input-field font-mono" type="number" min="0" step="0.1" value={rateMult} onChange={e => setRateMult(e.target.value)} style={{ width: 100 }} />
-                <button type="submit" className="btn-primary flex-none px-5" disabled={busy}>保存</button>
-              </form>
-            </ConfigField>
-
-            <ConfigField label="计费方向" hint="单向计费取出站/入站的较大值，双向计费计算出站+入站">
-              <div className="flex items-center gap-2">
-                <button onClick={toggleBillingDir} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${unidirectional ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-                  {unidirectional ? '单向计费（取较大方向）' : '双向计费（出站+入站）'}
-                </button>
-                <span className="text-xs text-ink-mut">当前：{unidirectional ? '单向' : '双向'}</span>
-              </div>
-            </ConfigField>
-
-            <ConfigField label="直接转发" hint="禁止后本节点不能作为链尾直连目标，规则必须在其后级联线路层；对之后新建/编辑的规则生效">
-              <div className="flex items-center gap-2">
-                <button onClick={toggleNoDirectExit} className={`inline-flex items-center gap-1.5 px-3.5 py-[7px] rounded-[8px] text-[13px] font-semibold border cursor-pointer transition-colors ${noDirectExit ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}`}>
-                  {noDirectExit ? '禁止直接转发' : '允许直接转发'}
-                </button>
-                <span className="text-xs text-ink-mut">当前：{noDirectExit ? '禁止' : '允许'}</span>
-              </div>
-            </ConfigField>
-          </section>
-        </div>
-        )}
-
-        {/* ===== 节点角色（含中转的上游绑定） ===== */}
-        <RolesCard node={node} onDone={reloadSilent} />
-
-        {/* ===== 组合节点跳序 — desktop only ===== */}
-        {isComposite && (
-          <div className="hidden md:block">
-            <CompositeHopsCard nodeId={id} hops={nodeHops} singleNodes={data.single_nodes || []} onDone={load} />
-          </div>
-        )}
-
-        {referencedByComposites.length > 0 && (
-          <section className={`${card} px-[26px] pt-[22px] pb-2`}>
-            <div className="flex items-baseline gap-2.5 mb-1.5">
-              <h2 className="m-0 text-[15px] font-bold">被以下组合引用</h2>
-              <span className="text-[12.5px] text-ink-mut">{referencedByComposites.length} 个</span>
-            </div>
-            <div className="pb-3 flex flex-wrap gap-2">
-              {referencedByComposites.map((comp) => (
-                <Link
-                  key={comp.id}
-                  to={`/nodes/${comp.id}`}
-                  className="inline-flex items-center gap-1.5 text-blue-600 hover:underline"
-                >
-                  <span>{comp.name}</span>
-                  <NodeTypeBadge type={comp.node_type} />
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* ===== 经过该节点的规则 ===== */}
-        <section className={`${card} px-[26px] pt-[22px] pb-2`}>
-          <div className="flex items-baseline gap-2.5 mb-1.5">
-            <h2 className="m-0 text-[15px] font-bold">经过该节点的规则</h2>
-            <span className="text-[12.5px] text-ink-mut">{ruleHops.length} 条</span>
-          </div>
-          {ruleHops.length ? (
-            <TableBox>
-            <table className="tbl">
-              <thead><tr><th>规则</th><th>用户</th><th>类型</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="text-right">流量</th></tr></thead>
-              <tbody>
-                {ruleHops.map((rh, i) => (
-                  <tr key={i}>
-                    <td className="font-semibold">
-                      {rh.rule_id ? <Link to={`/rules/${rh.rule_id}`} className="text-blue-600 hover:underline">{rh.rule_name || `#${rh.rule_id}`}</Link> : '--'}
-                    </td>
-                    <td className="text-sm">
-                      {rh.owner_id ? <Link to={`/users/${rh.owner_id}`} className="text-blue-600 hover:underline">{rh.owner_name}</Link> : <span className="text-ink-mut">--</span>}
-                    </td>
-                    <td className="text-xs whitespace-nowrap">
-                      {rh.total_hops > 1
-                        ? <Link to={`/nodes/${rh.rule_node_id}`} className="text-purple-600 font-semibold hover:underline">组合 {rh.position + 1}/{rh.total_hops}</Link>
-                        : <span className="text-ink-mut">单点</span>}
-                    </td>
-                    <td><ProtoBadge proto={rh.proto} /></td>
-                    <td><ModeBadge mode={rh.mode} /></td>
-                    <td className="font-mono">{rh.listen_port}</td>
-                    <td className="font-mono"><SensText blurred={blurred}>{rh.target_host ? `${rh.target_host}:${rh.target_port}` : '--'}</SensText></td>
-                    <td className="text-right font-mono text-xs text-ink-mut">{fmtBytes(rh.total_bytes)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TableBox>
-          ) : <div className="pb-4"><Empty title="该节点尚无规则经过"><Link to="/rules" className="text-blue-600 text-xs font-semibold">去添加</Link></Empty></div>}
-        </section>
-
-        {/* ===== 已授权用户 ===== */}
-        <section className={`${card} px-[26px] pt-[22px] pb-2`}>
-          <div className="flex items-baseline gap-2.5 mb-1.5">
-            <h2 className="m-0 text-[15px] font-bold">已授权用户</h2>
-            <span className="text-[12.5px] text-ink-mut">{grantedUsers.length} 人</span>
-          </div>
-          <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} onChanged={reloadSilent} />
-          {grantedUsers.length ? (
-            <TableBox>
-            <table className="tbl">
-              <thead><tr><th>用户</th><th>单节点配额</th><th>用途</th><th>授权时间</th><th className="text-right">操作</th></tr></thead>
-              <tbody>
-                {grantedUsers.map(g => (
-                  <tr key={g.user_id}>
-                    <td className="font-semibold">
-                      <Link to={`/users/${g.user_id}`} className="text-blue-600 hover:underline">{g.username}</Link>
-                    </td>
-                    <td className="font-mono">{g.max_forwards}</td>
-                    <td><PerNodeRolesForm userId={g.user_id} nodeId={node.id} roles={g.roles} onDone={reloadSilent} /></td>
-                    <td className="text-xs text-ink-mut">{fmtTime(g.granted_at)}</td>
-                    <td className="text-right">
-                      <button onClick={async () => {
-                        if (!await confirm({ title: '取消授权', message: `确定取消 ${g.username} 对该节点的授权？`, confirmText: '取消授权', danger: true })) return
-                        try { await api.del(`/users/${g.user_id}/grants/${node.id}`); toast('已取消授权'); reloadSilent() }
-                        catch (e) { toast(e.message, 'error') }
-                      }} className="text-red-500 text-xs font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0">取消授权</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TableBox>
-          ) : <div className="pb-4"><Empty title="尚无用户被授权使用此节点" /></div>}
-        </section>
-
-      </div>
-    </Layout>
+    <Page>
+      {/* 还没有节点数据时（加载中、失败、不存在）也留一条回列表的路。 */}
+      {resource.state.status !== 'ready' && <PageHeader title="节点详情" back={BACK} />}
+      <ResourceView resource={resource} notFound="节点不存在">
+        {data => <NodeView data={data} resource={resource} />}
+      </ResourceView>
+    </Page>
   )
 }
 
-function InfoRow({ label, mono, valueClass = '', last, children }) {
-  const bb = last ? '' : 'border-b border-line-soft'
+function NodeView({ data, resource }) {
+  const { state, reload } = resource
+  const { node, latest_agent_version: latest } = data
+  const navigate = useNavigate()
+  const toast = useToast()
+  const confirm = useConfirm()
+  const composite = node.node_type === 'composite'
+  // Agent 版本是否低于面板版本，由服务端判定（节点列表的“可升级”标记与批量
+  // 升级选对象用的是同一个判定）。
+  const outdated = data.agent_outdated === true
+  // 面板地址没有配置时，服务端返回的 panel_url 是空串；安装命令改用管理员
+  // 当前访问面板的地址，并在安装命令卡片里说明。
+  const panelUrl = data.panel_url_configured ? data.panel_url : window.location.origin
+
+  // 组合节点没有自己的 Agent，在线状态由服务端按子节点聚合，不存在“等它连上来”。
+  const offline = !composite && node.online !== 1
+  // 一次被节点确认的升级推送之后，等服务端给出结论的阶段：
+  // null 不在等；'waiting' 在等；'expired' 等到上限仍没有结论。
+  const [upgradeWatch, setUpgradeWatch] = useState(/** @type {null | 'waiting' | 'expired'} */ (null))
+  usePolling(reload, upgradeWatch ? UPGRADE_POLL_MS : offline ? OFFLINE_POLL_MS : null)
+
+  // 升级会让 Agent 重启、节点短暂离线再上线；那一次上线由升级结论的提示说明，
+  // 不再另报“已上线”。
+  const wasOffline = useRef(offline)
+  useEffect(() => {
+    if (wasOffline.current && !offline && !upgradeWatch) toast('节点已上线')
+    wasOffline.current = offline
+  }, [offline, upgradeWatch, toast])
+
+  useEffect(() => {
+    if (upgradeWatch !== 'waiting') return
+    const timer = setTimeout(() => setUpgradeWatch(w => (w === 'waiting' ? 'expired' : w)), UPGRADE_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [upgradeWatch])
+
+  // 屏幕上的 data 是否来自一次已经落定且成功的拉取。开始等待升级结论的同一刻
+  // 发起了一次刷新（见 upgrade），此后凡是 settled 的 data 都是推送之后取回的；
+  // 刷新在途或失败时 data 仍可能是推送之前的，不能拿来下结论。
+  const settled = state.status === 'ready' && !state.refreshing && state.refreshError === null
+  useEffect(() => {
+    if (!upgradeWatch) return
+    const verdict = settled ? upgradeVerdict(data.upgrade?.status) : 'running'
+    if (verdict === 'running' && upgradeWatch === 'waiting') return
+    // 结束等待与提示只发生在这里，每次等待因此恰好给出一个结论。
+    setUpgradeWatch(null)
+    switch (verdict) {
+      case 'succeeded':
+        toast(`升级完成，Agent 现在是 ${node.agent_version}`)
+        break
+      case 'failed':
+        toast(`升级失败：${data.upgrade.error || '节点没有给出原因'}`, 'error')
+        break
+      case 'stuck':
+        toast('节点已确认接收新版本，但上报的版本没有变化，可能是重启失败', 'error')
+        break
+      case 'running':
+        toast('2 分钟内没有取得升级结果，请稍后刷新页面查看', 'error')
+        break
+      default:
+        assertNever(verdict)
+    }
+  }, [upgradeWatch, settled, data, node.agent_version, toast])
+
+  // 启用 / 禁用在服务端是翻转语义：等刷新回来再放开按钮，按钮上的文字与
+  // 服务端状态一致之后才允许下一次点击。
+  const toggle = useAction(async () => {
+    await api.post(`/nodes/${node.id}/toggle`)
+    toast(node.disabled ? '节点已启用' : '节点已禁用')
+    await reload()
+  })
+
+  const resync = useAction(async () => {
+    try {
+      await api.post(`/nodes/${node.id}/resync`)
+      toast('已重新同步')
+    } finally {
+      // 下发失败时服务端也会把错误记到节点上，所以成败都刷新。
+      await reload()
+    }
+  })
+
+  const upgrade = useAction(async () => {
+    const agreed = await confirm({
+      title: '升级节点',
+      message: `把「${node.name}」的 Agent 升级到 ${latest}？面板会把新版本推送到节点，节点替换程序后重启 Agent。`,
+      confirmText: '升级',
+    })
+    if (!agreed) return
+    try {
+      await api.post(`/nodes/${node.id}/upgrade`)
+    } catch (err) {
+      // 推送失败也会被服务端记成一次升级记录，刷新后“升级状态”一行才看得到。
+      await reload()
+      throw err
+    }
+    toast('升级已推送，正在等待节点重启')
+    // 先发起刷新、再开始等待：等待期间的结论判定只认这次刷新及之后取回的数据。
+    const refreshed = reload()
+    setUpgradeWatch('waiting')
+    await refreshed
+  })
+
+  const remove = useAction(async () => {
+    if (!(await removeNode(node.id, confirm))) return
+    toast('节点已删除')
+    navigate('/nodes')
+  })
+
+  const ruleHops = data.rule_hops || []
+  const referencedBy = data.referenced_by_composites || []
+
   return (
     <>
-      <div className={`text-[13px] text-ink-mut pr-5 py-[11px] ${bb}`}>{label}</div>
-      <div className={`text-[13.5px] text-ink py-[11px] min-w-0 ${mono ? 'font-mono' : ''} ${valueClass} ${bb}`}>{children}</div>
+      <PageHeader
+        title={node.name}
+        back={BACK}
+        meta={<>
+          <NodeTypeTag type={node.node_type} />
+          <NodeStackTags node={node} />
+          <NodeStatus node={node} />
+        </>}
+        actions={<>
+          <Button loading={toggle.pending} onClick={() => toggle.run()}>{node.disabled ? '启用节点' : '禁用节点'}</Button>
+          {!composite && <Button icon={<IconRefresh />} loading={resync.pending} onClick={() => resync.run()}>重新同步</Button>}
+          <Button danger icon={<IconTrash />} loading={remove.pending} onClick={() => remove.run()}>删除节点</Button>
+          {outdated && (
+            <Button variant="primary" loading={upgrade.pending || upgradeWatch !== null} onClick={() => upgrade.run()}>
+              升级到 {latest}
+            </Button>
+          )}
+        </>}
+      />
+
+      {composite ? (
+        <>
+          <Alert>组合节点是一条虚拟链路，流量依次经过下面的各跳；它自己没有 Agent、连接 IP 和同步状态。</Alert>
+          <ConfigCard node={node} reload={reload} />
+        </>
+      ) : (
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="flex min-w-0 flex-col gap-5">
+            <InfoCard node={node} upgrade={data.upgrade} outdated={outdated} />
+            {node.node_type !== 'self' && (
+              <InstallCommandCard node={node} panelUrl={panelUrl} panelUrlConfigured={data.panel_url_configured} />
+            )}
+          </div>
+          <ConfigCard node={node} reload={reload} />
+        </div>
+      )}
+
+      <RolesCard node={node} reload={reload} />
+
+      {composite && (
+        <CompositeHopsCard nodeId={node.id} hops={data.node_hops || []} candidates={data.single_nodes || []} reload={reload} />
+      )}
+
+      {referencedBy.length > 0 && (
+        <Card>
+          <CardHeader title="所属组合" description={`被 ${referencedBy.length} 个组合节点用作成员`} />
+          <CardSection className="flex flex-wrap gap-x-5 gap-y-2">
+            {referencedBy.map(c => (
+              <TextLink key={c.id} to={`/nodes/${c.id}`}>
+                <NodeTypeIcon type={c.node_type} />
+                {c.name}
+              </TextLink>
+            ))}
+          </CardSection>
+        </Card>
+      )}
+
+      <RuleHopsCard ruleHops={ruleHops} />
+      <GrantsCard node={node} grantedUsers={data.granted_users || []} reload={reload} />
     </>
   )
 }
 
-function ConfigField({ label, hint, children }) {
-  return (
-    <div>
-      <label className="block text-[12.5px] text-ink-soft mb-[7px] font-medium">{label}</label>
-      {hint && <p className="mt-[-2px] mb-[7px] text-[11.5px] text-ink-mut leading-snug">{hint}</p>}
-      {children}
-    </div>
-  )
+/* ---------- 基本信息 ---------- */
+
+function Unset({ children }) {
+  return <span className="text-ink-mut">{children}</span>
 }
 
-// Header status pill combining online + sync state, with disabled/error overriding.
-function HeaderStatus({ node }) {
-  let text, cls, dot
-  if (node.disabled) {
-    text = '已禁用'; cls = 'text-[#c2520a] bg-[#fdeede] border-[#f6d4ac]'; dot = '#e0892f'
-  } else if (nullStr(node.last_error)) {
-    text = '错误'; cls = 'text-[#b42318] bg-[#fef3f2] border-[#f1c7c2]'; dot = '#e5484d'
-  } else if (node.last_warning) {
-    text = '警告'; cls = 'text-[#b25000] bg-[#fef6ec] border-[#f6d9ac]'; dot = '#e0892f'
-  } else if (node.online === 1) {
-    text = node.last_apply_at?.Valid ? '在线 · 已同步' : '在线 · 待同步'
-    cls = 'text-[#0a8a4f] bg-[#e7f7ee] border-[#c6ecd6]'; dot = '#22b46e'
-  } else {
-    text = '离线'; cls = 'text-[#6b7685] bg-[#f1f3f6] border-[#e1e5ea]'; dot = '#9aa4b2'
+function UpgradeStatus({ upgrade, node }) {
+  switch (upgrade.status) {
+    case 'ok':
+      return <><Badge tone="ok">升级成功</Badge> <span className="text-ink-mut">{upgrade.version} · {fmtTime(upgrade.at)}</span></>
+    case 'error':
+      return <><Badge tone="danger">升级失败</Badge> <span className="text-ink-soft">{upgrade.error}</span></>
+    case 'pending':
+      return <><Badge tone="accent">升级中</Badge> <span className="text-ink-mut">已推送 {upgrade.version} · {fmtTime(upgrade.at)}</span></>
+    case 'stuck':
+      return (
+        <>
+          <Badge tone="warn">可能未生效</Badge>{' '}
+          <span className="text-ink-soft">
+            节点已确认接收 {upgrade.version}（{fmtTime(upgrade.at)}），但当前仍是 {node.agent_version || '未知版本'}，可能是重启失败
+          </span>
+        </>
+      )
+    default:
+      return null
   }
+}
+
+function InfoCard({ node, upgrade, outdated }) {
+  const blurred = useBlur()
+  const error = nullStr(node.last_error)
+  const showUpgrade = upgradeWorthShowing(upgrade?.status)
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[12.5px] font-semibold px-2.5 py-[3px] rounded-full border ${cls}`}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
-      {text}
-    </span>
+    <Card>
+      <CardHeader title="基本信息" />
+      <CardSection className="flex flex-col gap-4">
+        <DescList>
+          <DescItem label="连接 IP">
+            {node.address ? <span className="font-mono"><SensText blurred={blurred}>{node.address}</SensText></span> : <Unset>未连接</Unset>}
+          </DescItem>
+          <DescItem label="中继地址">
+            {node.relay_host
+              ? <span className="font-mono"><SensText blurred={blurred}>{node.relay_host}</SensText></span>
+              : <Unset>未设置（设置后才能进入链路）</Unset>}
+          </DescItem>
+          <DescItem label="IPv6 中继地址">
+            {node.relay_host_v6 ? <span className="font-mono"><SensText blurred={blurred}>{node.relay_host_v6}</SensText></span> : <Unset>未设置</Unset>}
+          </DescItem>
+          <DescItem label="Token">
+            <span className="break-all font-mono"><SensText blurred={blurred}>{node.secret}</SensText></span>
+          </DescItem>
+          <DescItem label="最近心跳">
+            {fmtTime(node.last_seen ?? null)} <Unset>· {node.online === 1 ? 'Agent 已连接' : 'Agent 未连接'}</Unset>
+          </DescItem>
+          <DescItem label="最近同步">{fmtTime(node.last_apply_at?.Valid ? node.last_apply_at.Int64 : null)}</DescItem>
+          <DescItem label="Agent 版本">
+            {node.agent_version
+              ? <><span className="font-mono">{node.agent_version}</span> {outdated ? <Badge tone="warn">非最新</Badge> : <Badge tone="ok">最新</Badge>}</>
+              : <Unset>未知</Unset>}
+          </DescItem>
+          {showUpgrade && <DescItem label="升级状态"><UpgradeStatus upgrade={upgrade} node={node} /></DescItem>}
+        </DescList>
+        {error && <Alert tone="danger" className="break-all">{error}</Alert>}
+        {!error && node.last_warning && <Alert tone="warn" className="break-all">{node.last_warning}</Alert>}
+      </CardSection>
+    </Card>
   )
 }
 
-/* 多选下拉直接编辑该节点的授权集合：默认选中已授权用户，保存时把 diff
-   （新增 + 移除）一次性提交到批量接口，由后端顺序应用并统一下发，避免
-   前端逐个请求时中途失败造成"部分成功但不知道成功了哪些"。移除会让该
-   用户在此节点的规则失去授权依据，所以先确认。 */
-function GrantEditor({ nodeId, grantedUsers, onChanged }) {
-  const [allUsers, setAllUsers] = useState(null)
-  const [sel, setSel] = useState(grantedUsers.map(g => String(g.user_id)))
-  const [saving, setSaving] = useState(false)
-  const toast = useToast()
-  const confirm = useConfirm()
+/* ---------- 安装命令 ---------- */
 
-  // 只在授权集合真实变化时重置选择，静默轮询刷新不打断编辑中的下拉。
-  const grantedKey = grantedUsers.map(g => g.user_id).sort((a, b) => a - b).join(',')
-  useEffect(() => { setSel(grantedUsers.map(g => String(g.user_id))) }, [grantedKey])
-  useEffect(() => {
-    api.get('/users').then(d => setAllUsers((d.users || []).filter(u => u.role === 'user'))).catch(() => setAllUsers([]))
-  }, [])
+/* 节点默认的端口范围；与它相同就不必写进安装命令。 */
+const DEFAULT_PORT_RANGE = '10001-20000'
+const INSTALL_SCRIPT = 'https://raw.githubusercontent.com/xjetry/nft-forward/main/install.sh'
 
-  // 已授权但不在用户列表里的（角色变更等）也要可见，否则无法取消勾选。
-  const byId = new Map((allUsers || []).map(u => [String(u.id), u.username]))
-  for (const g of grantedUsers) if (!byId.has(String(g.user_id))) byId.set(String(g.user_id), g.username)
-  const options = [...byId].map(([value, label]) => ({ value, label }))
+function InstallCommandCard({ node, panelUrl, panelUrlConfigured }) {
+  const blurred = useBlur()
+  const [useGhProxy, setUseGhProxy] = useState(false)
+  const [ghProxy, setGhProxy] = useState('https://gh-proxy.com/')
+  const [relayHost, setRelayHost] = useState('')
+  const [relayHostV6, setRelayHostV6] = useState('')
 
-  const grantedIds = new Set(grantedUsers.map(g => String(g.user_id)))
-  const added = sel.filter(v => !grantedIds.has(v))
-  const removed = [...grantedIds].filter(v => !sel.includes(v))
-  const dirty = added.length > 0 || removed.length > 0
+  // gh-proxy 是一个 URL 前缀：既加在 install.sh 的下载地址前，也通过
+  // --gh-proxy 传给脚本，让脚本下载二进制时同样走这个镜像。
+  const proxy = useGhProxy ? ghProxy.trim() : ''
+  const proxyPrefix = proxy && !proxy.endsWith('/') ? `${proxy}/` : proxy
+  const args = [
+    `--panel-url ${panelUrl}`,
+    `--token ${node.secret}`,
+    node.port_range && node.port_range !== DEFAULT_PORT_RANGE && `--port-range ${node.port_range}`,
+    relayHost.trim() && `--relay-host ${relayHost.trim()}`,
+    relayHostV6.trim() && `--relay-host-v6 ${relayHostV6.trim()}`,
+    proxyPrefix && `--gh-proxy ${proxyPrefix}`,
+  ].filter(Boolean)
+  const command = [`curl -fsSL ${proxyPrefix}${INSTALL_SCRIPT} | bash -s agent`, ...args].join(' \\\n  ')
 
-  const save = async () => {
-    if (removed.length && !(await confirm({
-      title: '取消授权',
-      message: `将取消 ${removed.length} 名用户对该节点的授权，其在此节点的规则会失去授权依据。继续？`,
-      confirmText: '继续', danger: true,
-    }))) return
-    setSaving(true)
-    try {
-      const res = await api.post(`/nodes/${nodeId}/grants/batch`, {
-        add_user_ids: added.map(Number),
-        remove_user_ids: removed.map(Number),
-      })
-      toast(`授权已更新（新增 ${res?.granted ?? added.length}、移除 ${res?.revoked ?? removed.length}）`)
-    } catch (err) { toast(err.message, 'error') } finally { setSaving(false); onChanged() }
+  return (
+    <Card>
+      <CardHeader title="安装命令" description="在目标机器上以 root 执行（需要已安装 nftables）" />
+      <CardSection className="flex flex-col gap-4">
+        {!panelUrlConfigured && (
+          <Alert tone="warn">
+            还没有设置面板地址，命令里用的是你当前访问面板的地址 <span className="font-mono">{panelUrl}</span>。
+            如果节点要通过别的地址连接面板，先到<TextLink to="/settings">系统设置</TextLink>填写面板地址，再复制命令。
+          </Alert>
+        )}
+        <div className="flex flex-col gap-2">
+          <Checkbox checked={useGhProxy} onChange={setUseGhProxy}>通过 gh-proxy 下载（目标机器访问 GitHub 受限时）</Checkbox>
+          {useGhProxy && (
+            <Input mono value={ghProxy} onChange={setGhProxy} placeholder="https://gh-proxy.com/" aria-label="gh-proxy 地址" className="sm:max-w-sm" />
+          )}
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="声明中继地址" optional hint="双出口机器用。写进命令后，中继地址由节点的启动参数决定，面板里不能再修改。">
+            <Input mono value={relayHost} onChange={setRelayHost} placeholder="IPv4 或域名" />
+          </Field>
+          <Field label="声明 IPv6 中继地址" optional>
+            <Input mono value={relayHostV6} onChange={setRelayHostV6} placeholder="IPv6 地址" />
+          </Field>
+        </div>
+        <CodeBlock text={command}><SensText blurred={blurred}>{command}</SensText></CodeBlock>
+      </CardSection>
+    </Card>
+  )
+}
+
+/* ---------- 节点配置 ---------- */
+
+const trimmed = (text) => text.trim()
+
+/** 倍率输入整理成数字的规范写法（“1.50” → “1.5”），与服务端存下的值可比；不是数字时原样返回，交给校验报错。 */
+function canonRate(text) {
+  const t = text.trim()
+  return t !== '' && Number.isFinite(Number(t)) ? String(Number(t)) : t
+}
+
+function rateError(value) {
+  return value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? null : '倍率必须是大于等于 0 的数字'
+}
+
+/* 端口范围在提交前先校验格式，输错时错误直接标在输入框下面。留空交给服务端
+   处理。 */
+function portRangeError(value) {
+  if (!value) return null
+  for (const part of value.split(',')) {
+    const p = part.trim()
+    const m = p.match(/^(\d{1,5})(?:-(\d{1,5}))?$/)
+    if (!m) return `「${p}」格式不对：应为端口或端口区间，例如 23333 或 10001-19999`
+    const a = Number(m[1])
+    const b = m[2] ? Number(m[2]) : a
+    if (a < 1 || a > 65535 || b < 1 || b > 65535) return `「${p}」端口需在 1–65535 之间`
+    if (a > b) return `「${p}」区间的起始端口不能大于结束端口`
   }
+  return null
+}
+
+/**
+ * 一个配置项：一个输入框加它自己的保存按钮。输入中的内容是草稿（见
+ * useDraft）；校验与保存失败的原因显示在输入框下面。
+ *
+ * @param {{
+ *   label: string,
+ *   hint?: string,
+ *   saved: string,
+ *   onSave: (value: string) => Promise<unknown>,
+ *   canon?: (text: string) => string,
+ *   check?: (value: string) => string | null,
+ *   locked?: boolean,
+ *   inputClassName?: string,
+ * } & Record<string, unknown>} props `canon` 把输入整理成服务端会存下的形式；
+ * `locked` 表示这一项不由面板管理，只读。其余属性透传给 Input。
+ */
+function SettingForm({ label, hint, saved, onSave, canon = trimmed, check, locked = false, inputClassName = 'flex-1', ...input }) {
+  const draft = useDraft(saved)
+  const [error, setError] = useState(/** @type {string | null} */ (null))
+  const save = useAction(async () => {
+    const value = canon(draft.value)
+    const problem = check ? check(value) : null
+    setError(problem)
+    if (problem) return
+    // 草稿换成整理后的值：刷新回来的服务端值才会与它相等。
+    draft.set(value)
+    if (value === saved) return
+    await onSave(value)
+  }, { onError: err => setError(err instanceof Error ? err.message : '保存失败') })
 
   return (
-    <div className="flex items-center gap-2 mb-3 max-w-xl">
-      <Select multiple searchable className="flex-1" placeholder="选择要授权的用户…"
-        value={sel} onChange={setSel} options={options} />
-      <button onClick={save} disabled={saving || !dirty} className="btn-primary flex-none px-5">保存</button>
-    </div>
+    <Field label={label} hint={hint} error={error}>
+      <form noValidate className="flex gap-2" onSubmit={e => { e.preventDefault(); void save.run() }}>
+        <Input
+          {...input}
+          className={inputClassName}
+          value={draft.value}
+          disabled={locked}
+          onChange={text => { draft.set(text); setError(null) }}
+        />
+        <Button type="submit" loading={save.pending} disabled={locked || !draft.dirty}>保存</Button>
+      </form>
+    </Field>
   )
 }
 
-function CompositeHopsCard({ nodeId, hops: initHops, singleNodes, onDone }) {
-  const [rows, setRows] = useState(initHops.map(h => ({
-    node_id: h.hop_node_id, node_name: h.node_name || `#${h.hop_node_id}`,
-    mode: h.mode,
-  })))
-  const [saving, setSaving] = useState(false)
-  const [dragIdx, setDragIdx] = useState(null)
-  const toast = useToast()
+const BILLING_OPTIONS = [{ value: 'both', label: '双向' }, { value: 'larger', label: '单向' }]
+const DIRECT_EXIT_OPTIONS = [{ value: 'allow', label: '允许' }, { value: 'deny', label: '禁止' }]
 
-  const nodeById = Object.fromEntries(singleNodes.map(n => [n.id, n]))
-  const dirty = rows.length !== initHops.length || rows.some((r, i) => {
-    const h = initHops[i]
-    return !h || r.node_id !== h.hop_node_id || r.mode !== h.mode
+function ConfigCard({ node, reload }) {
+  const toast = useToast()
+  const composite = node.node_type === 'composite'
+
+  const post = async (path, body, done) => {
+    await api.post(`/nodes/${node.id}/${path}`, body)
+    toast(done)
+    await reload()
+  }
+  const setBilling = useAction(async (unidirectional) => {
+    await post('unidirectional', { unidirectional }, unidirectional ? '已改为单向计费' : '已改为双向计费')
+  })
+  const setDirectExit = useAction(async (noDirectExit) => {
+    await post('no-direct-exit', { no_direct_exit: noDirectExit }, noDirectExit ? '已禁止直接转发' : '已允许直接转发')
   })
 
-  const setField = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r))
-  const addHop = () => setRows(rs => [...rs, { node_id: '', node_name: '', mode: 'userspace' }])
-  const removeHop = (i) => setRows(rs => rs.filter((_, j) => j !== i))
-  const onDrop = (toIdx) => {
-    if (dragIdx === null || dragIdx === toIdx) { setDragIdx(null); return }
-    setRows(rs => {
-      const arr = [...rs]
-      const [moved] = arr.splice(dragIdx, 1)
-      arr.splice(toIdx, 0, moved)
-      return arr
-    })
-    setDragIdx(null)
-  }
+  return (
+    <Card>
+      <CardHeader title="节点配置" />
+      <CardSection className="flex flex-col gap-5">
+        <SettingForm
+          label="节点名称"
+          saved={node.name || ''}
+          check={value => (value ? null : '名称不能为空')}
+          onSave={name => post('rename', { name }, '名称已保存')}
+        />
+        {!composite && (
+          <>
+            <SettingForm
+              label="中继地址"
+              mono
+              placeholder="数据面的公网 IP 或域名"
+              saved={node.relay_host || ''}
+              locked={!!node.relay_host_declared}
+              hint={node.relay_host_declared
+                ? '由节点的启动参数 --relay-host 声明，面板里不能修改；要变更请改启动参数后重启 Agent。'
+                : '链路里的上一跳用这个地址连到本节点。'}
+              onSave={relayHost => post('relay-host', { relay_host: relayHost }, '中继地址已保存')}
+            />
+            <SettingForm
+              label="IPv6 中继地址"
+              mono
+              placeholder="数据面的公网 IPv6 地址"
+              saved={node.relay_host_v6 || ''}
+              locked={!!node.relay_host_v6_declared}
+              hint={node.relay_host_v6_declared
+                ? '由节点的启动参数 --relay-host-v6 声明，面板里不能修改；要变更请改启动参数后重启 Agent。'
+                : '设置后本节点可以转发 IPv6 目标；留空表示不支持 IPv6。'}
+              onSave={relayHostV6 => post('relay-host-v6', { relay_host_v6: relayHostV6 }, 'IPv6 中继地址已保存')}
+            />
+            <SettingForm
+              label="端口范围"
+              mono
+              placeholder="例如 10001-19999,23333,40000-42000"
+              saved={node.port_range || ''}
+              hint="规则自动分配监听端口时从这个范围里选。"
+              check={portRangeError}
+              onSave={portRange => post('port-range', { port_range: portRange }, '端口范围已保存')}
+            />
+          </>
+        )}
+        <SettingForm
+          label="倍率"
+          mono
+          type="number"
+          min="0"
+          step="0.1"
+          inputClassName="w-28"
+          saved={String(node.rate_multiplier ?? 1)}
+          hint={composite ? '组合节点自身的计费倍率，作用于整条链路承担的流量。' : '影响本节点承担流量的计费。'}
+          canon={canonRate}
+          check={rateError}
+          onSave={rate => post('rate-multiplier', { rate_multiplier: Number(rate) }, '倍率已保存')}
+        />
+        {!composite && (
+          <Field label="计费方向" hint="双向按出站 + 入站计费，单向取出站与入站中较大的一方。">
+            <div className="flex">
+              <Segmented
+                value={node.unidirectional ? 'larger' : 'both'}
+                disabled={setBilling.pending}
+                onChange={choice => { if ((choice === 'larger') !== !!node.unidirectional) void setBilling.run(choice === 'larger') }}
+                options={BILLING_OPTIONS}
+              />
+            </div>
+          </Field>
+        )}
+        <Field label="直接转发" hint="禁止后本节点不能作为链路的最后一跳直连目标，规则必须在它后面再接线路；只影响之后新建或编辑的规则。">
+          <div className="flex">
+            <Segmented
+              value={node.no_direct_exit ? 'deny' : 'allow'}
+              disabled={setDirectExit.pending}
+              onChange={choice => { if ((choice === 'deny') !== !!node.no_direct_exit) void setDirectExit.run(choice === 'deny') }}
+              options={DIRECT_EXIT_OPTIONS}
+            />
+          </div>
+        </Field>
+      </CardSection>
+    </Card>
+  )
+}
 
-  const save = async () => {
-    if (rows.length < 2) { toast('至少需要 2 个子节点', 'error'); return }
-    if (rows.some(r => !r.node_id)) { toast('请选择所有节点', 'error'); return }
-    setSaving(true)
+/* ---------- 节点用途与上下游绑定 ---------- */
+
+/* 绑定边的两侧。上游边：本节点接在哪些节点之后（本节点是下游）；
+   下游边：哪些节点接在本节点之后（本节点是上游）。两侧各有一个整表替换的接口。 */
+const EDGE_SIDES = {
+  upstream: { path: 'bindings', idKey: 'upstream_node_id' },
+  downstream: { path: 'downstream-bindings', idKey: 'downstream_node_id' },
+}
+
+/* 绑定是一个集合：服务端按对端节点 id 排序返回，不保存顺序。所以比较两份
+   绑定时不看顺序，只看“有哪些对端、各自什么模式”。 */
+function sameEdgeMembers(a, b) {
+  return !!a && !!b && a.length === b.length && a.every(x => b.some(y => y.id === x.id))
+}
+function sameEdges(a, b) {
+  return !!a && !!b && a.length === b.length && a.every(x => b.some(y => y.id === x.id && y.mode === x.mode))
+}
+
+/**
+ * 节点一侧的绑定：服务端保存的那份，加上本地还没保存的修改。
+ *
+ * 不变式：没有成功读到服务端保存的绑定之前，`rows` 为 null、`dirty` 为假，
+ * 调用方既无从编辑也不会提交。这一侧的保存是整表替换，一次读取失败之后若
+ * 仍允许提交，就会用一份空表盖掉已有的绑定。
+ *
+ * @param {number} nodeId
+ * @param {'upstream' | 'downstream'} side
+ */
+function useEdgeSet(nodeId, side) {
+  const { path, idKey } = EDGE_SIDES[side]
+  const url = `/nodes/${nodeId}/${path}`
+  const stored = useResource(
+    async () => ((await api.get(url)).bindings || []).map(b => ({ id: b[idKey], mode: b.mode })),
+    [url],
+  )
+  const saved = stored.state.status === 'ready' ? stored.state.data : null
+  const draft = useDraft(saved, sameEdges)
+  return {
+    state: stored.state,
+    reload: stored.reload,
+    saved,
+    rows: saved === null ? null : draft.value,
+    dirty: saved !== null && draft.dirty,
+    edit: draft.set,
+    discard: draft.discard,
+    save: async (rows) => {
+      await api.post(url, { bindings: rows.map(r => ({ [idKey]: r.id, mode: r.mode })) })
+      await stored.reload()
+    },
+  }
+}
+
+function EdgeEditor({ title, hint, placeholder, edge, roster, selfId, fit, unfitLabel, locked, onMode }) {
+  const combined = combineResources(roster.state, edge.state)
+  const retry = () => {
+    if (roster.state.status === 'error') void roster.reload()
+    if (edge.state.status === 'error') void edge.reload()
+  }
+  let body
+  switch (combined.status) {
+    case 'loading':
+      body = <p className="text-small text-ink-mut">正在加载…</p>
+      break
+    case 'error':
+      body = (
+        <Alert tone="danger">
+          绑定没有加载出来：{combined.message}。加载成功之前这一侧不会被保存，已有的绑定不受影响。{' '}
+          <TextLink onClick={retry}>重试</TextLink>
+        </Alert>
+      )
+      break
+    case 'ready': {
+      const [nodes] = combined.data
+      const rows = edge.rows
+      const byId = new Map(nodes.map(n => [n.id, n]))
+      const toOption = n => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> })
+      // 不符合条件的候选不隐藏，而是排到一条说明之后：用户看得到“节点在，
+      // 只是还缺用途”，选中后由保存流程补齐。
+      const group = (list) => {
+        if (!fit) return list.map(toOption)
+        const unfit = list.filter(n => !fit(n))
+        const ok = list.filter(fit).map(toOption)
+        return unfit.length ? [...ok, { heading: unfitLabel }, ...unfit.map(toOption)] : ok
+      }
+      const candidates = nodes.filter(n => n.id !== selfId)
+      const pick = (ids) => edge.edit([
+        ...rows.filter(r => ids.includes(r.id)),
+        ...ids.filter(id => !rows.some(r => r.id === id)).map(id => ({ id, mode: 'userspace' })),
+      ])
+      body = (
+        <>
+          {combined.refreshError && (
+            <Alert tone="warn">
+              刷新失败，下面显示的可能不是最新数据：{combined.refreshError}{' '}
+              <TextLink onClick={() => { void roster.reload(); void edge.reload() }}>重试</TextLink>
+            </Alert>
+          )}
+          <Select
+            multiple
+            searchable
+            tabs
+            selectAll
+            placeholder={placeholder}
+            value={rows.map(r => r.id)}
+            onChange={pick}
+            groups={[
+              { label: '单点', options: group(candidates.filter(n => n.node_type !== 'composite')) },
+              { label: '组合', options: group(candidates.filter(n => n.node_type === 'composite')) },
+            ]}
+          />
+          {rows.map(r => {
+            const peer = byId.get(r.id)
+            return (
+              <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-control bg-subtle px-3 py-2">
+                <NodeTypeIcon type={peer?.node_type} />
+                <span className="min-w-0 flex-1 truncate text-small">{peer ? peer.name : `节点 #${r.id}`}</span>
+                <Segmented
+                  size="sm"
+                  label={`与 ${peer ? peer.name : `节点 #${r.id}`} 之间的转发模式`}
+                  value={r.mode}
+                  disabled={locked}
+                  onChange={mode => { if (mode !== r.mode) onMode(r.id, mode) }}
+                  options={MODE_OPTIONS}
+                />
+                <IconButton size="sm" danger label="移除这条绑定" disabled={locked} onClick={() => edge.edit(rows.filter(x => x.id !== r.id))}>
+                  <IconX size={14} />
+                </IconButton>
+              </div>
+            )
+          })}
+        </>
+      )
+      break
+    }
+    default:
+      return assertNever(combined)
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline gap-2">
+        <h3 className="text-body font-medium text-ink">{title}</h3>
+        {edge.rows && <span className="text-caption text-ink-mut">{edge.rows.length} 个</span>}
+      </div>
+      <p className="text-caption text-ink-mut">{hint}</p>
+      {body}
+    </div>
+  )
+}
+
+function RolesCard({ node, reload }) {
+  const toast = useToast()
+  const rolesDraft = useDraft(node.roles)
+  const roles = rolesDraft.value
+  const entryOn = (roles & ROLE_ENTRY) !== 0
+  const viaOn = (roles & ROLE_VIA) !== 0
+
+  // 候选节点与绑定行里的名称都来自这一份节点列表。
+  const roster = useResource(async () => (await api.get('/nodes')).nodes || [], [])
+  const downstream = useEdgeSet(node.id, 'downstream')
+  const upstream = useEdgeSet(node.id, 'upstream')
+  // 取消勾选的用途，其绑定编辑区不显示，里面的修改也不算待保存、不会被提交。
+  const downDirty = entryOn && downstream.dirty
+  const upDirty = viaOn && upstream.dirty
+  const dirty = rolesDraft.dirty || downDirty || upDirty
+
+  // “保存”与“改模式即保存”共用一个动作：两者都会整表提交绑定，不能同时在途。
+  const commit = useAction(async (kind, edge, rows) => {
+    if (kind === 'mode') {
+      await edge.save(rows)
+      toast('转发模式已保存')
+      return
+    }
     try {
-      await api.post(`/nodes/${nodeId}/hops`, {
-        hops: rows.map(r => ({ node_id: Number(r.node_id), mode: r.mode }))
-      })
-      toast('已保存')
-      onDone()
-    } catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
+      if (rolesDraft.dirty) await api.post(`/nodes/${node.id}/roles`, { roles })
+      if (upDirty) await upstream.save(upstream.rows)
+      if (downDirty) {
+        // 下游必须有中转用途才能接在本节点之后；只有入口用途的先补上，
+        // 否则这次绑定会被服务端拒绝。
+        const all = roster.state.status === 'ready' ? roster.state.data : []
+        for (const row of downstream.rows) {
+          const peer = all.find(n => n.id === row.id)
+          if (peer && (peer.roles & ROLE_VIA) === 0) await api.post(`/nodes/${peer.id}/roles`, { roles: peer.roles | ROLE_VIA })
+        }
+        await downstream.save(downstream.rows)
+      }
+      toast('节点用途已保存')
+    } finally {
+      // 上面几次提交不是一个事务，中途失败时已经落库的部分不会回滚。成败都
+      // 刷新：已保存的部分与服务端对上后不再算待保存，没存上的仍然标着。
+      await Promise.all([reload(), roster.reload()])
+    }
+  })
+
+  const setRole = (bit, on) => rolesDraft.set(on ? roles | bit : roles & ~bit)
+  const changeMode = (edge) => (id, mode) => {
+    const next = edge.rows.map(r => (r.id === id ? { ...r, mode } : r))
+    edge.edit(next)
+    // 这一侧除了模式之外没有别的待保存修改（对端节点与已保存的一致、用途也
+    // 没改）时，整表提交只会落下这一处模式变化，直接保存；否则留给“保存”
+    // 连同其它修改一起提交。
+    if (!rolesDraft.dirty && sameEdgeMembers(next, edge.saved)) void commit.run('mode', edge, next)
+  }
+  const discard = () => {
+    rolesDraft.discard()
+    downstream.discard()
+    upstream.discard()
   }
 
   return (
-    <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
-      <div className="flex items-baseline gap-2.5 mb-1.5">
-        <h2 className="m-0 text-[15px] font-bold">组合节点跳序</h2>
-        <span className="text-[12.5px] text-ink-mut">{rows.length} 跳</span>
-      </div>
-      <p className="text-[12.5px] text-ink-mut mb-2.5">
-        拖拽 ⠿ 调整顺序。模式作用于该跳到下一跳之间的段：线路稳定、低丢包用内核态（性能更好，支持 TCP/UDP/TCP+UDP）；
-        跨境或网络不稳定、丢包高用用户态（更抗抖动，仅 TCP）。末跳模式在该组合被用作中转时生效，被用作规则出口时由规则的出口模式覆盖。修改对此后新建的规则生效。
-      </p>
-      <div className="space-y-2">
-        {rows.map((r, i) => (
-          <div key={i}
-            draggable onDragStart={() => setDragIdx(i)} onDragOver={e => e.preventDefault()} onDrop={() => onDrop(i)}
-            className={`flex items-center gap-2 bg-raised rounded-lg px-3 py-2 ${dragIdx === i ? 'opacity-50' : ''}`}>
-            <span className="text-ink-mut cursor-move select-none" title="拖拽排序">⠿</span>
-            <span className="text-xs text-ink-mut w-5 text-center font-mono">{i + 1}</span>
-            <Select className="flex-1" placeholder="-- 选择节点 --" searchable value={r.node_id}
-              onChange={v => {
-                const nd = nodeById[v]
-                setField(i, 'node_id', v)
-                if (nd) setField(i, 'node_name', nd.name)
-              }}
-              options={singleNodes.filter(n => n.id === Number(r.node_id) || !rows.some((rr, j) => j !== i && Number(rr.node_id) === n.id)).map(n => ({ value: n.id, label: n.name }))} />
-            {r.node_id && (
-              <Link to={`/nodes/${r.node_id}`} title="打开该子节点详情"
-                className="shrink-0 text-ink-mut hover:text-blue-600 text-sm leading-none px-0.5">↗</Link>
-            )}
-            {nodeById[r.node_id]?.node_type === 'composite' ? (
-              <span className="text-[11px] text-ink-mut shrink-0 text-center cursor-help" style={{ width: 120 }} title="组合成员：转发模式由其内部各跳决定，不在此处配置">组合</span>
-            ) : (<>
-              {/* 每一跳（含末跳）都可配模式：末跳模式在该组合被用作中转时生效，
-                  被用作规则出口时由规则的出口模式覆盖 */}
-              <Select value={r.mode} onChange={v => setField(i, 'mode', v)} style={{ width: 120 }}
-                title={i === rows.length - 1 ? '末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖' : undefined}
-                options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-              {i === rows.length - 1 && (
-                <span className="text-[11px] text-ink-mut shrink-0 cursor-help" title="末跳模式：作为中转时生效；作为规则出口时由规则的出口模式覆盖">末</span>
-              )}
-            </>)}
-            {rows.length > 2 && (
-              <button type="button" onClick={() => removeHop(i)} className="btn-danger-sm text-xs px-1.5">×</button>
+    <Card>
+      <CardHeader
+        title="节点用途"
+        actions={<>
+          {dirty && <Button size="sm" variant="ghost" disabled={commit.pending} onClick={discard}>放弃修改</Button>}
+          <Button size="sm" loading={commit.pendingKey === 'all'} disabled={!dirty || roles === 0 || commit.pending} onClick={() => commit.run('all')}>
+            保存用途
+          </Button>
+        </>}
+      />
+      <CardSection className="flex flex-col gap-4">
+        <p className="text-small text-ink-mut">
+          入口：可以被规则选作入口，并在它后面绑定下游。中转：可以绑定到上游之后，供规则级联。至少保留一个。
+          模式作用于两个节点衔接的那一段；对绑定的修改只影响之后新建的规则。
+        </p>
+        {roles === 0 && <Alert tone="danger">至少保留一个用途。</Alert>}
+        <div className="grid gap-x-8 gap-y-6 md:grid-cols-2">
+          <div className="flex flex-col gap-3">
+            <Checkbox checked={entryOn} onChange={on => setRole(ROLE_ENTRY, on)}>入口</Checkbox>
+            {entryOn && (
+              <EdgeEditor
+                title="已绑定的下游"
+                placeholder="选择下游节点"
+                hint="选中的下游可以在以本节点为上游的规则里级联接入。"
+                edge={downstream}
+                roster={roster}
+                selfId={node.id}
+                fit={n => (n.roles & ROLE_VIA) !== 0}
+                unfitLabel="以下节点只有入口用途，选中后保存时会自动为它们加上中转用途"
+                locked={commit.pending}
+                onMode={changeMode(downstream)}
+              />
             )}
           </div>
-        ))}
-      </div>
-      <div className="flex items-center gap-3 pt-3">
-        <button type="button" onClick={addHop} className="btn-secondary text-xs">+ 添加一跳</button>
-        <button onClick={save} disabled={saving || !dirty} className="btn-primary">保存</button>
-      </div>
-    </section>
+          <div className="flex flex-col gap-3">
+            <Checkbox checked={viaOn} onChange={on => setRole(ROLE_VIA, on)}>中转</Checkbox>
+            {viaOn && (
+              <EdgeEditor
+                title="已绑定的上游"
+                placeholder="选择上游节点"
+                hint="绑定后，选中这些上游（入口或中转）的规则可以级联接入本节点。"
+                edge={upstream}
+                roster={roster}
+                selfId={node.id}
+                locked={commit.pending}
+                onMode={changeMode(upstream)}
+              />
+            )}
+          </div>
+        </div>
+      </CardSection>
+    </Card>
   )
 }
 
-// A node's role bitmask controls where it can appear in a rule chain: entry
-// (bit0) lets a rule start here, via (bit1) lets other nodes bind behind it as
-// a middle layer. Both bits can be set at once; at least one must stay set or
-// the node becomes unreachable from any rule.
-//
-// Each role owns one column and one edge set. The entry column owns downstream
-// edges — nodes that cascade in behind this one, so this node is their upstream
-// — editable from here via the upstream-side API. The via column owns upstream
-// edges — nodes this one sits behind, so this node is their downstream. Each
-// editor loads lazily when its role is checked; a failed load keeps rows null
-// (nothing to save) with a retry, so one transient blip can never overwrite a
-// stored edge set with an empty one on the next save.
-function EdgeEditor({ title, hint, rows, err, onRetry, candidates, idKey, nodeById,
-                      onPick, onMode, onRemove, placeholder, isEligible, unfitLabel }) {
-  const toOption = (n) => ({ value: n.id, label: n.name, icon: <NodeTypeIcon type={n.node_type} /> })
-  // 全量展示候选节点；不符合的（isEligible 为假）沉底但仍可选，选中后由保存
-  // 流程自动补齐所缺用途（见 save），用一条不可选
-  // 的分隔文本与可选区隔开，让用户能发现"节点在，但缺角色"而不是凭空消失。
-  const buildOptions = (list) => {
-    if (!isEligible) return list.map(toOption)
-    const ok = list.filter(isEligible), unfit = list.filter(n => !isEligible(n))
-    return unfit.length
-      ? [...ok.map(toOption), { heading: unfitLabel }, ...unfit.map(toOption)]
-      : ok.map(toOption)
-  }
+/* ---------- 组合节点的跳序 ---------- */
+
+function sameHops(a, b) {
+  return a.length === b.length && a.every((x, i) => x.nodeId === b[i].nodeId && x.mode === b[i].mode)
+}
+
+function CompositeHopsCard({ nodeId, hops, candidates, reload }) {
+  const toast = useToast()
+  // 已保存的行用它在跳序里的位置作 key：同一份服务端数据每次渲染得到同样的
+  // key，行不会因为轮询刷新而重建。
+  const saved = hops.map(h => ({ key: `saved-${h.position}`, nodeId: h.hop_node_id, mode: h.mode }))
+  const draft = useDraft(saved, sameHops)
+  const rows = draft.value
+  const [error, setError] = useState(/** @type {string | null} */ (null))
+
+  const save = useAction(async () => {
+    const problem = hopRowsError(rows)
+    setError(problem)
+    if (problem) return
+    await api.post(`/nodes/${nodeId}/hops`, { hops: hopRowsPayload(rows) })
+    toast('跳序已保存')
+    await reload()
+  })
+
   return (
-    <div>
-      <div className="flex items-baseline gap-2.5 mb-1.5">
-        <h3 className="m-0 text-[13.5px] font-bold">{title}</h3>
-        <span className="text-[12.5px] text-ink-mut">{rows ? `${rows.length} 条` : err ? '' : '加载中…'}</span>
-      </div>
-      <p className="text-[12.5px] text-ink-mut mb-2.5">{hint}</p>
-      {err && (
-        <div className="text-[12.5px] text-red-600 flex items-center gap-2.5">
-          已有绑定加载失败，为避免误覆盖，修好前不会保存绑定。
-          <button type="button" onClick={onRetry} className="btn-secondary text-xs">重试</button>
-        </div>
+    <Card>
+      <CardHeader
+        title="跳序"
+        description={`${rows.length} 跳，从入口到出口；修改只影响之后新建的规则`}
+        actions={<>
+          {draft.dirty && <Button size="sm" variant="ghost" disabled={save.pending} onClick={() => { draft.discard(); setError(null) }}>放弃修改</Button>}
+          <Button size="sm" loading={save.pending} disabled={!draft.dirty} onClick={() => save.run()}>保存跳序</Button>
+        </>}
+      />
+      <CardSection className="flex flex-col gap-3">
+        {error && <Alert tone="danger">{error}</Alert>}
+        <HopListEditor rows={rows} candidates={candidates} memberLinks onChange={next => { draft.set(next); setError(null) }} />
+      </CardSection>
+    </Card>
+  )
+}
+
+/* ---------- 经过该节点的规则 ---------- */
+
+function RuleHopsCard({ ruleHops }) {
+  const blurred = useBlur()
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader title="经过该节点的规则" description={ruleHops.length ? `${ruleHops.length} 条` : undefined} />
+      {ruleHops.length === 0 ? (
+        <Empty title="还没有规则经过这个节点" desc="规则选它作入口、中转或出口之后，会列在这里。">
+          <Button to="/rules">去创建规则</Button>
+        </Empty>
+      ) : (
+        <TableBox>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>规则</th><th>用户</th><th>链路位置</th><th>协议</th><th>模式</th><th>监听端口</th><th>目标</th><th className="num">流量</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ruleHops.map(rh => (
+                <tr key={rh.id}>
+                  <td>
+                    {rh.rule_id
+                      ? <TextLink to={`/rules/${rh.rule_id}`} tone="ink" className="font-medium">{rh.rule_name || `#${rh.rule_id}`}</TextLink>
+                      : '--'}
+                  </td>
+                  <td>{rh.owner_id ? <TextLink to={`/users/${rh.owner_id}`}>{rh.owner_name}</TextLink> : <Unset>--</Unset>}</td>
+                  <td>
+                    {rh.total_hops > 1
+                      ? <TextLink to={`/nodes/${rh.rule_node_id}`}>第 {rh.position + 1} / {rh.total_hops} 跳</TextLink>
+                      : <Unset>单跳</Unset>}
+                  </td>
+                  <td><ProtoTag proto={rh.proto} /></td>
+                  <td><ModeTag mode={rh.mode} /></td>
+                  <td className="font-mono">{rh.listen_port}</td>
+                  <td className="font-mono"><SensText blurred={blurred}>{rh.target_host ? `${rh.target_host}:${rh.target_port}` : '--'}</SensText></td>
+                  <td className="num text-ink-soft">{fmtBytes(rh.total_bytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableBox>
       )}
-      {rows && (
-        <>
-          <Select multiple searchable tabs selectAll className="mb-2" placeholder={placeholder}
-            value={rows.map(r => String(r[idKey]))} onChange={onPick}
-            groups={[
-              { label: '单点', options: buildOptions(candidates.filter(n => n.node_type !== 'composite')) },
-              { label: '组合', options: buildOptions(candidates.filter(n => n.node_type === 'composite')) },
-            ]} />
-          {rows.length > 0 && (
-            <div className="space-y-2">
-              {rows.map((r, i) => {
-                const n = nodeById[Number(r[idKey])]
-                return (
-                  <div key={r[idKey]} className="flex items-center gap-2 bg-raised rounded-lg px-3 py-2">
-                    <NodeTypeIcon type={n?.node_type} />
-                    <span className="flex-1 min-w-0 truncate text-[13.5px]">{n?.name || `#${r[idKey]}`}</span>
-                    <Select value={r.mode} onChange={v => onMode(i, v)} style={{ width: 120 }}
-                      options={[{ value: 'kernel', label: 'kernel' }, { value: 'userspace', label: 'userspace' }]} />
-                    <button type="button" onClick={() => onRemove(i)} className="btn-danger-sm text-xs px-1.5">×</button>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </>
-      )}
+    </Card>
+  )
+}
+
+/* ---------- 已授权用户 ---------- */
+
+const NO_GRANT_CHANGE = { add: [], remove: [] }
+
+/**
+ * 批量编辑“哪些用户可以使用这个节点”。保存时把增减一次提交给批量接口。
+ *
+ * 待保存的修改按“相对当前授权的增减”保存，而不是一份完整的勾选列表：
+ * 授权随时可能在别处变化（下面表格里的“取消授权”、轮询刷新），增减叠加在
+ * 最新的授权之上仍然是用户的本意；一份完整列表则会把别处刚取消的授权
+ * 当成“新增”重新提交。已经成为事实的增减（要加的已被授权、要减的已不在）
+ * 在渲染时剔除，所以保存成功、数据刷新回来之后待保存的修改自然清空。
+ */
+function GrantEditor({ nodeId, grantedUsers, reload }) {
+  const toast = useToast()
+  const confirm = useConfirm()
+  const users = useGrantableUsers()
+  const granted = grantedUsers.map(g => g.user_id)
+  const [change, setChange] = useState(NO_GRANT_CHANGE)
+  const add = change.add.filter(id => !granted.includes(id))
+  const remove = change.remove.filter(id => granted.includes(id))
+  if (add.length !== change.add.length || remove.length !== change.remove.length) setChange({ add, remove })
+  const selected = [...granted.filter(id => !remove.includes(id)), ...add]
+  const dirty = add.length > 0 || remove.length > 0
+
+  const nameOf = new Map(grantedUsers.map(g => [g.user_id, g.username]))
+
+  const save = useAction(async () => {
+    if (remove.length) {
+      const agreed = await confirm({
+        title: '取消授权',
+        message: `取消 ${remove.map(id => nameOf.get(id) ?? `#${id}`).join('、')} 对该节点的授权？他们经过该节点的规则会被一并删除，无法恢复。`,
+        confirmText: '取消授权',
+        cancelText: '保留授权',
+        danger: true,
+      })
+      if (!agreed) return
+    }
+    try {
+      const res = await api.post(`/nodes/${nodeId}/grants/batch`, { add_user_ids: add, remove_user_ids: remove })
+      toast(`授权已更新：新增 ${res?.granted ?? add.length} 人，取消 ${res?.revoked ?? remove.length} 人`)
+    } finally {
+      // 这份增减由服务端在一个事务里应用，失败时一条都不生效。失败也刷新：
+      // 被拒的原因可能正是这里的名单过时了（比如其中的用户已被删除），增减
+      // 要按刷新后的实际授权重新算。
+      await reload()
+    }
+  })
+
+  return (
+    <div className="flex max-w-xl flex-wrap items-start gap-2">
+      <GrantUserSelect
+        className="flex-1"
+        users={users}
+        placeholder="选择要授权的用户"
+        known={grantedUsers.map(g => ({ id: g.user_id, username: g.username }))}
+        value={selected}
+        onChange={ids => setChange({ add: ids.filter(id => !granted.includes(id)), remove: granted.filter(id => !ids.includes(id)) })}
+      />
+      <Button loading={save.pending} disabled={!dirty} onClick={() => save.run()}>保存授权</Button>
     </div>
   )
 }
 
-function RolesCard({ node, onDone }) {
-  const [roles, setRoles] = useState(node.roles ?? 1)
-  const [saving, setSaving] = useState(false)
-  const [allNodes, setAllNodes] = useState([])
-  // Upstream edges: nodes this one sits behind (this node = downstream).
-  const [upRows, setUpRows] = useState(null)          // [{upstream_node_id, mode}]
-  const [savedUpRows, setSavedUpRows] = useState(null)
-  const [upErr, setUpErr] = useState(false)
-  // Downstream edges: nodes that cascade in behind this one (this node = upstream).
-  const [downRows, setDownRows] = useState(null)      // [{downstream_node_id, mode}]
-  const [savedDownRows, setSavedDownRows] = useState(null)
-  const [downErr, setDownErr] = useState(false)
+function GrantsCard({ node, grantedUsers, reload }) {
   const toast = useToast()
-
-  const entryChecked = (roles & 1) !== 0
-  const viaChecked = (roles & 2) !== 0
-
-  // NodeDetail stays mounted when only the :id param changes, so re-seed roles
-  // and drop both edge sets whenever the node identity changes.
-  useEffect(() => setRoles(node.roles ?? 1), [node.id, node.roles])
-  useEffect(() => {
-    setUpRows(null); setSavedUpRows(null); setUpErr(false)
-    setDownRows(null); setSavedDownRows(null); setDownErr(false)
-  }, [node.id])
-
-  // The candidate roster and both editors' name lookups share one fetch of the
-  // full node list, made once either role is checked.
-  const needNodes = entryChecked || viaChecked
-  useEffect(() => {
-    if (!needNodes) return
-    let stale = false
-    api.get('/nodes').then(d => { if (!stale) setAllNodes(d.nodes || []) }).catch(() => { if (!stale) setAllNodes([]) })
-    return () => { stale = true }
-  }, [needNodes, node.id])
-
-  // Lazy-load upstream edges when 中转 is checked. stale drops superseded
-  // responses; an error keeps rows null so a save never overwrites stored edges.
-  useEffect(() => {
-    if (!viaChecked || upRows !== null || upErr) return
-    let stale = false
-    api.get(`/nodes/${node.id}/bindings`)
-      .then(d => {
-        if (stale) return
-        const rs = (d.bindings || []).map(b => ({ upstream_node_id: b.upstream_node_id, mode: b.mode }))
-        setUpRows(rs); setSavedUpRows(rs)
-      })
-      .catch(() => { if (!stale) setUpErr(true) })
-    return () => { stale = true }
-  }, [viaChecked, upRows, node.id, upErr])
-
-  // Lazy-load downstream edges when 入口 is checked, mirroring the upstream path.
-  useEffect(() => {
-    if (!entryChecked || downRows !== null || downErr) return
-    let stale = false
-    api.get(`/nodes/${node.id}/downstream-bindings`)
-      .then(d => {
-        if (stale) return
-        const rs = (d.bindings || []).map(b => ({ downstream_node_id: b.downstream_node_id, mode: b.mode }))
-        setDownRows(rs); setSavedDownRows(rs)
-      })
-      .catch(() => { if (!stale) setDownErr(true) })
-    return () => { stale = true }
-  }, [entryChecked, downRows, node.id, downErr])
-
-  const nodeById = Object.fromEntries(allNodes.map(n => [n.id, n]))
-  const toggle = (bit) => setRoles(r => r ^ bit)
-
-  // Upstream candidates: any other node (an upstream may be entry or via).
-  const upCandidates = allNodes.filter(n => n.id !== node.id)
-  // Downstream candidates: other nodes carrying the via role, since a downstream
-  // must be able to sit behind this one as a middle layer.
-  // 下游候选不再预过滤角色：全量展示，仅入口（无中转位）的在下拉里沉底置灰，
-  // 由 EdgeEditor 的 isEligible 判定。上游天然支持所有节点，无需判定。
-  const downCandidates = allNodes.filter(n => n.id !== node.id)
-
-  const pickUp = (next) => setUpRows(rs => {
-    const keep = rs.filter(r => next.includes(String(r.upstream_node_id)))
-    const have = new Set(keep.map(r => String(r.upstream_node_id)))
-    const added = next.filter(v => !have.has(v)).map(v => ({ upstream_node_id: Number(v), mode: 'userspace' }))
-    return [...keep, ...added]
-  })
-  // Flipping a row's mode auto-saves that side, but only when the side has no
-  // pending add/remove (same node ids in the same order as the saved baseline) —
-  // then the whole-list POST can commit nothing but the mode. A pending
-  // structural edit makes this a no-op, leaving 保存 as the path to commit it.
-  const autoSaveMode = async (idKey, next, saved, setSaved, url) => {
-    if (saved === null || next.length !== saved.length ||
-        next.some((r, i) => Number(r[idKey]) !== Number(saved[i][idKey]))) return
-    const bs = next.map(r => ({ [idKey]: Number(r[idKey]), mode: r.mode }))
-    try { await api.post(url, { bindings: bs }); setSaved(bs); toast('已保存') }
-    catch (err) { toast(err.message, 'error') }
-  }
-  const setUpMode = (i, v) => {
-    const next = upRows.map((r, j) => j === i ? { ...r, mode: v } : r)
-    setUpRows(next)
-    autoSaveMode('upstream_node_id', next, savedUpRows, setSavedUpRows, `/nodes/${node.id}/bindings`)
-  }
-  const removeUp = (i) => setUpRows(rs => rs.filter((_, j) => j !== i))
-
-  const pickDown = (next) => setDownRows(rs => {
-    const keep = rs.filter(r => next.includes(String(r.downstream_node_id)))
-    const have = new Set(keep.map(r => String(r.downstream_node_id)))
-    const added = next.filter(v => !have.has(v)).map(v => ({ downstream_node_id: Number(v), mode: 'userspace' }))
-    return [...keep, ...added]
-  })
-  const setDownMode = (i, v) => {
-    const next = downRows.map((r, j) => j === i ? { ...r, mode: v } : r)
-    setDownRows(next)
-    autoSaveMode('downstream_node_id', next, savedDownRows, setSavedDownRows, `/nodes/${node.id}/downstream-bindings`)
-  }
-  const removeDown = (i) => setDownRows(rs => rs.filter((_, j) => j !== i))
-
-  const rolesDirty = roles !== (node.roles ?? 1)
-  const edgesDirty = (rows, saved) => rows !== null && saved !== null && (
-    rows.length !== saved.length ||
-    rows.some((r, i) => {
-      const s = saved[i]
-      return !s || JSON.stringify(r) !== JSON.stringify(s)
+  const confirm = useConfirm()
+  const revoke = useAction(async (userId, username) => {
+    const agreed = await confirm({
+      title: '取消授权',
+      message: `取消 ${username} 对该节点的授权？该用户经过该节点的规则会被一并删除，无法恢复。`,
+      confirmText: '取消授权',
+      cancelText: '保留授权',
+      danger: true,
     })
-  )
-  // Hidden edits are not dirty: an unchecked role's editor won't be saved.
-  const upDirty = viaChecked && edgesDirty(upRows, savedUpRows)
-  const downDirty = entryChecked && edgesDirty(downRows, savedDownRows)
-  const dirty = rolesDirty || upDirty || downDirty
-
-  // The three POSTs are not one transaction; onDone (a silent refresh) runs on
-  // failure too so the dirty baseline realigns with what actually persisted,
-  // without remounting the card and dropping the still-edited rows.
-  const save = async () => {
-    if (!roles) { toast('至少保留一个用途', 'error'); return }
-    setSaving(true)
-    try {
-      if (rolesDirty) await api.post(`/nodes/${node.id}/roles`, { roles })
-      if (upDirty) {
-        const bs = upRows.map(r => ({ upstream_node_id: Number(r.upstream_node_id), mode: r.mode }))
-        await api.post(`/nodes/${node.id}/bindings`, { bindings: bs })
-        setSavedUpRows(bs)
-      }
-      if (downDirty) {
-        // 仅入口用途的下游先自动补上中转用途，否则绑定会被服务端拒绝。
-        for (const r of downRows) {
-          const n = nodeById[Number(r.downstream_node_id)]
-          if (n && ((n.roles ?? 1) & 2) === 0) await api.post(`/nodes/${n.id}/roles`, { roles: (n.roles ?? 1) | 2 })
-        }
-        const bs = downRows.map(r => ({ downstream_node_id: Number(r.downstream_node_id), mode: r.mode }))
-        await api.post(`/nodes/${node.id}/downstream-bindings`, { bindings: bs })
-        setSavedDownRows(bs)
-      }
-      toast('已保存')
-    } catch (err) { toast(err.message, 'error') } finally { setSaving(false); onDone() }
-  }
-
-  const entryCls = 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-700'
-  const viaCls = 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'
-  const roleBtn = (bit, label, cls) => (
-    <button type="button" onClick={() => toggle(bit)}
-      className={`px-3 py-1 text-[12.5px] font-semibold rounded-md border transition-colors ${
-        (roles & bit) !== 0 ? cls : 'bg-transparent border-line text-ink-mut/40 hover:text-ink-mut'
-      }`}>{label}</button>
-  )
+    if (!agreed) return
+    await api.del(`/users/${userId}/grants/${node.id}`)
+    toast('已取消授权')
+    await reload()
+  })
 
   return (
-    <section className={`${card} px-[26px] pt-[22px] pb-[18px]`}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <h2 className="m-0 text-[15px] font-bold">节点用途</h2>
-        <button onClick={save} disabled={saving || !dirty} className="btn-primary ml-auto">保存</button>
-      </div>
-      <p className="text-[12.5px] text-ink-mut mb-3">
-        入口：可被规则选为入口，并绑定下游。中转：可绑定到上游之后供规则级联。至少保留一个。
-      </p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-        <div className="md:pr-6 md:border-r border-line-soft">
-          <div className="flex items-center gap-1.5 mb-3">{roleBtn(1, '入口', entryCls)}</div>
-          {entryChecked && (
-            <EdgeEditor title="已绑定的下游" placeholder="选择下游节点…"
-              hint="选中的下游可在选中本节点的规则里级联接入本节点之后；仅入口用途的下游会在保存时自动补上中转用途。模式作用于衔接段；修改对此后新建的规则生效。"
-              rows={downRows} err={downErr} onRetry={() => setDownErr(false)}
-              candidates={downCandidates} idKey="downstream_node_id" nodeById={nodeById}
-              isEligible={n => (n.roles & 2) !== 0} unfitLabel="以下节点仅有入口用途，选中后保存时会自动为其增加中转用途"
-              onPick={pickDown} onMode={setDownMode} onRemove={removeDown} />
-          )}
+    <Card className="overflow-hidden">
+      <CardHeader title="已授权用户" description={grantedUsers.length ? `${grantedUsers.length} 人` : undefined} />
+      <CardSection>
+        <GrantEditor nodeId={node.id} grantedUsers={grantedUsers} reload={reload} />
+      </CardSection>
+      {grantedUsers.length === 0 ? (
+        <div className="border-t border-line-soft">
+          <Empty title="还没有用户被授权使用这个节点" desc="在上面选择用户并保存，他们就能用这个节点创建规则。" />
         </div>
-        <div>
-          <div className="flex items-center gap-1.5 mb-3">{roleBtn(2, '中转', viaCls)}</div>
-          {viaChecked && (
-            <EdgeEditor title="已绑定的上游" placeholder="选择上游节点…"
-              hint="绑定后，选中这些上游（入口或中转）的规则可以级联接入本节点。模式作用于衔接段；修改对此后新建的规则生效。"
-              rows={upRows} err={upErr} onRetry={() => setUpErr(false)}
-              candidates={upCandidates} idKey="upstream_node_id" nodeById={nodeById}
-              onPick={pickUp} onMode={setUpMode} onRemove={removeUp} />
-          )}
-        </div>
-      </div>
-    </section>
+      ) : (
+        <TableBox className="border-t border-line-soft">
+          <table className="tbl">
+            <thead>
+              <tr><th>用户</th><th>规则配额</th><th>用途</th><th>授权时间</th><th className="num">操作</th></tr>
+            </thead>
+            <tbody>
+              {grantedUsers.map(g => (
+                <tr key={g.user_id}>
+                  <td><TextLink to={`/users/${g.user_id}`} tone="ink" className="font-medium">{g.username}</TextLink></td>
+                  <td>{g.max_forwards}</td>
+                  <td><PerNodeRolesForm userId={g.user_id} nodeId={node.id} roles={g.roles} onDone={reload} /></td>
+                  <td className="text-ink-soft">{fmtTime(g.granted_at)}</td>
+                  <td className="num">
+                    <Button size="sm" variant="ghost" danger loading={revoke.pendingKey === g.user_id} onClick={() => revoke.run(g.user_id, g.username)}>
+                      取消授权
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableBox>
+      )}
+    </Card>
   )
 }

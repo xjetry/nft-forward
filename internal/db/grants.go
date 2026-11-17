@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"errors"
+)
 
 type NodeHop struct {
 	NodeID            int64   `json:"node_id"`
@@ -79,26 +82,77 @@ func CompositeReferrers(d *sql.DB, nodeID int64) ([]*Node, error) {
 		 ORDER BY n.sort_order, n.id`, scanNode, nodeID)
 }
 
-// GrantNode grants a user access to a node with a max_forwards limit. If the
-// grant already exists, only max_forwards is updated (idempotent).
-func GrantNode(d *sql.DB, userID, nodeID int64, maxForwards int, trafficQuotaBytes int64) error {
+// GrantNode grants a user access to a node. If the grant already exists its
+// max_forwards and traffic quota are overwritten; the rate limit, roles and
+// usage counters are kept.
+func GrantNode(d DBTX, userID, nodeID int64, maxForwards int, trafficQuotaBytes int64) error {
 	_, err := d.Exec(`INSERT INTO user_nodes(user_id, node_id, max_forwards, traffic_quota_bytes, granted_at) VALUES (?,?,?,?,?)
 		ON CONFLICT(user_id, node_id) DO UPDATE SET max_forwards=excluded.max_forwards, traffic_quota_bytes=excluded.traffic_quota_bytes`,
 		userID, nodeID, maxForwards, trafficQuotaBytes, now())
 	return err
 }
 
-func RevokeNode(d *sql.DB, userID, nodeID int64) error {
+// GrantWrite is one (user, node) grant together with the caps to write.
+type GrantWrite struct {
+	UserID            int64
+	NodeID            int64
+	MaxForwards       int
+	TrafficQuotaBytes int64
+	RateLimitMBytes   int64
+}
+
+// ApplyGrants writes a batch of grants in one transaction: either every row
+// is written or none is, so a failure partway through (a user id that does
+// not exist fails the user_nodes foreign key) cannot leave some pairs granted
+// and the rest not.
+//
+// A (user, node) pair that already has a grant gets its three caps
+// overwritten in place; roles, usage counters and granted_at are kept, and so
+// is the row's rowid, which GrantShapes hands out as the shaping group id.
+// With keepExisting such a pair is left exactly as it is instead. The returned
+// slice is parallel to grants: true where a row was inserted or overwritten,
+// false where an existing grant was kept.
+func ApplyGrants(d *sql.DB, grants []GrantWrite, keepExisting bool) ([]bool, error) {
+	onConflict := `DO UPDATE SET max_forwards=excluded.max_forwards, traffic_quota_bytes=excluded.traffic_quota_bytes, rate_limit_mbytes=excluded.rate_limit_mbytes`
+	if keepExisting {
+		onConflict = `DO NOTHING`
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	written := make([]bool, len(grants))
+	at := now()
+	for i, g := range grants {
+		res, err := tx.Exec(`INSERT INTO user_nodes(user_id, node_id, max_forwards, traffic_quota_bytes, rate_limit_mbytes, granted_at) VALUES (?,?,?,?,?,?)
+			ON CONFLICT(user_id, node_id) `+onConflict,
+			g.UserID, g.NodeID, g.MaxForwards, g.TrafficQuotaBytes, g.RateLimitMBytes, at)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		written[i] = n > 0
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return written, nil
+}
+
+func RevokeNode(d DBTX, userID, nodeID int64) error {
 	_, err := d.Exec(`DELETE FROM user_nodes WHERE user_id=? AND node_id=?`, userID, nodeID)
 	return err
 }
 
 // SetGrantRoles overrides the role mask for one existing grant (0 = inherit the
 // node's mask). It targets an existing (user, node) row; if the user was never
-// granted the node the UPDATE affects nothing.
+// granted the node the error is sql.ErrNoRows.
 func SetGrantRoles(d *sql.DB, userID, nodeID, roles int64) error {
-	_, err := d.Exec(`UPDATE user_nodes SET roles=? WHERE user_id=? AND node_id=?`, roles, userID, nodeID)
-	return err
+	return UpdateRow(d, `UPDATE user_nodes SET roles=? WHERE user_id=? AND node_id=?`, roles, userID, nodeID)
 }
 
 func GetNodeGrant(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
@@ -223,10 +277,14 @@ func ListUsersForNode(d *sql.DB, nodeID int64) ([]struct {
 }
 
 // CheckNodeAccess validates that a user has access to a node. Node owners
-// automatically bypass the grant check.
+// automatically bypass the grant check. A node that does not exist has no
+// owner and falls through to the grant lookup, which finds nothing; a failed
+// owner lookup is returned rather than read as "not the owner".
 func CheckNodeAccess(d *sql.DB, userID, nodeID int64) (*UserNode, error) {
 	var ownerID sql.NullInt64
-	_ = d.QueryRow(`SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID)
+	if err := d.QueryRow(`SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	if ownerID.Valid && ownerID.Int64 == userID {
 		return &UserNode{UserID: userID, NodeID: nodeID, MaxForwards: 9999, TrafficQuotaBytes: 0, TrafficUsedBytes: 0}, nil
 	}

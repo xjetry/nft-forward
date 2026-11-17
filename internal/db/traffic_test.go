@@ -124,7 +124,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 
 	// reset_days=0 means never reset
 	u, _ := GetUserByID(d, uid)
-	reset, _ := CheckAndResetTrafficCycle(d, u)
+	reset, _, _ := CheckAndResetTrafficCycle(d, u)
 	if reset {
 		t.Fatal("reset_days=0 should not trigger reset")
 	}
@@ -136,7 +136,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 8888, uid, nid)
 
 	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
+	reset, _, _ = CheckAndResetTrafficCycle(d, u)
 	if !reset {
 		t.Fatal("should have reset after 31 days with 30-day cycle")
 	}
@@ -152,7 +152,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	// calling again in the same cycle should not reset
 	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 100, uid)
 	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
+	reset, _, _ = CheckAndResetTrafficCycle(d, u)
 	if reset {
 		t.Fatal("should not reset again in same cycle")
 	}
@@ -350,5 +350,89 @@ func grantNode(t *testing.T, d *sql.DB, uid, nid int64) {
 	t.Helper()
 	if err := GrantNode(d, uid, nid, 10, 0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A traffic reset re-enables a user who is disabled for reaching the quota, in
+// the same transaction as the counters, and leaves any other ban alone. Both
+// kinds of reset are covered: the admin's and the cycle's.
+func TestTrafficResetLiftsOnlyTheOverQuotaBan(t *testing.T) {
+	resets := map[string]func(t *testing.T, d *sql.DB, uid int64){
+		"admin reset": func(t *testing.T, d *sql.DB, uid int64) {
+			if err := ResetAllUserTraffic(d, uid); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"cycle reset": func(t *testing.T, d *sql.DB, uid int64) {
+			if _, err := d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=? WHERE id=?`, now()-31*86400, uid); err != nil {
+				t.Fatal(err)
+			}
+			u, err := GetUserByID(d, uid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reset, _, err := CheckAndResetTrafficCycle(d, u)
+			if err != nil || !reset {
+				t.Fatalf("cycle reset did not happen: reset=%v err=%v", reset, err)
+			}
+		},
+	}
+	for name, reset := range resets {
+		for _, tc := range []struct {
+			reason       string
+			wantDisabled bool
+		}{
+			{reason: DisableReasonOverQuota, wantDisabled: false},
+			{reason: "管理员手动禁用", wantDisabled: true},
+		} {
+			d := openTestDB(t)
+			uid := createTestUser(t, d)
+			if err := SetUserDisabled(d, uid, true, tc.reason); err != nil {
+				t.Fatal(err)
+			}
+			reset(t, d, uid)
+			u, err := GetUserByID(d, uid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u.Disabled != tc.wantDisabled {
+				t.Errorf("%s, disabled for %q: disabled=%v after the reset, want %v", name, tc.reason, u.Disabled, tc.wantDisabled)
+			}
+			if tc.wantDisabled && u.DisableReason.String != tc.reason {
+				t.Errorf("%s: the reason of a ban that stays was changed to %q", name, u.DisableReason.String)
+			}
+		}
+	}
+}
+
+// If lifting the ban fails, the counters are not reset either. A cycle reset
+// is detected once per cycle, through last_traffic_reset_at; were it stamped
+// while the ban stayed, the user would remain disabled, with their usage at
+// zero, until the next cycle begins.
+func TestCycleResetAndBanLiftAreOneTransaction(t *testing.T) {
+	d := openTestDB(t)
+	uid := createTestUser(t, d)
+	if _, err := d.Exec(`UPDATE users SET traffic_reset_days=30, created_at=?, traffic_used_bytes=9999 WHERE id=?`, now()-31*86400, uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetUserDisabled(d, uid, true, DisableReasonOverQuota); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`CREATE TRIGGER users_no_enable BEFORE UPDATE OF disabled ON users WHEN NEW.disabled = 0 AND OLD.disabled = 1 BEGIN SELECT RAISE(ABORT, 'cannot enable'); END`); err != nil {
+		t.Fatal(err)
+	}
+	u, err := GetUserByID(d, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset, _, err := CheckAndResetTrafficCycle(d, u); err == nil || reset {
+		t.Fatalf("want an error and no reset, got reset=%v err=%v", reset, err)
+	}
+	u, err = GetUserByID(d, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TrafficUsedBytes != 9999 || u.LastTrafficResetAt != 0 {
+		t.Fatalf("the cycle was reset (used=%d, last reset=%d) although the ban could not be lifted", u.TrafficUsedBytes, u.LastTrafficResetAt)
 	}
 }

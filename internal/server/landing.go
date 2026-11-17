@@ -37,7 +37,7 @@ func (s *Server) landingNodesFor(u *db.User, force bool) []landing.Node {
 // degrading to manual URIs when the subscription fetch fails — it reports
 // failure, because syncing a partial set would flip the subscription's exits
 // to present=0 and shift billing classification on a network blip.
-func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, bool) {
+func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, error) {
 	var nodes []landing.Node
 	if uris := strings.TrimSpace(u.LandingURIs); uris != "" {
 		nodes = append(nodes, landing.ParseURIs(strings.Split(uris, "\n"))...)
@@ -45,11 +45,11 @@ func (s *Server) resolveLandingExits(u *db.User, force bool) ([]landing.Node, bo
 	if url := strings.TrimSpace(u.LandingSubURL); url != "" {
 		subNodes, err := s.Landing.Subscription(url, force)
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		nodes = append(nodes, subNodes...)
 	}
-	return nodes, true
+	return nodes, nil
 }
 
 // dedupLandingNodes keeps the first node per host:port — manual URIs precede
@@ -69,32 +69,64 @@ func dedupLandingNodes(nodes []landing.Node) []landing.Node {
 }
 
 // syncLandingExits materializes a successfully resolved landing set and
-// re-pushes any exits whose push-exclusion state flipped with presence —
-// excluded rules generate no traffic, so no counters-driven path would ever
-// revive them.
-func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) {
+// re-pushes the nodes of any exits whose push-exclusion state flipped with
+// presence — excluded rules generate no traffic, so no counters-driven path
+// would ever revive them. The nodes come out of the sync's own transaction
+// (db.SyncUserLandingExits); only pushing them is left to do afterwards. An
+// error means the ledger was not brought up to date.
+func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) error {
 	deduped := dedupLandingNodes(nodes)
 	exits := make([]db.LandingExitInput, 0, len(deduped))
 	for _, n := range deduped {
 		exits = append(exits, db.LandingExitInput{Host: n.Host, Port: n.Port, Name: n.Name, Protocol: n.Protocol, URI: n.URI})
 	}
-	flipped, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
+	repush, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
 	if err != nil {
+		return err
+	}
+	if synced {
+		s.redispatchNodes(repush)
+	}
+	return nil
+}
+
+// refreshLandingLedger is syncLandingExits for the callers that sync in
+// passing — a page that resolved the landing set anyway, the periodic pass.
+// Nothing was asked of them that a failed sync leaves undone: the sync is one
+// transaction (db.SyncUserLandingExits), so the ledger stays on its previous
+// snapshot, and the next sync makes up for it. So the failure is logged and
+// not reported.
+func (s *Server) refreshLandingLedger(u *db.User, nodes []landing.Node) {
+	if err := s.syncLandingExits(u, nodes); err != nil {
 		log.Printf("landing: sync exits for user %d: %v", u.ID, err)
-		return
 	}
-	if !synced || len(flipped) == 0 {
-		return
+}
+
+// repushUserExit re-pushes, for a request that has just changed a landing
+// exit's ledger, the nodes carrying rules that exit there. It reports
+// whether the request can still be answered as done: if the nodes cannot be
+// listed it answers the request itself (500, opening with stored — what was
+// stored, such as "配额已保存") and returns false.
+//
+// The change is stored by then and only pushing is outstanding, which is
+// what the answer says; the call is declarative, so repeating it pushes.
+// Listing happens here, on the request's goroutine, because the admin is the
+// only one who can be told; the pushes themselves are handed off
+// (redispatchNodes), and a push that fails is recorded on its node.
+func (s *Server) repushUserExit(w http.ResponseWriter, stored string, userID int64, host string, port int) bool {
+	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, stored+"，但没能确定需要重新下发的节点: "+err.Error())
+		return false
 	}
-	go func() {
-		for _, k := range flipped {
-			s.redispatchUserExit(u.ID, k.Host, k.Port)
-		}
-	}()
+	s.redispatchNodes(nodes)
+	return true
 }
 
 // redispatchUserExit re-pushes every node carrying rules that exit to the
 // given landing exit so a changed ledger/quota state reaches the data plane.
+// It is for work nobody is waiting on (enforceExitQuota): a failure to list
+// the nodes is logged, and the exit is still over quota the next time.
 func (s *Server) redispatchUserExit(userID int64, host string, port int) {
 	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
 	if err != nil {
@@ -112,10 +144,10 @@ func (s *Server) redispatchUserExit(userID int64, host string, port int) {
 // materialized landing set — the same table that drives metering and push
 // exclusion, so the badge can never disagree with billing. No subscription
 // fetch happens on this path.
-func (s *Server) landingIndexFromDB(userID int64) map[string]landing.Node {
+func (s *Server) landingIndexFromDB(userID int64) (map[string]landing.Node, error) {
 	exits, err := db.PresentLandingExitsForUser(s.DB, userID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	m := make(map[string]landing.Node, len(exits))
 	for _, e := range exits {
@@ -124,7 +156,7 @@ func (s *Server) landingIndexFromDB(userID int64) map[string]landing.Node {
 			m[key] = landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI}
 		}
 	}
-	return m
+	return m, nil
 }
 
 // hasDynamicSource reports whether the user has a subscription URL (a refresh
@@ -155,25 +187,17 @@ func (s *Server) apiSetUserLanding(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	subURL := strings.TrimSpace(body.LandingSubURL)
-	uris := strings.TrimSpace(body.LandingURIs)
-	if subURL != "" && !strings.HasPrefix(subURL, "http://") && !strings.HasPrefix(subURL, "https://") {
-		jsonErr(w, http.StatusBadRequest, "订阅地址须以 http:// 或 https:// 开头")
+	saved, aerr := s.saveUserLandingSource(u.ID, id, body.LandingSubURL, &body.LandingURIs)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if err := db.SetUserLandingSource(s.DB, id, subURL, uris); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_landing", strconv.FormatInt(id, 10), subURL)
-	// Return a fresh preview so the admin sees what the source resolved to,
-	// and materialize it while the resolution is known-good.
-	target, _ := db.GetUserByID(s.DB, id)
-	if nodes, ok := s.resolveLandingExits(target, true); ok {
-		s.syncLandingExits(target, nodes)
-	}
-	nodes := s.landingNodesFor(target, false)
-	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes})
+	// A fresh preview, so the admin sees what the source resolved to. When the
+	// subscription could not be fetched (sub_error), the preview holds the
+	// manual URIs only.
+	jsonOK(w, map[string]any{
+		"ok": true, "landing_nodes": s.landingNodesFor(saved.User, false), "sub_error": saved.SubError,
+	})
 }
 
 // apiSubFetch proxies a subscription URL fetch so the browser avoids CORS.
@@ -215,24 +239,30 @@ type myLandingNodeView struct {
 func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	force := r.URL.Query().Get("refresh") == "1"
-	nodes, ok := s.resolveLandingExits(u, force)
+	nodes, err := s.resolveLandingExits(u, force)
 	stale := false
-	if ok {
-		s.syncLandingExits(u, nodes)
+	if err == nil {
+		s.refreshLandingLedger(u, nodes)
 	} else {
 		stale = true
-		if exits, err := db.PresentLandingExitsForUser(s.DB, u.ID); err == nil {
-			nodes = make([]landing.Node, 0, len(exits))
-			for _, e := range exits {
-				nodes = append(nodes, landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI})
-			}
+		present, err := db.PresentLandingExitsForUser(s.DB, u.ID)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		nodes = make([]landing.Node, 0, len(present))
+		for _, e := range present {
+			nodes = append(nodes, landing.Node{Name: e.Name, Protocol: e.Protocol, Host: e.Host, Port: e.Port, URI: e.URI})
 		}
 	}
+	exits, err := db.ListUserLandingExits(s.DB, u.ID)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	ledger := map[string]*db.LandingExit{}
-	if exits, err := db.ListUserLandingExits(s.DB, u.ID); err == nil {
-		for _, e := range exits {
-			ledger[net.JoinHostPort(e.Host, strconv.Itoa(e.Port))] = e
-		}
+	for _, e := range exits {
+		ledger[net.JoinHostPort(e.Host, strconv.Itoa(e.Port))] = e
 	}
 	views := make([]myLandingNodeView, 0, len(nodes))
 	for _, n := range nodes {
@@ -273,12 +303,16 @@ func (s *Server) apiListUserLandingExits(w http.ResponseWriter, r *http.Request)
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if r.URL.Query().Get("refresh") == "1" {
-		if nodes, ok := s.resolveLandingExits(target, true); ok {
-			s.syncLandingExits(target, nodes)
+		// A refresh that cannot reach the subscription leaves the ledger on
+		// its last snapshot; the ledger below is still the truth to show.
+		if nodes, err := s.resolveLandingExits(target, true); err != nil {
+			log.Printf("landing: refresh exits for user %d: %v", target.ID, err)
+		} else {
+			s.refreshLandingLedger(target, nodes)
 		}
 	}
 	exits, err := db.ListUserLandingExits(s.DB, id)
@@ -321,13 +355,13 @@ func (s *Server) apiSetLandingExitQuota(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
-	// A lowered quota may start excluding immediately; a raised/cleared one
-	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
-	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
-	}
 	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
+	// A lowered quota may start excluding immediately; a raised/cleared one
+	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
+	if present && !s.repushUserExit(w, "配额已保存", id, body.Host, body.Port) {
+		return
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -352,11 +386,11 @@ func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
-	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
-	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_exit_traffic", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d", body.Host, body.Port))
+	if present && !s.repushUserExit(w, "用量已重置", id, body.Host, body.Port) {
+		return
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 

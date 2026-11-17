@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // idempotencyTTLSeconds bounds how long a replayed Idempotency-Key stays honored.
 // A day comfortably covers agent retry windows without letting the table grow
@@ -26,7 +29,9 @@ func LookupIdempotentRule(d *sql.DB, userID int64, key string) (int64, bool, err
 // sequential retry (the common agent case: network blip, at-least-once queue)
 // replay the original rule; it does not serialize two *simultaneous* creates —
 // INSERT OR IGNORE just keeps the first mapping. It also prunes rows older than
-// idempotencyTTLSeconds so the table can't grow unbounded.
+// idempotencyTTLSeconds so the table can't grow unbounded. A failed prune is
+// returned like any other failure; the mapping is stored by then, so a caller
+// that retries under the same key gets the original rule replayed.
 func SaveIdempotentRule(d *sql.DB, userID int64, key string, ruleID int64) error {
 	if _, err := d.Exec(
 		`INSERT OR IGNORE INTO api_idempotency(user_id, idem_key, rule_id, created_at) VALUES (?,?,?,?)`,
@@ -34,6 +39,8 @@ func SaveIdempotentRule(d *sql.DB, userID int64, key string, ruleID int64) error
 	); err != nil {
 		return err
 	}
-	_, _ = d.Exec(`DELETE FROM api_idempotency WHERE created_at < ?`, now()-idempotencyTTLSeconds)
+	if _, err := d.Exec(`DELETE FROM api_idempotency WHERE created_at < ?`, now()-idempotencyTTLSeconds); err != nil {
+		return fmt.Errorf("prune expired idempotency keys: %w", err)
+	}
 	return nil
 }

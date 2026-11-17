@@ -333,8 +333,11 @@ func (d *Dialer) runOnce(ctx context.Context) (helloAcked bool, err error) {
 	d.nodeName = ha.Name
 	d.nodeMu.Unlock()
 
-	if ha.PoolSize > 0 && d.cfg.OnConfigUpdate != nil {
-		d.cfg.OnConfigUpdate(ha.PoolSize)
+	// The ack carries the panel's pool size whenever the panel has one to
+	// give, 0 included; applying it here is what makes the setting survive an
+	// agent restart, since a restarted agent starts from its own default.
+	if ha.PoolSize != nil && d.cfg.OnConfigUpdate != nil {
+		d.cfg.OnConfigUpdate(*ha.PoolSize)
 	}
 
 	// Migrate local tui rules to the server on first connect so they become

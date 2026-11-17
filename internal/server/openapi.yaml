@@ -23,7 +23,7 @@ components:
           properties:
             code:
               type: string
-              enum: [unauthorized, forbidden, scope_required, rate_limited, validation, not_found, conflict, duplicate_chain_node, internal]
+              enum: [unauthorized, forbidden, scope_required, rate_limited, validation, not_found, conflict, duplicate_chain_node, upstream_failed, internal]
             message:
               type: string
     Node:
@@ -327,6 +327,7 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: token 元信息 }
+        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     post:
       summary: 为用户铸/轮换 token
       description: admin 角色、readwrite scope。用户已有 token 时视为轮换（rotated=true）。
@@ -438,7 +439,7 @@ paths:
                 traffic_quota_bytes: { type: integer }
       responses:
         "200": { description: 授权结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: 用户或节点不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     delete:
       summary: 撤销用户对节点的授权
       description: admin 角色、readwrite scope。撤销会一并移除该用户在此节点下的规则。
@@ -467,7 +468,7 @@ paths:
                 traffic_quota_bytes: { type: integer }
       responses:
         "200": { description: 更新结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "用户不存在，或该用户没有这个节点的授权", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /users/{id}/nodes/{nodeId}/rate-limit:
     put:
@@ -486,7 +487,7 @@ paths:
                 rate_limit_mbytes: { type: integer, description: MB/s，0 表示不限速 }
       responses:
         "200": { description: 更新结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "用户不存在，或该用户没有这个节点的授权", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /users/{id}/landing-sub-url:
     put:
@@ -543,7 +544,10 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: 下发结果 }
-        "500": { description: 下发失败, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: 节点不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "节点未连接，没有可下发的对象（code=conflict）", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: "面板自身出错（code=internal）", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "502": { description: "规则已发给节点，但节点拒绝应用、应答无法解析、在时限内没有应答或连接中断（code=upstream_failed）", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /nodes/resync-all:
     post:

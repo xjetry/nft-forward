@@ -1,6 +1,8 @@
 package server
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -12,7 +14,7 @@ import (
 // admin write handlers reject bad ids before mutating.
 func (s *Server) v1RequireUser(w http.ResponseWriter, id int64) bool {
 	if _, err := db.GetUserByID(s.DB, id); err != nil {
-		v1Err(w, http.StatusNotFound, codeNotFound, "用户不存在")
+		v1LookupErr(w, err, http.StatusNotFound, codeNotFound, "用户不存在")
 		return false
 	}
 	return true
@@ -59,7 +61,7 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		scope := db.NormalizeTokenScope(body.TokenScope)
 		tok, _, err := db.IssueUserToken(s.DB, user.ID, scope)
 		if err != nil {
-			v1Err(w, http.StatusInternalServerError, codeInternal, "建 token 失败")
+			v1Err(w, http.StatusInternalServerError, codeInternal, "用户已创建，但没能签发 token: "+err.Error())
 			return
 		}
 		out["token"] = tok
@@ -87,14 +89,10 @@ func (s *Server) v1AdminMintUserToken(w http.ResponseWriter, r *http.Request) {
 	scope := db.NormalizeTokenScope(body.Scope)
 	tok, rotated, err := db.IssueUserToken(s.DB, id, scope)
 	if err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败")
+		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败: "+err.Error())
 		return
 	}
-	prefix := ""
-	if t, e := db.GetAPITokenByUser(s.DB, id); e == nil {
-		prefix = t.TokenPrefix
-	}
-	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": prefix, "rotated": rotated})
+	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": db.TokenPrefix(tok), "rotated": rotated})
 }
 
 // v1AdminGetUserToken returns token metadata (never the plaintext) so an admin
@@ -105,9 +103,18 @@ func (s *Server) v1AdminGetUserToken(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
+	// "No token" is an answer about a user; for an id that names none the
+	// token lookup finds no row either, and would give the same answer.
+	if !s.v1RequireUser(w, id) {
+		return
+	}
 	t, err := db.GetAPITokenByUser(s.DB, id)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		v1OK(w, map[string]any{"has_token": false})
+		return
+	}
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
 		return
 	}
 	var lastUsed *int64
@@ -129,7 +136,7 @@ func (s *Server) v1AdminDeleteUserToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.DeleteAPIToken(s.DB, id); err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, "删除失败")
+		v1Err(w, http.StatusInternalServerError, codeInternal, "删除失败: "+err.Error())
 		return
 	}
 	v1OK(w, map[string]any{"deleted": true})
@@ -176,11 +183,14 @@ func (s *Server) v1AdminSetLandingSubURL(w http.ResponseWriter, r *http.Request)
 		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
 		return
 	}
-	if aerr := s.setUserLandingSubURL(admin.ID, id, body.LandingSubURL); aerr != nil {
+	// nil for the manual URIs: this endpoint sets the subscription only.
+	saved, aerr := s.saveUserLandingSource(admin.ID, id, body.LandingSubURL, nil)
+	if aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
-	v1OK(w, map[string]any{"updated": true})
+	// sub_error is "" unless the URL was stored but could not be fetched.
+	v1OK(w, map[string]any{"updated": true, "sub_error": saved.SubError})
 }
 
 func (s *Server) v1AdminSetMaxForwards(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +261,7 @@ func (s *Server) v1AdminGrantNode(w http.ResponseWriter, r *http.Request) {
 		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	}
 	_ = decodeJSON(r, &body)
-	if aerr := s.grantUserNode(admin.ID, id, nodeID, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+	if aerr := s.grantUserNodes(admin.ID, id, []int64{nodeID}, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
@@ -382,7 +392,9 @@ func (s *Server) v1AdminBatchApplyGrants(w http.ResponseWriter, r *http.Request)
 	for i, g := range body.Grants {
 		specs[i] = batchGrantSpec{NodeName: g.NodeName, MaxForwards: g.MaxForwards, TrafficQuotaBytes: g.TrafficQuotaBytes, RateLimitMBytes: g.RateLimitMBytes}
 	}
-	granted, skipped, aerr := s.batchApplyGrants(admin.ID, body.UserIDs, specs)
+	// The public API always overwrites: its request and response shapes are
+	// fixed by openapi.yaml and carry no keep-existing option.
+	granted, _, skipped, aerr := s.batchApplyGrants(admin.ID, body.UserIDs, specs, false)
 	if aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
@@ -399,8 +411,8 @@ func (s *Server) v1AdminResyncNode(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
-	if err := s.dispatchToNode(id); err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+	if aerr := s.resyncNode(id); aerr != nil {
+		writeAdminErrV1(w, aerr)
 		return
 	}
 	v1OK(w, map[string]any{"resynced": true})
@@ -460,8 +472,15 @@ func (s *Server) v1LandingUsage(w http.ResponseWriter, r *http.Request) {
 // observability. Node traffic uses the raw per-node counter (the same figure
 // the admin aggregate view shows), not per-rule attribution.
 func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
-	users, _ := db.ListUsers(s.DB)
-	db.FillUserRuleCounts(s.DB, users)
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.FillUserRuleCounts(s.DB, users); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	userViews := make([]map[string]any, 0, len(users))
 	for _, u := range users {
 		var exp *int64
@@ -475,10 +494,25 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 			"rule_count": u.RuleCount, "expires_at": exp,
 		})
 	}
-	nodes, _ := db.ListNodes(s.DB)
-	db.ResolveCompositeOnline(s.DB, nodes)
-	rawByNode, _ := db.NodeRawTraffic(s.DB)
-	rcByNode, _ := db.RuleCountByNode(s.DB)
+	nodes, err := db.ListNodes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	if err := db.ResolveCompositeOnline(s.DB, nodes); err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	rawByNode, err := db.NodeRawTraffic(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	rcByNode, err := db.RuleCountByNode(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	online := 0
 	nodeViews := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
@@ -490,9 +524,21 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 			"rate_multiplier": n.RateMultiplier, "traffic_bytes": rawByNode[n.ID], "rule_count": rcByNode[n.ID],
 		})
 	}
-	userCount, _ := db.CountUsers(s.DB)
-	ruleCount, _ := db.CountAllRules(s.DB)
-	totalBytes, _ := db.TotalRuleTrafficBytes(s.DB)
+	userCount, err := db.CountUsers(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	ruleCount, err := db.CountAllRules(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+	totalBytes, err := db.TotalRuleTrafficBytes(s.DB)
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
 	v1OK(w, map[string]any{
 		"generated_at": time.Now().Unix(),
 		"totals": map[string]any{

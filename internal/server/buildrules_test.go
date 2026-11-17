@@ -38,7 +38,10 @@ func TestBuildRulesStampsRuleMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := buildRules(d, ruleHops)
+	rules, err := buildRules(d, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(rules) == 0 {
 		t.Fatal("expected at least 1 rule")
@@ -116,7 +119,10 @@ func TestBuildRules_FillsOwnerName(t *testing.T) {
 	tx2.Commit()
 
 	ruleHops, _ := db.ActiveRuleHopsForPush(d, n.ID)
-	rules := buildRules(d, ruleHops)
+	rules, err := buildRules(d, ruleHops)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var owned, unowned *nft.Rule
 	for i := range rules {

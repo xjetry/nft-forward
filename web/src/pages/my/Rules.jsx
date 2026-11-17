@@ -1,144 +1,25 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { api } from '../../lib/api'
-import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
-import { Loading, Empty, useConfirm } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput, ToolbarButton, TableScroll } from '../../components/page'
-import { RulesTable } from '../../components/RulesTable'
-import { RuleFormModal, copyInitial, ruleFormToPayload } from '../../components/RuleFormModal'
-import { parseURIs, landingIndex, rewriteEndpoint, splitEndpoint, mergeLanding, loadLocalURIs, saveLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
+import { RULE_SCOPES } from '../../components/RuleFormModal'
+import { RulesListPage } from '../../components/RulesTable'
+
+/* 用户侧的列表接口一并带回授权范围内的节点、它们之间的绑定关系，以及是否
+   向用户显示倍率。 */
+async function loadRules() {
+  const d = await api.get('/my/rules')
+  return { rules: d.rules || [], nodes: d.nodes || [], bindings: d.bindings || [], show_rate: !!d.show_rate }
+}
 
 export default function MyRules() {
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [serverLanding, setServerLanding] = useState([])
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createInitial, setCreateInitial] = useState(null)
   const [search, setSearch] = useState('')
-  const [probeAllTrigger, setProbeAllTrigger] = useState(0)
-  const navigate = useNavigate()
-  const toast = useToast()
-  const blurred = useBlur()
-  const confirm = useConfirm()
-  const { user } = useUser()
-
-  // The user's own proxy URIs live only in localStorage (never sent to the
-  // server). Parse them here to both feed the create picker and resolve a
-  // client-side relay URI for rules whose exit matches one of them.
-  const [localVer, setLocalVer] = useState(0)
-  const [nodeRoles, setNodeRoles] = useState({})
-  useEffect(() => {
-    fetchNodeRoles().then(sr => setNodeRoles({ ...sr, ...loadLocalRoles(user?.username) }))
-  }, [user])
-  const localNodes = useMemo(() => {
-    const isLanding = n => nodeHasRole(nodeRoles, n, ROLE_LANDING)
-    const manual = parseURIs(loadLocalURIs(user?.username)).filter(isLanding)
-    const sub = loadSubCache(user?.username).filter(isLanding)
-    return mergeLanding(manual, sub)
-  }, [user, localVer, nodeRoles])
-  const localIdx = useMemo(() => landingIndex(localNodes), [localNodes])
-
-  const addProxyURI = (uri) => {
-    if (!user?.username) return
-    const existing = loadLocalURIs(user.username)
-    const lines = existing.split('\n').map(l => l.trim()).filter(Boolean)
-    if (lines.includes(uri.trim())) return
-    lines.push(uri.trim())
-    saveLocalURIs(user.username, lines.join('\n'))
-    setLocalVer(v => v + 1)
-  }
-
-  const load = () => {
-    setLoading(true)
-    api.get('/my/rules').then(setData).catch(console.error).finally(() => setLoading(false))
-    api.get('/my/landing-nodes').then(d => setServerLanding(d?.nodes || [])).catch(console.error)
-  }
-  useEffect(load, [])
-
-  if (loading) return <Layout><Loading /></Layout>
-
-  const { rules = [], nodes = [], node_by_id = {}, show_rate, bindings = [] } = data || {}
-
-  // Filter server-assigned nodes by global role table — only landing-marked ones
-  // appear in the exit picker (unconfigured/direct ones are excluded).
-  const serverLandingFiltered = serverLanding.filter(n => nodeHasRole(nodeRoles, n, ROLE_LANDING))
-  const landingNodes = mergeLanding(localNodes, serverLandingFiltered)
-
-  const allLandingIdx = landingIndex(landingNodes)
-
-  const enrich = (r) => {
-    const key = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : null
-    if (key && allLandingIdx.has(key) && r.entry) {
-      const node = allLandingIdx.get(key)
-      const ep = splitEndpoint(r.entry)
-      const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
-      if (relay) {
-        const out = { ...r, exit_kind: 'landing', landing_name: node.name, landing_protocol: node.protocol, relay_uri: relay }
-        // A dual-stack rule has a second (v6) entry, so offer a matching relay
-        // URI with the v6 endpoint substituted alongside the v4 one.
-        if (r.entry_v6) {
-          const ep6 = splitEndpoint(r.entry_v6)
-          const relay6 = ep6 && rewriteEndpoint(node.uri, ep6.host, ep6.port)
-          if (relay6) out.relay_uri_v6 = relay6
-        }
-        return out
-      }
-    }
-    return r
-  }
-
-  const deleteRule = async (rule) => {
-    if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/my/rules/${rule.id}`); toast('已删除'); load() } catch (err) { toast(err.message, 'error') }
-  }
-  const openCreate = () => { setCreateInitial(null); setCreateOpen(true) }
-  const copyRule = (rule) => { setCreateInitial(copyInitial(rule)); setCreateOpen(true) }
-
-  const q = search.trim().toLowerCase()
-  const enriched = rules.map(enrich)
-  const filtered = !q ? enriched : enriched.filter(r => {
-    const node = node_by_id?.[r.node_id]
-    const exit = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : ''
-    return [r.name, node?.name, r.entry, exit].some(v => (v || '').toLowerCase().includes(q))
-  })
-
   return (
-    <Layout>
-      <div className="user-page h-full flex flex-col">
-      <PageHeader title="我的规则" count={rules.length} />
-
-      <Panel fill className="user-panel">
-        <PanelToolbar>
-          <SearchInput value={search} onChange={setSearch} placeholder="搜索规则名称、节点、目标…" />
-          <div className="ml-auto flex items-center gap-2">
-            <ToolbarButton onClick={() => setProbeAllTrigger(t => t + 1)} secondary>测试所有</ToolbarButton>
-            <ToolbarButton onClick={openCreate}>＋ 创建规则</ToolbarButton>
-          </div>
-        </PanelToolbar>
-
-        {rules.length === 0 ? (
-          <Empty title="暂无规则" desc="点击右上角「创建规则」开始。" />
-        ) : filtered.length === 0 ? (
-          <Empty title="无匹配规则" desc="试试别的关键词。" />
-        ) : (
-          <TableScroll>
-            <RulesTable variant="my" rules={filtered} nodeMap={node_by_id} blurred={blurred}
-              onDelete={deleteRule} onCopy={copyRule} onRowClick={r => navigate(`/my/rules/${r.id}`)}
-              probeAllTrigger={probeAllTrigger} />
-          </TableScroll>
-        )}
-      </Panel>
-      </div>
-
-      <RuleFormModal
-        open={createOpen} onClose={() => setCreateOpen(false)} title="创建规则" submitLabel="创建规则"
-        nodes={nodes} landingNodes={landingNodes} bindings={bindings} initial={createInitial} onAddProxyURI={addProxyURI} showRate={show_rate}
-        onSubmit={async (form) => {
-          const res = await api.post('/my/rules', ruleFormToPayload(form))
-          toast('规则已创建'); setCreateOpen(false)
-          if (res?.rule_id) navigate(`/my/rules/${res.rule_id}`)
-        }} />
-
-    </Layout>
+    <RulesListPage
+      scope={RULE_SCOPES.my}
+      title="我的规则"
+      load={loadRules}
+      search={search}
+      onSearch={setSearch}
+      onReset={() => setSearch('')}
+    />
   )
 }

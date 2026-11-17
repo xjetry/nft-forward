@@ -25,6 +25,10 @@ type Dispatcher struct {
 	DB        *sql.DB
 	Hub       *Hub
 	SendLocal func(rules []nft.Rule) (string, error) // nil → use default unix socket
+	// SendRemote, when set, delivers to a remote node in the hub's place.
+	// Tests set it to see what is pushed to which node, and to decide what
+	// the push comes to, without an agent connected.
+	SendRemote func(nodeID int64, rules []nft.Rule, rev string) (string, error)
 }
 
 func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) (string, error) {
@@ -37,7 +41,16 @@ func (d *Dispatcher) Dispatch(nodeID int64, rules []nft.Rule, rev string) (strin
 		if send == nil {
 			send = sendLocalDefault
 		}
-		return send(rules)
+		// The self-node's "node" is the daemon behind the unix socket; a
+		// failure to hand it the rules is that side's, as a remote node's is.
+		warning, err := send(rules)
+		if err != nil {
+			return "", pushUpstream(err)
+		}
+		return warning, nil
+	}
+	if d.SendRemote != nil {
+		return d.SendRemote(nodeID, rules, rev)
 	}
 	if d.Hub == nil {
 		return "", fmt.Errorf("hub not wired; cannot dispatch to remote node %d", nodeID)

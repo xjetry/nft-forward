@@ -28,6 +28,11 @@ const (
 	agentCacheRoot = "/var/lib/nft-forward/agent-cache"
 )
 
+// agentReleaseBase 是 release 托管处的地址前缀，fetchAgentBinary 在它后面接
+// “/<版本>/<资产名>”。它是变量：测试把它指到本机起的 HTTP 服务上，“产物取不回来”
+// 这条分支就不必靠真去请求 GitHub 来走。
+var agentReleaseBase = "https://github.com/" + agentRepo + "/releases/download"
+
 // agentAssets 是面板能推送的 nft-agent 发布资产：键是节点在 hello 里上报的
 // GOARCH，值是该架构在 GitHub release 里的资产名。
 //
@@ -43,10 +48,6 @@ var agentAssets = map[string]string{
 	"amd64": "nft-agent",
 	"arm64": "nft-agent-arm64",
 }
-
-// errNodeNotConnected：升级只能推给当前挂在 hub 上的连接，节点离线时没有推送对象，
-// 也无从得知它的架构。
-var errNodeNotConnected = errors.New("节点未连接")
 
 // agentAssetName 返回 arch 对应的发布资产名。表里没有的架构（含空串）一律报错
 // 而不回落到某个默认产物：推过去的二进制节点跑不了时，带目标架构校验的 agent
@@ -74,7 +75,13 @@ var (
 	agentArtCache = map[string]*agentArtifact{}
 )
 
-func serverVersion() string {
+// serverVersion is the panel's own version: the version of the agent it
+// pushes, and what a node's agent version is compared against. It is a
+// variable so that tests can stand in a release version — a test binary is a
+// dev build, against which no agent is ever outdated.
+var serverVersion = buildVersion
+
+func buildVersion() string {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
 		return "dev"
@@ -98,10 +105,14 @@ func stripPseudoVersion(v string) string {
 
 // loadAgentArtifact 返回面板 release 版本里指定架构的 nft-agent，首次用到时拉取
 // 并缓存。dev 构建的面板没有对应的 release，因此无法推送升级。
+//
+// 失败按 push_error.go 的口径归类：这个架构没有产物、或面板是 dev 构建，属于
+// “没有可推的东西”（pushBlocked）；产物取不回来或校验不过，是 release 托管方那
+// 一侧的失败（pushUpstream）。
 func (s *Server) loadAgentArtifact(arch string) (*agentArtifact, error) {
 	asset, err := agentAssetName(arch)
 	if err != nil {
-		return nil, err
+		return nil, pushBlocked(err)
 	}
 	v := serverVersion()
 	agentArtMu.Lock()
@@ -111,11 +122,11 @@ func (s *Server) loadAgentArtifact(arch string) (*agentArtifact, error) {
 		return art, nil
 	}
 	if v == "dev" {
-		return nil, errors.New("dev 构建无对应 agent release，无法推送升级")
+		return nil, pushBlocked(errors.New("dev 构建无对应 agent release，无法推送升级"))
 	}
 	data, sha, err := fetchAgentBinary(v, asset)
 	if err != nil {
-		return nil, err
+		return nil, pushUpstream(err)
 	}
 	art := &agentArtifact{Version: v, Arch: arch, SHA: sha, Data: data}
 	agentArtCache[arch] = art
@@ -131,7 +142,7 @@ func fetchAgentBinary(version, asset string) ([]byte, string, error) {
 		sum := sha256.Sum256(data)
 		return data, hex.EncodeToString(sum[:]), nil
 	}
-	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", agentRepo, version)
+	base := agentReleaseBase + "/" + version
 	want, err := fetchSumFor(base+"/SHA256SUMS", asset)
 	if err != nil {
 		return nil, "", err
@@ -225,7 +236,8 @@ func (s *Server) serveBinary(w http.ResponseWriter, r *http.Request) {
 	}
 	art, err := s.loadAgentArtifact(arch)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		status, _ := pushErrAnswer(err)
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -260,15 +272,15 @@ func (h *Hub) SendUpgrade(nodeID int64, u wsproto.Upgrade) error {
 	case raw := <-ch:
 		var ack wsproto.UpgradeAck
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return fmt.Errorf("malformed upgrade_ack: %w", err)
+			return pushUpstream(fmt.Errorf("malformed upgrade_ack: %w", err))
 		}
 		if !ack.OK {
-			return fmt.Errorf("%s", ack.Error)
+			return pushUpstream(errors.New(ack.Error))
 		}
 		return nil
-	case <-time.After(60 * time.Second):
-		return fmt.Errorf("升级应答超时")
+	case <-time.After(upgradeAckTimeout):
+		return pushUpstream(errors.New("升级应答超时"))
 	case <-ac.closed:
-		return fmt.Errorf("连接在升级期间断开")
+		return pushUpstream(errors.New("连接在升级期间断开"))
 	}
 }

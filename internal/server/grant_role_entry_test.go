@@ -138,3 +138,51 @@ func TestSetPerNodeRolesEndpoint(t *testing.T) {
 		t.Fatalf("illegal role bit must be rejected; got 200")
 	}
 }
+
+// The my overview reports the same effective roles as the rule form: a grant
+// override replaces the node's own mask in both directions, and a grant
+// without one inherits it.
+func TestMyDashboardReportsEffectiveRoles(t *testing.T) {
+	d := openDB(t)
+	overridden, _ := db.CreateNode(d, "via-node-entry-grant", "", "")
+	inherited, _ := db.CreateNode(d, "via-node-plain-grant", "", "")
+	for _, n := range []*db.Node{overridden, inherited} {
+		if err := db.UpdateNodeRoles(d, n.ID, db.NodeRoleVia); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uid, cookie := loginAsUser(t, d, 22)
+	_ = db.GrantNode(d, uid, overridden.ID, 5, 0)
+	_ = db.GrantNode(d, uid, inherited.ID, 5, 0)
+	if err := db.SetGrantRoles(d, uid, overridden.ID, db.NodeRoleEntry); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := New(d)
+	req := httptest.NewRequest("GET", "/api/my", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("my dashboard: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Nodes []struct {
+			ID    int64 `json:"id"`
+			Roles int64 `json:"roles"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]int64{}
+	for _, n := range resp.Nodes {
+		got[n.ID] = n.Roles
+	}
+	if got[overridden.ID] != db.NodeRoleEntry {
+		t.Fatalf("node with an entry override: roles = %d, want %d (the override, not the node's via mask)", got[overridden.ID], db.NodeRoleEntry)
+	}
+	if got[inherited.ID] != db.NodeRoleVia {
+		t.Fatalf("node without an override: roles = %d, want the node's own %d", got[inherited.ID], db.NodeRoleVia)
+	}
+}
