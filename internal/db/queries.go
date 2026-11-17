@@ -58,6 +58,26 @@ var errUserRowJSON = errors.New("db.User is a table row; serialize it through a 
 // 视图，这里让绕开视图的写法在第一次序列化时就失败。
 func (User) MarshalJSON() ([]byte, error) { return nil, errUserRowJSON }
 
+// 节点行的三种类型，即 nodes.node_type 的取值；表上的 CHECK 约束只许这三个，接口里
+// node_type 字段给出去的也是它们。
+//
+// 前两种是机器，各跑一个 agent：NodeTypeRemote 是面板之外的机器，NodeTypeSelf 是面板
+// 所在的这一台（至多一行，由部分唯一索引 idx_nodes_self 保证）。NodeTypeComposite
+// 是组合，不是机器。界面把机器叫“单点”，链路推导（internal/chain）把它叫物理节点。
+//
+// 这里的 remote 是相对面板说的。daemon 的运行形态（internal/daemon 的 RunMode）里
+// 另有 remote-panel 与 local-panel，说的是 daemon 从哪里接入面板：从面板的本机入口
+// 进来的连接（local-panel 形态）一律被认定为 NodeTypeSelf 那一行（server 包的
+// Hub.ServeLocalWS），带 token 从网络接入的（remote-panel 形态）按 token 找行。
+//
+// 本包与 server 包的 SQL 语句里直接写着这三个字面值（建节点的 INSERT、按类型筛选的
+// WHERE）；改取值要连同它们与一次迁移一起改。
+const (
+	NodeTypeRemote    = "remote"
+	NodeTypeSelf      = "self"
+	NodeTypeComposite = "composite"
+)
+
 // Node 是 nodes 表的一行，字段与列一一对应，没有内存里补出来的派生值。组合的在线、
 // 出入口地址、成员链、原始流量不是列，由 NodeCatalog.Derive 从全量节点算出；对外
 // 的 JSON 形状由 server 包里各受众的视图定义，行本身不序列化（见 MarshalJSON）。
@@ -131,6 +151,10 @@ type Line struct {
 }
 
 // errNodeRowJSON 是直接序列化节点行时的错误。
+// IsComposite 报告这一行是不是组合。“只对机器有意义”与“只对组合有意义”的分支都
+// 经它判定，不各自比较 NodeType 的字面值。
+func (n *Node) IsComposite() bool { return n.NodeType == NodeTypeComposite }
+
 var errNodeRowJSON = errors.New("db.Node is a table row; serialize it through an audience view")
 
 // MarshalJSON 拒绝把节点行直接写进响应。行上没有组合的派生属性（组合的 online 列

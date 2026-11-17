@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
 import { fmtBytes, fmtTime } from '../lib/fmt'
+import { isComposite } from '../lib/nodeType'
 import { useIsMobile } from '../lib/useIsMobile'
 import { useResource } from '../lib/useResource'
 import { NodeStatus, NodeTypeTag } from '../components/net'
@@ -81,7 +82,7 @@ const UNSORTED = { col: null, dir: null }
 
 /** 节点的入口地址，没有时返回空串。组合没有自己的地址，入口是它第一个物理成员的
     中继地址（服务端给的 entry_relay_host）。 */
-const entryOf = n => (n.node_type === 'composite' ? n.entry_relay_host : (n.relay_host || n.address)) || ''
+const entryOf = n => (isComposite(n) ? n.entry_relay_host : (n.relay_host || n.address)) || ''
 
 function NodesCard({ nodes, rulesOf, trafficOf }) {
   const blurred = useBlur()

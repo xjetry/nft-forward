@@ -93,7 +93,7 @@ func (s *Server) runProbe(ctx context.Context, target, nodeStr, protoRaw string)
 				return probeResult{Error: "无权操作该节点"}, http.StatusForbidden
 			}
 		}
-		if n.NodeType == "composite" {
+		if n.IsComposite() {
 			return s.probeCompositeToTarget(nodeID, target, proto)
 		}
 		ack, err := s.Hub.SendProbe(nodeID, target, proto)

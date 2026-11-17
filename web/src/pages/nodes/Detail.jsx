@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime, nullStr } from '../../lib/fmt'
+import { NODE_TYPE_SELF, isComposite } from '../../lib/nodeType'
 import { assertNever, combineResources } from '../../lib/resource'
 import { SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { upgradeVerdict, upgradeWorthShowing } from '../../lib/upgrade'
@@ -83,7 +84,7 @@ function NodeView({ data, resource }) {
   const navigate = useNavigate()
   const toast = useToast()
   const confirm = useConfirm()
-  const composite = node.node_type === 'composite'
+  const composite = isComposite(node)
   // Agent 版本是否低于面板版本，由服务端判定（节点列表的“可升级”标记与批量
   // 升级选对象用的是同一个判定）。
   const outdated = data.agent_outdated === true
@@ -219,7 +220,7 @@ function NodeView({ data, resource }) {
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <div className="flex min-w-0 flex-col gap-5">
             <InfoCard node={node} upgrade={data.upgrade} outdated={outdated} />
-            {node.node_type !== 'self' && (
+            {node.node_type !== NODE_TYPE_SELF && (
               <InstallCommandCard node={node} panelUrl={panelUrl} panelUrlConfigured={data.panel_url_configured} />
             )}
           </div>
@@ -460,7 +461,7 @@ const DIRECT_EXIT_OPTIONS = [{ value: 'allow', label: '允许' }, { value: 'deny
 
 function ConfigCard({ node, reload }) {
   const toast = useToast()
-  const composite = node.node_type === 'composite'
+  const composite = isComposite(node)
 
   const post = async (path, body, done) => {
     await api.post(`/nodes/${node.id}/${path}`, body)
@@ -670,8 +671,8 @@ function EdgeEditor({ title, hint, placeholder, edge, roster, selfId, fit, unfit
             value={rows.map(r => r.id)}
             onChange={pick}
             groups={[
-              { label: '单点', options: group(candidates.filter(n => n.node_type !== 'composite')) },
-              { label: '组合', options: group(candidates.filter(n => n.node_type === 'composite')) },
+              { label: '单点', options: group(candidates.filter(n => !isComposite(n))) },
+              { label: '组合', options: group(candidates.filter(n => isComposite(n))) },
             ]}
           />
           {rows.map(r => {

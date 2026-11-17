@@ -8,6 +8,7 @@ import {
   MARK_DIRECT, MARK_LANDING, PROXY_MARKS, applyProxyMarkBatch, fetchProxyMarks, hostPortKey, markedFirstOrder,
   mergeLanding, proxyKey, setProxyMarkBit,
 } from '../../lib/landing'
+import { isComposite } from '../../lib/nodeType'
 import { combineResources } from '../../lib/resource'
 import { GRANT_SEAT_OPTIONS, SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { useResource } from '../../lib/useResource'
@@ -300,8 +301,8 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
   // 服务端的 nodes 与 grants 出自同一次查询、逐行成对，所以每个已授权节点
   // 一定能按 node_id 找到它的授权。
   const grantByNode = new Map(grants.map(g => [g.node_id, g]))
-  const singles = nodes.filter(n => n.node_type !== 'composite')
-  const composites = nodes.filter(n => n.node_type === 'composite')
+  const singles = nodes.filter(n => !isComposite(n))
+  const composites = nodes.filter(n => isComposite(n))
   const tabNodes = tab === 'composite' ? composites : singles
   // 选择集里可能留着刚被撤销的节点；一切判断都以当前页签里实际还在的节点为准。
   const chosen = tabNodes.filter(n => selected.has(n.id))
@@ -499,7 +500,7 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
   const [errors, setErrors] = useState({})
   const available = allNodes.filter(n => !granted.has(n.id))
   const optionsOf = composite => available
-    .filter(n => (n.node_type === 'composite') === composite)
+    .filter(n => isComposite(n) === composite)
     .map(n => ({ value: n.id, label: n.name }))
 
   const grant = useAction(async () => {

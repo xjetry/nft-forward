@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../../lib/api'
+import { isComposite } from '../../lib/nodeType'
 import { assertNever } from '../../lib/resource'
 import { useResource } from '../../lib/useResource'
 import { NodeTypeIcon } from '../../components/net'
@@ -70,7 +71,7 @@ function removalImpact(detail) {
   const composites = detail.referenced_by_composites || []
   const effects = []
   if (ruleCount) {
-    effects.push(node.node_type === 'composite'
+    effects.push(isComposite(node)
       ? `经过它的 ${ruleCount} 条规则会被删除`
       : `经过它的 ${ruleCount} 条规则会被重新连接或清除`)
   }
@@ -209,7 +210,7 @@ export function HopListEditor({ rows, onChange, candidates, memberLinks = false 
               {memberLinks && row.nodeId != null && (
                 <IconButton size="sm" label="打开这个节点的详情" to={`/nodes/${row.nodeId}`}><IconExternal size={14} /></IconButton>
               )}
-              {member?.node_type === 'composite' ? (
+              {isComposite(member) ? (
                 <span className="text-caption text-ink-mut">模式由该组合内部各跳决定</span>
               ) : (
                 <Segmented

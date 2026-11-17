@@ -189,7 +189,7 @@ function Gallery() {
           <Row label="类别 Tag">
             <ProtoTag proto="tcp" /><ProtoTag proto="udp" /><ProtoTag proto="tcp+udp" />
             <ModeTag mode="kernel" /><ModeTag mode="userspace" />
-            <NodeTypeTag type="single" /><NodeTypeTag type="composite" /><NodeTypeTag type="self" />
+            <NodeTypeTag type="remote" /><NodeTypeTag type="composite" /><NodeTypeTag type="self" />
             <Tag>入口</Tag><Tag>中转</Tag>
           </Row>
           <Row label="节点">

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { MARK_LANDING, addLocalURI, hostPortKey, saveLocalMarks, setLocalMarkBatch, tryParseURI } from '../lib/landing'
 import { nodeStack } from '../lib/nodeHealth'
+import { isComposite } from '../lib/nodeType'
 import { SEAT_ENTRY, SEAT_VIA } from '../lib/seats'
 import { NodeTypeIcon } from './net'
 import { ProbeButton } from './probe'
@@ -190,8 +191,8 @@ function deriveChain(form, nodes, bindings) {
 function memberNames(byId, id) {
   const n = byId.get(id)
   if (!n) return []
-  if (n.node_type === 'composite' && n.hops?.length) {
-    return n.hops.flatMap(h => (h.node_type === 'composite' ? memberNames(byId, h.node_id) : [h.name || `#${h.node_id}`]))
+  if (isComposite(n) && n.hops?.length) {
+    return n.hops.flatMap(h => (isComposite(h) ? memberNames(byId, h.node_id) : [h.name || `#${h.node_id}`]))
   }
   return [n.name]
 }
@@ -306,8 +307,8 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
   // 只有有入口用途的节点能作入口。没有 roles 字段的节点按“可作入口”处理。
   const entryNodes = nodes.filter(n => ((n.roles ?? SEAT_ENTRY) & SEAT_ENTRY) !== 0)
   const entryGroups = [
-    { label: '单点', options: entryNodes.filter(n => n.node_type !== 'composite').map(option) },
-    { label: '组合', options: entryNodes.filter(n => n.node_type === 'composite').map(option) },
+    { label: '单点', options: entryNodes.filter(n => !isComposite(n)).map(option) },
+    { label: '组合', options: entryNodes.filter(n => isComposite(n)).map(option) },
   ].filter(g => g.options.length > 0)
   // 选项只显示协议与节点名，不显示连接地址；值是规范键，也就是规则的出口。
   const landingOptions = catalog.landing.map(n => ({
@@ -325,7 +326,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
     : null
   // 模式作用于出口那条腿（最后一跳 → 出口）。链路只有一个单点节点时它就是整条
   // 规则的模式；有组合节点或中转层时，节点之间各跳的模式由节点配置决定。
-  const multiHop = chain.tail?.node_type === 'composite' || chain.ids.length > 0
+  const multiHop = isComposite(chain.tail) || chain.ids.length > 0
 
   const target = exitTarget(form.exit)
   // 连通性从链路最后一跳测：去连接出口的是它，从入口直连出口测的是一条流量

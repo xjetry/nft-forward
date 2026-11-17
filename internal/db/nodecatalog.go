@@ -60,7 +60,7 @@ func NewNodeCatalog(nodes []*Node, hops []*NodeHop, raw map[int64]int64) *NodeCa
 	}
 	topo := topologyOf(nodes, hops, nil)
 	for _, n := range nodes {
-		if n.NodeType != "composite" {
+		if !n.IsComposite() {
 			continue
 		}
 		if leaves, err := topo.Flatten(n.ID); err == nil {
@@ -106,7 +106,7 @@ type NodeDerived struct {
 // chains 里的每个成员都在 byID 里：展开用的拓扑就是由同一批节点建的，成员不在其中
 // 的组合 Flatten 会失败、不进 chains。
 func (c *NodeCatalog) Derive(n *Node) NodeDerived {
-	if n.NodeType != "composite" {
+	if !n.IsComposite() {
 		return NodeDerived{Online: n.Online == 1, Unidirectional: n.Unidirectional, NoDirectExit: n.NoDirectExit}
 	}
 	leaves := c.chains[n.ID]

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime } from '../../lib/fmt'
+import { NODE_TYPE_COMPOSITE, isComposite } from '../../lib/nodeType'
 import { SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { upgradeAllReport } from '../../lib/upgrade'
 import { useIsMobile } from '../../lib/useIsMobile'
@@ -150,8 +151,8 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
   const [speedSnap, setSpeedSnap] = useState(null)
   const [dragId, setDragId] = useState(null)
 
-  const single = nodes.filter(n => n.node_type !== 'composite')
-  const composite = nodes.filter(n => n.node_type === 'composite')
+  const single = nodes.filter(n => !isComposite(n))
+  const composite = nodes.filter(n => isComposite(n))
   const inTab = tab === 'composite' ? composite : single
   const q = search.trim().toLowerCase()
   const matched = inTab
@@ -328,7 +329,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
                 <td className="num text-small text-ink-soft"><Speed speed={speeds[n.id]} /></td>
                 <td className="num" onClick={e => e.stopPropagation()}>
                   <span className="inline-flex items-center gap-1">
-                    {n.node_type !== 'composite' && (
+                    {!isComposite(n) && (
                       <IconButton size="sm" label="重新同步" loading={resync.pendingKey === n.id} onClick={() => resync.run(n.id)}>
                         <IconRefresh />
                       </IconButton>
@@ -485,7 +486,7 @@ function CompositeNodeModal({ nodes, onClose }) {
 
     const res = await api.post('/nodes', {
       name,
-      node_type: 'composite',
+      node_type: NODE_TYPE_COMPOSITE,
       rate_multiplier: rate,
       hops: hopRowsPayload(hops),
       user_ids: form.userIds.length ? form.userIds : undefined,

@@ -84,7 +84,7 @@ func topologyOf(nodes []*Node, hops []*NodeHop, bindings []*NodeBinding) chain.T
 	for _, n := range nodes {
 		topo.Nodes[n.ID] = chain.Node{
 			ID: n.ID, Name: n.Name,
-			Composite: n.NodeType == "composite",
+			Composite: n.IsComposite(),
 			Seats:     NodeSeats(n.Seats, n.NoDirectExit),
 		}
 	}

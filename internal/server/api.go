@@ -522,7 +522,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		err    error
 	)
 	switch strings.TrimSpace(body.NodeType) {
-	case "composite":
+	case db.NodeTypeComposite:
 		if body.Secret != "" || body.PortRange != "" || body.Unidirectional {
 			jsonErr(w, http.StatusBadRequest, "组合节点不跑 agent，没有接入凭据、端口范围与计费方向：这些按成员节点各自的设置")
 			return
@@ -551,7 +551,7 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		}
 		n, err = db.CreateCompositeNode(s.DB, body.Name, line, members)
 		action = "node.create_composite"
-	case "", "remote":
+	case "", db.NodeTypeRemote:
 		if len(body.Hops) > 0 {
 			jsonErr(w, http.StatusBadRequest, "只有组合节点有成员；建组合请指定 node_type 为 composite")
 			return
@@ -632,7 +632,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if n.NodeType == "composite" {
+	if n.IsComposite() {
 		compositeHops, err := db.ListRuleHopsByCompositeNode(s.DB, n.ID)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -672,7 +672,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 			// — fails the request, which is a read and can be repeated.
 			err := s.DB.QueryRow(`SELECT COUNT(*) FROM rule_hops WHERE rule_id=?`, rh.RuleID).Scan(&m.hopCount)
 			if err == nil {
-				err = s.DB.QueryRow(`SELECT COALESCE(n.node_type,'single'), r.node_id FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&m.nodeType, &m.nodeID)
+				err = s.DB.QueryRow(`SELECT n.node_type, r.node_id FROM rules r JOIN nodes n ON n.id=r.node_id WHERE r.id=?`, rh.RuleID).Scan(&m.nodeType, &m.nodeID)
 			}
 			if err == nil {
 				err = s.DB.QueryRow(`SELECT owner_id FROM rules WHERE id=?`, rh.RuleID).Scan(&ownerID)
@@ -737,7 +737,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Include node_hops if composite, enriched with each child's name.
-	if n.NodeType == "composite" {
+	if n.IsComposite() {
 		nodeHops, err := db.ListNodeHops(s.DB, n.ID)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -1418,7 +1418,7 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"needs_confirm": true, "affected_composites": affected})
 		return
 	}
-	if node.NodeType == "composite" {
+	if node.IsComposite() {
 		// A composite is logical: it never appears as a physical hop, so it can't
 		// be spliced out of a chain the way a physical mid-hop can. A rule running
 		// through a deleted composite (as entry or middle layer) therefore can't

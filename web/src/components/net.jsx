@@ -1,4 +1,5 @@
 import { nodeHealth, nodeStack } from '../lib/nodeHealth'
+import { NODE_TYPE_COMPOSITE, NODE_TYPE_SELF } from '../lib/nodeType'
 import { Badge, IconHome, IconLink, Tag } from './ui'
 
 /* 领域展示原子：节点、规则相关的小标签。
@@ -21,8 +22,8 @@ export function NodeStatus({ node, detailed = true }) {
  * @param {{ type?: string }} props
  */
 export function NodeTypeTag({ type }) {
-  if (type === 'composite') return <Tag icon={<IconLink size={12} />}>组合</Tag>
-  if (type === 'self') return <Tag icon={<IconHome size={12} />}>自身</Tag>
+  if (type === NODE_TYPE_COMPOSITE) return <Tag icon={<IconLink size={12} />}>组合</Tag>
+  if (type === NODE_TYPE_SELF) return <Tag icon={<IconHome size={12} />}>自身</Tag>
   return <Tag>单点</Tag>
 }
 
@@ -32,8 +33,8 @@ export function NodeTypeTag({ type }) {
  * @param {{ type?: string }} props
  */
 export function NodeTypeIcon({ type }) {
-  if (type === 'composite') return <span className="inline-flex text-ink-mut" title="组合节点"><IconLink size={14} /></span>
-  if (type === 'self') return <span className="inline-flex text-ink-mut" title="面板自身"><IconHome size={14} /></span>
+  if (type === NODE_TYPE_COMPOSITE) return <span className="inline-flex text-ink-mut" title="组合节点"><IconLink size={14} /></span>
+  if (type === NODE_TYPE_SELF) return <span className="inline-flex text-ink-mut" title="面板自身"><IconHome size={14} /></span>
   return null
 }
 

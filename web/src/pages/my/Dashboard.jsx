@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtDate, fmtGrantTraffic, isExpired, pct } from '../../lib/fmt'
+import { isComposite } from '../../lib/nodeType'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { SEAT_VIA } from '../../lib/seats'
 import { useResource } from '../../lib/useResource'
@@ -199,8 +200,8 @@ function GrantedNodes({ userId, nodes, grants, showRate, accountQuota }) {
     const rb = rank.get(b.id) ?? Infinity
     return ra === rb ? 0 : ra - rb
   })
-  const singles = ordered.filter(n => n.node_type !== 'composite')
-  const composites = ordered.filter(n => n.node_type === 'composite')
+  const singles = ordered.filter(n => !isComposite(n))
+  const composites = ordered.filter(n => isComposite(n))
   // 只有组合节点时直接显示组合，不让用户先看到一张空的单点表。
   const [tab, setTab] = useState(() => (singles.length === 0 && composites.length > 0 ? 'composite' : 'single'))
   const visible = tab === 'composite' ? composites : singles

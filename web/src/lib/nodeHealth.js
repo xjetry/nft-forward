@@ -1,5 +1,6 @@
 // @ts-check
 import { nullStr } from './fmt.js'
+import { isComposite } from './nodeType.js'
 
 /**
  * @typedef {'ok' | 'warn' | 'danger' | 'neutral'} HealthTone
@@ -36,7 +37,7 @@ import { nullStr } from './fmt.js'
 export function nodeHealth(node, { detailed = true } = {}) {
   if (node.disabled) return { tone: 'warn', label: '已禁用' }
   const online = node.online === 1
-  if (!detailed || node.node_type === 'composite') {
+  if (!detailed || isComposite(node)) {
     return online ? { tone: 'ok', label: '在线' } : { tone: 'neutral', label: '离线' }
   }
   const error = nullStr(node.last_error)
@@ -60,7 +61,7 @@ export function nodeHealth(node, { detailed = true } = {}) {
  * @returns {{ entryV4: boolean, entryV6: boolean, exitV6: boolean }}
  */
 export function nodeStack(node) {
-  const composite = node.node_type === 'composite'
+  const composite = isComposite(node)
   return {
     entryV4: composite ? !!node.entry_relay_host : !!node.relay_host,
     entryV6: composite ? !!node.entry_relay_host_v6 : !!node.relay_host_v6,

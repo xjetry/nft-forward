@@ -427,7 +427,7 @@ var errNotAMachine = errors.New("组合节点不跑 agent：它承载的规则�
 // requireMachine 是“这个操作只对机器有意义”的判定：下发与升级都要经过一个 agent
 // 连接，组合没有自己的连接，对它下发或升级只会把失败记在组合行上。
 func requireMachine(n *db.Node) error {
-	if n.NodeType == "composite" {
+	if n.IsComposite() {
 		return errNotAMachine
 	}
 	return nil

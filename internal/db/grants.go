@@ -52,7 +52,7 @@ func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
 	if err := d.QueryRow(`SELECT node_type FROM nodes WHERE id=?`, nodeID).Scan(&nodeType); err != nil {
 		return err
 	}
-	if nodeType != "composite" {
+	if nodeType != NodeTypeComposite {
 		return ErrNotComposite
 	}
 	for _, h := range hops {
