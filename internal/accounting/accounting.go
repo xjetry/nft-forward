@@ -67,17 +67,11 @@ func (s Sample) Key() CounterKey { return CounterKey{Proto: s.Proto, Port: s.Lis
 // Raw 是样本的原始字节。
 func (s Sample) Raw() Raw { return Raw(s.Up + s.Down) }
 
-// SamplesFromWire 把线上的计数样本换成 Sample。v0.33 之前的 agent 不分方向，只报
-// BytesDelta：上下行都为 0 而 BytesDelta 为正时把它记作上行，这类节点升级之前流量
-// 照样入账。
+// SamplesFromWire 把线上的计数样本换成 Sample。
 func SamplesFromWire(ws []wsproto.CounterSample) []Sample {
 	out := make([]Sample, len(ws))
 	for i, w := range ws {
-		up := w.BytesUp
-		if w.BytesUp == 0 && w.BytesDown == 0 && w.BytesDelta > 0 {
-			up = w.BytesDelta
-		}
-		out[i] = Sample{Proto: w.Proto, ListenPort: w.ListenPort, Up: up, Down: w.BytesDown}
+		out[i] = Sample{Proto: w.Proto, ListenPort: w.ListenPort, Up: w.BytesUp, Down: w.BytesDown}
 	}
 	return out
 }

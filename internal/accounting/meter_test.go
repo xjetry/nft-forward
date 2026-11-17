@@ -2,22 +2,28 @@ package accounting
 
 import (
 	"database/sql"
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"nft-forward/internal/wsproto"
 )
 
-// v0.33 之前的 agent 只报不分方向的 BytesDelta：上下行都为 0 时把它记作上行；
-// 带方向的样本里的 BytesDelta 不参与。
+// 线上的计数样本只有分方向的 up 与 down。v0.33 之前的节点报的是不分方向的
+// bytes_delta，这个字段已经不认：只带它的样本解出来上下行都是 0，同时带着 up、down
+// 的样本只取 up、down。
 func TestSamplesFromWire(t *testing.T) {
-	got := SamplesFromWire([]wsproto.CounterSample{
-		{Proto: "tcp", ListenPort: 1, BytesDelta: 70},
-		{Proto: "udp", ListenPort: 2, BytesUp: 3, BytesDown: 4, BytesDelta: 99},
-		{Proto: "tcp", ListenPort: 3, BytesDown: 5, BytesDelta: 99},
-	})
+	var frame wsproto.Counters
+	if err := json.Unmarshal([]byte(`{"samples":[
+		{"listen_port":1,"proto":"tcp","bytes_delta":70},
+		{"listen_port":2,"proto":"udp","up":3,"down":4,"bytes_delta":99},
+		{"listen_port":3,"proto":"tcp","down":5}
+	]}`), &frame); err != nil {
+		t.Fatal(err)
+	}
+	got := SamplesFromWire(frame.Samples)
 	want := []Sample{
-		{Proto: "tcp", ListenPort: 1, Up: 70},
+		{Proto: "tcp", ListenPort: 1},
 		{Proto: "udp", ListenPort: 2, Up: 3, Down: 4},
 		{Proto: "tcp", ListenPort: 3, Down: 5},
 	}
