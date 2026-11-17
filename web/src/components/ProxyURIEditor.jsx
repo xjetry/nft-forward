@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import {
-  ROLE_DIRECT, ROLE_LANDING, hostPortKey, loadLocalNodes, loadLocalURIs, loadSubURLs, nodeHasRole, rolesFirstOrder,
-  saveLocalRoles, saveLocalURIs, saveSubCache, saveSubURLs, setLocalRoleBatch, toggleLocalRole, tryParseURI,
+  ROLE_DIRECT, ROLE_LANDING, hostPortKey, loadLocalNodes, loadLocalURIs, loadSubCache, loadSubURLs, nextSubCache,
+  nodeHasRole, rolesFirstOrder, saveLocalRoles, saveLocalURIs, saveSubCache, saveSubURLs, setLocalRoleBatch,
+  subscriptionURLs, toggleLocalRole, tryParseURI,
 } from '../lib/landing'
 import { useLandingCatalog, useLocalLandingVersion } from '../lib/useLandingCatalog'
 import { useBlur } from './prefs'
@@ -44,12 +45,6 @@ function splitLocalNodes(all, manualNodes) {
     ;(manualKeys.has(rowKey(n)) ? manual : sub).push(n)
   }
   return { manual, sub }
-}
-
-/* 订阅地址：每行一个，忽略空行与 # 开头的行；同一个地址只抓一次。 */
-function subscriptionURLs(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-  return [...new Set(lines)]
 }
 
 /* 手动填写的内容里无法识别成节点的行号（从 1 起）。判定与 parseURIs 用的是
@@ -135,9 +130,8 @@ function Editor({ user, fill }) {
   })
   const toggle = section => setExpanded(current => (current === section ? null : section))
 
-  // 最近一次订阅更新里失败的订阅。kept 说明节点列表现在是什么：
-  // 'fetched' 其余订阅本次抓到的节点；'previous' 上一次的结果。
-  const [subReport, setSubReport] = useState(/** @type {{ kept: 'fetched' | 'previous', failed: Array<{ url: string, message: string }> } | null} */ (null))
+  // 最近一次订阅更新里失败的订阅；kept 是这条订阅沿用的上一次的节点数。
+  const [subReport, setSubReport] = useState(/** @type {{ failed: Array<{ url: string, message: string, kept: number }> } | null} */ (null))
 
   const subHeightRef = usePersistedHeight(`nf-sub-textarea-h:${username}`)
   const manualHeightRef = usePersistedHeight(`nf-manual-textarea-h:${username}`)
@@ -160,40 +154,39 @@ function Editor({ user, fill }) {
     toast(skippedLines.length ? `已保存，其中 ${skippedLines.length} 行无法识别，没有计入节点` : '已保存到本浏览器')
   })
 
-  /* 订阅缓存是一张不分来源的节点表，saveSubCache 整表覆盖。一次更新因此只有
-     三种结局：
-     - 没有订阅地址：清空缓存。否则删掉地址之后，上次抓到的节点会一直留着。
-     - 至少一条抓取成功：缓存换成本次抓到的节点。缓存里不记录节点来自哪条
-       订阅，失败的那几条订阅的旧节点没法单独留下，所以把失败的订阅逐条列出。
-     - 全部失败：不写缓存，列表保持上一次的结果。 */
+  /* 订阅缓存按订阅地址分开存放，写入只有一条规则（lib/landing.js 的
+     nextSubCache）：名单里的地址，抓取成功就换成新节点，失败就留着它上一次的
+     节点；不在名单里的地址连同节点一起消失。
+
+     名单在抓取之前就生效：先按新名单把缓存裁一遍，再去抓取。抓取要等网络，
+     中途关掉页面时存储里也已经是“新名单 + 仍在名单里的那些订阅的节点”。 */
   const refreshSubs = useAction(async () => {
     saveSubURLs(username, subText)
     setSubDraft(null)
+    saveSubCache(username, nextSubCache(loadSubCache(username), urls, new Map()))
     if (urls.length === 0) {
-      saveSubCache(username, [])
       setSubReport(null)
       toast(canClearSub ? '订阅已清空，订阅来的节点已移除' : '已保存到本浏览器')
       return
     }
-    const fetched = []
+    const fetched = new Map()
     const failed = []
     for (const url of urls) {
       try {
         const res = await api.post('/sub-fetch', { url })
-        fetched.push(...(res?.nodes || []))
+        fetched.set(url, res?.nodes || [])
       } catch (err) {
         failed.push({ url, message: err instanceof Error ? err.message : '请求失败' })
       }
     }
-    if (failed.length === urls.length) {
-      setSubReport({ kept: 'previous', failed })
-      toast('订阅没有更新成功，节点列表保持上次的结果', 'error')
-      return
-    }
-    saveSubCache(username, fetched)
-    setSubReport(failed.length ? { kept: 'fetched', failed } : null)
-    if (failed.length) toast(`${failed.length} 条订阅没有更新成功，其余共 ${fetched.length} 个节点`, 'error')
-    else toast(`订阅已更新，共 ${fetched.length} 个节点`)
+    const next = nextSubCache(loadSubCache(username), urls, fetched)
+    saveSubCache(username, next)
+    const total = Object.values(next).flat().length
+    setSubReport(failed.length
+      ? { failed: failed.map(f => ({ ...f, kept: Object.hasOwn(next, f.url) ? next[f.url].length : 0 })) }
+      : null)
+    if (failed.length) toast(`${failed.length} 条订阅没有更新成功，它们的节点保持上一次的结果`, 'error')
+    else toast(`订阅已更新，共 ${total} 个节点`)
   })
 
   /* 一张来源表的节点与角色。角色依赖服务端的角色表（目录的一部分）：它没有
@@ -269,17 +262,13 @@ function Editor({ user, fill }) {
                 {subDirty && <span className="text-caption text-ink-mut">有未保存的修改</span>}
               </div>
               {subReport && (
-                <Alert tone={subReport.kept === 'previous' ? 'danger' : 'warn'}>
-                  <p>
-                    {subReport.kept === 'previous'
-                      ? '订阅没有更新成功，节点列表保持上次的结果：'
-                      : '下面的订阅没有更新成功，节点列表里现在只有其余订阅的节点：'}
-                  </p>
+                <Alert tone="warn">
+                  <p>下面的订阅这次没有更新成功，它们各自的节点保持上一次抓到的结果：</p>
                   <ul className="mt-1 flex flex-col gap-1">
                     {subReport.failed.map(f => (
                       <li key={f.url} className="break-all">
                         <span className="font-mono"><SensText blurred={blurred}>{f.url}</SensText></span>
-                        ：{f.message}
+                        ：{f.message}（{f.kept > 0 ? `沿用上一次的 ${f.kept} 个节点` : '这条订阅还没有抓到过节点'}）
                       </li>
                     ))}
                   </ul>

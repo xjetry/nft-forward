@@ -57,21 +57,93 @@ export function saveSubURLs(username, text) {
   notifyChanged()
 }
 
-export function loadSubCache(username) {
-  if (!username) return []
-  try {
-    const raw = localStorage.getItem(LS_SUB_CACHE_PREFIX + username)
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
+/** 订阅文本框的内容 → 订阅地址名单：每行一个，去掉空行、# 注释行与重复项。 */
+export function subscriptionURLs(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  return [...new Set(lines)]
 }
 
-export function saveSubCache(username, nodes) {
+/* 订阅缓存：每条订阅地址上一次成功抓到的节点，按地址分开存放
+   （{ [订阅地址]: 节点[] }）。
+
+   不变式：一条订阅的节点跟着这条订阅走 —— 地址在名单里，节点就在（抓取成功
+   换成新的，失败留着上一次的）；地址不在名单里，它的节点也不在。唯一的写入
+   口径是 nextSubCache，所以不存在“地址已经换了、节点还是旧地址的”这种
+   状态。 */
+
+/** @returns {Record<string, any[]>} */
+export function loadSubCache(username) {
+  if (!username) return {}
+  try {
+    const value = JSON.parse(localStorage.getItem(LS_SUB_CACHE_PREFIX + username) || 'null')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch { return {} }
+}
+
+/** @param {string} username @param {Record<string, any[]>} cache */
+export function saveSubCache(username, cache) {
   if (!username) return
   try {
-    if (nodes.length) localStorage.setItem(LS_SUB_CACHE_PREFIX + username, JSON.stringify(nodes))
+    if (Object.keys(cache).length) localStorage.setItem(LS_SUB_CACHE_PREFIX + username, JSON.stringify(cache))
     else localStorage.removeItem(LS_SUB_CACHE_PREFIX + username)
   } catch {}
   notifyChanged()
+}
+
+/**
+ * 订阅名单与一次抓取的结果 → 新的缓存。纯函数。
+ *
+ * 名单里的每个地址：本次抓到了就用新节点（抓到零个也算抓到），没抓到就沿用
+ * 它在 previous 里的节点；名单之外的地址不进入结果。传空的 fetched 就是
+ * “只按名单裁剪”。
+ *
+ * @param {Record<string, any[]>} previous
+ * @param {string[]} urls 订阅地址名单
+ * @param {Map<string, any[]>} fetched 本次抓取成功的地址 → 节点
+ * @returns {Record<string, any[]>}
+ */
+export function nextSubCache(previous, urls, fetched) {
+  const entries = []
+  for (const url of urls) {
+    // 地址是用户输入的任意字符串，只认 previous 自己的属性，不沿原型链找。
+    const nodes = fetched.get(url) ?? (Object.hasOwn(previous, url) ? previous[url] : undefined)
+    if (nodes) entries.push([url, nodes])
+  }
+  return Object.fromEntries(entries)
+}
+
+/**
+ * 把数组形式的订阅缓存改写成按地址分开的形式。
+ *
+ * 浏览器里可能还存着数组形式的缓存：一张不记录来源的节点表。它的节点全部
+ * 记到名单里第一条订阅名下 —— 只有一条订阅时这就是事实；有多条时，其余
+ * 订阅在下一次更新成功后各自拿到自己的节点，地址相同的由 buildCatalog 去重。
+ * 名单为空时这些节点没有所属的订阅，按上面的不变式丢掉。
+ *
+ * @param {Pick<Storage, 'length' | 'key' | 'getItem' | 'setItem' | 'removeItem'>} storage
+ */
+export function migrateSubCaches(storage) {
+  const keys = []
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i)
+    if (key?.startsWith(LS_SUB_CACHE_PREFIX)) keys.push(key)
+  }
+  for (const key of keys) {
+    let value
+    // 解析不了的内容不动它：loadSubCache 会把它读成空缓存。
+    try { value = JSON.parse(storage.getItem(key) || 'null') } catch { continue }
+    if (!Array.isArray(value)) continue
+    const username = key.slice(LS_SUB_CACHE_PREFIX.length)
+    const [first] = subscriptionURLs(storage.getItem(LS_SUB_URL_PREFIX + username) || '')
+    if (first === undefined || value.length === 0) storage.removeItem(key)
+    else storage.setItem(key, JSON.stringify(Object.fromEntries([[first, value]])))
+  }
+}
+
+// 模块加载时迁移一次，所以本模块其余部分读到的订阅缓存只有按地址分开这一种
+// 形式。没有 window 的环境（单元测试）里没有可迁移的存储。
+if (typeof window !== 'undefined') {
+  try { migrateSubCaches(window.localStorage) } catch { /* 存储不可用：没有可迁移的内容 */ }
 }
 
 export function nodeRoleKey(n) {
@@ -336,9 +408,9 @@ export function tryParseURI(uri) {
      直连节点 = 全部节点里生效角色含 ROLE_DIRECT 的（直接出现在代理列表）。
    每个节点带 source：'local'（来自本浏览器）或 'admin'（服务端分配）。 */
 
-/* 读出本浏览器里的两类节点。 */
+/* 读出本浏览器里的两类节点。订阅节点按名单顺序把各条订阅的节点接在一起。 */
 export function loadLocalNodes(username) {
-  return { manual: parseURIs(loadLocalURIs(username)), sub: loadSubCache(username) }
+  return { manual: parseURIs(loadLocalURIs(username)), sub: Object.values(loadSubCache(username)).flat() }
 }
 
 /**

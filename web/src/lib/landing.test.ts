@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, hostPortKey, landingIndex, mergeLanding,
-  nodeKey, relayFor, setLocalRoleBatch, toggleLocalRole,
+  migrateSubCaches, nextSubCache, nodeKey, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
 } from './landing.js'
 
 const node = (host: string, port: number, extra: Record<string, unknown> = {}) =>
@@ -92,4 +92,88 @@ test('中转 URI：出口不是落地节点、或入口不是可解析的地址�
   // 服务端在规则还没有入口时返回占位符 “—”，不是地址
   const noEntry = { exit_host: '1.1.1.1', exit_port: 443, entry: '—' }
   assert.equal(enrichRule(noEntry, idx), noEntry)
+})
+
+/* ---------- 订阅缓存 ---------- */
+
+const A = 'https://a.example/sub'
+const B = 'https://b.example/sub'
+const a1 = node('10.0.0.1', 443)
+const a2 = node('10.0.0.2', 443)
+const b1 = node('10.0.1.1', 443)
+
+test('订阅名单：去掉空行、注释与重复的地址，保持顺序', () => {
+  assert.deepEqual(subscriptionURLs(`  ${B}  \n\n# 备用\n${A}\n${B}\n`), [B, A])
+})
+
+test('抓取成功的订阅换成新节点，抓到零个也算抓到', () => {
+  assert.deepEqual(nextSubCache({ [A]: [a1] }, [A], new Map([[A, [a2]]])), { [A]: [a2] })
+  assert.deepEqual(nextSubCache({ [A]: [a1] }, [A], new Map([[A, []]])), { [A]: [] })
+})
+
+test('抓取失败的订阅留着它上一次的节点，别的订阅不受影响', () => {
+  assert.deepEqual(
+    nextSubCache({ [A]: [a1], [B]: [b1] }, [A, B], new Map([[B, []]])),
+    { [A]: [a1], [B]: [] },
+  )
+})
+
+test('地址从名单里拿掉，它的节点一起消失 —— 即使换上的新地址抓取失败', () => {
+  assert.deepEqual(nextSubCache({ [A]: [a1, a2] }, [B], new Map()), {})
+  assert.deepEqual(nextSubCache({ [A]: [a1], [B]: [b1] }, [B], new Map()), { [B]: [b1] })
+  assert.deepEqual(nextSubCache({ [A]: [a1] }, [], new Map()), {})
+})
+
+test('第一次添加就抓取失败的订阅没有节点可留', () => {
+  assert.deepEqual(nextSubCache({}, [A], new Map()), {})
+  // 地址是任意字符串：不能把原型链上的东西当成“上一次的节点”
+  assert.deepEqual(nextSubCache({}, ['constructor', '__proto__'], new Map()), {})
+})
+
+function fakeStorage(init: Record<string, string>) {
+  const m = new Map(Object.entries(init))
+  return {
+    get length() { return m.size },
+    key: (i: number) => [...m.keys()][i] ?? null,
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => void m.set(k, v),
+    removeItem: (k: string) => void m.delete(k),
+    dump: () => Object.fromEntries(m),
+  }
+}
+
+test('迁移：数组形式的缓存记到名单里第一条订阅名下', () => {
+  const st = fakeStorage({
+    'nf-sub-urls:alice': `${A}\n${B}`,
+    'nf-sub-cache:alice': JSON.stringify([a1, b1]),
+  })
+  migrateSubCaches(st)
+  assert.deepEqual(JSON.parse(st.dump()['nf-sub-cache:alice']), { [A]: [a1, b1] })
+  assert.equal(st.dump()['nf-sub-urls:alice'], `${A}\n${B}`)
+})
+
+test('迁移：没有订阅地址的数组缓存没有所属的订阅，丢掉', () => {
+  const st = fakeStorage({ 'nf-sub-cache:bob': JSON.stringify([a1]), 'nf-sub-urls:carol': A, 'nf-sub-cache:carol': '[]' })
+  migrateSubCaches(st)
+  assert.deepEqual(Object.keys(st.dump()), ['nf-sub-urls:carol'])
+})
+
+test('迁移：已经按地址分开的缓存、别的键、解析不了的内容都不动', () => {
+  const init = {
+    'nf-sub-urls:alice': A,
+    'nf-sub-cache:alice': JSON.stringify({ [A]: [a1] }),
+    'nf-sub-cache:dave': '{not json',
+    'nf-landing-uris:alice': '[1,2]',
+  }
+  const st = fakeStorage(init)
+  migrateSubCaches(st)
+  assert.deepEqual(st.dump(), init)
+})
+
+test('迁移可以重复执行：第二次不再改动', () => {
+  const st = fakeStorage({ 'nf-sub-urls:alice': A, 'nf-sub-cache:alice': JSON.stringify([a1]) })
+  migrateSubCaches(st)
+  const once = st.dump()
+  migrateSubCaches(st)
+  assert.deepEqual(st.dump(), once)
 })
