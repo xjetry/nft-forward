@@ -787,7 +787,7 @@ func (s *Server) apiListNodeHops(w http.ResponseWriter, r *http.Request) {
 
 // apiUpdateNodeHops replaces a composite node's hop chain (membership, order
 // and per-hop mode). The config modes shape rules subsequently created on the
-// composite, and only for the inter-node segments: the exit segment's mode
+// composite, and only for the legs between its members: the exit leg's mode
 // belongs to the rule (see chain.ExitChoice), so the stored last-hop mode stays
 // dormant until a reorder turns that hop into an inter-node one. Existing
 // rules keep the modes captured when they were expanded. The multiplier is no

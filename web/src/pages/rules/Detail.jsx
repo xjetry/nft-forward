@@ -120,7 +120,7 @@ function HopsTable({ ruleId, hops, nodeById, onChanged }) {
           <tr>
             <th>#</th>
             <th>节点</th>
-            <th>所属段</th>
+            <th>所属逻辑节点</th>
             <th>监听端口</th>
             <th>转发目标</th>
             <th>模式</th>

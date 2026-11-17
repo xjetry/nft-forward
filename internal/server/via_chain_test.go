@@ -40,7 +40,7 @@ func createMyRuleVia(t *testing.T, s *Server, cookie *http.Cookie, nodeID int64,
 }
 
 // 入口(单点) + 组合中转：链 = entry ++ mid 的两个子节点；
-// 衔接段模式取绑定边；末跳模式取规则 exit_mode。
+// 两段衔接的那条腿的模式取绑定边；末跳模式取规则 exit_mode。
 func TestViaChainAssembly(t *testing.T) {
 	d := openDB(t)
 	entry, _ := db.CreateNode(d, "entry", "", "")
@@ -79,7 +79,7 @@ func TestViaChainAssembly(t *testing.T) {
 }
 
 // 组合作为中转（非末段）：组合的末跳保留组合自身配置的模式，而不是绑定边的
-// 模式——组合被用作中转时，自己决定其出口段如何转发。作为末段时才由规则的
+// 模式——组合被用作中转时，自己决定它最后那条腿如何转发。作为末段时才由规则的
 // exit_mode 覆盖（见 composite_exit_mode_test.go）。
 func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	d := openDB(t)

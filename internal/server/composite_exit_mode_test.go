@@ -94,7 +94,7 @@ func adminCreateRuleID(t *testing.T, s *Server, admin *http.Cookie, body map[str
 	return resp.Rule.ID
 }
 
-// The exit segment (last hop -> exit target) belongs to the rule: its mode
+// The exit leg (last hop -> exit target) belongs to the rule: its mode
 // comes from the request's exit_mode, while inter-node hops keep the
 // composite config's modes.
 func TestCompositeRuleCreateUsesRequestModeForExitHop(t *testing.T) {
@@ -147,7 +147,7 @@ func TestCompositeRuleEditExitHopMode(t *testing.T) {
 	wantModes(t, chainModes(t, s, id), "kernel", "kernel", "kernel")
 }
 
-// The my-side create/edit endpoints carry the same exit-segment semantics as
+// The my-side create/edit endpoints carry the same exit-leg semantics as
 // the admin ones.
 func TestMyCompositeRuleExitHopMode(t *testing.T) {
 	d := openDB(t)
@@ -179,7 +179,7 @@ func TestMyCompositeRuleExitHopMode(t *testing.T) {
 }
 
 // Rule list items expose exit_mode (the last hop's mode) so the edit form can
-// prefill the exit-segment picker; entry_mode alone reflects the first hop.
+// prefill the exit-leg picker; entry_mode alone reflects the first hop.
 func TestRuleListItemExposesExitMode(t *testing.T) {
 	d := openDB(t)
 	s, _ := New(d)

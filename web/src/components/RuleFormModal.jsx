@@ -71,7 +71,7 @@ export function ruleToForm(rule, landingByKey) {
     node_id: rule.node_id,
     via_node_ids: rule.via_node_ids || [],
     proto: rule.proto,
-    // 表单里的模式指出口段（链路最后一跳）。规则还没有任何一跳时两个字段
+    // 表单里的模式指出口那条腿（最后一跳 → 出口）。规则还没有任何一跳时两个字段
     // 都为空，取默认的 kernel。
     mode: rule.exit_mode || rule.entry_mode || 'kernel',
     entry_port: rule.entry_listen_port > 0 ? String(rule.entry_listen_port) : '',
@@ -88,7 +88,7 @@ export function copyInitial(rule, landingByKey) {
 
 /* 表单状态 → 创建 / 编辑接口的请求体。所有规则页面的请求体都由这里产生，
    新增字段不会在某一个调用点漏掉。
-   - 表单里的 mode 是出口段的模式，以 exit_mode 发出。请求体没有顶层的 mode
+   - 表单里的 mode 是出口那条腿的模式，以 exit_mode 发出。请求体没有顶层的 mode
      字段，带了它服务端回 400。
    - via_node_ids 总是发出：表单持有整条链路，空数组表示“清空线路层”，而
      不是“保持不变”。
@@ -326,7 +326,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
   const chainPreview = chain.ids.length > 0
     ? [...memberNames(chain.byId, chain.entry?.id), ...chain.ids.flatMap(id => memberNames(chain.byId, id)), '出口'].join(' → ')
     : null
-  // 模式作用于出口段（最后一跳 → 出口）。链路只有一个单点节点时它就是整条
+  // 模式作用于出口那条腿（最后一跳 → 出口）。链路只有一个单点节点时它就是整条
   // 规则的模式；有组合节点或线路层时，节点之间各跳的模式由节点配置决定。
   const multiHop = chain.tail?.node_type === 'composite' || chain.ids.length > 0
 
@@ -403,7 +403,7 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
 
         {chain.entry && (
           <Field
-            label={multiHop ? '出口段模式' : '转发模式'}
+            label={multiHop ? '出口模式' : '转发模式'}
             hint={`${multiHop ? '只作用于最后一跳到出口这一段。' : ''}线路稳定、丢包低时用 kernel（性能更好）；跨境或丢包高时用 userspace（更抗抖动）。userspace 只转发 TCP，UDP 仍走 kernel。`}
           >
             <Segmented value={form.mode} onChange={v => set({ mode: v })} options={MODE_OPTIONS} className="self-start" />

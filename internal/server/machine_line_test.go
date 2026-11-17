@@ -60,7 +60,7 @@ func TestCreatingACompositeWritesNodeAndMembersTogether(t *testing.T) {
 	}
 }
 
-// 组合不跑 agent：它的行上没有接入凭据、没有端口段、没有属主。
+// 组合不跑 agent：它的行上没有接入凭据、没有端口范围、没有属主。
 func TestCompositeRowsCarryNoMachineAttributes(t *testing.T) {
 	d := openDB(t)
 	a, _ := db.CreateNode(d, "a", "", "")
@@ -119,12 +119,12 @@ func TestNodeCreationRefusesFieldsOfTheOtherKind(t *testing.T) {
 		name string
 		body map[string]any
 	}{
-		{"组合带端口段", map[string]any{"node_type": "composite", "hops": members, "port_range": "30000-30010"}},
+		{"组合带端口范围", map[string]any{"node_type": "composite", "hops": members, "port_range": "30000-30010"}},
 		{"组合带凭据", map[string]any{"node_type": "composite", "hops": members, "secret": "tok"}},
 		{"组合带单向计费", map[string]any{"node_type": "composite", "hops": members, "unidirectional": true}},
 		{"物理节点带成员", map[string]any{"hops": members}},
 		{"认不出的节点类型", map[string]any{"node_type": "self"}},
-		{"物理节点端口段非法", map[string]any{"port_range": "not-a-range"}},
+		{"物理节点端口范围非法", map[string]any{"port_range": "not-a-range"}},
 	}
 	for i, c := range cases {
 		name := fmt.Sprintf("refused-%d", i)

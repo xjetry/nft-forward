@@ -27,7 +27,7 @@ type DBTX interface {
 const DefaultPortRange = "10001-20000"
 
 // ParsePortRange parses a composite port spec like "10001-19999,23333,40000-42000"
-// into individual (start, end) segments. A single port becomes (p, p).
+// into individual (start, end) ranges. A single port becomes (p, p).
 // An empty string is treated as DefaultPortRange.
 func ParsePortRange(spec string) ([][2]int, error) {
 	spec = strings.TrimSpace(spec)
@@ -35,7 +35,7 @@ func ParsePortRange(spec string) ([][2]int, error) {
 		spec = DefaultPortRange
 	}
 	parts := strings.Split(spec, ",")
-	segments := make([][2]int, 0, len(parts))
+	ranges := make([][2]int, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -56,7 +56,7 @@ func ParsePortRange(spec string) ([][2]int, error) {
 			if lo > hi {
 				return nil, fmt.Errorf("range start %d > end %d", lo, hi)
 			}
-			segments = append(segments, [2]int{lo, hi})
+			ranges = append(ranges, [2]int{lo, hi})
 		} else {
 			p, err := strconv.Atoi(part)
 			if err != nil {
@@ -65,13 +65,13 @@ func ParsePortRange(spec string) ([][2]int, error) {
 			if p < 1 || p > 65535 {
 				return nil, fmt.Errorf("port out of 1-65535: %d", p)
 			}
-			segments = append(segments, [2]int{p, p})
+			ranges = append(ranges, [2]int{p, p})
 		}
 	}
-	if len(segments) == 0 {
+	if len(ranges) == 0 {
 		return nil, fmt.Errorf("empty port range")
 	}
-	return segments, nil
+	return ranges, nil
 }
 
 // ValidatePortRange checks format validity and returns a human-readable error.
@@ -80,23 +80,23 @@ func ValidatePortRange(spec string) error {
 	return err
 }
 
-// PortInRange returns true if port falls within any of the parsed segments.
-func PortInRange(port int, segments [][2]int) bool {
-	for _, seg := range segments {
-		if port >= seg[0] && port <= seg[1] {
+// PortInRange returns true if port falls within any of the parsed ranges.
+func PortInRange(port int, ranges [][2]int) bool {
+	for _, rng := range ranges {
+		if port >= rng[0] && port <= rng[1] {
 			return true
 		}
 	}
 	return false
 }
 
-// PickFreePortFromRange picks a random free port from the given segments.
+// PickFreePortFromRange picks a random free port from the given ranges.
 // Returns 0 when every port is occupied.
-func PickFreePortFromRange(segments [][2]int, used map[int]bool) int {
-	// Calculate total capacity across all segments
+func PickFreePortFromRange(ranges [][2]int, used map[int]bool) int {
+	// Calculate total capacity across all ranges
 	total := 0
-	for _, seg := range segments {
-		total += seg[1] - seg[0] + 1
+	for _, rng := range ranges {
+		total += rng[1] - rng[0] + 1
 	}
 	if total <= 0 {
 		return 0
@@ -105,12 +105,12 @@ func PickFreePortFromRange(segments [][2]int, used map[int]bool) int {
 	offset := rand.Intn(total)
 	for i := 0; i < total; i++ {
 		idx := (offset + i) % total
-		// Map linear index to a port within segments
+		// Map linear index to a port within ranges
 		cur := 0
-		for _, seg := range segments {
-			span := seg[1] - seg[0] + 1
+		for _, rng := range ranges {
+			span := rng[1] - rng[0] + 1
 			if idx < cur+span {
-				p := seg[0] + (idx - cur)
+				p := rng[0] + (idx - cur)
 				if !used[p] {
 					return p
 				}
@@ -629,7 +629,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		mode          string
 		desiredPort   int
 		comment       string
-		portSegs      [][2]int // parsed from the node's port_range column
+		portRanges    [][2]int // parsed from the node's port_range column
 		logicalNodeID int64
 	}
 	rs := make([]resolved, len(hops))
@@ -651,7 +651,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if relay == "" {
 			return "", "", nil, ChainErrorf("节点 %s 未设置中继地址", name)
 		}
-		segs, err := ParsePortRange(portRange)
+		ranges, err := ParsePortRange(portRange)
 		if err != nil {
 			return "", "", nil, ChainErrorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
@@ -662,7 +662,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if logicalNodeID == 0 {
 			logicalNodeID = r.NodeID
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, logicalNodeID: logicalNodeID}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portRanges: ranges, logicalNodeID: logicalNodeID}
 	}
 
 	segments := make([]int64, len(rs))
@@ -762,7 +762,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		}
 		var p int
 		if h.desiredPort > 0 {
-			if !PortInRange(h.desiredPort, h.portSegs) {
+			if !PortInRange(h.desiredPort, h.portRanges) {
 				return "", "", nil, ChainErrorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, nodeLabel(tx, h.nodeID))
 			}
 			if occ[h.desiredPort] {
@@ -771,8 +771,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 			p = h.desiredPort
 		} else {
 			p = prevPort[h.nodeID]
-			if !(PortInRange(p, h.portSegs) && !occ[p]) {
-				p = PickFreePortFromRange(h.portSegs, occ)
+			if !(PortInRange(p, h.portRanges) && !occ[p]) {
+				p = PickFreePortFromRange(h.portRanges, occ)
 				if p == 0 {
 					return "", "", nil, ChainErrorf("节点 %s 端口范围内无可用端口", nodeLabel(tx, h.nodeID))
 				}

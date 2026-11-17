@@ -78,7 +78,7 @@ func (User) MarshalJSON() ([]byte, error) { return nil, errUserRowJSON }
 //
 // 一行有两种身份。一台机器（remote、self）：跑 agent 的那一台，它的事实在 Machine
 // 里。一条线路：可授权、可计价、可在链里占位置的单元，它的属性在 Line 里；一台机器
-// 就是一条一段的线路，组合（composite）是由几台机器按序组成的线路，自己不是机器。
+// 就是一条只有它自己的线路，组合（composite）是由几台机器按序组成的线路，自己不是机器。
 // 所以组合行上的 Machine 恒为零值：机器列只经 updateMachine 写入，它排除组合；建
 // 组合时（CreateCompositeNode）不写机器列；此前留在组合行上的机器列由迁移
 // 0050_composite_rows_carry_no_machine 清空。Name、NodeType、Disabled、SortOrder、
@@ -463,7 +463,7 @@ func grantNewLine(tx *sql.Tx, nodeID int64, l LineSpec) error {
 }
 
 // CreateNode 建一台机器，只给名字、连接地址初值与凭据，其余取默认值。面板建节点走
-// CreateMachineNode（要带属主与端口段）；这个包装是给测试造节点用的。
+// CreateMachineNode（要带属主与端口范围）；这个包装是给测试造节点用的。
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return CreateMachineNode(d, name, MachineSpec{Address: address, Secret: secret}, LineSpec{})
 }
@@ -511,7 +511,7 @@ func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node
 
 // CreateCompositeNode 建一个组合：节点行（node_type composite）、它的成员与初始授权
 // （LineSpec.GrantUserIDs）在同一个事务里写入，返回的是事务里读回的那一行；任何一步
-// 失败都不留下东西。组合行上不写任何机器列：凭据为空串、没有端口段、
+// 失败都不留下东西。组合行上不写任何机器列：凭据为空串、没有端口范围、
 // 没有属主。空凭据不会让谁以组合的身份接入——server 包的 lookupNodeBySecret 拒绝空
 // 凭据，也不匹配组合行。成员按 members 的次序编号，mode 经 CreateNodeHops 落值。
 func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) (*Node, error) {

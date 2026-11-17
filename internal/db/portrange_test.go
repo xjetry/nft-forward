@@ -4,9 +4,9 @@ import "testing"
 
 func TestParsePortRange(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantSegs int
-		wantErr  bool
+		input      string
+		wantRanges int
+		wantErr    bool
 	}{
 		// single range
 		{"10001-20000", 1, false},
@@ -26,19 +26,19 @@ func TestParsePortRange(t *testing.T) {
 		{"1-65535", 1, false},
 
 		// errors
-		{"0", 0, true},           // port < 1
-		{"65536", 0, true},       // port > 65535
-		{"abc", 0, true},         // non-numeric
-		{"100-50", 0, true},      // start > end
-		{"0-100", 0, true},       // start out of range
-		{"100-65536", 0, true},   // end out of range
-		{",,,", 0, true},         // all empty => empty port range
+		{"0", 0, true},         // port < 1
+		{"65536", 0, true},     // port > 65535
+		{"abc", 0, true},       // non-numeric
+		{"100-50", 0, true},    // start > end
+		{"0-100", 0, true},     // start out of range
+		{"100-65536", 0, true}, // end out of range
+		{",,,", 0, true},       // all empty => empty port range
 	}
 	for _, tt := range tests {
-		segs, err := ParsePortRange(tt.input)
+		ranges, err := ParsePortRange(tt.input)
 		if tt.wantErr {
 			if err == nil {
-				t.Errorf("ParsePortRange(%q): expected error, got %v", tt.input, segs)
+				t.Errorf("ParsePortRange(%q): expected error, got %v", tt.input, ranges)
 			}
 			continue
 		}
@@ -46,24 +46,24 @@ func TestParsePortRange(t *testing.T) {
 			t.Errorf("ParsePortRange(%q): unexpected error: %v", tt.input, err)
 			continue
 		}
-		if len(segs) != tt.wantSegs {
-			t.Errorf("ParsePortRange(%q): got %d segments, want %d", tt.input, len(segs), tt.wantSegs)
+		if len(ranges) != tt.wantRanges {
+			t.Errorf("ParsePortRange(%q): got %d ranges, want %d", tt.input, len(ranges), tt.wantRanges)
 		}
 	}
 }
 
 func TestParsePortRangeValues(t *testing.T) {
-	segs, err := ParsePortRange("10001-19999,23333,40000-42000")
+	ranges, err := ParsePortRange("10001-19999,23333,40000-42000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := [][2]int{{10001, 19999}, {23333, 23333}, {40000, 42000}}
-	if len(segs) != len(want) {
-		t.Fatalf("got %d segments, want %d", len(segs), len(want))
+	if len(ranges) != len(want) {
+		t.Fatalf("got %d ranges, want %d", len(ranges), len(want))
 	}
-	for i, s := range segs {
+	for i, s := range ranges {
 		if s != want[i] {
-			t.Errorf("seg[%d] = %v, want %v", i, s, want[i])
+			t.Errorf("range[%d] = %v, want %v", i, s, want[i])
 		}
 	}
 }
@@ -82,7 +82,7 @@ func TestValidatePortRange(t *testing.T) {
 }
 
 func TestPortInRange(t *testing.T) {
-	segs := [][2]int{{10001, 19999}, {23333, 23333}, {40000, 42000}}
+	ranges := [][2]int{{10001, 19999}, {23333, 23333}, {40000, 42000}}
 	tests := []struct {
 		port int
 		want bool
@@ -101,7 +101,7 @@ func TestPortInRange(t *testing.T) {
 		{1, false},
 	}
 	for _, tt := range tests {
-		got := PortInRange(tt.port, segs)
+		got := PortInRange(tt.port, ranges)
 		if got != tt.want {
 			t.Errorf("PortInRange(%d) = %v, want %v", tt.port, got, tt.want)
 		}
@@ -110,44 +110,44 @@ func TestPortInRange(t *testing.T) {
 
 func TestPickFreePortFromRange(t *testing.T) {
 	// Single port, not occupied
-	segs := [][2]int{{12345, 12345}}
-	p := PickFreePortFromRange(segs, nil)
+	ranges := [][2]int{{12345, 12345}}
+	p := PickFreePortFromRange(ranges, nil)
 	if p != 12345 {
 		t.Errorf("got %d, want 12345", p)
 	}
 
 	// Single port, occupied => 0
-	p = PickFreePortFromRange(segs, map[int]bool{12345: true})
+	p = PickFreePortFromRange(ranges, map[int]bool{12345: true})
 	if p != 0 {
 		t.Errorf("got %d, want 0 (exhausted)", p)
 	}
 
 	// Small range: 100-102 with 100 and 102 occupied => must return 101
-	segs = [][2]int{{100, 102}}
+	ranges = [][2]int{{100, 102}}
 	used := map[int]bool{100: true, 102: true}
-	p = PickFreePortFromRange(segs, used)
+	p = PickFreePortFromRange(ranges, used)
 	if p != 101 {
 		t.Errorf("got %d, want 101", p)
 	}
 
 	// Fully exhausted range
 	used = map[int]bool{100: true, 101: true, 102: true}
-	p = PickFreePortFromRange(segs, used)
+	p = PickFreePortFromRange(ranges, used)
 	if p != 0 {
 		t.Errorf("got %d, want 0 (exhausted)", p)
 	}
 
-	// Multi-segment: first segment full, second has room
-	segs = [][2]int{{10, 10}, {20, 22}}
+	// Several ranges: the first is full, the second has room
+	ranges = [][2]int{{10, 10}, {20, 22}}
 	used = map[int]bool{10: true, 20: true, 21: true}
-	p = PickFreePortFromRange(segs, used)
+	p = PickFreePortFromRange(ranges, used)
 	if p != 22 {
 		t.Errorf("got %d, want 22", p)
 	}
 
 	// nil used map => picks from range
-	segs = [][2]int{{5000, 5002}}
-	p = PickFreePortFromRange(segs, nil)
+	ranges = [][2]int{{5000, 5002}}
+	p = PickFreePortFromRange(ranges, nil)
 	if p < 5000 || p > 5002 {
 		t.Errorf("got %d, want in [5000,5002]", p)
 	}
@@ -155,10 +155,10 @@ func TestPickFreePortFromRange(t *testing.T) {
 
 func TestPickFreePortFromRangeDistribution(t *testing.T) {
 	// Verify that with a range of 3 ports, all ports can be picked (randomness)
-	segs := [][2]int{{100, 102}}
+	ranges := [][2]int{{100, 102}}
 	seen := map[int]bool{}
 	for i := 0; i < 300; i++ {
-		p := PickFreePortFromRange(segs, nil)
+		p := PickFreePortFromRange(ranges, nil)
 		if p < 100 || p > 102 {
 			t.Fatalf("port %d out of range", p)
 		}

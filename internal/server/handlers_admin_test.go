@@ -211,7 +211,7 @@ func TestNodeRolesAndBindingsEndpoints(t *testing.T) {
 }
 
 // The node_bindings schema defaults an edge's mode to userspace (the design
-// default for junction segments), an invalid mode must be rejected rather
+// default for the leg joining two nodes), an invalid mode must be rejected rather
 // than silently coerced, and two rows naming the same upstream must be
 // rejected instead of hitting the table's PRIMARY KEY and surfacing a raw
 // 500.

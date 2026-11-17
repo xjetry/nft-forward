@@ -158,7 +158,7 @@ func ownedNode(s *Server, seed faultSeed) error {
 
 func entryNode(seed faultSeed) int64 { return seed.nodeID }
 
-// freeListenPort 返回 nodeID 上还没有任何跳在监听的一个端口（在默认端口段之内）。
+// freeListenPort 返回 nodeID 上还没有任何跳在监听的一个端口（在默认端口范围之内）。
 // 节点发来的建规则命令不带端口时由面板随机挑一个（db.PickFreePortFromRange），应答里
 // 的入口地址就每次运行都不同；带上端口，同一条命令在同一份种子库上的应答才能与
 // 无故障那一次逐字段比较。

@@ -123,7 +123,7 @@ func TestNestedCompositeEntryRoleChecked(t *testing.T) {
 
 // A nested composite sitting mid-chain owns how its own exit leg forwards: its
 // flattened last leaf keeps the composite's configured mode (not the downstream
-// binding edge's), inner segments keep their inner modes, and only the rule's
+// binding edge's), inner legs keep their inner modes, and only the rule's
 // final hop takes exit_mode. Provenance stays attributed to the logical nodes.
 func TestNestedCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	d := openDB(t)

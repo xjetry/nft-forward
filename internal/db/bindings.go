@@ -7,9 +7,10 @@ import (
 )
 
 // NodeBinding is an edge of the middle-layer graph: downstream may be attached
-// behind upstream in a rule's chain. Mode is the junction segment's forwarding
-// mode (upstream segment tail -> downstream segment head); it is captured into
-// rule_hops when a rule expands, so edits affect only later (re)expansions.
+// behind upstream in a rule's chain. Mode is the forwarding mode of the leg
+// that joins the two (the last hop of upstream's segment -> the first hop of
+// downstream's); it is captured into rule_hops when a rule expands, so edits
+// affect only later (re)expansions.
 type NodeBinding struct {
 	UpstreamNodeID   int64  `json:"upstream_node_id"`
 	DownstreamNodeID int64  `json:"downstream_node_id"`

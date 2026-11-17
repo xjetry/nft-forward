@@ -211,7 +211,7 @@ func rewireRules(tx DBTX, ruleIDs []int64) ([]int64, error) {
 
 // StoredHopInputs 把一条规则落库的跳原样变成 RegenerateRule 的输入：每一跳的节点、
 // 模式与所属的逻辑节点照抄，端口不给。没给端口的跳，RegenerateRule 沿用该节点上这条
-// 规则现有的监听端口——只要它仍在节点的端口段内、没被别的跳占用，否则另挑一个。
+// 规则现有的监听端口——只要它仍在节点的端口范围内、没被别的跳占用，否则另挑一个。
 func StoredHopInputs(hops []*RuleHop) []HopInput {
 	inputs := make([]HopInput, len(hops))
 	for i, h := range hops {

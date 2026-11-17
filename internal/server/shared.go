@@ -24,7 +24,7 @@ type ruleListItem struct {
 	Exit        string `json:"exit"`
 	EntryNodeID int64  `json:"entry_node_id"`
 	// EntryMode is the first hop's forwarding mode. ExitMode is the last
-	// hop's — the exit segment the rule owns — and prefills the edit form's
+	// hop's — the exit leg, which the rule owns — and prefills the edit form's
 	// kernel/userspace picker; on single-node rules the two coincide.
 	EntryMode string `json:"entry_mode"`
 	ExitMode  string `json:"exit_mode"`

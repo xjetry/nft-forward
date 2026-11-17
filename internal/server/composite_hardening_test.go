@@ -20,7 +20,7 @@ func containsID(ids []int64, want int64) bool {
 	return false
 }
 
-// 1: 组合作为链尾时，真正发起出口段的是组合的末位子节点，no_direct_exit 校验必须
+// 1: 组合作为链尾时，真正发起出口那条腿的是组合的末位子节点，no_direct_exit 校验必须
 // 穿透到该物理子节点，而不是只看逻辑组合节点。
 func TestNoDirectExitCompositeLastChild(t *testing.T) {
 	d := openDB(t)

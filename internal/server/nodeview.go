@@ -124,7 +124,7 @@ type adminNodeDetailView struct {
 // myNodeView 是用户面上一个被授权的节点。只带用户页面读得到的字段：名字与类型、
 // 这条授权下的生效角色、倍率与计费方向、能否作链尾、停用与在线、中继地址（规则表单
 // 据此标出 v4/v6 能力），以及组合的派生字段。机器的接入与运行状态（连接地址、
-// agent 版本、同步错误、升级记录）、属主、端口段都不给。
+// agent 版本、同步错误、升级记录）、属主、端口范围都不给。
 type myNodeView struct {
 	ID             int64   `json:"id"`
 	Name           string  `json:"name"`

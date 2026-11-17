@@ -144,7 +144,7 @@ func TestCreateWritesEachKindsOwnAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plain.Secret == "" || plain.PortRange != DefaultPortRange || plain.OwnerID != nil || plain.RateMultiplier != 1.0 {
-		t.Errorf("没给的机器属性应取默认值（随机凭据、默认端口段、无属主、倍率 1）：%+v", plain)
+		t.Errorf("没给的机器属性应取默认值（随机凭据、默认端口范围、无属主、倍率 1）：%+v", plain)
 	}
 	c, err := CreateCompositeNode(d, "combo", LineSpec{RateMultiplier: 3}, []NodeHop{{HopNodeID: m.ID}, {HopNodeID: plain.ID}})
 	if err != nil {
@@ -158,7 +158,7 @@ func TestCreateWritesEachKindsOwnAttributes(t *testing.T) {
 	}
 }
 
-// 组合行上的机器列不再被写入之前，旧版本建组合时给它随机凭据与默认端口段，各个写接口
+// 组合行上的机器列不再被写入之前，旧版本建组合时给它随机凭据与默认端口范围，各个写接口
 // 也接受组合。迁移把组合行上的机器列一律清空，物理节点不动。
 func TestMigrationClearsMachineAttributesOnComposites(t *testing.T) {
 	const migration = "0050_composite_rows_carry_no_machine.sql"
