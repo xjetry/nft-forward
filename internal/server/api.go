@@ -330,6 +330,9 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 
 // --- Dashboard ---
 
+// apiDashboard is the panel-wide overview: every node with its traffic, and
+// the rule and user totals. It is registered for admins only (Router), like
+// its /api/v1 counterpart; a user's own overview is apiMyDashboard.
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request) {
 	nodes, err := db.ListNodes(s.DB)
 	if err != nil {
