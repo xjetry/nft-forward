@@ -421,10 +421,6 @@ func IPForwardEnabled() bool {
 	return sysctl("/proc/sys/net/ipv4/ip_forward")
 }
 
-func IPv6ForwardEnabled() bool {
-	return sysctl("/proc/sys/net/ipv6/conf/all/forwarding")
-}
-
 func EnableIPForward() error {
 	for _, p := range []struct{ proc, sysctl string }{
 		{"/proc/sys/net/ipv4/ip_forward", "net.ipv4.ip_forward = 1"},

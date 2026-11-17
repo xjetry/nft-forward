@@ -325,10 +325,8 @@ func TestDeleteRule_DeletesWithID(t *testing.T) {
 }
 
 func TestClient_HTTPTransport_HealthAndCreate(t *testing.T) {
-	var gotAuth string
 	srv := http.NewServeMux()
 	srv.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
@@ -345,7 +343,7 @@ func TestClient_HTTPTransport_HealthAndCreate(t *testing.T) {
 	defer httpSrv.Close()
 
 	addr := "http://" + l.Addr().String()
-	c, err := New(addr, WithBearerToken("s3cret"))
+	c, err := New(addr)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -355,9 +353,6 @@ func TestClient_HTTPTransport_HealthAndCreate(t *testing.T) {
 	resp, err := c.CreateRule(CreateRuleReq{Proto: "tcp", ExitHost: "10.0.0.1", ExitPort: 22, ListenPort: 22})
 	if err != nil {
 		t.Fatalf("CreateRule: %v", err)
-	}
-	if gotAuth != "Bearer s3cret" {
-		t.Errorf("Authorization = %q, want Bearer s3cret", gotAuth)
 	}
 	if resp.ListenPort != 22 {
 		t.Errorf("ListenPort = %d, want 22", resp.ListenPort)

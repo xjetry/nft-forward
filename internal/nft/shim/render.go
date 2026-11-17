@@ -82,20 +82,3 @@ func renderShimScript(family, table, chain string, rules []nft.Rule, staleHandle
 func protoForwardMatch(proto string, port int) string {
 	return nft.ProtoDportMatch(proto, port)
 }
-
-// renderInputShimScript builds the nft -f script for an INPUT-type chain:
-// delete stale owner-tagged rules, then one accept per userspace listen port.
-// No ct-state rule (inbound NEW is exactly what we allow) and no ip daddr.
-func renderInputShimScript(family, table, chain string, ports []ListenPort, staleHandles []int) string {
-	var b strings.Builder
-	for _, h := range staleHandles {
-		fmt.Fprintf(&b, "delete rule %s %s %s handle %d\n", family, table, chain, h)
-	}
-	for _, p := range ports {
-		fmt.Fprintf(&b,
-			"add rule %s %s %s %s dport %d counter accept comment \"%s\"\n",
-			family, table, chain, p.Proto, p.Port, OwnerComment,
-		)
-	}
-	return b.String()
-}

@@ -10,7 +10,6 @@ import (
 
 var (
 	ErrNoIPv4 = errors.New("no IPv4 address for host")
-	ErrNoIPv6 = errors.New("no IPv6 address for host")
 )
 
 // IsHostname returns true when s looks like a DNS name rather than a literal IP.
@@ -93,23 +92,4 @@ func (r *Resolver) LookupIPv4(ctx context.Context, host string) (string, error) 
 		}
 	}
 	return "", ErrNoIPv4
-}
-
-func (r *Resolver) LookupIPv6(ctx context.Context, host string) (string, error) {
-	if r.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.Timeout)
-		defer cancel()
-	}
-	addrs, err := r.Lookup(ctx, host)
-	if err != nil {
-		return "", err
-	}
-	for _, a := range addrs {
-		ip := net.ParseIP(a)
-		if ip != nil && ip.To4() == nil {
-			return ip.String(), nil
-		}
-	}
-	return "", ErrNoIPv6
 }

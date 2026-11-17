@@ -106,11 +106,6 @@ func Apply(rules []nft.Rule, iface string) error {
 	return nil
 }
 
-func Available() bool {
-	_, err := exec.LookPath("tc")
-	return err == nil
-}
-
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	var stderr bytes.Buffer

@@ -56,10 +56,6 @@ type model struct {
 	daemon daemonclient.StatusResp
 	rows   []daemonclient.Row
 	cursor int
-	// editingRuleID is the rule a rule-hop edit targets (0 = the
-	// row is not a rule hop). It routes submitEdit to the rule command path
-	// and selects the field-lock set.
-	editingRuleID int64
 
 	inputs       []textinput.Model
 	focusedInput int

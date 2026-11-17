@@ -13,7 +13,6 @@ import (
 
 func (m *model) enterAddMode() {
 	m.mode = viewAdd
-	m.editingRuleID = 0
 	m.err = ""
 	m.status = ""
 	m.inputs = buildInputs()
@@ -24,7 +23,6 @@ func (m *model) enterAddMode() {
 
 func (m *model) enterEditMode() {
 	r := m.rowAt(m.cursor)
-	m.editingRuleID = r.RuleID
 	m.mode = viewEdit
 	m.err = ""
 	m.status = ""
@@ -224,14 +222,4 @@ func (m model) commitEdit(proto string, srcPort int, destInput string, destPort 
 	m.status = fmt.Sprintf("已更新 %s → %s:%d", proto, destInput, destPort)
 	m.err = ""
 	return m, nil
-}
-
-// submitAdd is the legacy entry point called by tests; delegates to commitForm.
-func (m model) submitAdd() (tea.Model, tea.Cmd) {
-	return m.commitForm(false)
-}
-
-// submitEdit is the legacy entry point called by tests; delegates to commitForm.
-func (m model) submitEdit() (tea.Model, tea.Cmd) {
-	return m.commitForm(true)
 }

@@ -386,7 +386,7 @@ func TestSubmitAdd_CarriesUserspaceMode(t *testing.T) {
 	m.inputs[fSrcPort].SetValue("8443")
 	m.inputs[fDestIP].SetValue("10.0.0.1")
 	m.inputs[fDestPort].SetValue("443")
-	nm, _ := m.submitAdd()
+	nm, _ := m.commitForm(false)
 	mm := nm.(model)
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
@@ -407,7 +407,7 @@ func TestSubmitAdd_AutoAssignPort(t *testing.T) {
 	// Leave SrcPort empty for auto-assign.
 	m.inputs[fDestIP].SetValue("10.0.0.1")
 	m.inputs[fDestPort].SetValue("443")
-	nm, _ := m.submitAdd()
+	nm, _ := m.commitForm(false)
 	mm := nm.(model)
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
@@ -429,7 +429,7 @@ func TestSubmitAdd_DaemonError(t *testing.T) {
 	m.inputs[fSrcPort].SetValue("8443")
 	m.inputs[fDestIP].SetValue("10.0.0.1")
 	m.inputs[fDestPort].SetValue("443")
-	nm, _ := m.submitAdd()
+	nm, _ := m.commitForm(false)
 	if nm.(model).err == "" {
 		t.Fatal("expected daemon error to surface")
 	}
@@ -584,7 +584,7 @@ func TestRowAddressComesFromTheDaemonNotFromRuleFields(t *testing.T) {
 		m.cursor = i
 
 		m.enterEditMode()
-		if _, _ = m.submitEdit(); len(fc.ruleEdits) != 1 || fc.ruleEdits[0].Ref != want {
+		if _, _ = m.commitForm(true); len(fc.ruleEdits) != 1 || fc.ruleEdits[0].Ref != want {
 			t.Errorf("第 %d 行：编辑应发往 %v，实际 %+v", i, want, fc.ruleEdits)
 		}
 
@@ -659,7 +659,7 @@ func TestSubmitEditCallsUpdateRule(t *testing.T) {
 	m.inputs[fDestIP].SetValue("10.9.9.9")
 	m.inputs[fDestPort].SetValue("8443")
 	m.inputs[fComment].SetValue("new")
-	nm, _ := m.submitEdit()
+	nm, _ := m.commitForm(true)
 	mm := nm.(model)
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
@@ -686,7 +686,7 @@ func TestSubmitEditServerRule(t *testing.T) {
 	m.inputs[fSrcPort].SetValue("21555")
 	m.inputs[fComment].SetValue("new note")
 	m.modeIdx = 1
-	nm, _ := m.submitEdit()
+	nm, _ := m.commitForm(true)
 	mm := nm.(model)
 	if mm.err != "" {
 		t.Fatalf("unexpected err: %s", mm.err)
@@ -712,7 +712,7 @@ func TestSubmitEditRuleRowSurfacesServerError(t *testing.T) {
 	m.cursor = 0
 	m.enterEditMode()
 	m.inputs[fSrcPort].SetValue("80")
-	nm, _ := m.submitEdit()
+	nm, _ := m.commitForm(true)
 	if !strings.Contains(nm.(model).err, "端口被占用") {
 		t.Fatalf("server error not surfaced: %q", nm.(model).err)
 	}
@@ -760,7 +760,7 @@ func TestAllDigitLocalIDStaysLocal(t *testing.T) {
 	m.cursor = 0
 	m.enterEditMode()
 	m.inputs[fComment].SetValue("new")
-	nm, _ := m.submitEdit()
+	nm, _ := m.commitForm(true)
 	if e := nm.(model).err; e != "" {
 		t.Fatalf("unexpected err: %s", e)
 	}
@@ -818,8 +818,11 @@ func TestEnterEditModeRuleRow(t *testing.T) {
 	})
 	m.cursor = 0
 	m.enterEditMode()
-	if m.mode != viewEdit || m.editingRuleID != 7 {
-		t.Fatalf("editingRuleID=%d, want 7", m.editingRuleID)
+	if m.mode != viewEdit {
+		t.Fatalf("mode=%v, want viewEdit", m.mode)
+	}
+	if got := m.inputs[fSrcPort].Value(); got != "21000" {
+		t.Fatalf("edit form should be prefilled from the row: listen port %q, want 21000", got)
 	}
 }
 

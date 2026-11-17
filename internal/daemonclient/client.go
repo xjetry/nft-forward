@@ -22,26 +22,16 @@ import (
 // need to repeat the path.
 const DefaultSocketPath = "/var/run/nft-forward.sock"
 
-// Client speaks the daemon's HTTP API. Transport is selected by the address
-// scheme: "unix://" dials the local socket; "http://" / "https://" dial the
-// remote endpoint with an optional bearer token. Both transports share the
-// same JSON request/response shape so callers don't branch on which one is
-// in use.
+// Client 说 daemon 本机控制口的 HTTP 协议。走哪种传输由地址决定：unix socket 路径
+// （可带 "unix://" 前缀）是 daemon 实际监听的地方；"http://" / "https://" 地址按
+// 普通 HTTP 拨，daemon 自己不监听 TCP，这种形式是给测试接 httptest 服务用的。两种
+// 传输上的请求与应答完全相同。
+//
+// 控制口不带凭据：谁能连由 socket 文件的属主与权限决定（daemon.ListenSocket 把它建成
+// 0660、属组为配置的组）。
 type Client struct {
 	base       string
-	bearer     string
 	httpClient *http.Client
-}
-
-type Option func(*Client)
-
-// WithBearerToken sets the Authorization header for HTTP transports.
-// Unix-socket transports ignore it: SO_PEERCRED already establishes
-// authority and re-adding a static secret would be misleading.
-func WithBearerToken(token string) Option {
-	return func(c *Client) {
-		c.bearer = token
-	}
 }
 
 // New parses address and returns a Client wired for that transport.
@@ -51,11 +41,8 @@ func WithBearerToken(token string) Option {
 //
 // Plain socket paths ("/var/run/foo.sock") are also accepted for callers that
 // haven't yet been updated to the URL form; they're treated as unix://.
-func New(address string, opts ...Option) (*Client, error) {
+func New(address string) (*Client, error) {
 	c := &Client{}
-	for _, o := range opts {
-		o(c)
-	}
 
 	switch {
 	case strings.HasPrefix(address, "unix://"):
@@ -70,7 +57,6 @@ func New(address string, opts ...Option) (*Client, error) {
 				},
 			},
 		}
-		c.bearer = ""
 	case strings.HasPrefix(address, "http://"), strings.HasPrefix(address, "https://"):
 		u, err := url.Parse(address)
 		if err != nil {
@@ -90,7 +76,6 @@ func New(address string, opts ...Option) (*Client, error) {
 				},
 			},
 		}
-		c.bearer = ""
 	}
 	return c, nil
 }
@@ -102,9 +87,6 @@ func (c *Client) do(method, path string, body []byte) ([]byte, int, error) {
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearer)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -294,8 +276,9 @@ type UpdateRuleReq struct {
 // /v1/rules/{命名空间}/{id} 按它分发，不从 id 的长相推断。
 //
 // 地址的来源是 daemon：ListRules 的每一行带着 daemon 给的 Ref，改删时原样交回。
-// LocalRule / PanelRule 是给不经列表、已知规则归属的调用方用的。零值不指向任何
-// 规则，daemon 以 404 拒绝。
+// LocalRule / PanelRule 不经列表直接造一个地址；本程序里没有这样的调用方（TUI 只用
+// 列表给的地址），它们是给别的包的测试造地址用的——RuleRef 的字段不导出，包外没有
+// 别的办法构造它。零值不指向任何规则，daemon 以 404 拒绝。
 type RuleRef struct {
 	ns string
 	id string
