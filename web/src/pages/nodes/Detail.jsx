@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime, nullStr } from '../../lib/fmt'
 import { assertNever, combineResources } from '../../lib/resource'
+import { upgradeVerdict, upgradeWorthShowing } from '../../lib/upgrade'
 import { useResource } from '../../lib/useResource'
 import { ModeTag, NodeStackTags, NodeStatus, NodeTypeIcon, NodeTypeTag, ProtoTag } from '../../components/net'
 import { Page, PageHeader, TableBox } from '../../components/page'
@@ -15,7 +16,7 @@ import {
   useToast,
 } from '../../components/ui'
 import {
-  GrantUserSelect, HopListEditor, MODE_OPTIONS, ROLE_ENTRY, ROLE_VIA, agentOutdated, hopRowsError, hopRowsPayload, removeNode,
+  GrantUserSelect, HopListEditor, MODE_OPTIONS, ROLE_ENTRY, ROLE_VIA, hopRowsError, hopRowsPayload, removeNode,
   useGrantableUsers,
 } from './common'
 
@@ -32,38 +33,6 @@ const UPGRADE_POLL_MS = 2000
    stuck（internal/server/upgrade_status.go 的 upgradeGrace），所以轮询只要
    拿得到响应，结论由服务端给出；这个上限只在迟迟拿不到响应时才会先到。 */
 const UPGRADE_WAIT_MS = 120000
-
-/**
- * 一次被节点确认的升级推送之后，服务端的升级状态对应的结论。
- *
- * 前提（由调用方保证）：只对“推送成功之后取回的”状态调用。推送成功时服务端
- * 已经写下这次推送的记录（apiUpgradeNode → RecordUpgradeResult），所以此时
- * 的 `none` 不会是“从未推送过”。
- *
- * 状态由 internal/server/upgrade_status.go 的 deriveUpgradeStatus 推导：
- * - `pending`：推送已确认，节点上报的版本还没变，且仍在宽限期内。
- * - `none`：节点上报的版本已不低于面板版本。推送下去的正是面板版本
- *   （loadAgentArtifact 取 serverVersion()），所以升级生效后落在这里。
- * - `ok`：节点版本已不低于上次推送的版本，但低于面板当前版本 —— 只有面板
- *   在那次推送之后又升级过才会出现。
- * - `stuck`：过了宽限期，节点上报的版本仍然没变。
- * - `error`：记录下来的那次推送本身失败了。
- *
- * @returns {'running' | 'succeeded' | 'failed' | 'stuck'}
- */
-function upgradeVerdict(upgrade) {
-  switch (upgrade?.status) {
-    case 'none':
-    case 'ok':
-      return 'succeeded'
-    case 'error':
-      return 'failed'
-    case 'stuck':
-      return 'stuck'
-    default:
-      return 'running'
-  }
-}
 
 /**
  * `ms` 为数字期间反复调用 `tick`：上一次落定之后才开始计下一次的间隔，所以
@@ -139,7 +108,9 @@ function NodeView({ data, resource }) {
   const toast = useToast()
   const confirm = useConfirm()
   const composite = node.node_type === 'composite'
-  const outdated = !composite && agentOutdated(node, latest)
+  // Agent 版本是否低于面板版本，由服务端判定（节点列表的“可升级”标记与批量
+  // 升级选对象用的是同一个判定）。
+  const outdated = data.agent_outdated === true
   // 面板地址没有配置时，服务端返回的 panel_url 是空串；安装命令改用管理员
   // 当前访问面板的地址，并在安装命令卡片里说明。
   const panelUrl = data.panel_url_configured ? data.panel_url : window.location.origin
@@ -171,7 +142,7 @@ function NodeView({ data, resource }) {
   const settled = state.status === 'ready' && !state.refreshing && state.refreshError === null
   useEffect(() => {
     if (!upgradeWatch) return
-    const verdict = settled ? upgradeVerdict(data.upgrade) : 'running'
+    const verdict = settled ? upgradeVerdict(data.upgrade?.status) : 'running'
     if (verdict === 'running' && upgradeWatch === 'waiting') return
     // 结束等待与提示只发生在这里，每次等待因此恰好给出一个结论。
     setUpgradeWatch(null)
@@ -337,8 +308,7 @@ function UpgradeStatus({ upgrade, node }) {
 function InfoCard({ node, upgrade, outdated }) {
   const blurred = useBlur()
   const error = nullStr(node.last_error)
-  // `none` 表示没有需要展示的升级记录（从未推送，或节点已不低于面板版本）。
-  const showUpgrade = !!upgrade && upgrade.status !== 'none'
+  const showUpgrade = upgradeWorthShowing(upgrade?.status)
   return (
     <Card>
       <CardHeader title="基本信息" />

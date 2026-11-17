@@ -364,10 +364,18 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	version := serverVersion()
+	outdated := []int64{}
+	for _, n := range cat.Nodes() {
+		if agentOutdated(n, version) {
+			outdated = append(outdated, n.ID)
+		}
+	}
 	jsonOK(w, map[string]any{
 		"nodes": adminNodesOf(cat, cat.Nodes()), "panel_url": panelURL, "panel_name": panelName,
 		"node_raw_traffic":     cat.RawTrafficForDisplay(),
-		"latest_agent_version": serverVersion(),
+		"latest_agent_version": version,
+		"outdated_node_ids":    outdated,
 		"show_rate_to_user":    showRate == "1",
 	})
 }
@@ -619,6 +627,7 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 		"rule_hops": views, "panel_url": panelURL,
 		"panel_url_configured":     panelURL != "",
 		"latest_agent_version":     serverVersion(),
+		"agent_outdated":           agentOutdated(n, serverVersion()),
 		"upgrade":                  deriveUpgradeStatus(n, serverVersion(), time.Now()),
 		"granted_users":            grantedUsers,
 		"referenced_by_composites": referencedBy,
@@ -1457,9 +1466,13 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 本批的对象：已启用、且 agent 版本低于面板版本的节点（agentOutdated，与
+	// 节点列表上“可升级”标记是同一个判定）。已经不低于面板版本的节点不推：
+	// 对它们推送要么是空操作，要么是把更新的 agent 换回面板版本。
+	version := serverVersion()
 	var nodes []*db.Node
 	for _, n := range all {
-		if requireMachine(n) != nil || n.Disabled {
+		if requireMachine(n) != nil || n.Disabled || !agentOutdated(n, version) {
 			continue
 		}
 		nodes = append(nodes, n)
@@ -1483,24 +1496,29 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	version := serverVersion()
-	var ok, fail int
+	// upgraded + offline + failed == len(nodes)：每个对象恰好落在一类里。
+	// offline 单列，是因为它不是推送出了错，而是此刻没有连接可推。
+	var ok, offline, fail int
 	for _, n := range nodes {
 		err := s.upgradeNode(n, panelURL)
 		status, errText := "acked", ""
-		if err != nil {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, errNodeNotConnected):
+			status, errText = "error", err.Error()
+			offline++
+		default:
 			status, errText = "error", err.Error()
 			fail++
-		} else {
-			ok++
 		}
 		if err := db.RecordUpgradeResult(s.DB, n.ID, version, status, errText); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
-	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d fail=%d", ok, fail))
-	jsonOK(w, map[string]any{"ok": true, "upgraded": ok, "failed": fail})
+	db.WriteAudit(s.DB, u.ID, "node.upgrade_all", "", fmt.Sprintf("ok=%d offline=%d fail=%d", ok, offline, fail))
+	jsonOK(w, map[string]any{"ok": true, "upgraded": ok, "offline": offline, "failed": fail})
 }
 
 // --- Settings ---
