@@ -259,7 +259,7 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, MaxAge: int(sessionTTL.Seconds()),
 	})
 	db.WriteAudit(s.DB, u.ID, "login", "", "")
-	jsonOK(w, map[string]any{"user": apiUserView(u)})
+	jsonOK(w, map[string]any{"user": loginUserView(u)})
 }
 
 func (s *Server) apiLogout(w http.ResponseWriter, r *http.Request) {
@@ -289,7 +289,7 @@ func (s *Server) apiMe(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"user": apiUserFullView(u), "panel_name": panelName, "version": serverVersion()})
+	jsonOK(w, map[string]any{"user": selfUserView(u), "panel_name": panelName, "version": serverVersion()})
 }
 
 func (s *Server) apiChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -1898,7 +1898,7 @@ func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 	// （上面的 FillUserRuleCounts 只在这里填）。
 	views := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		v := apiUserFullView(u)
+		v := adminUserView(u)
 		v["rule_count"] = u.RuleCount
 		views = append(views, v)
 	}
@@ -1941,7 +1941,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 		landingPreview = s.landingNodesFor(target, false)
 	}
 	jsonOK(w, map[string]any{
-		"user": apiUserFullView(target), "nodes": adminNodesOf(cat, grantedNodes),
+		"user": adminUserView(target), "nodes": adminNodesOf(cat, grantedNodes),
 		"grants": grants, "all_nodes": adminNodesOf(cat, cat.Nodes()),
 		"rules":         rules,
 		"landing_nodes": landingPreview,
@@ -1978,7 +1978,7 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	jsonOK(w, map[string]any{"user": apiUserFullView(user)})
+	jsonOK(w, map[string]any{"user": adminUserView(user)})
 }
 
 func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
@@ -2389,7 +2389,7 @@ func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]any{
-		"user": apiUserFullView(u), "nodes": nodes, "grants": grants,
+		"user": selfUserView(u), "nodes": nodes, "grants": grants,
 		"rules": rules, "show_rate": showRate == "1",
 	})
 }
@@ -2508,16 +2508,33 @@ func withUser(ctx context.Context, u *db.User) context.Context {
 	return context.WithValue(ctx, userKey, u)
 }
 
-// apiUserView returns the minimal user representation for login response.
-func apiUserView(u *db.User) map[string]any {
+// 用户行对外有三个形状，按“谁在看”分，不按接口分：
+//
+//   - loginUserView：登录的回答，只说登录成了谁。
+//   - selfUserView：用户看自己（/api/me、/api/my）。
+//   - adminUserView：管理员看一个用户（用户列表、用户详情、建用户的回答）。它是
+//     selfUserView 加上只给管理员看的字段。
+//
+// 只给管理员看的字段只加在 adminUserView 里：加进 selfUserView，就是把它发给了
+// 用户本人（TestAdminNoteIsNotShownToTheUser 扫的是用户本人读得到的各个接口）。
+
+// loginUserView 是登录回答里的用户。
+func loginUserView(u *db.User) map[string]any {
 	return map[string]any{
 		"id": u.ID, "username": u.Username, "role": u.Role,
 	}
 }
 
-// apiUserFullView includes quota/traffic/expiry fields for /api/me and admin detail.
-func apiUserFullView(u *db.User) map[string]any {
-	m := apiUserView(u)
+// adminUserView 是管理员看到的用户：用户本人看到的那些，加上管理备注。
+func adminUserView(u *db.User) map[string]any {
+	m := selfUserView(u)
+	m["admin_note"] = u.AdminNote
+	return m
+}
+
+// selfUserView 是用户本人看到的自己：身份、配额、用量、到期与落地来源。
+func selfUserView(u *db.User) map[string]any {
+	m := loginUserView(u)
 	m["disabled"] = u.Disabled
 	m["max_forwards"] = u.MaxForwards
 	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
@@ -2536,7 +2553,6 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["has_landing_source"] = hasLandingSource(u)
 	m["traffic_reset_days"] = u.TrafficResetDays
 	m["last_traffic_reset_at"] = u.LastTrafficResetAt
-	m["admin_note"] = u.AdminNote
 	m["billing_rate"] = u.BillingRate
 	return m
 }

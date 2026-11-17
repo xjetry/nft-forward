@@ -131,7 +131,6 @@
   ],
   "show_rate": false,
   "user": {
-    "admin_note": "vip",
     "billing_rate": 1.5,
     "disable_reason": null,
     "disabled": false,

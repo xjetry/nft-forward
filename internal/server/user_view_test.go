@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +273,77 @@ func TestAdminSeesOneUserShape(t *testing.T) {
 		if name == "never" && item["admin_note"] != "记一笔" {
 			t.Errorf("never：admin_note 应是 %q，实际 %#v", "记一笔", item["admin_note"])
 		}
+	}
+}
+
+// 管理备注是管理员写给自己看的（页面上的说明就是“只有管理员能看到”），不出现在用户
+// 本人能读到的任何回答里：会话下的 /api/me、/api/my 与其余几个只读接口，以及他自己
+// 的 token 能读的 /api/v1 接口。对照组：管理员看这个用户时带着它。
+func TestAdminNoteIsNotShownToTheUser(t *testing.T) {
+	d := openDB(t)
+	s, err := New(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := loginAsAdmin(t, d)
+	uid, cookie := loginAsUser(t, d, 10)
+	const note = "note-only-for-the-admin-7f3a"
+	if _, err := d.Exec(`UPDATE users SET admin_note=? WHERE id=?`, note, uid); err != nil {
+		t.Fatal(err)
+	}
+	token, err := db.CreateAPIToken(d, uid, "read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := db.CreateNode(d, "n", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateNodeRelayHost(d, n.ID, "10.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantNode(d, uid, n.ID, 10, 0); err != nil {
+		t.Fatal(err)
+	}
+	rec := userJSON(t, s, cookie, "POST", "/api/my/rules", map[string]any{
+		"node_id": n.ID, "name": "r", "proto": "tcp", "exit": "9.9.9.9:443",
+	})
+	var made struct {
+		RuleID int64 `json:"rule_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &made); err != nil || made.RuleID == 0 {
+		t.Fatalf("建规则的回答：%v（%s）", err, rec.Body.String())
+	}
+	rule := strconv.FormatInt(made.RuleID, 10)
+
+	type call struct{ path, token string }
+	calls := []call{
+		{"/api/me", ""}, {"/api/my", ""}, {"/api/my/rules", ""}, {"/api/my/rules/" + rule, ""},
+		{"/api/my/landing-nodes", ""}, {"/api/my/token", ""},
+		{"/api/v1/info", token},
+		{"/api/v1/my/nodes", token}, {"/api/v1/my/rules", token}, {"/api/v1/my/rules/" + rule, token},
+	}
+	for _, c := range calls {
+		req := httptest.NewRequest("GET", c.path, nil)
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		} else {
+			req.AddCookie(cookie)
+		}
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s：%d %s（这条要验证的是回答里没有备注，先得读得到）", c.path, rec.Code, rec.Body.String())
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, note) || strings.Contains(body, "admin_note") {
+			t.Errorf("GET %s 把管理备注发给了用户本人：%s", c.path, body)
+		}
+	}
+
+	rec = adminRequest(t, s, admin, "GET", "/api/users/"+strconv.FormatInt(uid, 10), nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), note) {
+		t.Errorf("管理员看这个用户时应带着备注：%d %s", rec.Code, rec.Body.String())
 	}
 }
