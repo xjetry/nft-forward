@@ -221,9 +221,6 @@
           "comment": {
             "type": "string"
           },
-          "mode": {
-            "type": "string"
-          },
           "exit_mode": {
             "type": "string"
           },

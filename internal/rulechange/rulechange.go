@@ -173,10 +173,8 @@ type Path struct {
 	// 明确不要中转层。
 	Vias *[]int64
 	Hops []chain.Hop
-	// ExitMode 指定出口那一跳的转发模式；LegacyMode 是它的旧字段，只对裸单点生效。
-	// 取舍规则见 chain.ExitChoice。
-	ExitMode   string
-	LegacyMode string
+	// ExitMode 指定出口那一跳的转发模式，取舍规则见 chain.ExitChoice。
+	ExitMode string
 	// EntryPort 大于 0 时指定入口的监听端口，否则由面板分配或沿用现有的。
 	EntryPort int
 }
@@ -331,7 +329,7 @@ func (c *Changes) create(actor Actor, items []creation, op string, dryRun bool) 
 		} else {
 			derived, err := topo.Derive(chain.Request{
 				Entry: p.Entry, Vias: vias,
-				Exit:          chain.ExitChoice{Explicit: p.ExitMode, Legacy: p.LegacyMode},
+				Exit:          chain.ExitChoice{Explicit: p.ExitMode},
 				SeatOverrides: seats,
 			})
 			if err != nil {
@@ -387,7 +385,7 @@ func (c *Changes) create(actor Actor, items []creation, op string, dryRun bool) 
 //
 // 链的取法依次是：p.Hops 非空，用它作物理链，表头的入口与中转层由它算出；否则
 // p.Entry 大于 0 或 p.Vias 非 nil，按它们重新推导（没提到的那一项沿用规则已存的）；
-// 都没有，沿用规则落库的链。出口模式的指定（p.ExitMode / p.LegacyMode）对后两种取法
+// 都没有，沿用规则落库的链。出口模式的指定（p.ExitMode）对后两种取法
 // 生效（显式链里每一跳的模式都是请求写明的），没有指定时保持现状——除非换了入口，
 // 那时回到默认值。
 func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *Error) {
@@ -448,7 +446,7 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 		if cerr != nil {
 			return Result{}, cerr
 		}
-		exit := chain.ExitChoice{Explicit: p.ExitMode, Legacy: p.LegacyMode}
+		exit := chain.ExitChoice{Explicit: p.ExitMode}
 		if !moved && len(stored) > 0 {
 			exit.Current = stored[len(stored)-1].Mode
 		}
@@ -465,7 +463,7 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 		for i, sh := range stored {
 			kept[i] = chain.Hop{NodeID: sh.NodeID, Mode: sh.Mode, ViaNodeID: sh.ViaNodeID}
 		}
-		chain.ExitChoice{Explicit: p.ExitMode, Legacy: p.LegacyMode, Current: kept[len(kept)-1].Mode}.Apply(kept)
+		chain.ExitChoice{Explicit: p.ExitMode, Current: kept[len(kept)-1].Mode}.Apply(kept)
 		hops = hopInputs(kept)
 	}
 	if p.EntryPort > 0 {

@@ -112,8 +112,8 @@ func TestExplicitHopsCannotEndOnANoDirectExitNodeOnCreateOrEdit(t *testing.T) {
 }
 
 // 不重新推导链的编辑（请求里没有入口、中转层、物理跳）沿用已落库的链，请求对出口模式
-// 的指定仍然生效，取舍与重新推导时相同：exit_mode 对任何链生效；旧字段 mode 只对
-// 裸单点生效；都没给就保持现状。
+// 的指定仍然生效，取舍与重新推导时相同：给了 exit_mode 就用它，没给就保持现状；
+// 动的只有最后一跳。
 func TestHeaderOnlyEditAppliesTheSameExitModeChoice(t *testing.T) {
 	d := openDB(t)
 	a, _ := db.CreateNode(d, "a", "", "")
@@ -137,26 +137,26 @@ func TestHeaderOnlyEditAppliesTheSameExitModeChoice(t *testing.T) {
 		return chainModes(t, s, rid)
 	}
 
-	// 裸单点：旧字段算指定。
+	// 单点。
 	single := adminCreateRuleID(t, s, admin, header(map[string]any{"node_id": a.ID}))
 	wantModes(t, chainModes(t, s, single), "kernel")
-	wantModes(t, edit(single, map[string]any{"mode": "userspace"}), "userspace")
-	wantModes(t, edit(single, nil), "userspace") // 都没给：保持现状
+	wantModes(t, edit(single, map[string]any{"exit_mode": "userspace"}), "userspace")
+	wantModes(t, edit(single, nil), "userspace") // 没给：保持现状
 	wantModes(t, edit(single, map[string]any{"exit_mode": "kernel"}), "kernel")
 
-	// 两跳的显式链：旧字段不算指定，exit_mode 才算；中间那一跳不受影响。
+	// 两跳的显式链：没给就保持现状；给了只动最后一跳，中间那一跳不受影响。
 	multi := adminCreateRuleID(t, s, admin, header(map[string]any{
 		"hops": []map[string]any{{"node_id": a.ID, "mode": "userspace"}, {"node_id": b.ID, "mode": "kernel"}},
 	}))
 	wantModes(t, chainModes(t, s, multi), "userspace", "kernel")
-	wantModes(t, edit(multi, map[string]any{"mode": "userspace"}), "userspace", "kernel")
+	wantModes(t, edit(multi, nil), "userspace", "kernel")
 	wantModes(t, edit(multi, map[string]any{"exit_mode": "userspace"}), "userspace", "userspace")
 
-	// 只有一跳、但这一跳记在组合名下的链不是裸单点：旧字段同样不算指定。
+	// 只有一跳、这一跳记在组合名下的链也一样。
 	oneUnderComposite := adminCreateRuleID(t, s, admin, header(map[string]any{
 		"hops": []map[string]any{{"node_id": b.ID, "via_node_id": comp.ID, "mode": "kernel"}},
 	}))
-	wantModes(t, edit(oneUnderComposite, map[string]any{"mode": "userspace"}), "kernel")
+	wantModes(t, edit(oneUnderComposite, nil), "kernel")
 	wantModes(t, edit(oneUnderComposite, map[string]any{"exit_mode": "userspace"}), "userspace")
 }
 

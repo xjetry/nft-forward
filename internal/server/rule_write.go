@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -24,14 +25,43 @@ type ruleWriteBody struct {
 	Exit      string `json:"exit"`
 	EntryPort int    `json:"entry_port"`
 	Comment   string `json:"comment"`
-	// ExitMode 是出口那一跳的转发模式；Mode 是它的旧字段，只对裸单点生效（见
-	// chain.ExitChoice）。改规则时两者都不给就保持现状。
-	Mode     string        `json:"mode"`
+	// ExitMode 是出口那一跳的转发模式（见 chain.ExitChoice）。改规则时不给就保持现状。
 	ExitMode string        `json:"exit_mode"`
 	Hops     []explicitHop `json:"hops"`
 	// ViaNodeIDs 是入口之后的中转层。用指针区分“没提到”（改规则时沿用已存的）与
 	// 明确给出的空列表（去掉中转层）。
 	ViaNodeIDs *[]int64 `json:"via_node_ids"`
+	removedRuleFields
+}
+
+// removedRuleFields 接住规则请求体里已经删除的顶层字段。字段从结构体里拿掉之后，
+// json 解码会把请求里的同名键当未知键丢掉、不报错：仍在发 mode 的客户端以为自己
+// 指定了出口模式，实际没有。所以留一个只用来发现它的位置，由 decodeRuleBody 拒绝。
+// 建规则、改规则的请求体都嵌入它：这里的 ruleWriteBody，以及 /api/v1 的两个。
+type removedRuleFields struct {
+	// Mode 是出口模式的旧字段，已由 exit_mode 取代。用 RawMessage 只为看它出现没有，
+	// 不看值：空串与 null 也算带了。hops 里每一跳的 mode 是另一个字段，不在这一层。
+	Mode json.RawMessage `json:"mode"`
+}
+
+func (f *removedRuleFields) removedFields() *removedRuleFields { return f }
+
+// ruleBody 是 decodeRuleBody 能解的请求体：嵌入了 removedRuleFields 的结构体的指针。
+type ruleBody interface {
+	removedFields() *removedRuleFields
+}
+
+// decodeRuleBody 解出建规则、改规则的请求体。返回的字符串是拒绝理由（一律按 400
+// 回），空串表示解出来了。写规则的六个入口都经它解码，“带了已删除的字段就拒绝”
+// 因此不靠各入口自己记得去查。
+func decodeRuleBody(r *http.Request, body ruleBody) string {
+	if err := decodeJSON(r, body); err != nil {
+		return "请求格式错误"
+	}
+	if body.removedFields().Mode != nil {
+		return "字段 mode 已移除：出口的转发模式请用 exit_mode"
+	}
+	return ""
 }
 
 // explicitHop 是管理员直接给出的物理链里的一跳。ViaNodeID 标明这一跳属于哪个逻辑节
@@ -49,7 +79,7 @@ func (b ruleWriteBody) fields() rulechange.Fields {
 func (b ruleWriteBody) path() rulechange.Path {
 	p := rulechange.Path{
 		Entry: b.NodeID, Vias: b.ViaNodeIDs,
-		ExitMode: b.ExitMode, LegacyMode: b.Mode, EntryPort: b.EntryPort,
+		ExitMode: b.ExitMode, EntryPort: b.EntryPort,
 	}
 	for _, h := range b.Hops {
 		p.Hops = append(p.Hops, chain.Hop{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID})
@@ -84,8 +114,8 @@ func (s *Server) ruleChanged(res rulechange.Result) {
 
 func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	var body ruleWriteBody
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	res, cerr := s.Rules.Create(rulechange.Actor{User: userFromCtx(r.Context())}, body.fields(), body.path(), false)
@@ -104,8 +134,8 @@ func (s *Server) apiUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body ruleWriteBody
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	res, cerr := s.Rules.Update(rulechange.Actor{User: userFromCtx(r.Context())}, id, body.fields(), body.path())
@@ -163,8 +193,8 @@ func (s *Server) apiReallocateRuleHop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyCreateRule(w http.ResponseWriter, r *http.Request) {
 	var body ruleWriteBody
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	res, cerr := s.Rules.Create(rulechange.Actor{User: userFromCtx(r.Context())}, body.fields(), body.path(), false)
@@ -183,8 +213,8 @@ func (s *Server) apiMyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body ruleWriteBody
-	if err := decodeJSON(r, &body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	res, cerr := s.Rules.Update(rulechange.Actor{User: userFromCtx(r.Context())}, id, body.fields(), body.path())

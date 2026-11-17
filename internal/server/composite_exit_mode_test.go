@@ -109,28 +109,6 @@ func TestCompositeRuleCreateUsesRequestModeForExitHop(t *testing.T) {
 	wantModes(t, chainModes(t, s, id), "kernel", "kernel", "userspace")
 }
 
-// Composite chains only honor exit_mode: legacy clients predating that field
-// always sent mode (prefilled from the first hop) even though the server
-// ignored it for composites, so honoring it now would let a stale web bundle
-// silently rewrite the exit segment on every edit.
-func TestCompositeRuleLegacyModeFieldIgnored(t *testing.T) {
-	d := openDB(t)
-	s, _ := New(d)
-	admin := loginAsAdmin(t, d)
-	comp := threeNodeChain(t, d, "userspace")
-
-	id := adminCreateRuleID(t, s, admin, map[string]any{
-		"node_id": comp.ID, "name": "r1", "proto": "tcp", "exit": "9.9.9.9:443", "mode": "userspace",
-	})
-	wantModes(t, chainModes(t, s, id), "userspace", "userspace", "kernel")
-
-	// A legacy edit carrying only mode keeps the exit hop untouched.
-	adminJSON(t, s, admin, "PUT", fmt.Sprintf("/api/rules/%d", id), map[string]any{
-		"node_id": comp.ID, "name": "r1b", "proto": "tcp", "exit": "9.9.9.9:443", "mode": "userspace",
-	})
-	wantModes(t, chainModes(t, s, id), "userspace", "userspace", "kernel")
-}
-
 // A composite rule created without a mode gets the kernel default on its exit
 // hop — the same default a single-node rule gets — not the config's tail mode.
 func TestCompositeRuleCreateDefaultsExitHopKernel(t *testing.T) {
@@ -194,12 +172,6 @@ func TestMyCompositeRuleExitHopMode(t *testing.T) {
 	})
 	wantModes(t, chainModes(t, s, resp.RuleID), "kernel", "kernel", "userspace")
 
-	// A stale bundle's edit (legacy mode only) must not touch the exit hop.
-	userJSON(t, s, cookie, "PUT", fmt.Sprintf("/api/my/rules/%d", resp.RuleID), map[string]any{
-		"name": "vless2", "proto": "tcp", "exit": "9.9.9.9:8443", "mode": "kernel",
-	})
-	wantModes(t, chainModes(t, s, resp.RuleID), "kernel", "kernel", "userspace")
-
 	userJSON(t, s, cookie, "PUT", fmt.Sprintf("/api/my/rules/%d", resp.RuleID), map[string]any{
 		"name": "vless2", "proto": "tcp", "exit": "9.9.9.9:8443", "exit_mode": "kernel",
 	})
@@ -243,22 +215,6 @@ func TestRuleListItemExposesExitMode(t *testing.T) {
 	}
 }
 
-// On single-node rules exit_mode and the legacy mode name the same (only)
-// hop; exit_mode wins when both are present so old and new clients coexist.
-func TestSingleNodeRuleExitModeField(t *testing.T) {
-	d := openDB(t)
-	s, _ := New(d)
-	admin := loginAsAdmin(t, d)
-	n, _ := db.CreateNode(d, "n1", "", "t1")
-	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
-
-	id := adminCreateRuleID(t, s, admin, map[string]any{
-		"node_id": n.ID, "name": "r1", "proto": "tcp", "exit": "9.9.9.9:443",
-		"mode": "kernel", "exit_mode": "userspace",
-	})
-	wantModes(t, chainModes(t, s, id), "userspace")
-}
-
 // Pins the existing invariant: udp cannot ride the TCP-only userspace relay,
 // so every hop of a udp chain is coerced to kernel no matter what the request
 // or the composite config asks for.
@@ -269,7 +225,7 @@ func TestCompositeRuleUDPCoercesAllHopsKernel(t *testing.T) {
 	comp := threeNodeChain(t, d, "userspace")
 
 	id := adminCreateRuleID(t, s, admin, map[string]any{
-		"node_id": comp.ID, "name": "r-udp", "proto": "udp", "exit": "9.9.9.9:443", "mode": "userspace",
+		"node_id": comp.ID, "name": "r-udp", "proto": "udp", "exit": "9.9.9.9:443", "exit_mode": "userspace",
 	})
 	wantModes(t, chainModes(t, s, id), "kernel", "kernel", "kernel")
 }

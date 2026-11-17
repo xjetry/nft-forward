@@ -88,8 +88,8 @@ export function copyInitial(rule, landingByKey) {
 
 /* 表单状态 → 创建 / 编辑接口的请求体。所有规则页面的请求体都由这里产生，
    新增字段不会在某一个调用点漏掉。
-   - mode 是出口段的模式，同时以 exit_mode（真实字段）与 mode（单点规则的
-     别名字段）发出。
+   - 表单里的 mode 是出口段的模式，以 exit_mode 发出。请求体没有顶层的 mode
+     字段，带了它服务端回 400。
    - via_node_ids 总是发出：表单持有整条链路，空数组表示“清空线路层”，而
      不是“保持不变”。
    - 不发 entry_family：服务端按入口节点的中转地址推导。 */
@@ -98,7 +98,6 @@ export function ruleFormToPayload(form) {
     node_id: form.node_id,
     name: form.name,
     proto: form.proto,
-    mode: form.mode || undefined,
     exit_mode: form.mode || undefined,
     exit: exitTarget(form.exit),
     entry_port: form.entry_port ? Number(form.entry_port) : undefined,

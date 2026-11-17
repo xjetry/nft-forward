@@ -306,7 +306,7 @@ func TestDeriveSeatOverrides(t *testing.T) {
 	}
 }
 
-// 出口那条腿的模式：显式指定 > 旧字段（只对裸单点）> 规则现有的 > 留空。
+// 出口那条腿的模式：显式指定 > 规则现有的 > 留空。
 func TestDeriveExitModePrecedence(t *testing.T) {
 	topo := testTopology()
 	k, u := ModeKernel, ModeUserspace
@@ -316,14 +316,12 @@ func TestDeriveExitModePrecedence(t *testing.T) {
 		want string
 	}{
 		{"都没给：留空", Request{Entry: 1}, ""},
-		{"显式指定", Request{Entry: 1, Exit: ExitChoice{Explicit: u, Legacy: k, Current: k}}, u},
-		{"裸单点认旧字段", Request{Entry: 1, Exit: ExitChoice{Legacy: u, Current: k}}, u},
-		{"裸单点没指定时沿用现有的", Request{Entry: 1, Exit: ExitChoice{Current: u}}, u},
-		{"有中转层时旧字段不算指定，沿用现有的", Request{Entry: 1, Vias: []int64{3}, Exit: ExitChoice{Legacy: u, Current: k}}, k},
-		{"有中转层时旧字段不算指定，没有现有的就留空", Request{Entry: 1, Vias: []int64{3}, Exit: ExitChoice{Legacy: u}}, ""},
-		{"组合入口时旧字段同样不算", Request{Entry: 10, Exit: ExitChoice{Legacy: u}}, ""},
-		// 只有一个成员的组合展开后也只有一跳，但它不是裸单点。
-		{"单成员组合入口时旧字段也不算", Request{Entry: 13, Exit: ExitChoice{Legacy: k}}, ""},
+		{"显式指定盖过现有的", Request{Entry: 1, Exit: ExitChoice{Explicit: u, Current: k}}, u},
+		{"单点没指定时沿用现有的", Request{Entry: 1, Exit: ExitChoice{Current: u}}, u},
+		{"有中转层、没指定时沿用现有的", Request{Entry: 1, Vias: []int64{3}, Exit: ExitChoice{Current: u}}, u},
+		{"有中转层、都没给：留空", Request{Entry: 1, Vias: []int64{3}}, ""},
+		{"组合入口都没给：留空", Request{Entry: 10}, ""},
+		{"单成员组合入口都没给：留空", Request{Entry: 13}, ""},
 		{"组合入口显式指定：盖掉组合给最后一个成员配的", Request{Entry: 10, Exit: ExitChoice{Explicit: u}}, u},
 	}
 	for _, c := range cases {
@@ -348,9 +346,9 @@ func TestExitChoiceApplyOnAStoredChain(t *testing.T) {
 		choice ExitChoice
 		want   string
 	}{
-		{"裸单点认旧字段", []Hop{hop(1, k, 1)}, ExitChoice{Legacy: u, Current: k}, u},
-		{"单成员组合的那一跳不认旧字段，保持现状", []Hop{hop(1, k, 13)}, ExitChoice{Legacy: u, Current: k}, k},
-		{"多跳链不认旧字段，保持现状", []Hop{hop(1, u, 1), hop(3, k, 3)}, ExitChoice{Legacy: u, Current: k}, k},
+		{"单点没指定时保持现状", []Hop{hop(1, u, 1)}, ExitChoice{Current: u}, u},
+		{"单点显式指定盖过现状", []Hop{hop(1, k, 1)}, ExitChoice{Explicit: u, Current: k}, u},
+		{"多跳链没指定时保持现状", []Hop{hop(1, k, 1), hop(3, u, 3)}, ExitChoice{Current: u}, u},
 		{"显式指定对任何链都生效", []Hop{hop(1, u, 10), hop(3, k, 10)}, ExitChoice{Explicit: u, Current: k}, u},
 	}
 	for _, c := range cases {

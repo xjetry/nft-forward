@@ -68,7 +68,7 @@ func TestEntryFamilyDerived(t *testing.T) {
 	// A dual-stack TCP rule exposes both entries and silently runs its entry hop
 	// in userspace even when kernel is requested (only userspace accepts v6).
 	t.Run("dual-stack tcp derives both and forces userspace entry", func(t *testing.T) {
-		rec := create("r-dual", dual.ID, "tcp", map[string]any{"mode": "kernel"})
+		rec := create("r-dual", dual.ID, "tcp", map[string]any{"exit_mode": "kernel"})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}

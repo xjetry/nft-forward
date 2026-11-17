@@ -208,15 +208,12 @@ func (t Topology) memberPath(from, target int64, visited map[int64]bool) ([]stri
 	return nil, false
 }
 
-// ExitChoice 是一次请求对“出口那条腿（链尾到目标）用什么转发模式”的各级意愿。
-// 按 Explicit、Legacy、Current 的次序取第一个生效的；都没有时留空，由 EnforceModes
+// ExitChoice 是一次请求对“出口那条腿（链尾到目标）用什么转发模式”的意愿：请求
+// 指定了就用指定的（Explicit），否则用 Current；两者都没有时留空，由 EnforceModes
 // 落成默认值。
 type ExitChoice struct {
 	// Explicit 是请求显式指定的出口模式。
 	Explicit string
-	// Legacy 是请求里的旧字段 mode。它只对裸单点链算作对出口的指定，别的链上一律
-	// 忽略：仍在发送这个字段的客户端不应因此改掉组合或多层链的出口。
-	Legacy string
 	// Current 是这条规则现在的出口模式。调用方只在“这次编辑没有换入口”时填它：
 	// 没有指定就沿用现状，免得不带出口模式的请求把 userspace 出口改回默认值。
 	Current string
@@ -229,19 +226,10 @@ func (c ExitChoice) Apply(hops []Hop) {
 		return
 	}
 	mode := c.Explicit
-	if mode == "" && bareSingle(hops) {
-		mode = c.Legacy
-	}
 	if mode == "" {
 		mode = c.Current
 	}
 	hops[len(hops)-1].Mode = mode
-}
-
-// bareSingle 报告 hops 是不是裸单点链。只看跳数不够：只有一个成员的组合展开后也
-// 只有一跳，但那一跳的 ViaNodeID 是组合的 id、NodeID 是物理成员的 id，两者不同。
-func bareSingle(hops []Hop) bool {
-	return len(hops) == 1 && hops[0].ViaNodeID == hops[0].NodeID
 }
 
 // Request 是一次链路推导的输入：规则选了哪个入口、哪些中转层，以及对出口模式的

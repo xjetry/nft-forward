@@ -461,21 +461,21 @@ func (s *Server) v1MyGetRule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	var body struct {
-		NodeID       int64     `json:"node_id"`
-		NodeName     string    `json:"node_name"`
-		Name         string    `json:"name"`
-		Proto        string    `json:"proto"`
-		Exit         string    `json:"exit"`
-		EntryPort    int       `json:"entry_port"`
-		Comment      string    `json:"comment"`
-		Mode         string    `json:"mode"`
+		NodeID    int64  `json:"node_id"`
+		NodeName  string `json:"node_name"`
+		Name      string `json:"name"`
+		Proto     string `json:"proto"`
+		Exit      string `json:"exit"`
+		EntryPort int    `json:"entry_port"`
+		Comment   string `json:"comment"`
+		removedRuleFields
 		ExitMode     string    `json:"exit_mode"`
 		ViaNodeIDs   *[]int64  `json:"via_node_ids"`
 		ViaNodeNames *[]string `json:"via_node_names"`
 		DryRun       bool      `json:"dry_run"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
-		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		v1Err(w, http.StatusBadRequest, codeValidation, msg)
 		return
 	}
 	dryRun := body.DryRun || r.URL.Query().Get("dry_run") == "1"
@@ -520,7 +520,7 @@ func (s *Server) v1MyCreateRule(w http.ResponseWriter, r *http.Request) {
 
 	out, merr := s.Rules.Create(rulechange.Actor{User: u},
 		rulechange.Fields{Name: body.Name, Proto: body.Proto, Exit: body.Exit, Comment: body.Comment},
-		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, LegacyMode: body.Mode, EntryPort: body.EntryPort},
+		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, EntryPort: body.EntryPort},
 		dryRun)
 	if merr != nil {
 		writeRuleMutationV1(w, merr)
@@ -568,20 +568,20 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		NodeID       int64     `json:"node_id"`
-		NodeName     string    `json:"node_name"`
-		Name         string    `json:"name"`
-		Proto        string    `json:"proto"`
-		Exit         string    `json:"exit"`
-		EntryPort    int       `json:"entry_port"`
-		Comment      string    `json:"comment"`
-		Mode         string    `json:"mode"`
+		NodeID    int64  `json:"node_id"`
+		NodeName  string `json:"node_name"`
+		Name      string `json:"name"`
+		Proto     string `json:"proto"`
+		Exit      string `json:"exit"`
+		EntryPort int    `json:"entry_port"`
+		Comment   string `json:"comment"`
+		removedRuleFields
 		ExitMode     string    `json:"exit_mode"`
 		ViaNodeIDs   *[]int64  `json:"via_node_ids"`
 		ViaNodeNames *[]string `json:"via_node_names"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
-		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
+	if msg := decodeRuleBody(r, &body); msg != "" {
+		v1Err(w, http.StatusBadRequest, codeValidation, msg)
 		return
 	}
 	// node_name resolves to node_id only when a node was actually named; leaving
@@ -593,7 +593,7 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	out, merr := s.Rules.Update(rulechange.Actor{User: u}, id,
 		rulechange.Fields{Name: body.Name, Proto: body.Proto, Exit: body.Exit, Comment: body.Comment},
-		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, LegacyMode: body.Mode, EntryPort: body.EntryPort})
+		rulechange.Path{Entry: nodeID, Vias: vias, ExitMode: body.ExitMode, EntryPort: body.EntryPort})
 	if merr != nil {
 		writeRuleMutationV1(w, merr)
 		return

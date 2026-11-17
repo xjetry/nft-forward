@@ -92,7 +92,6 @@ components:
         exit: { type: string }
         entry_port: { type: integer }
         comment: { type: string }
-        mode: { type: string }
         exit_mode: { type: string }
         via_node_ids:
           type: array

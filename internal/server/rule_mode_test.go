@@ -45,7 +45,7 @@ func TestSingleNodeRuleModeCreateAndEdit(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
 
 	rec := adminJSON(t, s, admin, "POST", "/api/rules", map[string]any{
-		"node_id": n.ID, "name": "r1", "proto": "tcp", "exit": "9.9.9.9:443", "mode": "userspace",
+		"node_id": n.ID, "name": "r1", "proto": "tcp", "exit": "9.9.9.9:443", "exit_mode": "userspace",
 	})
 	var resp struct {
 		Rule struct {
@@ -71,7 +71,7 @@ func TestSingleNodeRuleModeCreateAndEdit(t *testing.T) {
 
 	// An explicit mode edit switches it.
 	adminJSON(t, s, admin, "PUT", fmt.Sprintf("/api/rules/%d", ruleID), map[string]any{
-		"node_id": n.ID, "name": "r1b", "proto": "tcp", "exit": "9.9.9.9:443", "mode": "kernel",
+		"node_id": n.ID, "name": "r1b", "proto": "tcp", "exit": "9.9.9.9:443", "exit_mode": "kernel",
 	})
 	if m := singleHopMode(t, s, ruleID); m != "kernel" {
 		t.Fatalf("mode after kernel edit = %q, want kernel", m)
@@ -86,7 +86,7 @@ func TestSingleNodeRuleModeUDPCoercesKernel(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, n.ID, "1.1.1.1")
 
 	rec := adminJSON(t, s, admin, "POST", "/api/rules", map[string]any{
-		"node_id": n.ID, "name": "r-udp", "proto": "udp", "exit": "9.9.9.9:443", "mode": "userspace",
+		"node_id": n.ID, "name": "r-udp", "proto": "udp", "exit": "9.9.9.9:443", "exit_mode": "userspace",
 	})
 	var resp struct {
 		Rule struct {
