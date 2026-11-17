@@ -73,7 +73,6 @@
       "no_direct_exit": false,
       "node_type": "composite",
       "online": true,
-      "port_range": "10001-20000",
       "rate_multiplier": 3,
       "roles": 3,
       "unidirectional": false
@@ -85,7 +84,6 @@
       "no_direct_exit": false,
       "node_type": "composite",
       "online": false,
-      "port_range": "10001-20000",
       "rate_multiplier": 1,
       "roles": 3,
       "unidirectional": false
@@ -97,7 +95,6 @@
       "no_direct_exit": false,
       "node_type": "composite",
       "online": false,
-      "port_range": "10001-20000",
       "rate_multiplier": 1,
       "roles": 3,
       "unidirectional": false
@@ -109,7 +106,6 @@
       "no_direct_exit": false,
       "node_type": "composite",
       "online": false,
-      "port_range": "10001-20000",
       "rate_multiplier": 1,
       "roles": 3,
       "unidirectional": false

@@ -17,21 +17,14 @@ import (
 // the rule request".
 func makeCompositeHopMode(t *testing.T, d *sql.DB, name, hopMode string, childIDs ...int64) *db.Node {
 	t.Helper()
-	c, err := db.CreateNode(d, name, "", "")
+	hops := make([]db.NodeHop, len(childIDs))
+	for i, cid := range childIDs {
+		hops[i] = db.NodeHop{HopNodeID: cid, Mode: hopMode}
+	}
+	n, err := db.CreateCompositeNode(d, name, db.LineSpec{}, hops)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, c.ID); err != nil {
-		t.Fatal(err)
-	}
-	hops := make([]db.NodeHop, len(childIDs))
-	for i, cid := range childIDs {
-		hops[i] = db.NodeHop{NodeID: c.ID, Position: i, HopNodeID: cid, Mode: hopMode}
-	}
-	if err := db.CreateNodeHops(d, c.ID, hops); err != nil {
-		t.Fatal(err)
-	}
-	n, _ := db.GetNode(d, c.ID)
 	return n
 }
 

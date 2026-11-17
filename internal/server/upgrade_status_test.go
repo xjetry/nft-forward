@@ -11,7 +11,7 @@ import (
 func TestDeriveUpgradeStatus(t *testing.T) {
 	base := time.Unix(1_000_000, 0)
 	mk := func(at int64, ver, status, errText, agent string) *db.Node {
-		n := &db.Node{AgentVersion: agent, LastUpgradeVersion: ver, LastUpgradeStatus: status, LastUpgradeError: errText}
+		n := &db.Node{Machine: db.Machine{AgentVersion: agent, LastUpgradeVersion: ver, LastUpgradeStatus: status, LastUpgradeError: errText}}
 		if at > 0 {
 			n.LastUpgradeAt = sql.NullInt64{Int64: at, Valid: true}
 		}

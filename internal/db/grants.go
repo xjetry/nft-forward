@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 
 	"nft-forward/internal/chain"
 )
@@ -33,12 +34,23 @@ type UserNode struct {
 	GrantedAt int64 `json:"granted_at"`
 }
 
+// ErrNotComposite 表示试图给不是组合的节点写成员。
+var ErrNotComposite = errors.New("members apply to composite nodes only")
+
 // CreateNodeHops 写入组合节点 nodeID 的有序成员。
 //
 // 成员的 mode 经 chain.InterNodeLegMode 落值后才入库：没填的按节点间那条腿的默认值
 // 记成 userspace，认不出的值返回错误。node_hops 只经本函数写入，所以读侧（展开、
-// 链路推导）拿到的成员 mode 一定是两种模式之一。
+// 链路推导）拿到的成员 mode 一定是两种模式之一；也因此“只有组合有成员”在这里检查：
+// nodeID 不是组合时返回 ErrNotComposite，不存在时返回 sql.ErrNoRows。
 func CreateNodeHops(d DBTX, nodeID int64, hops []NodeHop) error {
+	var nodeType string
+	if err := d.QueryRow(`SELECT node_type FROM nodes WHERE id=?`, nodeID).Scan(&nodeType); err != nil {
+		return err
+	}
+	if nodeType != "composite" {
+		return ErrNotComposite
+	}
 	for _, h := range hops {
 		mult := h.TrafficMultiplier
 		if mult < 0 {

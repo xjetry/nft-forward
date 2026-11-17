@@ -191,10 +191,9 @@ func TestActiveRuleHopsForPushCompositeQuota(t *testing.T) {
 	d := openTestDB(t)
 	uid := createTestUser(t, d)
 
-	// Create a composite node and one physical hop node.
-	compID := createTestNode(t, d, "composite")
+	// Create one physical hop node and a composite over it.
 	physID := createTestNode(t, d, "phys")
-	d.Exec(`UPDATE nodes SET node_type='composite', relay_host='10.0.0.1' WHERE id=?`, compID)
+	compID := createTestComposite(t, d, "composite", physID).ID
 	d.Exec(`UPDATE nodes SET relay_host='10.0.0.2' WHERE id=?`, physID)
 
 	// Grant both; set a quota on the composite node only.
@@ -253,11 +252,8 @@ func TestLegacyChainBackfillPerHopSegments(t *testing.T) {
 
 	plain, _ := CreateNode(d, "plain-entry", "", "") // node_type 'remote'
 	relay, _ := CreateNode(d, "relay", "", "")
-	comp, _ := CreateNode(d, "comp-entry", "", "")
-	if _, err := d.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, comp.ID); err != nil {
-		t.Fatal(err)
-	}
 	child, _ := CreateNode(d, "comp-child", "", "")
+	comp := createTestComposite(t, d, "comp-entry", child.ID)
 
 	insertRule := func(entryNodeID int64) int64 {
 		res, err := d.Exec(`INSERT INTO rules(node_id, proto, exit_host, exit_port, created_at) VALUES (?, 'tcp', '9.9.9.9', 443, ?)`, entryNodeID, now())

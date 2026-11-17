@@ -370,17 +370,21 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeType := strings.TrimSpace(body.NodeType)
-	if nodeType == "composite" {
-		// Create a composite node with hops
+	// 线路属性两种节点都有；机器属性只给机器，成员只给组合。只对另一种节点有意义的
+	// 字段直接拒绝，不悄悄丢掉。请求在任何写入之前校验完，被拒绝的请求不留下节点行。
+	line := db.LineSpec{RateMultiplier: body.RateMultiplier}
+	switch strings.TrimSpace(body.NodeType) {
+	case "composite":
+		if body.Secret != "" || body.PortRange != "" || body.Unidirectional {
+			jsonErr(w, http.StatusBadRequest, "组合节点不跑 agent，没有接入凭据、端口范围与计费方向：这些按成员节点各自的设置")
+			return
+		}
 		if len(body.Hops) < 2 {
 			jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 			return
 		}
-		// 成员与各自的转发模式都在建节点之前校验完：后面的建节点、写成员不在同一个
-		// 事务里，校验放在后面的话，被拒绝的请求会留下一个没有成员的组合。
 		childIDs := make([]int64, len(body.Hops))
-		memberModes := make([]string, len(body.Hops))
+		members := make([]db.NodeHop, len(body.Hops))
 		for i, h := range body.Hops {
 			childIDs[i] = h.NodeID
 			mode, err := chain.InterNodeLegMode(h.Mode)
@@ -388,71 +392,47 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			memberModes[i] = mode
+			members[i] = db.NodeHop{HopNodeID: h.NodeID, Mode: mode}
 		}
 		if status, err := s.validateCompositeMembers(0, childIDs); err != nil {
 			jsonErr(w, status, err.Error())
 			return
 		}
-		n, err := db.CreateNode(s.DB, body.Name, "", "")
+		n, err := db.CreateCompositeNode(s.DB, body.Name, line, members)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Set node_type to composite
-		if _, err := s.DB.Exec(`UPDATE nodes SET node_type='composite' WHERE id=?`, n.ID); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		nodeHops := make([]db.NodeHop, len(body.Hops))
-		for i, h := range body.Hops {
-			nodeHops[i] = db.NodeHop{NodeID: n.ID, Position: i, HopNodeID: h.NodeID, Mode: memberModes[i], TrafficMultiplier: 0}
-		}
-		if err := db.CreateNodeHops(s.DB, n.ID, nodeHops); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		// Create can't distinguish an unset multiplier from an explicit 0: an
-		// absent JSON field decodes to 0 too. So 0 keeps the default 1.0 here;
-		// configuring a node as free (0) is done afterward via the dedicated
-		// rate-multiplier endpoint, which alone treats 0 as the free marker.
-		if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
-			_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
-		}
 		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
 		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
 		s.writeAdminNode(w, n.ID)
-		return
-	}
-
-	// Default: create a remote node
-	n, err := db.CreateNode(s.DB, body.Name, "", strings.TrimSpace(body.Secret))
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// Absent field and explicit 0 are indistinguishable on create, so 0 keeps
-	// the default 1.0; free (0) is set later via the dedicated endpoint.
-	if body.RateMultiplier > 0 && body.RateMultiplier != 1.0 {
-		_ = db.UpdateNodeRateMultiplier(s.DB, n.ID, body.RateMultiplier)
-	}
-	if body.Unidirectional {
-		_ = db.UpdateNodeUnidirectional(s.DB, n.ID, true)
-	}
-	if body.PortRange != "" {
-		if err := db.ValidatePortRange(body.PortRange); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+	case "", "remote":
+		if len(body.Hops) > 0 {
+			jsonErr(w, http.StatusBadRequest, "只有组合节点有成员；建组合请指定 node_type 为 composite")
 			return
 		}
-		if err := db.UpdateNodePortRange(s.DB, n.ID, body.PortRange); err != nil {
+		if body.PortRange != "" {
+			if err := db.ValidatePortRange(body.PortRange); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		// 属主是建它的管理员：这台机器的节点侧命令以属主的名义执行。
+		n, err := db.CreateMachineNode(s.DB, body.Name, db.MachineSpec{
+			Secret: strings.TrimSpace(body.Secret), OwnerID: &u.ID,
+			PortRange: body.PortRange, Unidirectional: body.Unidirectional,
+		}, line)
+		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
+		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
+		s.dispatchNodes("新建节点", []int64{n.ID})
+		s.writeAdminNode(w, n.ID)
+	default:
+		jsonErr(w, http.StatusBadRequest, "node_type 须为 remote 或 composite")
 	}
-	db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
-	s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-	s.dispatchNodes("新建节点", []int64{n.ID})
-	s.writeAdminNode(w, n.ID)
 }
 
 // writeAdminNode 回 {"node": 节点 id 的管理员视图}，给写完节点之后的响应用。
@@ -618,10 +598,6 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
 		return
 	}
-	if node.NodeType != "composite" {
-		jsonErr(w, http.StatusBadRequest, "非组合节点")
-		return
-	}
 	type hopUpdate struct {
 		NodeID int64  `json:"node_id"`
 		Mode   string `json:"mode"`
@@ -637,10 +613,6 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if len(body.Hops) < 2 {
-		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
-		return
-	}
 	childIDs := make([]int64, len(body.Hops))
 	for i, hu := range body.Hops {
 		if hu.NodeID == 0 {
@@ -649,8 +621,14 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 		}
 		childIDs[i] = hu.NodeID
 	}
+	// 先判定 id 是不是组合（ValidateMembers），再看成员个数：给机器写成员的请求报的是
+	// “非组合节点”。
 	if status, err := s.validateCompositeMembers(id, childIDs); err != nil {
 		jsonErr(w, status, err.Error())
+		return
+	}
+	if len(body.Hops) < 2 {
+		jsonErr(w, http.StatusBadRequest, "组合节点至少需要 2 个子节点")
 		return
 	}
 	hops := make([]db.NodeHop, len(body.Hops))
@@ -928,7 +906,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的中继地址：入口取展开后第一台机器的中继地址，请在那台机器上设置")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
@@ -988,11 +966,24 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := db.UpdateNodeRelayHostV6(s.DB, id, host); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的 IPv6 中继地址：入口与出口取展开后首尾两台机器的地址，请在那两台机器上设置")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host_v6", strconv.FormatInt(id, 10), host)
 	jsonOK(w, map[string]any{"ok": true})
+}
+
+// jsonMachineWriteErr 报告一次机器属性写入（db.updateMachine）的失败：目标是组合时回
+// 400 与 compositeMsg，节点不存在回 404，其余回 500。
+func jsonMachineWriteErr(w http.ResponseWriter, err error, compositeMsg string) {
+	switch {
+	case errors.Is(err, db.ErrPhysicalNodeSetting):
+		jsonErr(w, http.StatusBadRequest, compositeMsg)
+	case errors.Is(err, sql.ErrNoRows):
+		jsonErr(w, http.StatusNotFound, "节点不存在")
+	default:
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) {
@@ -1002,13 +993,8 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	node, err := db.GetNode(s.DB, id)
-	if err != nil {
+	if _, err := db.GetNode(s.DB, id); err != nil {
 		jsonErr(w, http.StatusNotFound, "节点不存在")
-		return
-	}
-	if node.NodeType == "composite" {
-		jsonErr(w, http.StatusBadRequest, "组合节点不支持设置端口范围")
 		return
 	}
 	var body struct {
@@ -1024,7 +1010,7 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.UpdateNodePortRange(s.DB, id, spec); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点不支持设置端口范围：监听端口在成员节点上分配，按各成员节点的端口范围")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_port_range", strconv.FormatInt(id, 10), spec)
@@ -1084,11 +1070,7 @@ func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := db.UpdateNodeUnidirectional(s.DB, id, body.Unidirectional); err != nil {
-		if errors.Is(err, db.ErrPhysicalNodeSetting) {
-			jsonErr(w, http.StatusBadRequest, "组合节点没有自己的计费方向：按上报流量的成员节点各自的设置计费，请在成员节点上设置")
-			return
-		}
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有自己的计费方向：按上报流量的成员节点各自的设置计费，请在成员节点上设置")
 		return
 	}
 	label := "双向"
@@ -1121,11 +1103,7 @@ func (s *Server) apiSetNodeNoDirectExit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.UpdateNodeNoDirectExit(s.DB, id, body.NoDirectExit); err != nil {
-		if errors.Is(err, db.ErrPhysicalNodeSetting) {
-			jsonErr(w, http.StatusBadRequest, "组合节点不能设置“禁止直接转发”：能否作为链尾由组合里最后一个成员节点决定，请在该成员节点上设置")
-			return
-		}
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点不能设置“禁止直接转发”：能否作为链尾由组合里最后一个成员节点决定，请在该成员节点上设置")
 		return
 	}
 	label := "允许直接转发"
@@ -1142,8 +1120,8 @@ func (s *Server) apiResyncNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := s.dispatchToNode(id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+	if aerr := s.resyncNode(id); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
@@ -1169,6 +1147,10 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	// 的产物，各架构的产物版本号相同。
 	version := serverVersion()
 	err = s.upgradeNode(node, panelURL)
+	if errors.Is(err, errNotAMachine) {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Record the dispatch outcome so the node detail can surface a silent
 	// failure later (an acked upgrade whose version never takes).
 	status, errText := "acked", ""
@@ -1290,7 +1272,7 @@ func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := db.UpdateNodeOwner(s.DB, id, body.OwnerID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonMachineWriteErr(w, err, "组合节点没有属主：属主是机器的节点侧命令的执行身份，组合不跑 agent")
 		return
 	}
 	ownerStr := "nil"
@@ -1342,7 +1324,7 @@ func (s *Server) apiUpgradeAllNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var nodes []*db.Node
 	for _, n := range all {
-		if n.NodeType == "composite" || n.Disabled {
+		if requireMachine(n) != nil || n.Disabled {
 			continue
 		}
 		nodes = append(nodes, n)

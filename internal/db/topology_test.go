@@ -69,8 +69,7 @@ func TestLoadTopology(t *testing.T) {
 	a, _ := CreateNode(d, "a", "", "")
 	b, _ := CreateNode(d, "b", "", "")
 	c, _ := CreateNode(d, "c", "", "")
-	combo, _ := CreateNode(d, "combo", "", "")
-	markComposite(t, d, combo.ID)
+	combo := createTestComposite(t, d, "combo")
 	if err := UpdateNodeRoles(d, a.ID, NodeRoleEntry); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +126,7 @@ func TestInterNodeLegModeIsSettledWhenStored(t *testing.T) {
 	d := openTestDB(t)
 	a, _ := CreateNode(d, "a", "", "")
 	b, _ := CreateNode(d, "b", "", "")
-	combo, _ := CreateNode(d, "combo", "", "")
-	markComposite(t, d, combo.ID)
+	combo := createTestComposite(t, d, "combo")
 
 	if err := CreateNodeHops(d, combo.ID, []NodeHop{{Position: 0, HopNodeID: a.ID}, {Position: 1, HopNodeID: b.ID, Mode: "kernel"}}); err != nil {
 		t.Fatal(err)

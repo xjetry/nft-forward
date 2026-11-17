@@ -15,7 +15,7 @@ func memberHop(comp, child int64, mode string) *NodeHop {
 
 func TestCatalogCompositeOnline(t *testing.T) {
 	mk := func(id int64, typ string, online int, disabled bool) *Node {
-		return &Node{ID: id, NodeType: typ, Online: online, Disabled: disabled}
+		return &Node{ID: id, NodeType: typ, Disabled: disabled, Machine: Machine{Online: online}}
 	}
 	hop := func(comp, child int64) *NodeHop { return memberHop(comp, child, "") }
 
@@ -92,7 +92,7 @@ func TestCatalogCompositeOnline(t *testing.T) {
 
 func TestCatalogCompositeRelayStack(t *testing.T) {
 	mk := func(id int64, typ, v4, v6 string) *Node {
-		return &Node{ID: id, NodeType: typ, RelayHost: v4, RelayHostV6: v6}
+		return &Node{ID: id, NodeType: typ, Machine: Machine{RelayHost: v4, RelayHostV6: v6}}
 	}
 	hop := func(comp, child int64) *NodeHop { return memberHop(comp, child, "") }
 
@@ -249,14 +249,12 @@ func TestCatalogDerivesAGrantedCompositeOverTheWholeTopology(t *testing.T) {
 	a, _ := CreateNode(d, "a", "", "")
 	b, _ := CreateNode(d, "b", "", "")
 	x, _ := CreateNode(d, "x", "", "")
-	inner, _ := CreateNode(d, "inner", "", "")
-	outer, _ := CreateNode(d, "outer", "", "")
-	markComposite(t, d, inner.ID)
-	markComposite(t, d, outer.ID)
-	if err := CreateNodeHops(d, inner.ID, []NodeHop{{Position: 0, HopNodeID: a.ID, Mode: "kernel"}, {Position: 1, HopNodeID: b.ID, Mode: "userspace"}}); err != nil {
+	inner, err := CreateCompositeNode(d, "inner", LineSpec{}, []NodeHop{{HopNodeID: a.ID, Mode: "kernel"}, {HopNodeID: b.ID, Mode: "userspace"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CreateNodeHops(d, outer.ID, []NodeHop{{Position: 0, HopNodeID: inner.ID, Mode: "kernel"}, {Position: 1, HopNodeID: x.ID, Mode: "userspace"}}); err != nil {
+	outer, err := CreateCompositeNode(d, "outer", LineSpec{}, []NodeHop{{HopNodeID: inner.ID, Mode: "kernel"}, {HopNodeID: x.ID, Mode: "userspace"}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	uid := createTestUser(t, d)
@@ -285,7 +283,7 @@ func TestCatalogDerivesAGrantedCompositeOverTheWholeTopology(t *testing.T) {
 // 地址、展示用的原始流量里没有它；同一份目录里展得开的组合不受影响。
 func TestUnflattenableCompositeHasNoDerivedAttributes(t *testing.T) {
 	nodes := []*Node{
-		{ID: 1, Name: "a", NodeType: "remote", Online: 1, RelayHost: "10.0.0.1", RelayHostV6: "2001:db8::1"},
+		{ID: 1, Name: "a", NodeType: "remote", Machine: Machine{Online: 1, RelayHost: "10.0.0.1", RelayHostV6: "2001:db8::1"}},
 		{ID: 7, Name: "loop-a", NodeType: "composite"},
 		{ID: 8, Name: "loop-b", NodeType: "composite"},
 		{ID: 9, Name: "ok", NodeType: "composite"},

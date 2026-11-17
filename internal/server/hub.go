@@ -611,12 +611,15 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 	}
 }
 
+// lookupNodeBySecret 按接入凭据认出一台机器。空凭据一律拒绝：self 节点与组合的
+// secret 列都是空串，空凭据若参与匹配就会认出它们。组合不跑 agent，即使行上残留着
+// 凭据也不参与匹配。
 func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
 	if secret == "" {
 		return nil, errors.New("empty secret")
 	}
 	var id int64
-	err := d.QueryRow(`SELECT id FROM nodes WHERE secret=?`, secret).Scan(&id)
+	err := d.QueryRow(`SELECT id FROM nodes WHERE secret=? AND node_type<>'composite'`, secret).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

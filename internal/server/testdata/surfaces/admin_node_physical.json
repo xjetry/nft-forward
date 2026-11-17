@@ -37,6 +37,7 @@
     "no_direct_exit": false,
     "node_type": "remote",
     "online": 1,
+    "owner_id": 1,
     "port_range": "20000-20100",
     "rate_multiplier": 2,
     "relay_host": "10.0.0.1",

@@ -399,8 +399,8 @@ func (s *Server) v1AdminResyncNode(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "bad id")
 		return
 	}
-	if err := s.dispatchToNode(id); err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
+	if aerr := s.resyncNode(id); aerr != nil {
+		writeAdminErrV1(w, aerr)
 		return
 	}
 	v1OK(w, map[string]any{"resynced": true})
