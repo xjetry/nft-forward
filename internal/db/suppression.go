@@ -93,11 +93,20 @@ func NodesCarryingRulesThrough(d *sql.DB, nodeID int64) ([]int64, error) {
 
 // ActiveRuleHopsForPush 返回应当下发到 nodeID 的规则跳：这个节点上的全部跳，去掉
 // 被压制的规则（suppressedRulesSQL）的跳。
+//
+// 结果按（监听端口，协议）排序，同一组跳每次返回的顺序都相同。两个读者依赖这一点：
+// 面板给下发载荷算的 rev（顺序变了 rev 就变，重连的节点会被多下发一次），以及节点
+// 按下标比较新旧规则集的数据面（nft.SameDataplane，顺序变了就整表重建）。
+//
+// 只按监听端口排不够：一个节点上 tcp 与 udp 可以各占同一个端口（OccupiedPortsOnNode
+// 按协议的命名空间判占用），那两行谁先谁后会跟着行的物理位置走，而 RegenerateRule
+// 每次都把跳行删掉重插。同一节点上（监听端口，协议）不重复由分配端口时的占用检查
+// 保证，所以加上协议就是全序。
 func ActiveRuleHopsForPush(d *sql.DB, nodeID int64) ([]*RuleHop, error) {
 	q := `SELECT ` + ruleHopCols + ` FROM rule_hops
 		WHERE node_id=?
 		  AND rule_id NOT IN (SELECT rule_id FROM (` + suppressedRulesSQL + `))
-		ORDER BY listen_port`
+		ORDER BY listen_port, proto`
 	return queryAll(d, q, scanRuleHop, nodeID)
 }
 

@@ -285,8 +285,8 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) []nft.Rule {
 // “要不要下发”与“数据面要不要重放”是两个问题。后者由节点收到载荷后自己按数据面
 // 投影判断（nft.SameDataplane）：只变了数据面不读的字段时，它存下新值、不动数据面。
 //
-// 同一份载荷两次算出的 rev 是否相同，取决于 ActiveRuleHopsForPush 两次返回的顺序
-// 是否相同（它按 listen_port 排序）。
+// 同一组规则两次算出的 rev 相同，要求 buildRules 两次给出的顺序相同；顺序来自
+// db.ActiveRuleHopsForPush，它按（监听端口，协议）排成全序。
 func computeRev(rules []nft.Rule) string {
 	h := sha256.New()
 	b, _ := json.Marshal(rules)
