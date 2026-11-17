@@ -1,11 +1,13 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -117,41 +119,93 @@ func dbAliasIn(file *ast.File) string {
 	return alias
 }
 
-// eachGoFile parses every non-test Go file of the repository and hands it to
-// visit. It fails the test if it finds none.
+// eachGoFile 解析本模块每个非测试的 Go 文件并交给 visit；一个都没扫到时让测试失败，
+// 否则检查会空过。
 func eachGoFile(t *testing.T, visit func(fset *token.FileSet, file *ast.File)) {
 	t.Helper()
-	root := filepath.Join("..", "..")
+	paths, err := moduleGoFiles(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("scanned no Go files; the check would pass vacuously")
+	}
 	fset := token.NewFileSet()
-	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		visit(fset, file)
+	}
+}
+
+// moduleGoFiles 列出以 root 为根的模块里每个非测试的 Go 文件。
+//
+// “这个模块的文件”按 go 工具枚举 ./... 的规则界定：名字以 "." 或 "_" 开头的目录和
+// 文件、名为 testdata 的目录不算；自带 go.mod 的子目录是另一个模块，也不算。
+//
+// 仓库根下面可以放着别的检出——git 工作树（.claude/worktrees、.worktrees，或别的
+// 位置），各带一份别的版本的源码。它们的根上都有 go.mod，所以不论叫什么、放在哪，都
+// 被“另一个模块”那一条挡在外面；放在点开头的目录里的，还先被目录名那一条挡住。按
+// 目录名逐个排除则每多一个位置就漏一次，漏掉时别的版本的代码被当成本模块的来检查。
+//
+// node_modules 是这套规则之外单独排除的：go 工具并不跳过它，而里面即使有 .go 文件
+// 也是前端依赖带来的，不是本仓库的代码。
+//
+// root 自己没有 go.mod 时报错：调用方给的不是模块根，扫出来的就不是本模块。
+func moduleGoFiles(root string) ([]string, error) {
+	isRoot, err := hasGoMod(root)
+	if err != nil {
+		return nil, err
+	}
+	if !isRoot {
+		return nil, fmt.Errorf("%s is not a module root: it has no go.mod", root)
+	}
+	var paths []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", ".git", ".worktrees", "dist":
+		// root 先单独放行：它的名字可以是 ".."，不该按“点开头”处理。
+		if path == root {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if d.IsDir() {
+			if name == "testdata" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			otherModule, err := hasGoMod(path)
+			if err != nil {
+				return err
+			}
+			if otherModule {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
+		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+			paths = append(paths, path)
 		}
-		scanned++
-		visit(fset, file)
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	return paths, err
+}
+
+// hasGoMod 报告 dir 下有没有 go.mod。
+func hasGoMod(dir string) (bool, error) {
+	_, err := os.Stat(filepath.Join(dir, "go.mod"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
-	if scanned == 0 {
-		t.Fatal("scanned no Go files; the check would pass vacuously")
-	}
+	return err == nil, err
 }
 
 // discardedDatabaseErrors lists every place in the file where a database call
