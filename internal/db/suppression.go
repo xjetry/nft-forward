@@ -27,12 +27,17 @@ const (
 
 // userExpiredSQL 是“账号 u 已到期”的 SQL 条件，与 Go 侧的 User.Expired 是同一个
 // 判定（TestUserExpiredAgreesBetweenGoAndThePushPredicate 对照）：没有到期时间
-// （NULL 或 0）永不到期，否则到期时间早于当前时刻即到期。
-const userExpiredSQL = `(u.expires_at IS NOT NULL AND u.expires_at > 0 AND u.expires_at < strftime('%s','now'))`
+// （NULL）永不到期，否则到期时间早于当前时刻即到期。
+//
+// “永不到期”只认 NULL，是一个放宽条件，所以不给它第二种写法：0 在这里是一个早已
+// 过去的时刻。写入方不写 0（server 包的 parseExpiryDate、parseExpiryUnix 是到期
+// 时间进入系统的两个入口，都把“不设到期”定成 NULL）；万一库里出现 0，结果是这个
+// 账号被当作已到期，而不是悄悄变成永不到期。
+const userExpiredSQL = `(u.expires_at IS NOT NULL AND u.expires_at < strftime('%s','now'))`
 
 // Expired 报告账号在 now 这一刻是否已到期。判定见 userExpiredSQL。
 func (u *User) Expired(now time.Time) bool {
-	return u.ExpiresAt.Valid && u.ExpiresAt.Int64 > 0 && u.ExpiresAt.Int64 < now.Unix()
+	return u.ExpiresAt.Valid && u.ExpiresAt.Int64 < now.Unix()
 }
 
 // suppressedRulesSQL 是“哪些规则此刻不转发、因为什么”的唯一定义，产出

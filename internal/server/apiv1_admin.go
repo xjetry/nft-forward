@@ -46,10 +46,15 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		// random, unguessable one rather than an empty/known secret.
 		password = db.RandToken(16)
 	}
+	expiresAt, aerr := parseExpiryUnix(body.ExpiresAt)
+	if aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
 	user, aerr := s.provisionUser(admin.ID, provisionParams{
 		Username: body.Username, Password: password, Role: body.Role,
 		MaxForwards: body.MaxForwards, TrafficQuotaBytes: body.TrafficQuotaBytes,
-		ExpiresAtUnix: body.ExpiresAt,
+		ExpiresAt: expiresAt,
 	})
 	if aerr != nil {
 		writeAdminErrV1(w, aerr)
@@ -234,7 +239,12 @@ func (s *Server) v1AdminSetExpiry(w http.ResponseWriter, r *http.Request) {
 		v1Err(w, http.StatusBadRequest, codeValidation, "请求格式错误")
 		return
 	}
-	if aerr := s.setUserExpiry(admin.ID, id, body.ExpiresAt); aerr != nil {
+	expiresAt, aerr := parseExpiryUnix(body.ExpiresAt)
+	if aerr != nil {
+		writeAdminErrV1(w, aerr)
+		return
+	}
+	if aerr := s.setUserExpiry(admin.ID, id, expiresAt); aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}
@@ -485,15 +495,10 @@ func (s *Server) v1Usage(w http.ResponseWriter, r *http.Request) {
 	}
 	userViews := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		var exp *int64
-		if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
-			e := u.ExpiresAt.Int64
-			exp = &e
-		}
 		userViews = append(userViews, map[string]any{
 			"user_id": u.ID, "username": u.Username, "role": u.Role, "disabled": u.Disabled,
 			"traffic_used_bytes": u.TrafficUsedBytes, "traffic_quota_bytes": u.TrafficQuotaBytes,
-			"rule_count": u.RuleCount, "expires_at": exp,
+			"rule_count": u.RuleCount, "expires_at": unixOrNil(u.ExpiresAt),
 		})
 	}
 	cat, err := db.LoadNodeCatalog(s.DB)

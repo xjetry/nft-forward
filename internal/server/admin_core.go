@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nft-forward/internal/db"
 )
@@ -50,7 +51,7 @@ type provisionParams struct {
 	Role              string
 	MaxForwards       int
 	TrafficQuotaBytes int64
-	ExpiresAtUnix     int64 // 0 = no expiry
+	ExpiresAt         sql.NullInt64 // 由 parseExpiryDate / parseExpiryUnix 给出
 	LandingSubURL     string
 	AdminNote         string
 }
@@ -102,8 +103,8 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 			maxFwd, p.TrafficQuotaBytes, id); err != nil {
 			return nil, err
 		}
-		if p.ExpiresAtUnix != 0 {
-			if _, err := tx.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id); err != nil {
+		if p.ExpiresAt.Valid {
+			if _, err := tx.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAt, id); err != nil {
 				return nil, err
 			}
 		}
@@ -158,13 +159,57 @@ func (s *Server) setUserMaxForwards(adminID, userID int64, n int) *adminError {
 	return nil
 }
 
-// setUserExpiry sets the user's absolute expiry (unix seconds; 0 = no expiry)
-// and re-dispatches their nodes so the change lands in the kernel immediately.
-func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError {
-	if err := db.UpdateRow(s.DB, `UPDATE users SET expires_at=? WHERE id=?`, expiresAtUnix, userID); err != nil {
+// 到期时间进入系统只有下面两个入口，各对应一种线上写法。二者的返回值只有两种：
+// NULL（sql.NullInt64 的零值，不设到期），或一个正的 unix 秒。users.expires_at 的
+// 三条写入语句（provisionUser、setUserExpiry、apiUpdateUserProfile 里各一条）绑定的
+// 都是它们的返回值；建用户的 INSERT（db.CreateUser）不写这一列，列没有默认值，留下
+// 的是 NULL。所以库里不会有 0 或负数——到期判定（db.User.Expired 与下发用的 SQL）
+// 只把 NULL 当作永不到期，0 在它那里是一个早已过去的时刻。
+//
+// “不设到期”是放宽，两个入口都只在调用方明说时才给：页面是空串，/api/v1 是 0。
+// 认不出的、或落不到一个正时刻上的取值一律拒绝，不归到“不设到期”里去。
+
+// parseExpiryDate 解析页面送来的到期日：YYYY-MM-DD，取 UTC 0 点；空串表示不设到期。
+// 1970-01-01 及更早的日期换不成一个正的 unix 秒，拒绝。
+func parseExpiryDate(raw string) (sql.NullInt64, *adminError) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return sql.NullInt64{}, nil
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return sql.NullInt64{}, &adminError{http.StatusBadRequest, codeValidation, "日期格式无效（需 YYYY-MM-DD）"}
+	}
+	if t.Unix() <= 0 {
+		return sql.NullInt64{}, &adminError{http.StatusBadRequest, codeValidation, "到期日无效"}
+	}
+	return sql.NullInt64{Int64: t.Unix(), Valid: true}, nil
+}
+
+// parseExpiryUnix 解析 /api/v1 送来的到期时刻：unix 秒，0 表示不设到期（这个接口的
+// 约定）。负数不是一个到期时刻，拒绝。
+func parseExpiryUnix(v int64) (sql.NullInt64, *adminError) {
+	if v < 0 {
+		return sql.NullInt64{}, &adminError{http.StatusBadRequest, codeValidation, "到期时间无效"}
+	}
+	return sql.NullInt64{Int64: v, Valid: v > 0}, nil
+}
+
+// unixOrNil 把可空的 unix 时刻换成对外的写法：一个数，或 null。
+func unixOrNil(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	return &v.Int64
+}
+
+// setUserExpiry 设置用户的到期时间（at 由 parseExpiryDate / parseExpiryUnix 给出，
+// NULL 表示永不到期），并重新下发他的节点，让变化立即到节点上。
+func (s *Server) setUserExpiry(adminID, userID int64, at sql.NullInt64) *adminError {
+	if err := db.UpdateRow(s.DB, `UPDATE users SET expires_at=? WHERE id=?`, at, userID); err != nil {
 		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
-	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(expiresAtUnix, 10))
+	db.WriteAudit(s.DB, adminID, "user.set_expiry", strconv.FormatInt(userID, 10), strconv.FormatInt(at.Int64, 10))
 	// 到期时间已经落库，要经这次重新下发才到节点上。调用是声明式的，重复一次就是重试。
 	if err := s.redispatchUser(userID, "设置到期时间"); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, "到期时间已保存，但没能确定需要重新下发的节点: " + err.Error()}

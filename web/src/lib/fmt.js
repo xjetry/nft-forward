@@ -104,13 +104,6 @@ export function pct(used, total) {
   return ((used / total) * 100).toFixed(1)
 }
 
-/** Extract Int64 from Go sql.NullInt64 JSON shape */
-export function nullInt(v) {
-  if (v == null) return null
-  if (typeof v === 'object' && 'Valid' in v) return v.Valid ? v.Int64 : null
-  return v
-}
-
 /** Extract String from Go sql.NullString JSON shape */
 export function nullStr(v) {
   if (v == null) return null

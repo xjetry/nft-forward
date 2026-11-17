@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { copyToClipboard } from '../../lib/clipboard'
-import { GB, fmtTrafficGB, nullInt, nullStr } from '../../lib/fmt'
+import { GB, fmtTrafficGB } from '../../lib/fmt'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
 import { ListItem, Page, PageHeader, SearchInput, SortableTh, TableScroll, Toolbar, nextSort } from '../../components/page'
@@ -84,7 +84,7 @@ function UserState({ user }) {
     return <StatusDot tone="danger" title="全局流量配额已用尽，规则已暂停转发；账号仍可登录">已超额</StatusDot>
   }
   if (!user.disabled) return <StatusDot tone="ok">正常</StatusDot>
-  const reason = nullStr(user.disable_reason)
+  const reason = user.disable_reason
   return (
     <span className="inline-flex items-center gap-2">
       <StatusDot tone="warn">已禁用</StatusDot>
@@ -136,7 +136,8 @@ function UserTable({ users, reload, onNewPassword }) {
 
   const q = search.trim().toLowerCase()
   const matched = q ? users.filter(u => (u.username || '').toLowerCase().includes(q)) : users
-  const expiryOf = u => nullInt(u.expires_at) || 0
+  // expires_at 是 unix 秒，没有到期日时是 null。
+  const expiryOf = u => u.expires_at || 0
   const rows = sort.col ? [...matched].sort((a, b) => {
     const ea = expiryOf(a)
     const eb = expiryOf(b)

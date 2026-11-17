@@ -283,7 +283,7 @@ paths:
                 role: { type: string, enum: [user, admin] }
                 max_forwards: { type: integer }
                 traffic_quota_bytes: { type: integer }
-                expires_at: { type: integer, description: unix 秒 }
+                expires_at: { type: integer, minimum: 0, description: "unix 秒；0 或不带表示永不过期，负数回 400" }
                 issue_token: { type: boolean, description: "默认 true；显式 false 时不铸 token" }
                 token_scope: { type: string, enum: [read, readwrite] }
       responses:
@@ -397,9 +397,10 @@ paths:
             schema:
               type: object
               properties:
-                expires_at: { type: integer, description: unix 秒，0 表示永不过期 }
+                expires_at: { type: integer, minimum: 0, description: "unix 秒；0 表示永不过期，负数回 400" }
       responses:
         "200": { description: 更新结果 }
+        "400": { description: 到期时间无效（负数）, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /users/{id}/enabled:

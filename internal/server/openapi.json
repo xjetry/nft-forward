@@ -731,7 +731,8 @@
                   },
                   "expires_at": {
                     "type": "integer",
-                    "description": "unix 秒"
+                    "minimum": 0,
+                    "description": "unix 秒；0 或不带表示永不过期，负数回 400"
                   },
                   "issue_token": {
                     "type": "boolean",
@@ -1063,7 +1064,8 @@
                 "properties": {
                   "expires_at": {
                     "type": "integer",
-                    "description": "unix 秒，0 表示永不过期"
+                    "minimum": 0,
+                    "description": "unix 秒；0 表示永不过期，负数回 400"
                   }
                 }
               }
@@ -1073,6 +1075,16 @@
         "responses": {
           "200": {
             "description": "更新结果"
+          },
+          "400": {
+            "description": "到期时间无效（负数）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "404": {
             "description": "用户不存在",

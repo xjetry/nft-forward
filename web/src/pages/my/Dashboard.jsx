@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { api } from '../../lib/api'
-import { fmtBytes, fmtDate, fmtGrantTraffic, isExpired, nullStr, pct } from '../../lib/fmt'
+import { fmtBytes, fmtDate, fmtGrantTraffic, isExpired, pct } from '../../lib/fmt'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
 import { browserStore, readSlot, writeSlot } from '../../lib/userStore'
@@ -54,8 +54,8 @@ function Overview({ data, onRenamed }) {
   const { user, nodes = [], grants = [], rules = [], show_rate: showRate } = data
   const [renaming, setRenaming] = useState(false)
 
-  const expiresAt = user.expires_at > 0 ? user.expires_at : null
-  const disableReason = nullStr(user.disable_reason)
+  const expiresAt = user.expires_at
+  const disableReason = user.disable_reason
   const used = user.traffic_used_bytes || 0
   const quota = user.traffic_quota_bytes || 0
   // fmtBytes 给出 “1.2 GB”；数值与单位分开排版。

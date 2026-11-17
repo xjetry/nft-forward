@@ -2,7 +2,7 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { copyToClipboard } from '../../lib/clipboard'
-import { GB, bytesToGBText, fmtBytes, fmtDate, fmtDateInput, fmtGrantTraffic, fmtTrafficGB, nullStr, pct } from '../../lib/fmt'
+import { GB, bytesToGBText, fmtBytes, fmtDate, fmtDateInput, fmtGrantTraffic, fmtTrafficGB, pct } from '../../lib/fmt'
 import { formatGrantLine } from '../../lib/grantText'
 import {
   ROLE_DIRECT, ROLE_LANDING, applyNodeRoleBatch, fetchNodeRoles, hostPortKey, mergeLanding, setNodeRoleBit,
@@ -70,7 +70,7 @@ function UserDetailBody({ userId, data, reload, patch }) {
   const confirm = useConfirm()
   const [newPassword, setNewPassword] = useState(null)
   const isRegular = user.role === 'user'
-  const disableReason = nullStr(user.disable_reason)
+  const disableReason = user.disable_reason
 
   // 接口是“翻转”语义：服务端按它当时的状态取反。结果以响应为准，而不是
   // 按页面上（可能已过期）的状态去猜。
@@ -168,7 +168,7 @@ function UsageCard({ userId, user, ruleCount, onReset }) {
   const quota = user.traffic_quota_bytes || 0
   // fmtBytes 给出 “1.2 GB”；数值与单位分开排版。
   const [usedValue, usedUnit] = fmtBytes(used).split(' ')
-  const expiresAt = user.expires_at > 0 ? user.expires_at : null
+  const expiresAt = user.expires_at
   const expiry = expiryAlert(expiresAt)
 
   const reset = useAction(async () => {
@@ -217,7 +217,7 @@ function UsageCard({ userId, user, ruleCount, onReset }) {
 
 function SettingsCard({ userId, user, reload }) {
   const toast = useToast()
-  const savedExpiry = user.expires_at > 0 ? fmtDateInput(user.expires_at) : ''
+  const savedExpiry = user.expires_at ? fmtDateInput(user.expires_at) : ''
   // 表单只在挂载时取一次服务端的值：之后页面数据刷新（别的卡片保存后都会
   // 刷新）不会冲掉这里输入到一半的内容。
   const [form, setForm] = useState(() => ({

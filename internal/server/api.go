@@ -1894,7 +1894,15 @@ func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonOK(w, map[string]any{"users": users})
+	// 列表里的每一项与详情里的 user 是同一个视图，另带只有列表需要的 rule_count
+	// （上面的 FillUserRuleCounts 只在这里填）。
+	views := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		v := apiUserFullView(u)
+		v["rule_count"] = u.RuleCount
+		views = append(views, v)
+	}
+	jsonOK(w, map[string]any{"users": views})
 }
 
 func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
@@ -1956,22 +1964,21 @@ func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	var expiresAt int64
-	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
-		if et, err := time.Parse("2006-01-02", raw); err == nil {
-			expiresAt = et.Unix()
-		}
+	expiresAt, aerr := parseExpiryDate(body.ExpiresAt)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
+		return
 	}
 	user, aerr := s.provisionUser(u.ID, provisionParams{
 		Username: body.Username, Password: body.Password, Role: body.Role,
 		MaxForwards: body.MaxForwards, TrafficQuotaBytes: body.TrafficQuotaBytes,
-		ExpiresAtUnix: expiresAt, LandingSubURL: body.LandingSubURL, AdminNote: body.AdminNote,
+		ExpiresAt: expiresAt, LandingSubURL: body.LandingSubURL, AdminNote: body.AdminNote,
 	})
 	if aerr != nil {
 		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	jsonOK(w, map[string]any{"user": user})
+	jsonOK(w, map[string]any{"user": apiUserFullView(user)})
 }
 
 func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
@@ -2181,14 +2188,10 @@ func (s *Server) apiSetUserExpiry(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	var expiresAt int64
-	if raw := strings.TrimSpace(body.ExpiresAt); raw != "" {
-		t, err := time.Parse("2006-01-02", raw)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, "日期格式无效（需 YYYY-MM-DD）")
-			return
-		}
-		expiresAt = t.Unix()
+	expiresAt, aerr := parseExpiryDate(body.ExpiresAt)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
+		return
 	}
 	if aerr := s.setUserExpiry(u.ID, id, expiresAt); aerr != nil {
 		jsonErr(w, aerr.status, aerr.msg)
@@ -2250,15 +2253,10 @@ func (s *Server) apiUpdateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var expiresAt int64
-	raw := strings.TrimSpace(body.ExpiresAt)
-	if raw != "" {
-		t, err := time.Parse("2006-01-02", raw)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, "日期格式无效（需 YYYY-MM-DD）")
-			return
-		}
-		expiresAt = t.Unix()
+	expiresAt, aerr := parseExpiryDate(body.ExpiresAt)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
+		return
 	}
 
 	trafficQuotaBytes := int64(body.TrafficQuotaGB * 1073741824)
@@ -2525,11 +2523,7 @@ func apiUserFullView(u *db.User) map[string]any {
 	m["traffic_quota_bytes"] = u.TrafficQuotaBytes
 	m["traffic_used_bytes"] = u.TrafficUsedBytes
 	m["over_quota"] = u.OverQuota
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
-		m["expires_at"] = u.ExpiresAt.Int64
-	} else {
-		m["expires_at"] = nil
-	}
+	m["expires_at"] = unixOrNil(u.ExpiresAt)
 	if u.DisableReason.Valid {
 		m["disable_reason"] = u.DisableReason.String
 	} else {

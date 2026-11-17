@@ -244,16 +244,11 @@ type v1User struct {
 }
 
 func toV1User(u *db.User) v1User {
-	var exp *int64
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
-		e := u.ExpiresAt.Int64
-		exp = &e
-	}
 	return v1User{
 		ID: u.ID, Username: u.Username, Role: u.Role, Disabled: u.Disabled,
 		MaxForwards: u.MaxForwards, RuleCount: u.RuleCount,
 		TrafficUsedBytes: u.TrafficUsedBytes, TrafficQuotaBytes: u.TrafficQuotaBytes,
-		TrafficResetDays: u.TrafficResetDays, ExpiresAt: exp, BillingRate: u.BillingRate,
+		TrafficResetDays: u.TrafficResetDays, ExpiresAt: unixOrNil(u.ExpiresAt), BillingRate: u.BillingRate,
 	}
 }
 
@@ -348,11 +343,6 @@ func (s *Server) v1Info(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var expiresAt *int64
-	if u.ExpiresAt.Valid && u.ExpiresAt.Int64 != 0 {
-		e := u.ExpiresAt.Int64
-		expiresAt = &e
-	}
 	t := tokenFromCtx(r.Context())
 	scope := ""
 	if t != nil {
@@ -366,7 +356,7 @@ func (s *Server) v1Info(w http.ResponseWriter, r *http.Request) {
 		"traffic_quota":         u.TrafficQuotaBytes,
 		"traffic_reset_days":    u.TrafficResetDays,
 		"last_traffic_reset_at": u.LastTrafficResetAt,
-		"expires_at":            expiresAt,
+		"expires_at":            unixOrNil(u.ExpiresAt),
 		"rule_count":            ruleCount,
 		"max_forwards":          u.MaxForwards,
 		"billing_rate":          u.BillingRate,

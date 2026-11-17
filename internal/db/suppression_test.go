@@ -209,16 +209,21 @@ func TestDisablingTheLogicalNodeSuppressesRulesBoughtThroughIt(t *testing.T) {
 
 // “账号已到期”有两处表达：Go 侧的 User.Expired（建规则、改规则时拒绝到期用户用它）
 // 和压制条件里的 SQL。两处必须对同一个到期时间给出同一个答案。
+//
+// “永不到期”只有一种写法：NULL。0 不是它的另一种写法——写入方不写 0，旧库里的 0 由
+// 迁移 0052 改成了 NULL；万一库里出现 0，两处都把它当成一个早已过去的时刻，账号
+// 按已到期处理，而不是被悄悄放行。
 func TestUserExpiredAgreesBetweenGoAndThePushPredicate(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
 		name      string
 		expiresAt any
+		expired   bool
 	}{
-		{"没有到期时间", nil},
-		{"到期时间为 0（不限期）", int64(0)},
-		{"一小时前到期", now.Add(-time.Hour).Unix()},
-		{"一小时后到期", now.Add(time.Hour).Unix()},
+		{"没有到期时间", nil, false},
+		{"到期时间为 0", int64(0), true},
+		{"一小时前到期", now.Add(-time.Hour).Unix(), true},
+		{"一小时后到期", now.Add(time.Hour).Unix(), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -234,6 +239,9 @@ func TestUserExpiredAgreesBetweenGoAndThePushPredicate(t *testing.T) {
 				t.Fatal(err)
 			}
 			expired := u.Expired(now)
+			if expired != c.expired {
+				t.Errorf("User.Expired=%v，期望 %v", expired, c.expired)
+			}
 			if pushed := pushedHopIDs(t, d, nid)[hop]; pushed == expired {
 				t.Errorf("User.Expired=%v，但规则下发=%v（到期应不下发，未到期应下发）", expired, pushed)
 			}

@@ -27,37 +27,50 @@ func EffectiveNodeRoles(nodeRoles, grantRoles int64) int64 {
 	return grantRoles
 }
 
+// User 是 users 表的一行，外加两个读出时算出来的值（OverQuota、RuleCount）。行本身
+// 不序列化（见 MarshalJSON）：对外的形状由 server 包里的用户视图给出。
 type User struct {
-	ID                int64          `json:"id"`
-	Username          string         `json:"username"`
-	PwHash            string         `json:"-"`
-	Role              string         `json:"role"`
-	Disabled          bool           `json:"disabled"`
-	DisableReason     sql.NullString `json:"disable_reason"`
-	MaxForwards       int            `json:"max_forwards"`
-	TrafficQuotaBytes int64          `json:"traffic_quota_bytes"`
+	ID                int64
+	Username          string
+	PwHash            string
+	Role              string
+	Disabled          bool
+	DisableReason     sql.NullString
+	MaxForwards       int
+	TrafficQuotaBytes int64
 	// TrafficUsedBytes 是本周期的全局已用量，加权字节（accounting.Weighted），只在
 	// 规则的入口跳记账；配额 TrafficQuotaBytes 与它同一单位。
-	TrafficUsedBytes int64 `json:"traffic_used_bytes"`
+	TrafficUsedBytes int64
 	// OverQuota 不是 users 表的列：scanUser 在读出这一行时用 QuotaReached 从上面两个
 	// 字段算出，供页面显示“已超额”。全局配额用尽只停转发（见 ActiveRuleHopsForPush），
 	// 与 Disabled 无关：超额的账号仍可登录。
-	OverQuota bool `json:"over_quota"`
+	OverQuota bool
 	// TrafficResetDays is the rolling window length in days; 0 means never auto-reset.
-	TrafficResetDays   int           `json:"traffic_reset_days"`
-	LastTrafficResetAt int64         `json:"last_traffic_reset_at"`
-	ExpiresAt          sql.NullInt64 `json:"expires_at"`
+	TrafficResetDays   int
+	LastTrafficResetAt int64
+	// ExpiresAt 是到期时刻（unix 秒）；NULL 表示永不到期，没有别的写法（判定见
+	// userExpiredSQL）。
+	ExpiresAt sql.NullInt64
 	// LandingSubURL is an optional subscription URL; LandingURIs is an optional
 	// newline-separated list of proxy URIs. They combine into the user's set of
 	// landing nodes (see internal/landing). Both empty means no landing source.
-	LandingSubURL string  `json:"landing_sub_url"`
-	LandingURIs   string  `json:"landing_uris"`
-	AdminNote     string  `json:"admin_note"`
-	BillingRate   float64 `json:"billing_rate"`
+	LandingSubURL string
+	LandingURIs   string
+	AdminNote     string
+	BillingRate   float64
 	// RuleCount is not a users-table column; it is filled by FillUserRuleCounts
 	// so the user list can show used/total rule quota.
-	RuleCount int `json:"rule_count"`
+	RuleCount int
 }
+
+// errUserRowJSON 是直接序列化用户行时的错误。
+var errUserRowJSON = errors.New("db.User is a table row; serialize it through a user view")
+
+// MarshalJSON 拒绝把用户行直接写进响应。行上的可空列是 sql.NullInt64、sql.NullString，
+// 直接序列化出来是 {"Int64":…,"Valid":…} 这样的驱动内部形状，读者得知道这一层才
+// 读得出值；行上还带着只给管理员看的 AdminNote。所以对外一律经 server 包里的用户
+// 视图，这里让绕开视图的写法在第一次序列化时就失败。
+func (User) MarshalJSON() ([]byte, error) { return nil, errUserRowJSON }
 
 // Node 是 nodes 表的一行，字段与列一一对应，没有内存里补出来的派生值。组合的在线、
 // 出入口地址、成员链、原始流量不是列，由 NodeCatalog.Derive 从全量节点算出；对外
