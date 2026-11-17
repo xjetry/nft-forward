@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"database/sql"
+	"errors"
 	"time"
 
 	"nft-forward/internal/db"
@@ -96,15 +97,26 @@ func ResetGrant(d *sql.DB, userID, nodeID int64) error {
 // ResetExit 把用户的一个落地出口账归零（合计与上下行三列一起），只动这一本账。
 // updated 表示有这一行；present 表示它在册——不在册的残留行不在下发排除的范围里，
 // 调用方据此决定要不要重推。
+//
+// 归零与读出 present 是同一条语句，放在事务里执行：语句执行了而它的结果没能读回来时
+// 事务回滚，所以返回错误就意味着账没有被清。
 func ResetExit(d *sql.DB, userID int64, host string, port int) (updated, present bool, err error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return false, false, err
+	}
+	defer tx.Rollback()
 	var p int
-	err = d.QueryRow(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0, updated_at = ?
+	err = tx.QueryRow(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0, updated_at = ?
 		WHERE user_id=? AND host=? AND port=? RETURNING present`,
 		time.Now().Unix(), userID, host, port).Scan(&p)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
 	if err != nil {
+		return false, false, err
+	}
+	if err := tx.Commit(); err != nil {
 		return false, false, err
 	}
 	return true, p == 1, nil

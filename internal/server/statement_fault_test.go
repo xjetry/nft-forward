@@ -30,10 +30,25 @@ import (
 // cannot reach, because the same table is read earlier in the request (the
 // second lookup of a user, after authentication has read the first) or
 // because they sit behind a write that has to succeed first.
+//
+// A query has a second way to fail: it is accepted, and reading its result
+// fails partway (faultAt.fetch). The caller is then told by rows.Err, not by
+// Query — a branch of its own, which a caller that only looks at Query's
+// error does not have, and which leaves it holding fewer rows than there are.
 
 const faultDriverName = "sqlite-statement-fault"
 
 var errInjectedFault = errors.New("injected fault: this statement was made to fail")
+
+// faultAt says where a run fails: at its stmt-th statement (1-based; 0 for
+// nowhere), and how.
+//
+// fetch 0 fails the statement itself: it returns an error. fetch n > 0 lets
+// the statement succeed and fails the n-th fetch from its result — fetch 1
+// before any row was delivered, fetch 2 after one row was. A statement that
+// is not a query, or whose result is not read that far, then fails nowhere,
+// and the run reports no failed statement.
+type faultAt struct{ stmt, fetch int }
 
 // statementScript watches the statements one goroutine sends to one database
 // and fails the failAt-th of them (1-based; 0 fails none).
@@ -48,6 +63,7 @@ type statementScript struct {
 	mu     sync.Mutex
 	gid    uint64 // watched goroutine; 0 while not armed
 	failAt int
+	fetch  int // faultAt.fetch
 	seen   []string
 	failed string
 	// failedIn is the bestEffortWork the failed statement belonged to, "" if
@@ -110,10 +126,12 @@ func firstOf[V any](stack []string, among map[string]V) string {
 // statementScripts maps a database file to the script for its connections.
 var statementScripts sync.Map
 
-func (sc *statementScript) arm(failAt int) {
+func (sc *statementScript) arm(failAt int) { sc.armAt(faultAt{stmt: failAt}) }
+
+func (sc *statementScript) armAt(f faultAt) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.gid, sc.failAt, sc.seen, sc.failed, sc.failedIn, sc.failedStack = goroutineID(), failAt, nil, "", "", nil
+	sc.gid, sc.failAt, sc.fetch, sc.seen, sc.failed, sc.failedIn, sc.failedStack = goroutineID(), f.stmt, f.fetch, nil, "", "", nil
 	sc.own, sc.auth = 0, map[string]bool{}
 }
 
@@ -124,11 +142,14 @@ func (sc *statementScript) disarm() {
 	sc.gid = 0
 }
 
-func (sc *statementScript) before(stmt string) error {
+// before records a statement the watched goroutine is about to issue. It
+// returns the error to fail the statement with, if this is the one to fail;
+// or, if it is the one whose result is to fail, which fetch (failFetch > 0).
+func (sc *statementScript) before(stmt string) (failFetch int, err error) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if sc.gid == 0 || sc.gid != goroutineID() {
-		return nil
+		return 0, nil
 	}
 	sc.seen = append(sc.seen, strings.Join(strings.Fields(stmt), " "))
 	stack := callingStack()
@@ -137,12 +158,26 @@ func (sc *statementScript) before(stmt string) error {
 	} else {
 		sc.own++
 	}
-	if len(sc.seen) == sc.failAt {
-		sc.failed, sc.failedStack = sc.seen[len(sc.seen)-1], stack
-		sc.failedIn = firstOf(stack, bestEffortWork)
-		return errInjectedFault
+	if len(sc.seen) != sc.failAt {
+		return 0, nil
 	}
-	return nil
+	if sc.fetch > 0 {
+		return sc.fetch, nil
+	}
+	sc.failed, sc.failedStack = sc.seen[len(sc.seen)-1], stack
+	sc.failedIn = firstOf(stack, bestEffortWork)
+	return 0, errInjectedFault
+}
+
+// fetchFailed records that the n-th fetch from stmt's result was failed. It
+// is attributed by the stack that fetched, which is the one that has to
+// notice.
+func (sc *statementScript) fetchFailed(stmt string, n int) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.failedStack = callingStack()
+	sc.failed = fmt.Sprintf("%s [fetch %d of its result]", strings.Join(strings.Fields(stmt), " "), n)
+	sc.failedIn = firstOf(sc.failedStack, bestEffortWork)
 }
 
 // goroutineID reads the calling goroutine's id off its stack header
@@ -204,21 +239,45 @@ type faultConn struct {
 }
 
 func (c *faultConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if err := c.script.before(query); err != nil {
+	if _, err := c.script.before(query); err != nil {
 		return nil, err
 	}
 	return c.execer.ExecContext(ctx, query, args)
 }
 
 func (c *faultConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if err := c.script.before(query); err != nil {
+	failFetch, err := c.script.before(query)
+	if err != nil {
 		return nil, err
 	}
-	return c.queryer.QueryContext(ctx, query, args)
+	rows, err := c.queryer.QueryContext(ctx, query, args)
+	if err != nil || failFetch == 0 {
+		return rows, err
+	}
+	return &faultRows{Rows: rows, script: c.script, stmt: query, failOn: failFetch}, nil
+}
+
+// faultRows is the result of the one query whose reading is to fail. The
+// fetches before failOn come from the real result.
+type faultRows struct {
+	driver.Rows
+	script  *statementScript
+	stmt    string
+	failOn  int
+	fetches int
+}
+
+func (r *faultRows) Next(dest []driver.Value) error {
+	r.fetches++
+	if r.fetches == r.failOn {
+		r.script.fetchFailed(r.stmt, r.failOn)
+		return errInjectedFault
+	}
+	return r.Rows.Next(dest)
 }
 
 func (c *faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	if err := c.script.before("BEGIN"); err != nil {
+	if _, err := c.script.before("BEGIN"); err != nil {
 		return nil, err
 	}
 	tx, err := c.beginner.BeginTx(ctx, opts)
@@ -243,7 +302,7 @@ type faultTx struct {
 }
 
 func (tx *faultTx) Commit() error {
-	if err := tx.script.before("COMMIT"); err != nil {
+	if _, err := tx.script.before("COMMIT"); err != nil {
 		// A commit that fails commits nothing, and the connection has to be
 		// left usable for the next statement.
 		tx.Tx.Rollback()
@@ -313,6 +372,11 @@ func openFaulted(seed faultSeed, path string) (s *Server, script *statementScrip
 }
 
 func runSweepCall(seed faultSeed, path string, call sweepCall, failAt int) (sweepRun, error) {
+	return runSweepCallAt(seed, path, call, faultAt{stmt: failAt})
+}
+
+// runSweepCallAt is runSweepCall with the fault given in full.
+func runSweepCallAt(seed faultSeed, path string, call sweepCall, fault faultAt) (sweepRun, error) {
 	s, script, release, err := openFaulted(seed, path)
 	if err != nil {
 		return sweepRun{}, err
@@ -334,7 +398,7 @@ func runSweepCall(seed faultSeed, path string, call sweepCall, failAt int) (swee
 	seed.authenticate(req, call.who)
 	rec := httptest.NewRecorder()
 	router := s.Router()
-	script.arm(failAt)
+	script.armAt(fault)
 	router.ServeHTTP(rec, req)
 	script.disarm()
 	after, err := storedState(d)

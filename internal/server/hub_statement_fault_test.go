@@ -48,12 +48,12 @@ type frameRun struct {
 const frameID = "frame-1"
 
 // runNodeFrame has the hub handle f on a fresh copy of the seeded database,
-// failing the failAt-th statement the handling issues (0: none).
+// failing where fault says in the statements the handling issues.
 //
 // Re-dispatch and quota enforcement are switched off: the hub hands both to
 // other goroutines, whose statements the script does not count, and which
 // would still be running when the database is closed.
-func runNodeFrame(seed faultSeed, path string, f nodeFrame, failAt int, snapshot func(*sql.DB) (map[string]string, error)) (frameRun, error) {
+func runNodeFrame(seed faultSeed, path string, f nodeFrame, fault faultAt, snapshot func(*sql.DB) (map[string]string, error)) (frameRun, error) {
 	s, script, release, err := openFaulted(seed, path)
 	if err != nil {
 		return frameRun{}, err
@@ -75,7 +75,7 @@ func runNodeFrame(seed faultSeed, path string, f nodeFrame, failAt int, snapshot
 		return frameRun{}, err
 	}
 	ac := &agentConn{nodeID: f.node(seed), writeCh: make(chan []byte, 8), closed: make(chan struct{})}
-	script.arm(failAt)
+	script.armAt(fault)
 	s.Hub.handleFrame(ac, wsproto.Envelope{Type: typ, ID: frameID, Payload: raw})
 	script.disarm()
 	if run.after, err = snapshot(s.DB); err != nil {
@@ -86,6 +86,19 @@ func runNodeFrame(seed faultSeed, path string, f nodeFrame, failAt int, snapshot
 		return frameRun{}, err
 	}
 	return run, nil
+}
+
+// everyFault lists the faults to try on a run of n statements: each
+// statement failing, and the first and second fetch from its result failing
+// (faultAt).
+func everyFault(n int) []faultAt {
+	var all []faultAt
+	for k := 1; k <= n; k++ {
+		for fetch := 0; fetch <= 2; fetch++ {
+			all = append(all, faultAt{stmt: k, fetch: fetch})
+		}
+	}
+	return all
 }
 
 // sentRuleAcks drains what the hub queued for the node, which has to be
@@ -206,18 +219,18 @@ func TestRuleCommandFromANodeIsAckedAsAPanelFailureWhenAStatementFails(t *testin
 	seed := seedFaultDB(t)
 	dir := t.TempDir()
 	serial := 0
-	run := func(f nodeFrame, failAt int) frameRun {
+	run := func(f nodeFrame, fault faultAt) frameRun {
 		t.Helper()
 		serial++
-		r, err := runNodeFrame(seed, filepath.Join(dir, fmt.Sprintf("frame-%d.db", serial)), f, failAt, wholeDatabase)
+		r, err := runNodeFrame(seed, filepath.Join(dir, fmt.Sprintf("frame-%d.db", serial)), f, fault, wholeDatabase)
 		if err != nil {
-			t.Fatalf("%s, statement %d: %v", f.name, failAt, err)
+			t.Fatalf("%s, statement %d: %v", f.name, fault.stmt, err)
 		}
 		return r
 	}
-	checked := 0
+	checked, fetchFaults := 0, 0
 	for _, f := range ruleCommandFrames() {
-		base := run(f, 0)
+		base := run(f, faultAt{})
 		if len(base.acks) != 1 || !base.acks[0].OK {
 			t.Errorf("%s: with nothing failing the ack is %+v, want one that is OK", f.name, base.acks)
 			continue
@@ -226,12 +239,16 @@ func TestRuleCommandFromANodeIsAckedAsAPanelFailureWhenAStatementFails(t *testin
 			t.Errorf("%s: with nothing failing the command stores nothing, so it cannot show a half-applied one", f.name)
 			continue
 		}
-		for k := 1; k <= len(base.stmts); k++ {
-			r := run(f, k)
+		for _, fault := range everyFault(len(base.stmts)) {
+			k := fault.stmt
+			r := run(f, fault)
 			if r.failed == "" {
-				continue // this run issued fewer statements than the fault-free one
+				continue // the statement was not issued, or the fetch not made
 			}
 			checked++
+			if fault.fetch > 0 {
+				fetchFaults++
+			}
 			where := fmt.Sprintf("%s, failed statement %d: %s", f.name, k, r.failed)
 			if len(r.acks) != 1 {
 				t.Errorf("%s\n    the node was sent %d acks, want 1", where, len(r.acks))
@@ -254,6 +271,9 @@ func TestRuleCommandFromANodeIsAckedAsAPanelFailureWhenAStatementFails(t *testin
 	}
 	if checked < 20 {
 		t.Fatalf("only %d statement failures were checked; the commands are not reaching the database", checked)
+	}
+	if fetchFaults == 0 {
+		t.Fatal("no failed fetch was checked; results are not being read through the wrapper that fails them")
 	}
 }
 
@@ -285,7 +305,7 @@ func TestRuleCommandFromANodeNamesWhatIsMissing(t *testing.T) {
 			}
 			return c.typ, c.payload, nil
 		}}
-		r, err := runNodeFrame(seed, filepath.Join(t.TempDir(), "frame.db"), f, 0, wholeDatabase)
+		r, err := runNodeFrame(seed, filepath.Join(t.TempDir(), "frame.db"), f, faultAt{}, wholeDatabase)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -414,12 +434,12 @@ func TestCountersBatchRecordsItsBytesInFullOrNotAtAllPerLedger(t *testing.T) {
 	seed := seedFaultDB(t)
 	dir := t.TempDir()
 	serial := 0
-	run := func(f nodeFrame, failAt int) frameRun {
+	run := func(f nodeFrame, fault faultAt) frameRun {
 		t.Helper()
 		serial++
-		r, err := runNodeFrame(seed, filepath.Join(dir, fmt.Sprintf("counters-%d.db", serial)), f, failAt, readLedgers)
+		r, err := runNodeFrame(seed, filepath.Join(dir, fmt.Sprintf("counters-%d.db", serial)), f, fault, readLedgers)
 		if err != nil {
-			t.Fatalf("%s, statement %d: %v", f.name, failAt, err)
+			t.Fatalf("%s, statement %d: %v", f.name, fault.stmt, err)
 		}
 		if len(r.acks) != 0 {
 			t.Fatalf("%s: a counters batch was answered with %+v", f.name, r.acks)
@@ -437,7 +457,7 @@ func TestCountersBatchRecordsItsBytesInFullOrNotAtAllPerLedger(t *testing.T) {
 	full := map[string]frameRun{}
 	moved := map[string]bool{}
 	for _, f := range []nodeFrame{entry, last, entryResetDue} {
-		full[f.name] = run(f, 0)
+		full[f.name] = run(f, faultAt{})
 		for ledger := range counterLedgers {
 			if full[f.name].before[ledger] != full[f.name].after[ledger] {
 				moved[ledger] = true
@@ -461,13 +481,17 @@ func TestCountersBatchRecordsItsBytesInFullOrNotAtAllPerLedger(t *testing.T) {
 	// from a dropped batch and, for an entry that costs the batch something,
 	// from a full one as well.
 	exercised := map[string]bool{}
-	checked := 0
+	checked, fetchFaults := 0, 0
 	check := func(f nodeFrame, only func(fn string) bool, unresetAs frameRun) {
 		base := full[f.name]
-		for k := 1; k <= len(base.stmts); k++ {
-			r := run(f, k)
+		for _, fault := range everyFault(len(base.stmts)) {
+			k := fault.stmt
+			r := run(f, fault)
 			if r.failed == "" {
 				continue
+			}
+			if fault.fetch > 0 {
+				fetchFaults++
 			}
 			fn := firstOf(r.failedStack, countersSurvives)
 			if !only(fn) {
@@ -540,6 +564,9 @@ func TestCountersBatchRecordsItsBytesInFullOrNotAtAllPerLedger(t *testing.T) {
 	if checked < 20 {
 		t.Fatalf("only %d statement failures were checked", checked)
 	}
+	if fetchFaults == 0 {
+		t.Fatal("no failed fetch was checked; results are not being read through the wrapper that fails them")
+	}
 }
 
 // relayFields are the columns a hello can write of a node's relay addresses.
@@ -595,9 +622,9 @@ func TestHelloRelayHostWritesStopAtAFailedWriteAndTheNextHelloFinishes(t *testin
 	serial := 0
 	checked := 0
 	for _, sc := range scenarios {
-		// attempt runs the hello's writes with the failAt-th statement failing
-		// and then, on the same database, a second hello with nothing failing.
-		attempt := func(failAt int) (stmts int, failed string, err error, initial, inMemory, stored, afterSecond relayFields) {
+		// attempt runs the hello's writes failing where fault says and then,
+		// on the same database, a second hello with nothing failing.
+		attempt := func(fault faultAt) (stmts int, failed string, err error, initial, inMemory, stored, afterSecond relayFields) {
 			t.Helper()
 			serial++
 			s, script, release, oerr := openFaulted(seed, filepath.Join(dir, fmt.Sprintf("hello-%d.db", serial)))
@@ -620,7 +647,7 @@ func TestHelloRelayHostWritesStopAtAFailedWriteAndTheNextHelloFinishes(t *testin
 			}
 			node := load()
 			initial = relayFieldsOf(node)
-			script.arm(failAt)
+			script.armAt(fault)
 			err = storeHelloRelayHosts(s.DB, node, connectV4, sc.hello)
 			script.disarm()
 			stmts, failed = len(script.seen), script.failed
@@ -631,7 +658,7 @@ func TestHelloRelayHostWritesStopAtAFailedWriteAndTheNextHelloFinishes(t *testin
 			afterSecond = relayFieldsOf(load())
 			return
 		}
-		stmts, _, err, _, _, stored, _ := attempt(0)
+		stmts, _, err, _, _, stored, _ := attempt(faultAt{})
 		if err != nil {
 			t.Errorf("%s: with nothing failing: %v", sc.name, err)
 			continue
@@ -644,8 +671,12 @@ func TestHelloRelayHostWritesStopAtAFailedWriteAndTheNextHelloFinishes(t *testin
 			t.Errorf("%s: the hello writes nothing, so there is no write to fail", sc.name)
 			continue
 		}
-		for k := 1; k <= stmts; k++ {
-			_, failed, err, initial, inMemory, stored, afterSecond := attempt(k)
+		for _, fault := range everyFault(stmts) {
+			k := fault.stmt
+			_, failed, err, initial, inMemory, stored, afterSecond := attempt(fault)
+			if failed == "" {
+				continue // a write has no result to fetch from
+			}
 			checked++
 			where := fmt.Sprintf("%s, failed statement %d: %s", sc.name, k, failed)
 			if !errors.Is(err, errInjectedFault) {
@@ -712,7 +743,7 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 	}
 	var rules []int64
 	serial := 0
-	attempt := func(failAt int) outcome {
+	attempt := func(fault faultAt) outcome {
 		t.Helper()
 		serial++
 		s, script, release, err := openFaulted(seed, filepath.Join(dir, fmt.Sprintf("move-%d.db", serial)))
@@ -770,7 +801,7 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 		var logs strings.Builder
 		prevOut := log.Writer()
 		log.SetOutput(&logs)
-		script.arm(failAt)
+		script.armAt(fault)
 		s.Hub.settleHelloRelayHosts(node, "198.51.100.77", hello)
 		script.disarm()
 		log.SetOutput(prevOut)
@@ -788,7 +819,7 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 			select {
 			case o.redispatch = <-redispatched:
 			case <-time.After(5 * time.Second):
-				t.Fatalf("failAt %d: rules were re-generated but nothing was handed to Redispatch", failAt)
+				t.Fatalf("fault %+v: rules were re-generated but nothing was handed to Redispatch", fault)
 			}
 		}
 
@@ -809,7 +840,7 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 		return o
 	}
 
-	clean := attempt(0)
+	clean := attempt(faultAt{})
 	if clean.logged != "" {
 		t.Fatalf("with nothing failing the hello logs: %s", clean.logged)
 	}
@@ -828,11 +859,15 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 		t.Fatalf("the hello issued only %d statements; the rules are not being re-generated", clean.stmts)
 	}
 
-	partial := 0
-	for k := 1; k <= clean.stmts; k++ {
-		o := attempt(k)
+	partial, fetchFaults := 0, 0
+	for _, fault := range everyFault(clean.stmts) {
+		k := fault.stmt
+		o := attempt(fault)
 		if o.failed == "" {
-			continue // this run issued fewer statements than the fault-free one
+			continue // the statement was not issued, or the fetch not made
+		}
+		if fault.fetch > 0 {
+			fetchFaults++
 		}
 		where := fmt.Sprintf("failed statement %d: %s", k, o.failed)
 		before, want := o.before, o.want
@@ -878,6 +913,9 @@ func TestHelloThatMovesANodeTakesItsRulesAlongOrLeavesEachWhole(t *testing.T) {
 	// what it describes.
 	if partial == 0 {
 		t.Error("no failed statement left one rule re-generated and the other as it was")
+	}
+	if fetchFaults == 0 {
+		t.Error("no failed fetch was checked; results are not being read through the wrapper that fails them")
 	}
 }
 
