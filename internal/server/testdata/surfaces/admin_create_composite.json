@@ -1,0 +1,36 @@
+{
+  "node": {
+    "address": "",
+    "agent_sha": "",
+    "agent_version": "",
+    "created_at": 0,
+    "disabled": false,
+    "id": 6,
+    "last_apply_at": {
+      "Int64": 0,
+      "Valid": false
+    },
+    "last_error": {
+      "String": "",
+      "Valid": false
+    },
+    "last_upgrade_at": {
+      "Int64": 0,
+      "Valid": false
+    },
+    "last_warning": "",
+    "name": "combo-k",
+    "no_direct_exit": false,
+    "node_type": "composite",
+    "online": 0,
+    "port_range": "10001-20000",
+    "rate_multiplier": 3,
+    "relay_host": "",
+    "relay_host_declared": false,
+    "relay_host_v6": "",
+    "relay_host_v6_declared": false,
+    "roles": 3,
+    "sort_order": 5,
+    "unidirectional": false
+  }
+}

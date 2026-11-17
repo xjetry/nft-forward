@@ -1,0 +1,289 @@
+{
+  "node_by_id": {
+    "2": {
+      "address": "203.0.113.1",
+      "agent_sha": "sha-a",
+      "agent_version": "v0.69.0",
+      "created_at": 1700000002,
+      "disabled": false,
+      "id": 2,
+      "last_apply_at": {
+        "Int64": 1700000950,
+        "Valid": true
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000900,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "skipped 1",
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_declared": false,
+      "relay_host_v6": "2001:db8::a",
+      "relay_host_v6_declared": false,
+      "roles": 1,
+      "sort_order": 1,
+      "unidirectional": false
+    },
+    "4": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000004,
+      "disabled": false,
+      "id": 4,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "dial timeout",
+        "Valid": true
+      },
+      "last_seen": 1700000902,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 2,
+      "sort_order": 3,
+      "unidirectional": true
+    },
+    "6": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000006,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "id": 6,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 5,
+      "unidirectional": false
+    }
+  },
+  "nodes": [
+    {
+      "address": "203.0.113.1",
+      "agent_sha": "sha-a",
+      "agent_version": "v0.69.0",
+      "created_at": 1700000002,
+      "disabled": false,
+      "id": 2,
+      "last_apply_at": {
+        "Int64": 1700000950,
+        "Valid": true
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000900,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "skipped 1",
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_declared": false,
+      "relay_host_v6": "2001:db8::a",
+      "relay_host_v6_declared": false,
+      "roles": 1,
+      "sort_order": 1,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000004,
+      "disabled": false,
+      "id": 4,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "dial timeout",
+        "Valid": true
+      },
+      "last_seen": 1700000902,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 2,
+      "sort_order": 3,
+      "unidirectional": true
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000006,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "hops": [
+        {
+          "mode": "kernel",
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "mode": "userspace",
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "id": 6,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 5,
+      "unidirectional": false
+    }
+  ],
+  "rule": {
+    "billing_rate": 1.5,
+    "chain": [
+      {
+        "name": "edge-a",
+        "node_id": 2,
+        "node_type": "remote"
+      },
+      {
+        "name": "edge-b",
+        "node_id": 3,
+        "node_type": "remote"
+      }
+    ],
+    "comment": "",
+    "created_at": 1700001004,
+    "entry": "10.0.0.1:20004",
+    "entry_family": "both",
+    "entry_listen_port": 20004,
+    "entry_mode": "userspace",
+    "entry_node_id": 2,
+    "entry_v6": "[2001:db8::a]:20004",
+    "exit": "7.7.7.7:7",
+    "exit_host": "7.7.7.7",
+    "exit_kind": "custom",
+    "exit_mode": "userspace",
+    "exit_port": 7,
+    "id": 4,
+    "name": "alice-k",
+    "node_id": 6,
+    "owner_id": {
+      "Int64": 2,
+      "Valid": true
+    },
+    "owner_name": "",
+    "proto": "tcp",
+    "rate_multiplier": 3,
+    "total_bytes": 4000,
+    "via_node_ids": []
+  },
+  "show_rate": false
+}

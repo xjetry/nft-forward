@@ -1,0 +1,200 @@
+{
+  "grants": [
+    {
+      "granted_at": 1700000100,
+      "max_forwards": 10,
+      "node_id": 2,
+      "rate_limit_mbytes": 0,
+      "roles": 1,
+      "traffic_quota_bytes": 0,
+      "traffic_used_bytes": 0,
+      "user_id": 2
+    },
+    {
+      "granted_at": 1700000100,
+      "max_forwards": 3,
+      "node_id": 4,
+      "rate_limit_mbytes": 0,
+      "roles": 0,
+      "traffic_quota_bytes": 0,
+      "traffic_used_bytes": 0,
+      "user_id": 2
+    },
+    {
+      "granted_at": 1700000100,
+      "max_forwards": 5,
+      "node_id": 6,
+      "rate_limit_mbytes": 8,
+      "roles": 0,
+      "traffic_quota_bytes": 1073741824,
+      "traffic_used_bytes": 2048,
+      "user_id": 2
+    }
+  ],
+  "nodes": [
+    {
+      "address": "203.0.113.1",
+      "agent_sha": "sha-a",
+      "agent_version": "v0.69.0",
+      "created_at": 1700000002,
+      "disabled": false,
+      "id": 2,
+      "last_apply_at": {
+        "Int64": 1700000950,
+        "Valid": true
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000900,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "skipped 1",
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_declared": false,
+      "relay_host_v6": "2001:db8::a",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 1,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000004,
+      "disabled": false,
+      "id": 4,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "dial timeout",
+        "Valid": true
+      },
+      "last_seen": 1700000902,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 2,
+      "sort_order": 3,
+      "unidirectional": true
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000006,
+      "disabled": false,
+      "id": 6,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 5,
+      "unidirectional": false
+    }
+  ],
+  "rules": [
+    {
+      "comment": "",
+      "created_at": 1700001003,
+      "entry_family": "both",
+      "entry_listen_port": 20003,
+      "exit_host": "6.6.6.6",
+      "exit_port": 8388,
+      "id": 3,
+      "name": "alice-a",
+      "node_id": 2,
+      "owner_id": {
+        "Int64": 2,
+        "Valid": true
+      },
+      "proto": "tcp",
+      "total_bytes": 0,
+      "via_node_ids": [
+        4
+      ]
+    },
+    {
+      "comment": "",
+      "created_at": 1700001004,
+      "entry_family": "both",
+      "entry_listen_port": 20004,
+      "exit_host": "7.7.7.7",
+      "exit_port": 7,
+      "id": 4,
+      "name": "alice-k",
+      "node_id": 6,
+      "owner_id": {
+        "Int64": 2,
+        "Valid": true
+      },
+      "proto": "tcp",
+      "total_bytes": 0,
+      "via_node_ids": []
+    }
+  ],
+  "show_rate": false,
+  "user": {
+    "admin_note": "vip",
+    "billing_rate": 1.5,
+    "disable_reason": null,
+    "disabled": false,
+    "expires_at": 2000000000,
+    "has_landing_source": true,
+    "id": 2,
+    "landing_sub_url": "",
+    "landing_uris": "vless://u@6.6.6.6:8388#HK",
+    "last_traffic_reset_at": 1700000500,
+    "max_forwards": 20,
+    "over_quota": false,
+    "role": "user",
+    "traffic_quota_bytes": 1073741824,
+    "traffic_reset_days": 30,
+    "traffic_used_bytes": 4096,
+    "username": "alice"
+  }
+}

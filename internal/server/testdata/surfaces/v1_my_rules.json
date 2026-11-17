@@ -1,0 +1,58 @@
+{
+  "data": [
+    {
+      "chain": [
+        {
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "name": "tail-c",
+          "node_id": 4,
+          "node_type": "remote"
+        }
+      ],
+      "created_at": 1700001003,
+      "entry": "10.0.0.1:20003",
+      "entry_family": "both",
+      "entry_v6": "[2001:db8::a]:20003",
+      "exit": "6.6.6.6:8388",
+      "exit_mode": "kernel",
+      "id": 3,
+      "name": "alice-a",
+      "node_id": 2,
+      "proto": "tcp",
+      "traffic_used_bytes": 3000,
+      "via_node_ids": [
+        4
+      ]
+    },
+    {
+      "chain": [
+        {
+          "name": "edge-a",
+          "node_id": 2,
+          "node_type": "remote"
+        },
+        {
+          "name": "edge-b",
+          "node_id": 3,
+          "node_type": "remote"
+        }
+      ],
+      "created_at": 1700001004,
+      "entry": "10.0.0.1:20004",
+      "entry_family": "both",
+      "entry_v6": "[2001:db8::a]:20004",
+      "exit": "7.7.7.7:7",
+      "exit_mode": "userspace",
+      "id": 4,
+      "name": "alice-k",
+      "node_id": 6,
+      "proto": "tcp",
+      "traffic_used_bytes": 4000,
+      "via_node_ids": []
+    }
+  ]
+}

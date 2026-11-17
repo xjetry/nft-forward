@@ -1,0 +1,722 @@
+{
+  "hops": [
+    {
+      "comment": "链路 adm-n · 第1跳",
+      "id": 2,
+      "last_bytes": 0,
+      "last_bytes_down": 0,
+      "last_bytes_up": 0,
+      "listen_port": 20002,
+      "mode": "kernel",
+      "node_id": 2,
+      "position": 0,
+      "proto": "tcp+udp",
+      "rule_id": 2,
+      "target_host": "10.0.0.2",
+      "target_port": 40003,
+      "total_bytes": 2000,
+      "via_node_id": 7
+    },
+    {
+      "comment": "链路 adm-n · 第2跳",
+      "id": 3,
+      "last_bytes": 0,
+      "last_bytes_down": 0,
+      "last_bytes_up": 0,
+      "listen_port": 40003,
+      "mode": "userspace",
+      "node_id": 3,
+      "position": 1,
+      "proto": "tcp+udp",
+      "rule_id": 2,
+      "target_host": "10.0.0.3",
+      "target_port": 40004,
+      "total_bytes": 0,
+      "via_node_id": 7
+    },
+    {
+      "comment": "链路 adm-n · 第3跳",
+      "id": 4,
+      "last_bytes": 0,
+      "last_bytes_down": 0,
+      "last_bytes_up": 0,
+      "listen_port": 40004,
+      "mode": "kernel",
+      "node_id": 4,
+      "position": 2,
+      "proto": "tcp+udp",
+      "rule_id": 2,
+      "target_host": "8.8.8.8",
+      "target_port": 53,
+      "total_bytes": 0,
+      "via_node_id": 7
+    }
+  ],
+  "node_by_id": {
+    "1": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000001,
+      "disabled": false,
+      "id": 1,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 0,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "self",
+      "no_direct_exit": false,
+      "node_type": "self",
+      "online": 0,
+      "owner_id": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 1,
+      "sort_order": 0,
+      "unidirectional": false
+    },
+    "2": {
+      "address": "203.0.113.1",
+      "agent_sha": "sha-a",
+      "agent_version": "v0.69.0",
+      "created_at": 1700000002,
+      "disabled": false,
+      "id": 2,
+      "last_apply_at": {
+        "Int64": 1700000950,
+        "Valid": true
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000900,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "skipped 1",
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_declared": false,
+      "relay_host_v6": "2001:db8::a",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 1,
+      "unidirectional": false
+    },
+    "3": {
+      "address": "203.0.113.2",
+      "agent_sha": "",
+      "agent_version": "v0.68.0",
+      "created_at": 1700000003,
+      "disabled": false,
+      "id": 3,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000901,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "edge-b",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.2",
+      "relay_host_declared": true,
+      "relay_host_v6": "2001:db8::b",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 2,
+      "unidirectional": false
+    },
+    "4": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000004,
+      "disabled": false,
+      "id": 4,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "dial timeout",
+        "Valid": true
+      },
+      "last_seen": 1700000902,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 2,
+      "sort_order": 3,
+      "unidirectional": true
+    },
+    "5": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000005,
+      "disabled": true,
+      "id": 5,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "spare-d",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.4",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 4,
+      "unidirectional": false
+    },
+    "6": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000006,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "id": 6,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 5,
+      "unidirectional": false
+    },
+    "7": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000007,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "id": 7,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "nested-n",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 6,
+      "unidirectional": false
+    },
+    "8": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000008,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "id": 8,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "with-disabled-m",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 7,
+      "unidirectional": false
+    },
+    "9": {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000009,
+      "disabled": false,
+      "id": 9,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "loop-l",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 8,
+      "unidirectional": false
+    }
+  },
+  "nodes": [
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000001,
+      "disabled": false,
+      "id": 1,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 0,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "self",
+      "no_direct_exit": false,
+      "node_type": "self",
+      "online": 0,
+      "owner_id": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 1,
+      "sort_order": 0,
+      "unidirectional": false
+    },
+    {
+      "address": "203.0.113.1",
+      "agent_sha": "sha-a",
+      "agent_version": "v0.69.0",
+      "created_at": 1700000002,
+      "disabled": false,
+      "id": 2,
+      "last_apply_at": {
+        "Int64": 1700000950,
+        "Valid": true
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000900,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "skipped 1",
+      "name": "edge-a",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "20000-20100",
+      "rate_multiplier": 2,
+      "relay_host": "10.0.0.1",
+      "relay_host_declared": false,
+      "relay_host_v6": "2001:db8::a",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 1,
+      "unidirectional": false
+    },
+    {
+      "address": "203.0.113.2",
+      "agent_sha": "",
+      "agent_version": "v0.68.0",
+      "created_at": 1700000003,
+      "disabled": false,
+      "id": 3,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_seen": 1700000901,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "edge-b",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.2",
+      "relay_host_declared": true,
+      "relay_host_v6": "2001:db8::b",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 2,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000004,
+      "disabled": false,
+      "id": 4,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "dial timeout",
+        "Valid": true
+      },
+      "last_seen": 1700000902,
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "tail-c",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.3",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 2,
+      "sort_order": 3,
+      "unidirectional": true
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000005,
+      "disabled": true,
+      "id": 5,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "spare-d",
+      "no_direct_exit": false,
+      "node_type": "remote",
+      "online": 1,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "10.0.0.4",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 4,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000006,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "exit_relay_host_v6": "2001:db8::b",
+      "id": 6,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "combo-k",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 3,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 5,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000007,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "id": 7,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "nested-n",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 6,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000008,
+      "disabled": false,
+      "entry_relay_host": "10.0.0.1",
+      "entry_relay_host_v6": "2001:db8::a",
+      "id": 8,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "with-disabled-m",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 7,
+      "unidirectional": false
+    },
+    {
+      "address": "",
+      "agent_sha": "",
+      "agent_version": "",
+      "created_at": 1700000009,
+      "disabled": false,
+      "id": 9,
+      "last_apply_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_error": {
+        "String": "",
+        "Valid": false
+      },
+      "last_upgrade_at": {
+        "Int64": 0,
+        "Valid": false
+      },
+      "last_warning": "",
+      "name": "loop-l",
+      "no_direct_exit": false,
+      "node_type": "composite",
+      "online": 0,
+      "port_range": "10001-20000",
+      "rate_multiplier": 1,
+      "relay_host": "",
+      "relay_host_declared": false,
+      "relay_host_v6": "",
+      "relay_host_v6_declared": false,
+      "roles": 3,
+      "sort_order": 8,
+      "unidirectional": false
+    }
+  ],
+  "rule": {
+    "billing_rate": 1,
+    "comment": "nested",
+    "created_at": 1700001002,
+    "entry": "10.0.0.1:20002",
+    "entry_family": "v4",
+    "entry_listen_port": 20002,
+    "entry_mode": "kernel",
+    "entry_node_id": 2,
+    "exit": "8.8.8.8:53",
+    "exit_host": "8.8.8.8",
+    "exit_kind": "custom",
+    "exit_mode": "kernel",
+    "exit_port": 53,
+    "id": 2,
+    "name": "adm-n",
+    "node_id": 7,
+    "owner_id": {
+      "Int64": 1,
+      "Valid": true
+    },
+    "owner_name": "root",
+    "proto": "tcp+udp",
+    "rate_multiplier": 1,
+    "total_bytes": 2000,
+    "via_node_ids": []
+  }
+}
