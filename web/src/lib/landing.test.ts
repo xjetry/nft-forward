@@ -1,13 +1,27 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, exportNames, hostPortKey, landingIndex, mergeLanding,
-  migrateSubCache, nextSubCache, nodeKey, relayExportName, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
+  migrateSubCache, nextSubCache, nodeKey, parseURIs, relayExportName, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
 } from './landing.js'
 
 const node = (host: string, port: number, extra: Record<string, unknown> = {}) =>
   ({ name: `${host}`, protocol: 'vless', host, port, uri: `vless://uuid@${host.includes(':') ? `[${host}]` : host}:${port}?x=1#n`, ...extra })
 const roleKey = (n: { protocol: string; host: string; port: number }) => `${n.protocol}:${n.host}:${n.port}`
+
+/* 样例文件同时被服务端解析器的测试读取（internal/landing/parse_test.go），
+   所以同一条 URI 在两边解析出的名字被钉成同一个。 */
+test('节点名取 URI 里写的那个：面板追加的 "^~2~^" 计数也原样保留', () => {
+  const cases: { uri: string; name: string }[] = JSON.parse(
+    readFileSync(new URL('../../../internal/landing/testdata/node_names.json', import.meta.url), 'utf8'))
+  assert.ok(cases.length > 0, '样例文件里没有用例')
+  for (const c of cases) {
+    const nodes = parseURIs(c.uri)
+    assert.equal(nodes.length, 1, c.uri)
+    assert.equal(nodes[0].name, c.name, c.uri)
+  }
+})
 
 test('规范键：IPv6 带方括号，且与索引 / 合并用的是同一个键', () => {
   assert.equal(hostPortKey('1.2.3.4', 443), '1.2.3.4:443')
