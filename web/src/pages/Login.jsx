@@ -79,9 +79,9 @@ export default function Login() {
     setAttempted(true)
     setOutcome(null)
     if (missing.username || missing.password) return
-    // 本页路径就是 /login，api 在这里把 401 当作普通失败抛出（见 lib/api.js
-    // 的 request），所以“用户名或密码错误”会走到下面的 onError。
-    await api.post('/login', { username, password })
+    // 登录请求的 401 是“用户名或密码错误”，不是会话结束：声明 own401，让它
+    // 作为普通失败走到下面的 onError（见 lib/api.js 的 request）。
+    await api.post('/login', { username, password }, { own401: true })
     await refresh()
     setOutcome({ kind: 'accepted' })
   }, {

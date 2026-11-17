@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
-import { ApiError, api } from '../lib/api'
+import { ApiError, api, setSessionEndedHandler } from '../lib/api'
 import { assertNever, createLatest } from '../lib/resource'
 import { adoptLocalData } from '../lib/landing'
 import { answerFromFailure, guard, settle } from '../lib/session'
@@ -36,7 +36,8 @@ export function SessionProvider({ children }) {
     const token = latest.begin()
     let answer
     try {
-      const data = await api.get('/me')
+      // 401 在这里就是答复本身（没有登录），由下面的 answerFromFailure 归类。
+      const data = await api.get('/me', { own401: true })
       if (!latest.isCurrent(token)) return true
       setBranding({ panelName: data?.panel_name || '', version: data?.version || '' })
       answer = data?.user ? { kind: 'user', user: data.user } : { kind: 'anonymous' }
@@ -57,7 +58,19 @@ export function SessionProvider({ children }) {
   // 面板名称刚在设置页保存成功时调用：侧栏与标签页标题读的是这里的这一份。
   const setPanelName = useCallback((name) => setBranding(b => ({ ...b, panelName: name })), [])
 
-  useEffect(() => { void refresh() }, [refresh])
+  // 会话结束。它有两个来源，都是服务端的明确答复，所以与 /me 答复“没有登录”
+  // 同样对待（settle 的 anonymous），RequireAuth 随后在页内转到登录页：
+  // - 某个请求被答复 401（lib/api 的 request 经下面登记的处理通知到这里）；
+  // - 退出登录的请求成功（Layout 的 logout）。
+  const endSession = useCallback(() => setSession(prev => settle(prev, { kind: 'anonymous' })), [])
+
+  // 受保护的页面要等这里的 refresh 确认到已登录才会渲染（RequireAuth），所以
+  // 它们发出请求的时候，会话结束的处理已经登记好了。
+  useEffect(() => {
+    setSessionEndedHandler(endSession)
+    void refresh()
+    return () => setSessionEndedHandler(null)
+  }, [refresh, endSession])
 
   const anonymous = session.status === 'anonymous'
   useEffect(() => {
@@ -75,8 +88,8 @@ export function SessionProvider({ children }) {
   useEffect(() => { document.title = panelName }, [panelName])
 
   const value = useMemo(
-    () => ({ session, refresh, setPanelName, panelName, version: branding.version }),
-    [session, refresh, setPanelName, panelName, branding.version],
+    () => ({ session, refresh, endSession, setPanelName, panelName, version: branding.version }),
+    [session, refresh, endSession, setPanelName, panelName, branding.version],
   )
   return <SessionCtx.Provider value={value}>{children}</SessionCtx.Provider>
 }
@@ -86,6 +99,7 @@ export function SessionProvider({ children }) {
  * @returns {{
  *   session: Session,
  *   refresh: () => Promise<boolean>,
+ *   endSession: () => void,
  *   setPanelName: (name: string) => void,
  *   panelName: string,
  *   version: string,
@@ -98,11 +112,11 @@ export function useSession() {
 /**
  * 当前登录用户。只在 <RequireAuth> 之下调用，那里 user 一定存在；
  * 在它之外（登录页）user 为 null。
- * @returns {{ user: any, panelName: string, version: string, refresh: () => Promise<boolean> }}
+ * @returns {{ user: any, panelName: string, version: string, refresh: () => Promise<boolean>, endSession: () => void }}
  */
 export function useUser() {
-  const { session, refresh, panelName, version } = useSession()
-  return { user: session.status === 'authenticated' ? session.user : null, panelName, version, refresh }
+  const { session, refresh, endSession, panelName, version } = useSession()
+  return { user: session.status === 'authenticated' ? session.user : null, panelName, version, refresh, endSession }
 }
 
 /**

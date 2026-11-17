@@ -43,15 +43,17 @@ function navFor(user, hasProxies) {
  * 外壳只挂载一次，切换页面时侧栏不会重建。
  */
 export function AppLayout() {
-  const { user, panelName, version } = useUser()
+  const { user, panelName, version, endSession } = useUser()
   const navigate = useNavigate()
   const { isDark, toggleTheme, blurred, toggleBlur, copyFmt, setCopyFmt } = usePrefs()
   // 本地代理数据变化会改变导航项的有无，订阅它的变化以便重新计算。
   useLocalLandingVersion()
 
+  // 退出请求成功，服务端已经删掉会话并清掉 cookie（apiLogout），会话就此结束。
+  // 这里不自己跳转：转到登录页由 RequireAuth 按会话状态决定。
   const logout = useAction(async () => {
     await api.post('/logout')
-    window.location.href = '/login'
+    endSession()
   })
 
   const accountItems = (collapsed) => [
