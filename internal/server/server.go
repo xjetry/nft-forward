@@ -37,6 +37,21 @@ type Server struct {
 }
 
 func New(d *sql.DB) (*Server, error) {
+	s, err := newServer(d)
+	if err != nil {
+		return nil, err
+	}
+	go s.expiryEnforcer()
+	go s.cycleResetEnforcer()
+	go s.landingSyncEnforcer()
+	return s, nil
+}
+
+// newServer builds a server that answers requests but runs none of the
+// periodic work New starts. Everything it does to the database is then the
+// doing of the requests it is given, which is what a test that counts or
+// fails individual statements needs.
+func newServer(d *sql.DB) (*Server, error) {
 	if _, err := EnsureSelfNode(d); err != nil {
 		return nil, fmt.Errorf("ensure self node: %w", err)
 	}
@@ -49,9 +64,6 @@ func New(d *sql.DB) (*Server, error) {
 		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
-	go s.expiryEnforcer()
-	go s.cycleResetEnforcer()
-	go s.landingSyncEnforcer()
 	return s, nil
 }
 
@@ -175,7 +187,7 @@ func (s *Server) landingSyncPass(includeManualOnly bool) {
 			log.Printf("landing: sync pass resolve user %d: %v", u.ID, err)
 			continue
 		}
-		s.syncLandingExits(u, nodes)
+		s.refreshLandingLedger(u, nodes)
 	}
 }
 

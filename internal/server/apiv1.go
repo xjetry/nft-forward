@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 
@@ -51,6 +50,17 @@ const (
 func v1OK(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+}
+
+// v1LookupErr is lookupErr for the v1 envelope: the caller's status, code and
+// message when the row does not exist, an internal error carrying err
+// otherwise. err is not nil.
+func v1LookupErr(w http.ResponseWriter, err error, status int, code, message string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		v1Err(w, status, code, message)
+		return
+	}
+	v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
 }
 
 // v1Err writes the standard error envelope: {"error":{"code","message"}}.
@@ -455,7 +465,13 @@ func (s *Server) v1MyGetRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rl, err := db.GetRule(s.DB, id)
-	if err != nil || !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+	if err != nil {
+		v1LookupErr(w, err, http.StatusNotFound, codeNotFound, "规则不存在")
+		return
+	}
+	// Someone else's rule is answered exactly as one that does not exist, so
+	// that rule ids cannot be probed.
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
 		v1Err(w, http.StatusNotFound, codeNotFound, "规则不存在")
 		return
 	}
@@ -602,28 +618,27 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		writeRuleMutationV1(w, merr)
 		return
 	}
-	entry, entryV6, merr := s.updateUserRule(u, id, updateUserRuleParams{
+	if _, _, merr := s.updateUserRule(u, id, updateUserRuleParams{
 		NodeID: nodeID, Name: body.Name, Proto: body.Proto, Exit: body.Exit,
 		EntryPort: body.EntryPort, Comment: body.Comment, Mode: body.Mode,
 		ExitMode: body.ExitMode, ViaNodeIDs: vias, EntryFamily: body.EntryFamily,
-	})
-	if merr != nil {
+	}); merr != nil {
 		writeRuleMutationV1(w, merr)
 		return
 	}
-	// The update is applied. If the rule cannot be read back, the reply still
-	// reports success and carries what the update itself returned — the entry
-	// address — instead of the full rule.
+	// The update is stored. The reply is the rule as stored, so a rule that
+	// cannot be read back is a failure that says the update went through.
 	rl, err := db.GetRule(s.DB, id)
-	if err == nil {
-		var views []v1Rule
-		if views, err = s.v1RulesFromDB([]*db.Rule{rl}); err == nil {
-			v1OK(w, map[string]any{"rule": views[0]})
-			return
-		}
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
+		return
 	}
-	log.Printf("api v1: rule %d updated but could not be read back: %v", id, err)
-	v1OK(w, map[string]any{"entry": entry, "entry_v6": entryV6})
+	views, err := s.v1RulesFromDB([]*db.Rule{rl})
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
+		return
+	}
+	v1OK(w, map[string]any{"rule": views[0]})
 }
 
 func (s *Server) v1MyDeleteRule(w http.ResponseWriter, r *http.Request) {
@@ -785,12 +800,8 @@ func (s *Server) hopsChainPreview(hops []db.HopInput) ([]v1RuleChainHop, error) 
 // envelope, mapping the shared error's status onto a stable code (and the
 // duplicate-hop RegenerateRule failure onto 409 + duplicate_chain_node).
 func writeRuleMutationV1(w http.ResponseWriter, e *ruleMutationError) {
-	if e.regenerate {
-		if errors.Is(e.cause, db.ErrDuplicateChainNode) {
-			v1Err(w, http.StatusConflict, codeDuplicateHop, e.msg)
-			return
-		}
-		v1Err(w, http.StatusBadRequest, codeValidation, e.msg)
+	if errors.Is(e.cause, db.ErrDuplicateChainNode) {
+		v1Err(w, http.StatusConflict, codeDuplicateHop, e.msg)
 		return
 	}
 	code := codeValidation

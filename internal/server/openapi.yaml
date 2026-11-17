@@ -438,7 +438,7 @@ paths:
                 traffic_quota_bytes: { type: integer }
       responses:
         "200": { description: 授权结果 }
-        "404": { description: 用户不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: 用户或节点不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     delete:
       summary: 撤销用户对节点的授权
       description: admin 角色、readwrite scope。撤销会一并移除该用户在此节点下的规则。
@@ -543,6 +543,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: 下发结果 }
+        "404": { description: 节点不存在, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "500": { description: 下发失败, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /nodes/resync-all:

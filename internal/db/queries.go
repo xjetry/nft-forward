@@ -236,7 +236,7 @@ func SetUserDisabled(d *sql.DB, id int64, disabled bool, reason string) error {
 	return err
 }
 
-func DeleteUser(d *sql.DB, id int64) error {
+func DeleteUser(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM users WHERE id=?`, id)
 	return err
 }
@@ -245,7 +245,7 @@ func GetUserByUsername(d *sql.DB, username string) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE username = ?`, username))
 }
 
-func GetUserByID(d *sql.DB, id int64) (*User, error) {
+func GetUserByID(d DBTX, id int64) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
 }
 
@@ -349,7 +349,7 @@ func GetSetting(d *sql.DB, key string) (string, error) {
 }
 
 // SetSetting upserts a global setting key.
-func SetSetting(d *sql.DB, key, value string) error {
+func SetSetting(d DBTX, key, value string) error {
 	_, err := d.Exec(
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -359,24 +359,10 @@ func SetSetting(d *sql.DB, key, value string) error {
 
 // Nodes
 
+// CreateNode creates a plain node with the default settings; see
+// CreateNodeFrom for the rest.
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
-	if secret == "" {
-		secret = RandToken(32)
-	}
-	// New agent nodes default to both roles (entry|via = 3) so a freshly
-	// registered node can be picked as an entry or bound as a middle layer
-	// without an extra edit; the numeric literal mirrors NodeRoleEntry|NodeRoleVia.
-	res, err := d.Exec(`INSERT INTO nodes(name, address, secret, roles, sort_order, created_at)
-		VALUES (?,?,?,3, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
-		name, address, secret, now())
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	return GetNode(d, id)
+	return CreateNodeFrom(d, NewNode{Name: name, Address: address, Secret: secret})
 }
 
 // NOTE: scanNode and the inline scan in grants.go (ListNodesForUser) read these
@@ -389,7 +375,7 @@ const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_hos
 // same-named columns make the SELECT ambiguous.
 var nodeColsQualified = "n." + strings.Join(strings.Split(nodeCols, ","), ",n.")
 
-func GetNode(d *sql.DB, id int64) (*Node, error) {
+func GetNode(d DBTX, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
 	return scanNode(row)
 }
@@ -689,14 +675,14 @@ func RenameNode(d *sql.DB, id int64, name string) error {
 	return err
 }
 
-func DeleteNode(d *sql.DB, id int64) error {
+func DeleteNode(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	return err
 }
 
 // UpdateNodeRelayHost sets a node's data-plane reachable address (empty clears
 // it). Validation of the value (IPv4 / hostname) is the caller's job.
-func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
+func UpdateNodeRelayHost(d DBTX, id int64, relayHost string) error {
 	_, err := d.Exec(`UPDATE nodes SET relay_host=? WHERE id=?`, relayHost, id)
 	return err
 }
@@ -706,12 +692,12 @@ func UpdateNodeRelayHostV6(d *sql.DB, id int64, relayHostV6 string) error {
 	return err
 }
 
-func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
+func UpdateNodeRateMultiplier(d DBTX, id int64, mult float64) error {
 	_, err := d.Exec(`UPDATE nodes SET rate_multiplier=? WHERE id=?`, mult, id)
 	return err
 }
 
-func UpdateNodeUnidirectional(d *sql.DB, id int64, uni bool) error {
+func UpdateNodeUnidirectional(d DBTX, id int64, uni bool) error {
 	v := 0
 	if uni {
 		v = 1
@@ -736,7 +722,7 @@ func UpdateNodeNoDirectExit(d *sql.DB, id int64, v bool) error {
 
 // UpdateNodePortRange sets a node's port_range spec. An empty string resets to
 // the default range. Callers must validate with ValidatePortRange first.
-func UpdateNodePortRange(d *sql.DB, id int64, portRange string) error {
+func UpdateNodePortRange(d DBTX, id int64, portRange string) error {
 	if portRange == "" {
 		portRange = DefaultPortRange
 	}
@@ -799,7 +785,7 @@ func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	return h, nil
 }
 
-func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
+func DeleteRulesForUser(d DBTX, userID int64) ([]int64, error) {
 	nodes, err := DistinctUserNodes(d, userID)
 	if err != nil {
 		return nil, err
@@ -810,7 +796,7 @@ func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
 	return nodes, nil
 }
 
-func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
+func DistinctUserNodes(d DBTX, userID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=?`, userID)
 }
 

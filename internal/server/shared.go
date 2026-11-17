@@ -315,36 +315,3 @@ func (s *Server) checkUserRuleQuota(u *db.User, hopCount int, existingRuleHops i
 	}
 	return nil
 }
-
-// regenerateRuleByID loads a rule and its hops, then calls RegenerateRule
-// inside a transaction. Returns the set of affected node IDs.
-func (s *Server) regenerateRuleByID(ruleID int64) ([]int64, error) {
-	r, err := db.GetRule(s.DB, ruleID)
-	if err != nil {
-		return nil, err
-	}
-	hops, err := db.ListRuleHops(s.DB, ruleID)
-	if err != nil {
-		return nil, err
-	}
-	if len(hops) == 0 {
-		return nil, nil
-	}
-	inputs := make([]db.HopInput, len(hops))
-	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	_, _, affected, err := db.RegenerateRule(tx, r, inputs, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return affected, nil
-}

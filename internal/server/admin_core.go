@@ -24,6 +24,16 @@ type adminError struct {
 
 func (e *adminError) Error() string { return e.msg }
 
+// adminLookupErr is lookupErr as an adminError: the caller's status, code and
+// message when the row does not exist, an internal error carrying err
+// otherwise. err is not nil.
+func adminLookupErr(err error, status int, code, msg string) *adminError {
+	if errors.Is(err, sql.ErrNoRows) {
+		return &adminError{status, code, msg}
+	}
+	return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+}
+
 // writeAdminErrV1 renders an adminError in the /api/v1 envelope.
 func writeAdminErrV1(w http.ResponseWriter, e *adminError) {
 	v1Err(w, e.status, e.code, e.msg)
@@ -74,41 +84,43 @@ func (s *Server) provisionUser(adminID int64, p provisionParams) (*db.User, *adm
 	// The row and its settings are written in one transaction: a user that
 	// exists without the expiry or quota it was created with could not be
 	// repaired by retrying, because the retry would hit the username conflict.
-	id, err := func() (int64, error) {
+	// The user is read back in the same transaction for the same reason — a
+	// create that cannot report what it created is not committed.
+	created, err := func() (*db.User, error) {
 		tx, err := s.DB.Begin()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		defer tx.Rollback()
 		id, err := db.CreateUser(tx, username, hash, role)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if _, err := tx.Exec(`UPDATE users SET max_forwards=?, traffic_quota_bytes=? WHERE id=?`,
 			maxFwd, p.TrafficQuotaBytes, id); err != nil {
-			return 0, err
+			return nil, err
 		}
 		if p.ExpiresAtUnix != 0 {
 			if _, err := tx.Exec(`UPDATE users SET expires_at=? WHERE id=?`, p.ExpiresAtUnix, id); err != nil {
-				return 0, err
+				return nil, err
 			}
 		}
 		if p.LandingSubURL != "" || p.AdminNote != "" {
 			if _, err := tx.Exec(`UPDATE users SET landing_sub_url=?, admin_note=? WHERE id=?`,
 				strings.TrimSpace(p.LandingSubURL), strings.TrimSpace(p.AdminNote), id); err != nil {
-				return 0, err
+				return nil, err
 			}
 		}
-		return id, tx.Commit()
+		created, err := db.GetUserByID(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		return created, tx.Commit()
 	}()
 	if err != nil {
 		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	db.WriteAudit(s.DB, adminID, "user.create", strconv.FormatInt(id, 10), username)
-	created, err := db.GetUserByID(s.DB, id)
-	if err != nil {
-		return nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-	}
+	db.WriteAudit(s.DB, adminID, "user.create", strconv.FormatInt(created.ID, 10), username)
 	return created, nil
 }
 
@@ -158,16 +170,32 @@ func (s *Server) setUserExpiry(adminID, userID, expiresAtUnix int64) *adminError
 	return nil
 }
 
-// grantUserNode ensures the user is granted the node with the given caps
-// (create-or-update via db.GrantNode). maxForwards<=0 falls back to the default.
-func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, quotaBytes int64) *adminError {
+// grantUserNodes ensures the user is granted each of the nodes with the given
+// caps (create-or-update via db.GrantNodes), all of them or none.
+// maxForwards<=0 falls back to the default.
+//
+// Both ends of every grant are looked up first, and those lookups are what
+// decides "there is no such user" and "there is no such node". The foreign
+// keys on user_nodes would refuse the insert as well, but nothing here reads
+// a failed insert for its cause: it is passed on as an internal error.
+func (s *Server) grantUserNodes(adminID, userID int64, nodeIDs []int64, maxForwards int, quotaBytes int64) *adminError {
 	if maxForwards <= 0 {
 		maxForwards = defaultGrantMaxForwards
 	}
-	if err := db.GrantNode(s.DB, userID, nodeID, maxForwards, quotaBytes); err != nil {
+	if _, err := db.GetUserByID(s.DB, userID); err != nil {
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
+	}
+	for _, nid := range nodeIDs {
+		if _, err := db.GetNode(s.DB, nid); err != nil {
+			return adminLookupErr(err, http.StatusNotFound, codeNotFound, fmt.Sprintf("节点 #%d 不存在", nid))
+		}
+	}
+	if err := db.GrantNodes(s.DB, userID, nodeIDs, maxForwards, quotaBytes); err != nil {
 		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
-	db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nodeID, 10))
+	for _, nid := range nodeIDs {
+		db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
+	}
 	return nil
 }
 
@@ -175,10 +203,7 @@ func (s *Server) grantUserNode(adminID, userID, nodeID int64, maxForwards int, q
 // re-dispatching the affected nodes so forwarding (and billing) stops. Returns
 // the number of physical nodes re-pushed.
 func (s *Server) revokeUserNode(adminID, userID, nodeID int64) (int, *adminError) {
-	if err := db.RevokeNode(s.DB, userID, nodeID); err != nil {
-		return 0, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
-	}
-	affected, err := db.DeleteRulesForUserNode(s.DB, userID, nodeID)
+	affected, err := db.RevokeGrants(s.DB, []db.GrantKey{{UserID: userID, NodeID: nodeID}})
 	if err != nil {
 		return 0, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
@@ -261,10 +286,7 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 		}
 		seenUser[uid] = true
 		if _, err := db.GetUserByID(s.DB, uid); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return 0, 0, nil, &adminError{http.StatusBadRequest, codeValidation, fmt.Sprintf("用户 #%d 不存在", uid)}
-			}
-			return 0, 0, nil, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+			return 0, 0, nil, adminLookupErr(err, http.StatusBadRequest, codeValidation, fmt.Sprintf("用户 #%d 不存在", uid))
 		}
 		users = append(users, uid)
 	}
@@ -313,6 +335,7 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 	// Only pairs that were actually written can change what a node enforces;
 	// a kept grant has the same caps as before and needs no re-push.
 	affected := map[int64]bool{}
+	var affectedErr error
 	for i, w := range writes {
 		if !written[i] {
 			kept++
@@ -322,7 +345,11 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 		db.WriteAudit(s.DB, adminID, "user.grant_node", strconv.FormatInt(w.UserID, 10), strconv.FormatInt(w.NodeID, 10))
 		ns, err := db.RulesAffectedByNode(s.DB, w.UserID, w.NodeID)
 		if err != nil {
-			log.Printf("grants: list nodes to re-push for user %d node %d: %v", w.UserID, w.NodeID, err)
+			// The grants are stored. The nodes found for the other pairs are
+			// still re-pushed below; this pair's are reported as not found.
+			if affectedErr == nil {
+				affectedErr = err
+			}
 			continue
 		}
 		for _, n := range ns {
@@ -334,7 +361,22 @@ func (s *Server) batchApplyGrants(adminID int64, userIDs []int64, grants []batch
 		nodeIDs = append(nodeIDs, n)
 	}
 	s.apiDispatchFanout(nodeIDs)
+	if affectedErr != nil {
+		return granted, kept, skipped, &adminError{http.StatusInternalServerError, codeInternal, "授权已保存，但没能确定需要重新下发的节点: " + affectedErr.Error()}
+	}
 	return granted, kept, skipped, nil
+}
+
+// resyncNode re-pushes one node's rules to it. A push that fails — the node
+// is not connected, or did not apply the rules — is the error.
+func (s *Server) resyncNode(nodeID int64) *adminError {
+	if _, err := db.GetNode(s.DB, nodeID); err != nil {
+		return adminLookupErr(err, http.StatusNotFound, codeNotFound, "节点不存在")
+	}
+	if err := s.dispatchToNode(nodeID); err != nil {
+		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	return nil
 }
 
 // resyncAllNodes re-pushes kernel state to every non-composite node, tolerating
@@ -386,11 +428,8 @@ func (s *Server) saveUserLandingSource(adminID, userID int64, subURL string, uri
 		return landingSave{}, &adminError{http.StatusBadRequest, codeValidation, "订阅地址须以 http:// 或 https:// 开头"}
 	}
 	u, err := db.GetUserByID(s.DB, userID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return landingSave{}, &adminError{http.StatusNotFound, codeNotFound, "用户不存在"}
-	}
 	if err != nil {
-		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+		return landingSave{}, adminLookupErr(err, http.StatusNotFound, codeNotFound, "用户不存在")
 	}
 	// The only setter writes both source columns; when the caller does not
 	// supply the manual URIs, the stored ones are written back unchanged.
@@ -410,10 +449,16 @@ func (s *Server) saveUserLandingSource(adminID, userID int64, subURL string, uri
 		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, "来源已保存，但没能读回用户以刷新落地节点: " + err.Error()}
 	}
 	saved := landingSave{User: target}
-	if nodes, err := s.resolveLandingExits(target, true); err != nil {
+	nodes, err := s.resolveLandingExits(target, true)
+	if err != nil {
 		saved.SubError = err.Error()
-	} else {
-		s.syncLandingExits(target, nodes)
+		return saved, nil
+	}
+	// Bringing the ledger up to date is part of what saving a source means
+	// here, so a sync that fails is reported — as a failure that says the
+	// source itself is stored.
+	if err := s.syncLandingExits(target, nodes); err != nil {
+		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, "来源已保存，但没能刷新落地出口: " + err.Error()}
 	}
 	return saved, nil
 }

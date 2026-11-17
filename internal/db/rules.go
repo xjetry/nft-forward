@@ -485,7 +485,7 @@ func TotalRuleTrafficBytes(d *sql.DB) (int64, error) {
 // whose composite node is nodeID) and returns the physical node IDs whose
 // kernel state must be re-pushed. Used when a node grant is revoked so the
 // user's forwarding stops instead of lingering. rule_hops cascade-delete.
-func DeleteRulesForUserNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
+func DeleteRulesForUserNode(d DBTX, userID, nodeID int64) ([]int64, error) {
 	// A rule "uses" a granted logical node when the node is its entry OR one of
 	// its middle layers — both surface as rule_hops.via_node_id == nodeID (the
 	// entry segment's hops carry via_node_id = the rule's node_id). Matching on
@@ -516,7 +516,7 @@ func DeleteRulesForUserNode(d *sql.DB, userID, nodeID int64) ([]int64, error) {
 // can't keep running through a node that no longer exists, and a composite's id
 // never appears in rule_hops.node_id, so an FK cascade alone would leave the
 // composite's physical children carrying stale kernel rules.
-func DeleteRulesUsingNode(d *sql.DB, nodeID int64) ([]int64, error) {
+func DeleteRulesUsingNode(d DBTX, nodeID int64) ([]int64, error) {
 	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT rule_id FROM rule_hops WHERE node_id=? OR via_node_id=?`, nodeID, nodeID)
 	if err != nil {
 		return nil, err
@@ -586,12 +586,33 @@ func FillUserRuleCounts(d DBTX, users []*User) error {
 	return nil
 }
 
-// ErrDuplicateChainNode is returned by RegenerateRule when the resolved chain
-// visits the same physical node twice (e.g. a composite entry and a via
-// sharing a machine). It's a configuration conflict between the entry and
-// via selections, not a malformed request, so callers surfacing it over HTTP
-// should map it to 409 rather than 400.
-var ErrDuplicateChainNode = errors.New("同一节点不能在链路中重复")
+// A ChainError says that a rule's chain cannot be built as asked: a hop names
+// a node that does not exist or has no relay address, a requested port is
+// taken, a node is not allowed in that position. What has to change is the
+// request or the nodes' configuration, so callers answer it as the caller's
+// error and show the message. Every other error from deriving or generating
+// a chain is a statement that failed, which says nothing about the chain.
+type ChainError struct{ msg string }
+
+func (e *ChainError) Error() string { return e.msg }
+
+// ChainErrorf builds a ChainError.
+func ChainErrorf(format string, a ...any) error {
+	return &ChainError{msg: fmt.Sprintf(format, a...)}
+}
+
+// IsChainError reports whether err is, or wraps, a ChainError.
+func IsChainError(err error) bool {
+	var ce *ChainError
+	return errors.As(err, &ce)
+}
+
+// ErrDuplicateChainNode is the ChainError RegenerateRule returns when the
+// resolved chain visits the same physical node twice (e.g. a composite entry
+// and a via sharing a machine). It's a configuration conflict between the
+// entry and via selections, not a malformed request, so callers surfacing it
+// over HTTP should map it to 409 rather than 400.
+var ErrDuplicateChainNode error = &ChainError{msg: "同一节点不能在链路中重复"}
 
 // nodeLabel names a node inside an error message. The caller is already
 // returning an error of its own, so a name that cannot be read is replaced by
@@ -616,7 +637,7 @@ func nodeLabel(tx DBTX, nodeID int64) string {
 // quota) is the caller's responsibility.
 func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (string, string, []int64, error) {
 	if len(hops) == 0 {
-		return "", "", nil, fmt.Errorf("链路至少需要一跳")
+		return "", "", nil, ChainErrorf("链路至少需要一跳")
 	}
 
 	type resolved struct {
@@ -638,15 +659,19 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		seen[hop.NodeID] = true
 
 		var name, relay, relayV6, portRange string
-		if err := tx.QueryRow(`SELECT name, relay_host, relay_host_v6, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &relayV6, &portRange); err != nil {
-			return "", "", nil, fmt.Errorf("节点 %d 不存在", hop.NodeID)
+		err := tx.QueryRow(`SELECT name, relay_host, relay_host_v6, port_range FROM nodes WHERE id=?`, hop.NodeID).Scan(&name, &relay, &relayV6, &portRange)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", nil, ChainErrorf("节点 %d 不存在", hop.NodeID)
+		}
+		if err != nil {
+			return "", "", nil, err
 		}
 		if relay == "" {
-			return "", "", nil, fmt.Errorf("节点 %s 未设置中继地址", name)
+			return "", "", nil, ChainErrorf("节点 %s 未设置中继地址", name)
 		}
 		segs, err := ParsePortRange(portRange)
 		if err != nil {
-			return "", "", nil, fmt.Errorf("节点 %s 端口范围格式错误: %v", name, err)
+			return "", "", nil, ChainErrorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
 		mode := NormalizeForwardMode(hop.Mode)
 		if r.Proto == "udp" {
@@ -663,7 +688,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	}
 
 	if exitIsIPv6(r.ExitHost) && rs[len(rs)-1].relayHostV6 == "" {
-		return "", "", nil, fmt.Errorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", nodeLabel(tx, rs[len(rs)-1].nodeID))
+		return "", "", nil, ChainErrorf("节点 %s 未设置 IPv6 中继地址，不能转发 IPv6 目标", nodeLabel(tx, rs[len(rs)-1].nodeID))
 	}
 
 	// The entry family is derived from what the entry node can serve, not chosen
@@ -714,10 +739,10 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		var p int
 		if h.desiredPort > 0 {
 			if !PortInRange(h.desiredPort, h.portSegs) {
-				return "", "", nil, fmt.Errorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, nodeLabel(tx, h.nodeID))
+				return "", "", nil, ChainErrorf("端口 %d 超出节点 %s 允许范围", h.desiredPort, nodeLabel(tx, h.nodeID))
 			}
 			if occ[h.desiredPort] {
-				return "", "", nil, fmt.Errorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, nodeLabel(tx, h.nodeID))
+				return "", "", nil, ChainErrorf("端口 %d 在节点 %s 上已被占用", h.desiredPort, nodeLabel(tx, h.nodeID))
 			}
 			p = h.desiredPort
 		} else {
@@ -725,7 +750,7 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 			if !(PortInRange(p, h.portSegs) && !occ[p]) {
 				p = PickFreePortFromRange(h.portSegs, occ)
 				if p == 0 {
-					return "", "", nil, fmt.Errorf("节点 %s 端口范围内无可用端口", nodeLabel(tx, h.nodeID))
+					return "", "", nil, ChainErrorf("节点 %s 端口范围内无可用端口", nodeLabel(tx, h.nodeID))
 				}
 			}
 		}

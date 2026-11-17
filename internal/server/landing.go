@@ -71,8 +71,8 @@ func dedupLandingNodes(nodes []landing.Node) []landing.Node {
 // syncLandingExits materializes a successfully resolved landing set and
 // re-pushes any exits whose push-exclusion state flipped with presence —
 // excluded rules generate no traffic, so no counters-driven path would ever
-// revive them.
-func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) {
+// revive them. An error means the ledger was not brought up to date.
+func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) error {
 	deduped := dedupLandingNodes(nodes)
 	exits := make([]db.LandingExitInput, 0, len(deduped))
 	for _, n := range deduped {
@@ -80,17 +80,29 @@ func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) {
 	}
 	flipped, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
 	if err != nil {
-		log.Printf("landing: sync exits for user %d: %v", u.ID, err)
-		return
+		return err
 	}
 	if !synced || len(flipped) == 0 {
-		return
+		return nil
 	}
 	go func() {
 		for _, k := range flipped {
 			s.redispatchUserExit(u.ID, k.Host, k.Port)
 		}
 	}()
+	return nil
+}
+
+// refreshLandingLedger is syncLandingExits for the callers that sync in
+// passing — a page that resolved the landing set anyway, the periodic pass.
+// Nothing was asked of them that a failed sync leaves undone: the sync is one
+// transaction (db.SyncUserLandingExits), so the ledger stays on its previous
+// snapshot, and the next sync makes up for it. So the failure is logged and
+// not reported.
+func (s *Server) refreshLandingLedger(u *db.User, nodes []landing.Node) {
+	if err := s.syncLandingExits(u, nodes); err != nil {
+		log.Printf("landing: sync exits for user %d: %v", u.ID, err)
+	}
 }
 
 // redispatchUserExit re-pushes every node carrying rules that exit to the
@@ -210,7 +222,7 @@ func (s *Server) apiMyLandingNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, err := s.resolveLandingExits(u, force)
 	stale := false
 	if err == nil {
-		s.syncLandingExits(u, nodes)
+		s.refreshLandingLedger(u, nodes)
 	} else {
 		stale = true
 		present, err := db.PresentLandingExitsForUser(s.DB, u.ID)
@@ -271,7 +283,7 @@ func (s *Server) apiListUserLandingExits(w http.ResponseWriter, r *http.Request)
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if r.URL.Query().Get("refresh") == "1" {
@@ -280,7 +292,7 @@ func (s *Server) apiListUserLandingExits(w http.ResponseWriter, r *http.Request)
 		if nodes, err := s.resolveLandingExits(target, true); err != nil {
 			log.Printf("landing: refresh exits for user %d: %v", target.ID, err)
 		} else {
-			s.syncLandingExits(target, nodes)
+			s.refreshLandingLedger(target, nodes)
 		}
 	}
 	exits, err := db.ListUserLandingExits(s.DB, id)
