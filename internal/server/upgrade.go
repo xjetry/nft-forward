@@ -74,7 +74,13 @@ var (
 	agentArtCache = map[string]*agentArtifact{}
 )
 
-func serverVersion() string {
+// serverVersion is the panel's own version: the version of the agent it
+// pushes, and what a node's agent version is compared against. It is a
+// variable so that tests can stand in a release version — a test binary is a
+// dev build, against which no agent is ever outdated.
+var serverVersion = buildVersion
+
+func buildVersion() string {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
 		return "dev"

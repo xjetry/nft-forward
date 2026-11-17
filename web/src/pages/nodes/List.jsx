@@ -1,7 +1,8 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime } from '../../lib/fmt'
+import { upgradeAllReport } from '../../lib/upgrade'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
 import { fmtSpeed, useSpeed } from '../../lib/useSpeed'
@@ -13,7 +14,7 @@ import {
   ModalActions, Segmented, Tag, TextLink, ToggleChip, cx, useAction, useConfirm, useToast,
 } from '../../components/ui'
 import {
-  GrantUserSelect, HopListEditor, ROLE_ENTRY, ROLE_VIA, agentOutdated, hopRowsError, hopRowsPayload, newHopRow,
+  GrantUserSelect, HopListEditor, ROLE_ENTRY, ROLE_VIA, hopRowsError, hopRowsPayload, newHopRow,
   removeNode, useGrantableUsers,
 } from './common'
 
@@ -67,15 +68,15 @@ export default function NodeList() {
   })
   const upgradeAll = useAction(async () => {
     const agreed = await confirm({
-      title: '升级所有节点',
-      message: `向所有已启用的节点推送 ${latest}？节点替换程序后会重启 Agent，转发会短暂中断。`,
+      title: '升级版本落后的节点',
+      message: `向所有已启用、Agent 版本低于 ${latest} 的节点推送 ${latest}？节点替换程序后会重启 Agent，转发会短暂中断。`,
       confirmText: '升级',
     })
     if (!agreed) return
     try {
-      const d = await api.post('/nodes/upgrade-all')
-      if (d?.failed) toast(`已推送到 ${d.upgraded} 个节点，${d.failed} 个推送失败（多为节点不在线）`, 'error')
-      else toast(`升级已推送到 ${d?.upgraded ?? 0} 个节点，等待它们重启`)
+      const report = upgradeAllReport(await api.post('/nodes/upgrade-all'))
+      if (report.incomplete) toast(report.text, 'error')
+      else toast(report.text)
     } finally {
       await nodes.reload()
     }
@@ -94,7 +95,7 @@ export default function NodeList() {
             label="批量操作"
             items={[
               { label: '向所有节点重新推送规则', disabled: resyncAll.pending, onSelect: () => resyncAll.run() },
-              { label: '升级所有节点', disabled: !latest || upgradeAll.pending, onSelect: () => upgradeAll.run() },
+              { label: '升级版本落后的节点', disabled: !latest || upgradeAll.pending, onSelect: () => upgradeAll.run() },
             ]}
           />
           <Button onClick={() => setDialog('composite')}>创建组合节点</Button>
@@ -127,7 +128,10 @@ function RoleTags({ node }) {
 }
 
 function NodeTable({ data, resource, onAdd, onComposite }) {
-  const { nodes = [], latest_agent_version: latest, node_raw_traffic: rawTraffic = {} } = data
+  const { nodes = [], node_raw_traffic: rawTraffic = {} } = data
+  // 哪些节点的 Agent 版本低于面板，由服务端判定（与批量升级选对象用的是同一个
+  // 判定），这里只负责标出来。
+  const outdated = useMemo(() => new Set(data.outdated_node_ids || []), [data.outdated_node_ids])
   const { reload, patch } = resource
   const navigate = useNavigate()
   const toast = useToast()
@@ -314,7 +318,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
                   {n.agent_version ? (
                     <span className="inline-flex items-center gap-1.5">
                       <span className="font-mono text-small">{n.agent_version}</span>
-                      {agentOutdated(n, latest) && <Badge tone="warn">可升级</Badge>}
+                      {outdated.has(n.id) && <Badge tone="warn">可升级</Badge>}
                     </span>
                   ) : <span className="text-ink-mut">--</span>}
                 </td>

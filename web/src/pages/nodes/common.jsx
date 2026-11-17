@@ -16,20 +16,6 @@ import {
 export const ROLE_ENTRY = 1
 export const ROLE_VIA = 2
 
-function semverLT(a, b) {
-  const pa = (a || '').replace(/^v/, '').split('.').map(Number)
-  const pb = (b || '').replace(/^v/, '').split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0)
-  }
-  return false
-}
-
-/** 节点的 Agent 版本是否低于面板版本，即可以向它推送升级。没有上报过版本的节点不算。 */
-export function agentOutdated(node, latest) {
-  return !!node.agent_version && semverLT(node.agent_version, latest)
-}
-
 /** 可以被授权使用节点的用户：授权的对象只有普通用户（role 为 user）。 */
 export function useGrantableUsers() {
   return useResource(async () => ((await api.get('/users')).users || []).filter(u => u.role === 'user'), [])
