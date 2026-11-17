@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"testing"
+	"time"
 )
 
 // “用户能否使用这个节点”只有一个答案：管理员能，其余人要有授权；只是节点的属主
@@ -91,8 +92,21 @@ func TestMigrationTurnsImpliedOwnerAccessIntoGrants(t *testing.T) {
 	if n, _ := res.RowsAffected(); n != 1 {
 		t.Fatalf("前置条件：迁移 %s 应已登记，删除了 %d 行", migration, n)
 	}
+	before := time.Now().Unix()
 	if err := migrate(d); err != nil {
 		t.Fatal(err)
+	}
+	after := time.Now().Unix()
+
+	// 授权时间显示在节点详情的授权列表里，补出的授权记的是迁移执行的时刻。这一行
+	// 没补出来由下面数行数的断言报告。
+	var grantedAt int64
+	switch err := d.QueryRow(`SELECT granted_at FROM user_nodes WHERE user_id=? AND node_id=?`, uid, ownedBare).Scan(&grantedAt); {
+	case err == sql.ErrNoRows:
+	case err != nil:
+		t.Fatal(err)
+	case grantedAt < before || grantedAt > after:
+		t.Errorf("补出的授权应记迁移执行的时刻（%d..%d），实际 %d", before, after, grantedAt)
 	}
 
 	maxForwards := func(nodeID int64) (int, bool) {
