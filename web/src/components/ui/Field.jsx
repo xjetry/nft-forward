@@ -307,19 +307,22 @@ export function Segmented({ value, onChange, options, size = 'md', label, disabl
 }
 
 /**
- * 可叠加的筛选开关（多个可同时按下）。互斥的选择用 Segmented。
+ * 可叠加的开关（多个可同时按下）。互斥的选择用 Segmented。
  * @param {{
  *   pressed: boolean,
  *   onChange: (pressed: boolean) => void,
  *   title?: string,
+ *   label?: string,
  *   children: import('react').ReactNode,
- * }} props
+ * }} props `label` 是无障碍名称，在可见文字不足以说明它作用于谁时给出：
+ * 表格里每一行都有一个写着同样文字的开关时，名称里要带上这一行是谁。
  */
-export function ToggleChip({ pressed, onChange, title, children }) {
+export function ToggleChip({ pressed, onChange, title, label, children }) {
   return (
     <button
       type="button"
       aria-pressed={pressed}
+      aria-label={label}
       title={title}
       onClick={() => onChange(!pressed)}
       className={cx(

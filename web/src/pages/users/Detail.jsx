@@ -841,7 +841,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
           <div className="ml-auto flex items-center gap-1.5">
             <span className="text-small text-ink-mut">选中的 {chosen.length} 个</span>
             {MARKS.map(([bit, label]) => (
-              <ToggleChip key={bit} pressed={chosen.every(n => markOf(n) & bit)} onChange={on => setMark(chosen, bit, on)}>{label}</ToggleChip>
+              <ToggleChip key={bit} label={`选中的 ${chosen.length} 个节点：${label}`} pressed={chosen.every(n => markOf(n) & bit)} onChange={on => setMark(chosen, bit, on)}>{label}</ToggleChip>
             ))}
           </div>
         )}
@@ -889,7 +889,7 @@ function LandingNodes({ userId, username, nodes, exits, roles, onRoles, reloadRo
                   <td className="num">
                     <span className="inline-flex gap-1.5">
                       {MARKS.map(([bit, label]) => (
-                        <ToggleChip key={bit} pressed={(mark & bit) !== 0} onChange={on => setMark([n], bit, on)}>{label}</ToggleChip>
+                        <ToggleChip key={bit} label={`${n.name || hostPortKey(n.host, n.port)}：${label}`} pressed={(mark & bit) !== 0} onChange={on => setMark([n], bit, on)}>{label}</ToggleChip>
                       ))}
                     </span>
                   </td>

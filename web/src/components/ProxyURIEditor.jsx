@@ -312,12 +312,13 @@ function Editor({ user, fill }) {
 }
 
 /* 一组用途开关。落地与直连互相独立：一个节点可以既作规则出口，又出现在
-   “我的代理”里。 */
-function RoleChips({ has, onChange }) {
+   “我的代理”里。subject 说明这组开关作用于谁（某个节点，或选中的若干个），
+   进入每个开关的无障碍名称。 */
+function RoleChips({ subject, has, onChange }) {
   return (
     <span className="flex flex-none items-center gap-1.5">
       {ROLES.map(({ bit, label }) => (
-        <ToggleChip key={bit} pressed={has(bit)} onChange={on => onChange(bit, on)}>{label}</ToggleChip>
+        <ToggleChip key={bit} label={`${subject}：${label}`} pressed={has(bit)} onChange={on => onChange(bit, on)}>{label}</ToggleChip>
       ))}
     </span>
   )
@@ -372,6 +373,7 @@ function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBa
             <span className="ml-auto flex items-center gap-2">
               <span className="text-caption text-ink-mut">已选 {chosen.length} 个</span>
               <RoleChips
+                subject={`选中的 ${chosen.length} 个节点`}
                 has={bit => chosen.every(n => nodeHasRole(roles, n, bit))}
                 onChange={(bit, on) => onBatch(chosen, bit, on)}
               />
@@ -394,7 +396,7 @@ function NodeRoleList({ nodes, total, foldedNote, roles, blurred, onToggle, onBa
                     <span className="break-all font-mono"><SensText blurred={blurred}>{key}</SensText></span>
                   </div>
                 </div>
-                <RoleChips has={bit => nodeHasRole(roles, n, bit)} onChange={bit => onToggle(n, bit)} />
+                <RoleChips subject={n.name || rowKey(n)} has={bit => nodeHasRole(roles, n, bit)} onChange={bit => onToggle(n, bit)} />
               </li>
             )
           })}
