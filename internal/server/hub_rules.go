@@ -32,7 +32,7 @@ func (h *Hub) handleRuleCommand(ac *agentConn, env wsproto.Envelope) {
 		res, cerr = run(actor)
 	}
 	if cerr != nil {
-		sendRuleAck(ac, env.ID, wsproto.RuleCmdAck{Error: cerr.Msg})
+		sendRuleAck(ac, env.ID, wsproto.RuleCmdAck{Error: ruleAckMessage(cerr)})
 		return
 	}
 	if h.Redispatch != nil && len(res.Affected) > 0 {
@@ -109,6 +109,16 @@ func adoptedLocals(local []nft.Rule) []rulechange.Local {
 		}
 	}
 	return out
+}
+
+// ruleAckMessage 是一条失败的规则命令回给节点的话。被拒绝的命令（无权、参数不对、
+// 端口被占……）原样给出原因；类别是 rulechange.Internal 的失败是面板这边的语句没执行
+// 成，要明说是面板的问题——否则节点的操作者会去改一条本来没有问题的规则。
+func ruleAckMessage(cerr *rulechange.Error) string {
+	if cerr.Kind == rulechange.Internal {
+		return "面板内部错误: " + cerr.Msg
+	}
+	return cerr.Msg
 }
 
 func sendRuleAck(ac *agentConn, id string, ack wsproto.RuleCmdAck) {

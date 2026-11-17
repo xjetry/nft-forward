@@ -43,6 +43,70 @@ func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
+// lookupErr decides how a failed lookup of a row the request names is
+// answered; err is the lookup's error and is not nil. Only "there is no such
+// row" is an answer about the row, and gets the caller's status and message.
+// Any other error means the lookup could not be made; it says nothing about
+// the row, so it is a 500 carrying the error — answered as "not found", it
+// would send the caller looking for a node, rule or user that is there.
+func lookupErr(err error, status int, msg string) (int, string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		return status, msg
+	}
+	return http.StatusInternalServerError, err.Error()
+}
+
+// jsonLookupErr writes lookupErr's answer.
+func jsonLookupErr(w http.ResponseWriter, err error, status int, msg string) {
+	status, msg = lookupErr(err, status, msg)
+	jsonErr(w, status, msg)
+}
+
+// chainErrStatus is the status for an error from deriving or generating a
+// rule's chain. A db.ChainError is the caller's to fix: 409 when a node
+// appears twice (a conflict between the entry and via selections, not a
+// malformed request), 400 otherwise. Any other error is a statement that
+// failed.
+func chainErrStatus(err error) int {
+	switch {
+	case errors.Is(err, db.ErrDuplicateChainNode):
+		return http.StatusConflict
+	case db.IsChainError(err):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// jsonChainErr reports an error from deriving or generating a rule's chain.
+func jsonChainErr(w http.ResponseWriter, err error) {
+	jsonErr(w, chainErrStatus(err), err.Error())
+}
+
+// jsonRewireErr answers a change that was not applied because of what it
+// would do to the rules (db.DeleteNodeAndRewire, db.SetNodeRelayHostAndRewire).
+// A rule that could not run over the nodes as the change would leave them
+// (db.ChainError) is a conflict with the rules as they are: refused, followed
+// by which rule and why, tells the admin what to change first. Anything else
+// is a statement that failed.
+func jsonRewireErr(w http.ResponseWriter, err error, refused string) {
+	if db.IsChainError(err) {
+		jsonErr(w, http.StatusConflict, refused+"："+err.Error())
+		return
+	}
+	jsonErr(w, http.StatusInternalServerError, err.Error())
+}
+
+// chainLookupErr is the error for a lookup that failed while a chain was
+// being derived: the ChainError given when the row does not exist, and the
+// lookup's own error — a statement that failed — otherwise.
+func chainLookupErr(err error, format string, a ...any) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return db.ChainErrorf(format, a...)
+	}
+	return err
+}
+
 // ensureNonNilSlices replaces nil slices with empty slices so JSON
 // serialization produces [] instead of null.
 func ensureNonNilSlices(m map[string]any) {
@@ -158,6 +222,12 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := db.GetUserByUsername(s.DB, body.Username)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// The lookup could not be made. That is not a wrong username, and
+		// not an attempt to count against the caller.
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err != nil {
 		if s.loginLimiter != nil {
 			s.loginLimiter.recordFailure(limitKey)
@@ -181,7 +251,7 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := db.CreateSession(s.DB, u.ID, sessionTTL)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "登录失败")
+		jsonErr(w, http.StatusInternalServerError, "登录失败: "+err.Error())
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -281,13 +351,14 @@ func (s *Server) apiChangeUsername(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"ok": true})
 		return
 	}
-	existing, err := db.GetUserByUsername(s.DB, username)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if existing != nil {
+	// The name is free exactly when the lookup finds no row. A lookup that
+	// failed says nothing about the name, so it is not taken as "free".
+	switch _, err := db.GetUserByUsername(s.DB, username); {
+	case err == nil:
 		jsonErr(w, http.StatusConflict, "用户名已存在")
+		return
+	case !errors.Is(err, sql.ErrNoRows):
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := db.RenameUser(s.DB, u.ID, username); err != nil {
@@ -384,18 +455,20 @@ func (s *Server) apiListNodes(w http.ResponseWriter, r *http.Request) {
 // created without an explicit value.
 const defaultGrantMaxForwards = 10
 
-// grantInitialUsers grants the given users access to a freshly created node
-// with the same defaults the per-user grant endpoint applies (max_forwards
-// fallback, quota inherited from the global user quota). Grant failures do
-// not fail node creation; the grants can be re-applied from the user pages.
-func (s *Server) grantInitialUsers(actorID, nodeID int64, userIDs []int64) {
-	for _, uid := range userIDs {
-		if err := db.GrantNode(s.DB, uid, nodeID, defaultGrantMaxForwards, 0); err != nil {
-			log.Printf("grant user %d on new node %d: %v", uid, nodeID, err)
-			continue
+// usersExist reports whether every id names a user, answering the request
+// (400, naming the id) when one does not. Ids taken from a request body are
+// looked up before they are written as grants. The foreign key on user_nodes
+// would refuse one that names no user as well, but as a failed insert, which
+// is passed on as an internal error without being read for its cause — and
+// this one is the request's mistake, not the panel's.
+func (s *Server) usersExist(w http.ResponseWriter, ids []int64) bool {
+	for _, uid := range ids {
+		if _, err := db.GetUserByID(s.DB, uid); err != nil {
+			jsonLookupErr(w, err, http.StatusBadRequest, fmt.Sprintf("用户 #%d 不存在", uid))
+			return false
 		}
-		db.WriteAudit(s.DB, actorID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
 	}
+	return true
 }
 
 func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
@@ -424,8 +497,17 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 线路属性两种节点都有；机器属性只给机器，成员只给组合。只对另一种节点有意义的
-	// 字段直接拒绝，不悄悄丢掉。请求在任何写入之前校验完，被拒绝的请求不留下节点行。
-	line := db.LineSpec{RateMultiplier: body.RateMultiplier}
+	// 字段直接拒绝，不悄悄丢掉。
+	//
+	// 节点连同它的成员与初始授权在一个事务里建成（db.CreateCompositeNode、
+	// db.CreateMachineNode），要么带着请求要的一切建出来，要么什么都不留下。所以能
+	// 事先查的都先查完，要授权的用户是否存在也在其中（usersExist）。
+	line := db.LineSpec{RateMultiplier: body.RateMultiplier, GrantUserIDs: body.UserIDs, GrantMaxForwards: defaultGrantMaxForwards}
+	var (
+		n      *db.Node
+		action string
+		err    error
+	)
 	switch strings.TrimSpace(body.NodeType) {
 	case "composite":
 		if body.Secret != "" || body.PortRange != "" || body.Unidirectional {
@@ -451,14 +533,11 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, status, err.Error())
 			return
 		}
-		n, err := db.CreateCompositeNode(s.DB, body.Name, line, members)
-		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
+		if !s.usersExist(w, body.UserIDs) {
 			return
 		}
-		db.WriteAudit(s.DB, u.ID, "node.create_composite", strconv.FormatInt(n.ID, 10), body.Name)
-		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-		s.writeAdminNode(w, n.ID)
+		n, err = db.CreateCompositeNode(s.DB, body.Name, line, members)
+		action = "node.create_composite"
 	case "", "remote":
 		if len(body.Hops) > 0 {
 			jsonErr(w, http.StatusBadRequest, "只有组合节点有成员；建组合请指定 node_type 为 composite")
@@ -470,34 +549,45 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if !s.usersExist(w, body.UserIDs) {
+			return
+		}
 		// 属主是建它的管理员：这台机器的节点侧命令以属主的名义执行。
-		n, err := db.CreateMachineNode(s.DB, body.Name, db.MachineSpec{
+		n, err = db.CreateMachineNode(s.DB, body.Name, db.MachineSpec{
 			Secret: strings.TrimSpace(body.Secret), OwnerID: &u.ID,
 			PortRange: body.PortRange, Unidirectional: body.Unidirectional,
 		}, line)
-		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		db.WriteAudit(s.DB, u.ID, "node.create", strconv.FormatInt(n.ID, 10), body.Name)
-		s.grantInitialUsers(u.ID, n.ID, body.UserIDs)
-		s.dispatchNodes("新建节点", []int64{n.ID})
-		s.writeAdminNode(w, n.ID)
+		action = "node.create"
 	default:
 		jsonErr(w, http.StatusBadRequest, "node_type 须为 remote 或 composite")
+		return
 	}
-}
-
-// writeAdminNode 回 {"node": 节点 id 的管理员视图}，给写完节点之后的响应用。
-func (s *Server) writeAdminNode(w http.ResponseWriter, id int64) {
-	cat, err := db.LoadNodeCatalog(s.DB)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	db.WriteAudit(s.DB, u.ID, action, strconv.FormatInt(n.ID, 10), body.Name)
+	for _, uid := range body.UserIDs {
+		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(n.ID, 10))
+	}
+	if requireMachine(n) == nil {
+		s.dispatchNodes("新建节点", []int64{n.ID})
+	}
+	s.writeAdminNode(w, n.ID)
+}
+
+// writeAdminNode 回 {"node": 节点 id 的管理员视图}，给写完节点之后的响应用。调用它时
+// 写入已经落库，所以这里读不出来要说明“已保存”：只回一个读库的错误，调用方会以为
+// 这次写入没有发生。
+func (s *Server) writeAdminNode(w http.ResponseWriter, id int64) {
+	cat, err := db.LoadNodeCatalog(s.DB)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "节点已保存，但没能读回: "+err.Error())
+		return
+	}
 	n := cat.Node(id)
 	if n == nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonErr(w, http.StatusNotFound, "节点已保存，但随后已不存在")
 		return
 	}
 	jsonOK(w, map[string]any{"node": adminNodeOf(cat, n)})
@@ -696,7 +786,7 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	type hopUpdate struct {
@@ -774,7 +864,7 @@ func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "node not found")
+		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
 	if err := db.UpdateNodeRoles(s.DB, id, body.Roles); err != nil {
@@ -817,7 +907,7 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "node not found")
+		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
 	if node.Roles&db.NodeRoleVia == 0 {
@@ -847,7 +937,7 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 		}
 		seenUpstream[b.UpstreamNodeID] = true
 		if _, err := db.GetNode(s.DB, b.UpstreamNodeID); err != nil {
-			jsonErr(w, http.StatusBadRequest, "upstream node not found")
+			jsonLookupErr(w, err, http.StatusBadRequest, "upstream node not found")
 			return
 		}
 		mode, err := chain.InterNodeLegMode(b.Mode)
@@ -894,7 +984,7 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "node not found")
+		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
 	if node.Roles&(db.NodeRoleEntry|db.NodeRoleVia) == 0 {
@@ -925,7 +1015,7 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 		seen[b.DownstreamNodeID] = true
 		down, err := db.GetNode(s.DB, b.DownstreamNodeID)
 		if err != nil {
-			jsonErr(w, http.StatusBadRequest, "downstream node not found")
+			jsonLookupErr(w, err, http.StatusBadRequest, "downstream node not found")
 			return
 		}
 		if down.Roles&db.NodeRoleVia == 0 {
@@ -983,7 +1073,7 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	if node.RelayHostDeclared {
@@ -1002,39 +1092,44 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "中继地址须为 IPv4 或域名，IPv6 请使用 IPv6 中继地址字段")
 		return
 	}
-	if err := db.UpdateNodeRelayHost(s.DB, id, host); err != nil {
-		jsonMachineWriteErr(w, err, "组合节点没有自己的中继地址：入口取展开后第一台机器的中继地址，请在那台机器上设置")
+	// 地址与“引用本节点的规则按新地址重新生成”在同一个事务里（db.SetNodeRelayHostAndRewire）：
+	// 有一条规则重生成不了，地址就不改，回 409 并点名是哪条规则、为什么。写地址这一步
+	// 自己的拒绝（节点不存在、是组合）仍按机器写入的错误回答。
+	affected, err := db.SetNodeRelayHostAndRewire(s.DB, id, host)
+	if err != nil {
+		var rerr *db.RewireError
+		if errors.As(err, &rerr) {
+			jsonRewireErr(w, err, "无法修改中继地址")
+		} else {
+			jsonMachineWriteErr(w, err, "组合节点没有自己的中继地址：入口取展开后第一台机器的中继地址，请在那台机器上设置")
+		}
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
-	// 地址已经落库，引用本节点的规则要经这次重新接线才用上它。原样再保存一次不改变
-	// 结果，等于重试这次接线。
-	if err := s.rewireRulesReferencingNode(id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "中继地址已保存，但没能确定需要重新接线的规则: "+err.Error())
-		return
-	}
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
 // rewireRulesReferencingNode 重新生成所有引用 nodeID 的规则，并下发受影响的节点。
 //
 // relay_host 是其他节点把流量送到本节点时用的数据面地址，建规则时被抄进上游跳的
-// rule_hops.target_host。所以改写 relay_host 的每一条路径都要经过这里：管理员接口
-// apiSetNodeRelayHost 直接调用，节点 hello 里的声明与回填经 Hub.OnRelayHostChange
-// 调用。
+// rule_hops.target_host。节点 hello 里的声明与回填改写了 relay_host 之后经
+// Hub.OnRelayHostChange 调到这里：这个地址是节点自己报上来的，面板没有拒绝的余地，
+// 所以地址先落库、规则随后逐条跟进（db.RewireEachRule），重生成不了的那条不拖住
+// 其余的。管理员接口 apiSetNodeRelayHost 不走这里，它把改地址与重生成放在一个事务
+// 里（db.SetNodeRelayHostAndRewire），重生成不了就连地址也不改。
 //
-// 返回值只有一种含义：没能读出哪些规则引用了这个节点。这时地址已经改了，却没有任何
-// 规则跟着重接，调用方必须如实上报，不能当作“没有规则引用它”。单条规则重接失败、
-// 单个节点下发失败不在返回值里（见 rulechange.Changes.Rewire、dispatchNodes）。
+// 返回的错误有两种来源：没能读出哪些规则引用了这个节点（这时没有任何规则跟着重接），
+// 或者其中一些规则没能重新生成（其余的已经重新生成并下发）。单个节点下发失败不在
+// 返回值里（见 dispatchNodes）。
 func (s *Server) rewireRulesReferencingNode(nodeID int64) error {
 	ruleIDs, err := db.RulesReferencingNode(s.DB, nodeID)
 	if err != nil {
 		return err
 	}
-	if len(ruleIDs) > 0 {
-		s.apiRewireRules(ruleIDs)
-	}
-	return nil
+	affected, err := db.RewireEachRule(s.DB, ruleIDs)
+	s.dispatchNodes("规则变更", affected)
+	return err
 }
 
 func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
@@ -1046,7 +1141,7 @@ func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	if node.RelayHostV6Declared {
@@ -1109,7 +1204,7 @@ func (s *Server) apiUpdateNodePortRange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	var body struct {
@@ -1142,7 +1237,7 @@ func (s *Server) apiSetNodeRateMultiplier(w http.ResponseWriter, r *http.Request
 	// Composite nodes are edited like any other: composite pricing lives on
 	// the node's own rate_multiplier column, not on its hop rows.
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	var body struct {
@@ -1174,7 +1269,7 @@ func (s *Server) apiSetNodeUnidirectional(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	var body struct {
@@ -1207,7 +1302,7 @@ func (s *Server) apiSetNodeNoDirectExit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	var body struct {
@@ -1251,7 +1346,7 @@ func (s *Server) apiUpgradeNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	panelURL, err := db.GetSetting(s.DB, "panel_url")
@@ -1297,7 +1392,7 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := db.GetNode(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	// Deleting a node FK-cascades its member rows out of every composite that
@@ -1327,12 +1422,8 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		// survive — delete those rules and re-push their sibling physical nodes so
 		// the composite's children don't keep stale kernel state (the FK cascade
 		// alone would drop the rules but never touch the children).
-		rerun, err := db.DeleteRulesUsingNode(s.DB, id)
+		rerun, err := db.DeleteCompositeAndRules(s.DB, id)
 		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if err := db.DeleteNode(s.DB, id); err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -1341,23 +1432,15 @@ func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"ok": true})
 		return
 	}
-	// A physical node: re-wire the rules it participated in, splicing it out of
-	// each chain (its hop rows FK-cascade away on delete, and rewire
-	// re-materializes the surviving hops onto their new neighbors).
-	// Looked up before the delete and required to succeed: once the node is
-	// gone its hop rows are too, and the rules that need re-wiring could no
-	// longer be found.
-	affectedRules, err := db.RulesReferencingNode(s.DB, id)
+	// A physical node is spliced out of the rules it was a hop of, and the
+	// nodes those rules still run on are re-pushed.
+	affected, err := db.DeleteNodeAndRewire(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := db.DeleteNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
+		jsonRewireErr(w, err, "无法删除节点")
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.delete", strconv.FormatInt(id, 10), "")
-	s.apiRewireRules(affectedRules)
+	s.dispatchNodes("规则变更", affected)
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -1369,7 +1452,7 @@ func (s *Server) apiToggleNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	if err := db.ToggleNode(s.DB, id); err != nil {
@@ -1395,7 +1478,7 @@ func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := db.GetNode(s.DB, id); err != nil {
-		jsonErr(w, http.StatusNotFound, "节点不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
 		return
 	}
 	var body struct {
@@ -1407,7 +1490,7 @@ func (s *Server) apiUpdateNodeOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.OwnerID != nil {
 		if _, err := db.GetUserByID(s.DB, *body.OwnerID); err != nil {
-			jsonErr(w, http.StatusBadRequest, "用户不存在")
+			jsonLookupErr(w, err, http.StatusBadRequest, "用户不存在")
 			return
 		}
 	}
@@ -1563,40 +1646,37 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if err := db.SetSetting(s.DB, "panel_url", strings.TrimSpace(body.PanelURL)); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "settings.panel_url", strings.TrimSpace(body.PanelURL), "")
+	// Everything is checked before anything is stored, and what is stored is
+	// stored together (db.SetSettings): a request that is refused, or fails,
+	// leaves the settings as they were.
+	panelURL := strings.TrimSpace(body.PanelURL)
+	values := map[string]string{"panel_url": panelURL}
 	if body.PanelName != nil {
-		name := strings.TrimSpace(*body.PanelName)
-		if err := db.SetSetting(s.DB, "panel_name", name); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		db.WriteAudit(s.DB, u.ID, "settings.panel_name", name, "")
+		values["panel_name"] = strings.TrimSpace(*body.PanelName)
 	}
 	if body.ShowRateToUser != nil {
-		val := ""
+		values["show_rate_to_user"] = ""
 		if *body.ShowRateToUser {
-			val = "1"
-		}
-		if err := db.SetSetting(s.DB, "show_rate_to_user", val); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
+			values["show_rate_to_user"] = "1"
 		}
 	}
 	if body.PoolSize != nil {
-		ps := *body.PoolSize
-		if ps < 0 || ps > 64 {
+		if *body.PoolSize < 0 || *body.PoolSize > 64 {
 			jsonErr(w, http.StatusBadRequest, "pool_size 必须在 0-64 之间")
 			return
 		}
-		if err := db.SetSetting(s.DB, "pool_size", strconv.Itoa(ps)); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		s.Hub.BroadcastConfigUpdate(ps)
+		values["pool_size"] = strconv.Itoa(*body.PoolSize)
+	}
+	if err := db.SetSettings(s.DB, values); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	db.WriteAudit(s.DB, u.ID, "settings.panel_url", panelURL, "")
+	if name, ok := values["panel_name"]; ok {
+		db.WriteAudit(s.DB, u.ID, "settings.panel_name", name, "")
+	}
+	if body.PoolSize != nil {
+		s.Hub.BroadcastConfigUpdate(*body.PoolSize)
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -1775,7 +1855,7 @@ func (s *Server) apiGetRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rl, err := db.GetRule(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "规则不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "规则不存在")
 		return
 	}
 	cat, err := db.LoadNodeCatalog(s.DB)
@@ -1823,7 +1903,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	cat, err := db.LoadNodeCatalog(s.DB)
@@ -1846,7 +1926,7 @@ func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	// background pass.
 	landingPreview, err := s.resolveLandingExits(target, false)
 	if err == nil {
-		s.syncLandingExits(target, landingPreview)
+		s.refreshLandingLedger(target, landingPreview)
 	} else {
 		landingPreview = s.landingNodesFor(target, false)
 	}
@@ -1917,11 +1997,9 @@ func (s *Server) apiGrantNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
-	for _, nid := range ids {
-		if aerr := s.grantUserNode(u.ID, userID, nid, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
-			jsonErr(w, aerr.status, aerr.msg)
-			return
-		}
+	if aerr := s.grantUserNodes(u.ID, userID, ids, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
+		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
 }
@@ -1964,18 +2042,16 @@ func (s *Server) apiBatchRevokeNodes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请选择节点")
 		return
 	}
-	var affected []int64
+	grants := make([]db.GrantKey, len(body.NodeIDs))
+	for i, nid := range body.NodeIDs {
+		grants[i] = db.GrantKey{UserID: userID, NodeID: nid}
+	}
+	affected, err := db.RevokeGrants(s.DB, grants)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	for _, nid := range body.NodeIDs {
-		if err := db.RevokeNode(s.DB, userID, nid); err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		nodes, err := db.DeleteRulesForUserNode(s.DB, userID, nid)
-		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected = append(affected, nodes...)
 		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(userID, 10), strconv.FormatInt(nid, 10))
 	}
 	s.dispatchNodes("规则变更", affected)
@@ -2012,44 +2088,39 @@ func (s *Server) apiBatchUpdateNodeGrants(w http.ResponseWriter, r *http.Request
 	if body.MaxForwards <= 0 {
 		body.MaxForwards = defaultGrantMaxForwards
 	}
-	// Additions first: a user appearing in both lists ends up revoked, which
-	// matches the roster editor's semantics (the final list is authoritative).
-	granted := 0
+	if _, err := db.GetNode(s.DB, nodeID); err != nil {
+		jsonLookupErr(w, err, http.StatusNotFound, "节点不存在")
+		return
+	}
+	if !s.usersExist(w, body.AddUserIDs) {
+		return
+	}
+	// Additions are applied before removals, so a user appearing in both
+	// lists ends up revoked, which matches the roster editor's semantics (the
+	// final list is authoritative). The whole diff is applied or none of it
+	// (db.UpdateNodeGrantRoster).
+	affected, err := db.UpdateNodeGrantRoster(s.DB, nodeID, body.AddUserIDs, body.MaxForwards, body.RemoveUserIDs)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	for _, uid := range body.AddUserIDs {
-		if err := db.GrantNode(s.DB, uid, nodeID, body.MaxForwards, 0); err != nil {
-			jsonErr(w, http.StatusInternalServerError,
-				fmt.Sprintf("已新增 %d/%d 个授权后失败: %s", granted, len(body.AddUserIDs), err.Error()))
-			return
-		}
 		db.WriteAudit(s.DB, u.ID, "user.grant_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
-		granted++
 	}
-	// db.GrantNode 对已有授权是覆盖写：名单里若有已授权的用户，他这条授权的配额被
-	// 写回 0（不限量），此前因授权配额用尽被排除的规则要恢复下发。
-	var affected []int64
-	for _, uid := range body.AddUserIDs {
-		if nodes, err := db.RulesAffectedByNode(s.DB, uid, nodeID); err == nil {
-			affected = append(affected, nodes...)
-		}
-	}
-	revoked := 0
 	for _, uid := range body.RemoveUserIDs {
-		if err := db.RevokeNode(s.DB, uid, nodeID); err != nil {
-			jsonErr(w, http.StatusInternalServerError,
-				fmt.Sprintf("已移除 %d/%d 个授权后失败: %s", revoked, len(body.RemoveUserIDs), err.Error()))
-			return
-		}
-		nodes, err := db.DeleteRulesForUserNode(s.DB, uid, nodeID)
-		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected = append(affected, nodes...)
 		db.WriteAudit(s.DB, u.ID, "user.revoke_node", strconv.FormatInt(uid, 10), strconv.FormatInt(nodeID, 10))
-		revoked++
 	}
 	s.dispatchNodes("规则变更", affected)
-	jsonOK(w, map[string]any{"ok": true, "granted": granted, "revoked": revoked})
+	// db.GrantNode 对已有授权是覆盖写：名单里若有已授权的用户，他这条授权的配额被
+	// 写回 0（不限量），此前因授权配额用尽被排除的规则要恢复下发。名单已经落库，
+	// 调用是声明式的，重复一次就是重试。
+	for _, uid := range body.AddUserIDs {
+		if err := s.redispatchUserGrant(uid, nodeID, "授权节点"); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "授权已保存，但没能确定需要重新下发的节点: "+err.Error())
+			return
+		}
+	}
+	jsonOK(w, map[string]any{"ok": true, "granted": len(body.AddUserIDs), "revoked": len(body.RemoveUserIDs)})
 }
 
 func (s *Server) apiSetUserQuota(w http.ResponseWriter, r *http.Request) {
@@ -2224,7 +2295,7 @@ func (s *Server) apiToggleUser(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	// Flip: a currently-disabled user becomes enabled and vice versa.
@@ -2245,7 +2316,7 @@ func (s *Server) apiResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if target.Role == "admin" {
@@ -2279,19 +2350,15 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := db.GetUserByID(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "用户不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if target.Role == "admin" {
 		jsonErr(w, http.StatusForbidden, "不支持删除管理员")
 		return
 	}
-	affected, err := db.DeleteRulesForUser(s.DB, id)
+	affected, err := db.DeleteUserAndRules(s.DB, id)
 	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := db.DeleteUser(s.DB, id); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -2380,7 +2447,13 @@ func (s *Server) apiMyGetRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rl, err := db.GetRule(s.DB, id)
-	if err != nil || !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+	if err != nil {
+		jsonLookupErr(w, err, http.StatusNotFound, "规则不存在")
+		return
+	}
+	// Someone else's rule is answered exactly as one that does not exist, so
+	// that rule ids cannot be probed.
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
 		jsonErr(w, http.StatusNotFound, "规则不存在")
 		return
 	}
@@ -2703,8 +2776,12 @@ func (s *Server) apiMyCreateToken(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r, &body)
 	scope := db.NormalizeTokenScope(body.Scope)
 	token, err := db.CreateAPIToken(s.DB, u.ID, scope)
-	if err != nil {
+	if errors.Is(err, db.ErrAPITokenExists) {
 		jsonErr(w, http.StatusConflict, "已存在 Token，请先删除后重新创建")
+		return
+	}
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	jsonOK(w, map[string]any{"token": token, "scope": scope})
@@ -2713,7 +2790,7 @@ func (s *Server) apiMyCreateToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiMyDeleteToken(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	if err := db.DeleteAPIToken(s.DB, u.ID); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "删除失败")
+		jsonErr(w, http.StatusInternalServerError, "删除失败: "+err.Error())
 		return
 	}
 	jsonOK(w, map[string]any{"ok": true})
@@ -2723,7 +2800,7 @@ func (s *Server) apiMyRefreshToken(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	token, err := db.RefreshAPIToken(s.DB, u.ID)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "无 Token 可刷新")
+		jsonLookupErr(w, err, http.StatusNotFound, "无 Token 可刷新")
 		return
 	}
 	jsonOK(w, map[string]any{"token": token})
@@ -2733,7 +2810,7 @@ func (s *Server) apiMyToggleToken(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	disabled, err := db.ToggleAPIToken(s.DB, u.ID)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "Token 不存在")
+		jsonLookupErr(w, err, http.StatusNotFound, "Token 不存在")
 		return
 	}
 	jsonOK(w, map[string]any{"disabled": disabled})

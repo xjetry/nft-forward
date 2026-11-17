@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 
@@ -52,6 +51,17 @@ const (
 func v1OK(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+}
+
+// v1LookupErr is lookupErr for the v1 envelope: the caller's status, code and
+// message when the row does not exist, an internal error carrying err
+// otherwise. err is not nil.
+func v1LookupErr(w http.ResponseWriter, err error, status int, code, message string) {
+	if errors.Is(err, sql.ErrNoRows) {
+		v1Err(w, status, code, message)
+		return
+	}
+	v1Err(w, http.StatusInternalServerError, codeInternal, err.Error())
 }
 
 // v1Err writes the standard error envelope: {"error":{"code","message"}}.
@@ -433,7 +443,13 @@ func (s *Server) v1MyGetRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rl, err := db.GetRule(s.DB, id)
-	if err != nil || !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
+	if err != nil {
+		v1LookupErr(w, err, http.StatusNotFound, codeNotFound, "规则不存在")
+		return
+	}
+	// Someone else's rule is answered exactly as one that does not exist, so
+	// that rule ids cannot be probed.
+	if !rl.OwnerID.Valid || rl.OwnerID.Int64 != u.ID {
 		v1Err(w, http.StatusNotFound, codeNotFound, "规则不存在")
 		return
 	}
@@ -586,18 +602,19 @@ func (s *Server) v1MyUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.ruleChanged(out)
-	// 改动已经生效。规则读不回来时仍按成功回答，带上这次改动自己返回的入口地址，而不
-	// 是整条规则。
+	// 改动已经落库。应答是落库后的规则本身，所以规则读不回来是一次失败，并且要说明
+	// 改动已经生效。
 	rl, err := db.GetRule(s.DB, id)
-	if err == nil {
-		var views []v1Rule
-		if views, err = s.v1RulesFromDB([]*db.Rule{rl}); err == nil {
-			v1OK(w, map[string]any{"rule": views[0]})
-			return
-		}
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
+		return
 	}
-	log.Printf("api v1: rule %d updated but could not be read back: %v", id, err)
-	v1OK(w, map[string]any{"entry": out.Entry, "entry_v6": out.EntryV6})
+	views, err := s.v1RulesFromDB([]*db.Rule{rl})
+	if err != nil {
+		v1Err(w, http.StatusInternalServerError, codeInternal, "规则已更新，但没能读回: "+err.Error())
+		return
+	}
+	v1OK(w, map[string]any{"rule": views[0]})
 }
 
 func (s *Server) v1MyDeleteRule(w http.ResponseWriter, r *http.Request) {

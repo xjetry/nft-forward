@@ -2,9 +2,10 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -39,11 +40,28 @@ func (s *Server) probeEndpoint(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
+// probeFailure is the answer when a statement failed while preparing a probe:
+// nothing was probed, so it is an internal error and never a probe result. As
+// a result it would read "this target is unreachable" or "no such node".
+func probeFailure(err error) (probeResult, int) {
+	return probeResult{Error: err.Error()}, http.StatusInternalServerError
+}
+
+// probeLookupErr answers a failed lookup of the node or rule a probe names;
+// err is not nil. A row that does not exist is a completed probe with nothing
+// to reach (notFound, 200); any other error is a probeFailure.
+func probeLookupErr(err error, notFound string) (probeResult, int) {
+	if errors.Is(err, sql.ErrNoRows) {
+		return probeResult{Error: notFound}, http.StatusOK
+	}
+	return probeFailure(err)
+}
+
 // runProbe performs a single target probe and returns the result plus the HTTP
 // status a REST caller should surface. A status of 200 covers both a reachable
 // and an unreachable target (the result's OK/Error carry that); non-200 is a
-// transport-level refusal (bad request, forbidden) the caller maps to an error
-// envelope. The permission collapsing — non-admins may only probe through nodes
+// transport-level refusal (bad request, forbidden) or a probeFailure, which
+// the caller maps to an error envelope. The permission collapsing — non-admins may only probe through nodes
 // they're granted, and the SSRF-prone node-less branch is admin-only — lives here
 // so every entry point (session UI and token API) enforces it identically.
 func (s *Server) runProbe(ctx context.Context, target, nodeStr, protoRaw string) (probeResult, int) {
@@ -62,17 +80,21 @@ func (s *Server) runProbe(ctx context.Context, target, nodeStr, protoRaw string)
 		}
 		n, err := db.GetNode(s.DB, nodeID)
 		if err != nil {
-			return probeResult{Error: "node not found"}, http.StatusOK
+			return probeLookupErr(err, "node not found")
 		}
 		// 经一个节点向外探测，与把它用进规则是同一个问题（db.NodeAccess）：否则任何
-		// 登录用户都能拿别人的节点当扫描代理。读授权失败按无权处理。
+		// 登录用户都能拿别人的节点当扫描代理。读授权失败是面板的失败，不是“无权”。
 		if actor != nil {
-			if _, ok, err := db.NodeAccess(s.DB, actor, nodeID); err != nil || !ok {
+			_, ok, err := db.NodeAccess(s.DB, actor, nodeID)
+			if err != nil {
+				return probeFailure(err)
+			}
+			if !ok {
 				return probeResult{Error: "无权操作该节点"}, http.StatusForbidden
 			}
 		}
 		if n.NodeType == "composite" {
-			return s.probeCompositeToTarget(nodeID, target, proto), http.StatusOK
+			return s.probeCompositeToTarget(nodeID, target, proto)
 		}
 		ack, err := s.Hub.SendProbe(nodeID, target, proto)
 		if err != nil {
@@ -114,18 +136,21 @@ func probeProto(p string) string {
 	return "tcp"
 }
 
-func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string) probeResult {
+func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string) (probeResult, int) {
 	// 探测面对的是展平后的物理节点，与建规则时用的是同一份展平（chain.Topology
 	// 的 Flatten）。组合的成员可以还是组合，而探测帧只能发给有 agent 连接的节点
 	// （Hub.SendProbe 按节点 id 找连接）；只遍历 node_hops 的第一层，会把嵌套的
 	// 组合当成一台机器去探测，得到的永远是“未连接”。
+	//
+	// 拓扑读不出来是面板的失败；读出来了但展不平（成员不存在、成环）是这个组合的
+	// 配置问题，作为探测结果里的错误如实给出。
 	topo, err := db.LoadTopology(s.DB)
 	if err != nil {
-		return probeResult{Error: err.Error()}
+		return probeFailure(err)
 	}
 	hops, err := topo.Flatten(compositeID)
 	if err != nil {
-		return probeResult{Error: err.Error()}
+		return probeResult{Error: err.Error()}, http.StatusOK
 	}
 	// Only the last physical node dials the real target, so it's the only leg
 	// with a concrete data-plane endpoint to probe outside a rule — the legs
@@ -139,10 +164,15 @@ func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string)
 	total := 0
 	for i, h := range hops {
 		// 节点行在这里另读一次：中间成员是否在线要看行上的 online 与 disabled，
-		// 这两项不在拓扑快照里。
-		n, gerr := db.GetNode(s.DB, h.NodeID)
+		// 这两项不在拓扑快照里。拓扑读出之后被删掉的成员按它的 id 报告，算作一个
+		// 不在的成员；别的读失败是面板的失败。
+		n, err := db.GetNode(s.DB, h.NodeID)
+		gone := errors.Is(err, sql.ErrNoRows)
+		if err != nil && !gone {
+			return probeFailure(err)
+		}
 		name := fmt.Sprintf("#%d", h.NodeID)
-		if gerr == nil {
+		if !gone {
 			name = n.Name
 		}
 		hp := hopProbe{Node: name}
@@ -159,7 +189,7 @@ func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string)
 			default:
 				hp.Latency = ack.Latency
 			}
-		} else if gerr != nil || n.Online != 1 || n.Disabled {
+		} else if gone || n.Online != 1 || n.Disabled {
 			hp.Error = "节点离线"
 		}
 		if hp.Error != "" {
@@ -169,7 +199,7 @@ func (s *Server) probeCompositeToTarget(compositeID int64, target, proto string)
 		}
 		results[i] = hp
 	}
-	return probeResult{OK: allOK, Latency: total, Hops: results}
+	return probeResult{OK: allOK, Latency: total, Hops: results}, http.StatusOK
 }
 
 func (s *Server) probeChainEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +225,7 @@ func chainRuleIDParam(r *http.Request) string {
 
 // runProbeChain probes every hop of a rule's deployed chain in parallel and
 // returns the aggregate result plus the HTTP status a REST caller should surface
-// (non-200 only for a forbidden cross-owner probe). Ownership is enforced here so
+// (non-200 for a forbidden cross-owner probe, or a probeFailure). Ownership is enforced here so
 // a non-admin can't read another user's per-hop node names/targets.
 func (s *Server) runProbeChain(ctx context.Context, ruleIDStr string) (probeResult, int) {
 	ruleID, err := strconv.ParseInt(ruleIDStr, 10, 64)
@@ -204,7 +234,7 @@ func (s *Server) runProbeChain(ctx context.Context, ruleIDStr string) (probeResu
 	}
 	rule, err := db.GetRule(s.DB, ruleID)
 	if err != nil {
-		return probeResult{Error: "rule not found"}, http.StatusOK
+		return probeLookupErr(err, "rule not found")
 	}
 	// A non-admin may probe only their own rule, so the per-hop node names and
 	// targets of other users' rules don't leak through the chain probe.
@@ -214,7 +244,10 @@ func (s *Server) runProbeChain(ctx context.Context, ruleIDStr string) (probeResu
 		}
 	}
 	hops, err := db.ListRuleHops(s.DB, ruleID)
-	if err != nil || len(hops) == 0 {
+	if err != nil {
+		return probeFailure(err)
+	}
+	if len(hops) == 0 {
 		return probeResult{Error: "no hops"}, http.StatusOK
 	}
 
@@ -228,13 +261,14 @@ func (s *Server) runProbeChain(ctx context.Context, ruleIDStr string) (probeResu
 	var tasks []probeTask
 	for i, h := range hops {
 		target := net.JoinHostPort(h.TargetHost, strconv.Itoa(h.TargetPort))
-		// The name only labels this hop in the result; a hop whose node
-		// cannot be read is still probed, under its id.
+		// A node deleted since the hops were read is probed under its id;
+		// the probe then reports it as not connected.
 		nodeName := fmt.Sprintf("#%d", h.NodeID)
-		if n, err := db.GetNode(s.DB, h.NodeID); err != nil {
-			log.Printf("probe chain: rule %d hop node %d: read name: %v", ruleID, h.NodeID, err)
-		} else {
+		switch n, err := db.GetNode(s.DB, h.NodeID); {
+		case err == nil:
 			nodeName = n.Name
+		case !errors.Is(err, sql.ErrNoRows):
+			return probeFailure(err)
 		}
 		tasks = append(tasks, probeTask{idx: i, nodeID: h.NodeID, name: nodeName, target: target, proto: probeProto(h.Proto)})
 	}

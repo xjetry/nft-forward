@@ -960,8 +960,10 @@ function GrantEditor({ nodeId, grantedUsers, reload }) {
       const res = await api.post(`/nodes/${nodeId}/grants/batch`, { add_user_ids: add, remove_user_ids: remove })
       toast(`授权已更新：新增 ${res?.granted ?? add.length} 人，取消 ${res?.revoked ?? remove.length} 人`)
     } finally {
-      // 批量接口逐个应用，中途失败时前面的已经生效。成败都刷新，剩下没生效的
-      // 增减才会按实际授权重新算出来。
+      // 这份增减由服务端在一个事务里应用，失败时一条都不生效；例外是应答明说
+      // “授权已保存，但……”的失败：名单已经落库，只是没能确定要重新下发哪些节点。
+      // 失败也刷新：被拒的原因可能正是这里的名单过时了（比如其中的用户已被删除），
+      // 增减要按刷新后的实际授权重新算。
       await reload()
     }
   })

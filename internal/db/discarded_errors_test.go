@@ -98,11 +98,9 @@ func databaseCall(e ast.Expr, dbAlias string, inDB bool, returnsError map[string
 	return "", false
 }
 
-// discardedDatabaseErrors lists every place in the file where a database call
-// has its error thrown away: assigned to the blank identifier, or made as a
-// bare statement (including defer and go).
-func discardedDatabaseErrors(fset *token.FileSet, file *ast.File, returnsError map[string]bool) []string {
-	inDB := file.Name.Name == "db"
+// dbAliasIn returns the name file uses for this package, "" if it does not
+// import it by a usable name.
+func dbAliasIn(file *ast.File) string {
 	alias := ""
 	for _, imp := range file.Imports {
 		if p, _ := strconv.Unquote(imp.Path.Value); p == dbImportPath {
@@ -113,8 +111,54 @@ func discardedDatabaseErrors(fset *token.FileSet, file *ast.File, returnsError m
 		}
 	}
 	if alias == "_" {
-		alias = ""
+		return ""
 	}
+	return alias
+}
+
+// eachGoFile parses every non-test Go file of the repository and hands it to
+// visit. It fails the test if it finds none.
+func eachGoFile(t *testing.T, visit func(fset *token.FileSet, file *ast.File)) {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".git", ".worktrees", "dist":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		scanned++
+		visit(fset, file)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no Go files; the check would pass vacuously")
+	}
+}
+
+// discardedDatabaseErrors lists every place in the file where a database call
+// has its error thrown away: assigned to the blank identifier, or made as a
+// bare statement (including defer and go).
+func discardedDatabaseErrors(fset *token.FileSet, file *ast.File, returnsError map[string]bool) []string {
+	inDB := file.Name.Name == "db"
+	alias := dbAliasIn(file)
 	var found []string
 	flag := func(pos token.Pos, name string) {
 		p := fset.Position(pos)
@@ -154,47 +198,163 @@ func discardedDatabaseErrors(fset *token.FileSet, file *ast.File, returnsError m
 // client, or logged where there is no one to report to.
 //
 // This walks the syntax of every non-test Go file in the repository. It sees
-// an error dropped at the call (see discardedDatabaseErrors); it does not see
-// one that is assigned to a variable and then not acted on.
+// an error dropped at the call (see discardedDatabaseErrors). An error that
+// is assigned and tested, but not looked at where it is handled, is
+// TestNoDatabaseErrorIsHandledUnexamined's.
 func TestNoDatabaseErrorIsDiscarded(t *testing.T) {
 	returnsError := errorReturningFuncs(t)
 	if len(returnsError) == 0 {
 		t.Fatal("found no error-returning functions in this package; the check would pass vacuously")
 	}
-	root := filepath.Join("..", "..")
-	fset := token.NewFileSet()
 	var found []string
-	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", ".git", ".worktrees", "dist":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		scanned++
+	eachGoFile(t, func(fset *token.FileSet, file *ast.File) {
 		found = append(found, discardedDatabaseErrors(fset, file, returnsError)...)
-		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if scanned == 0 {
-		t.Fatal("scanned no Go files; the check would pass vacuously")
-	}
 	sort.Strings(found)
 	if len(found) > 0 {
 		t.Fatalf("%d database call(s) have their error discarded:\n%s", len(found), strings.Join(found, "\n"))
+	}
+}
+
+// unexaminedByDesign names the functions that may handle a failed database
+// call without looking at the error, each with why that loses nothing.
+var unexaminedByDesign = map[string]string{
+	"nodeLabel": "names a node inside an error message its caller is already returning; a name that cannot be read becomes the node's id",
+}
+
+// unexaminedDatabaseErrors lists every place in the file where a database
+// call's error is tested against nil and the branch for "not nil" never
+// mentions it:
+//
+//	u, err := GetUserByID(d, id)
+//	if err != nil {
+//		return notFound
+//	}
+//
+// Each entry is "function\tfile:line: call". The error variable is taken
+// from the call's own statement — the if's init, or the statement just
+// before the if.
+func unexaminedDatabaseErrors(fset *token.FileSet, file *ast.File, returnsError map[string]bool) []string {
+	inDB := file.Name.Name == "db"
+	alias := dbAliasIn(file)
+	// errorOf: when stmt is `..., e := <database call>`, e and the call.
+	errorOf := func(stmt ast.Stmt) (name, call string, ok bool) {
+		assign, isAssign := stmt.(*ast.AssignStmt)
+		if !isAssign || len(assign.Rhs) != 1 {
+			return "", "", false
+		}
+		call, ok = databaseCall(assign.Rhs[0], alias, inDB, returnsError)
+		if !ok {
+			return "", "", false
+		}
+		id, isIdent := assign.Lhs[len(assign.Lhs)-1].(*ast.Ident)
+		if !isIdent || id.Name == "_" {
+			return "", "", false
+		}
+		return id.Name, call, true
+	}
+	mentions := func(n ast.Node, name string) bool {
+		found := false
+		ast.Inspect(n, func(x ast.Node) bool {
+			if id, ok := x.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+			return !found
+		})
+		return found
+	}
+	testsNotNil := func(cond ast.Expr, name string) bool {
+		found := false
+		ast.Inspect(cond, func(x ast.Node) bool {
+			if b, ok := x.(*ast.BinaryExpr); ok && b.Op == token.NEQ {
+				l, lok := b.X.(*ast.Ident)
+				r, rok := b.Y.(*ast.Ident)
+				if lok && rok && l.Name == name && r.Name == "nil" {
+					found = true
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	var found []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			var list []ast.Stmt
+			switch block := n.(type) {
+			case *ast.BlockStmt:
+				list = block.List
+			case *ast.CaseClause:
+				list = block.Body
+			case *ast.CommClause:
+				list = block.Body
+			default:
+				return true
+			}
+			for i, stmt := range list {
+				ifStmt, ok := stmt.(*ast.IfStmt)
+				if !ok {
+					continue
+				}
+				var name, call string
+				have := false
+				if ifStmt.Init != nil {
+					name, call, have = errorOf(ifStmt.Init)
+				}
+				if !have && i > 0 {
+					name, call, have = errorOf(list[i-1])
+				}
+				if have && testsNotNil(ifStmt.Cond, name) && !mentions(ifStmt.Body, name) {
+					p := fset.Position(ifStmt.Pos())
+					found = append(found, fn.Name.Name+"\t"+p.Filename+":"+strconv.Itoa(p.Line)+": "+call)
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
+// A branch that runs when a database call failed, and does not look at the
+// error, gives one answer to every failure. That answer is right for at most
+// one of them. "Not found" is the usual one: right when the row is not there,
+// and wrong when the query could not be made, where it sends whoever reads it
+// looking for a row that exists. The same goes for "no access", "already
+// exists", a default value, a skipped item.
+//
+// So the branch has to mention the error: to tell the cases apart
+// (errors.Is(err, sql.ErrNoRows)), to pass it on, or to log it. This walks
+// the syntax of every non-test Go file in the repository; it sees the shape
+// in unexaminedDatabaseErrors and cannot tell whether the mention is a
+// sufficient one.
+func TestNoDatabaseErrorIsHandledUnexamined(t *testing.T) {
+	returnsError := errorReturningFuncs(t)
+	if len(returnsError) == 0 {
+		t.Fatal("found no error-returning functions in this package; the check would pass vacuously")
+	}
+	var found []string
+	exempted := map[string]bool{}
+	eachGoFile(t, func(fset *token.FileSet, file *ast.File) {
+		for _, entry := range unexaminedDatabaseErrors(fset, file, returnsError) {
+			fn, where, _ := strings.Cut(entry, "\t")
+			if _, ok := unexaminedByDesign[fn]; ok {
+				exempted[fn] = true
+				continue
+			}
+			found = append(found, where+" (in "+fn+")")
+		}
+	})
+	sort.Strings(found)
+	if len(found) > 0 {
+		t.Errorf("%d database call(s) have their failure handled without the error being looked at:\n%s", len(found), strings.Join(found, "\n"))
+	}
+	for fn := range unexaminedByDesign {
+		if !exempted[fn] {
+			t.Errorf("unexaminedByDesign names %s, where nothing of the kind is found any more", fn)
+		}
 	}
 }

@@ -7,14 +7,16 @@ import (
 	"testing"
 )
 
-// 改动落库之后要经一次重新下发（或重新接线）才到节点上，要通知哪些节点、重接哪些规则
-// 是从 rule_hops 读出来的。读不出来时改动已经保存、却没有任何节点知道，接口必须回答
-// 500 并说明“已保存，但没能确定……”，不能按“没有节点需要通知”回 200。
+// 改动落库之后要经一次重新下发才到节点上，要通知哪些节点是从 rule_hops 读出来的。
+// 读不出来时改动已经保存、却没有任何节点知道，接口必须回答 500 并说明“已保存，但
+// 没能确定……”，不能按“没有节点需要通知”回 200。
 //
 // 表里每个接口的写入都不碰 rule_hops，所以丢掉这张表只让“读出要通知谁”这一步失败；
 // 对照组（表都在）回 200，说明 500 不是请求本身有问题。重置用户流量
 // （/users/{id}/reset-traffic）不在表里：它的写入本身要清 rule_hops 上的逐跳流量，
-// 丢表分不开这两步。
+// 丢表分不开这两步。设置中继地址（/nodes/{id}/relay-host）也不在表里：它把改地址与
+// 重新生成引用它的规则放在一个事务里（db.SetNodeRelayHostAndRewire），读不出要重接
+// 哪些规则时地址根本不保存，没有“已保存但……”这种状态。
 func TestSavedChangeReportsWhenItsNodesCannotBeListed(t *testing.T) {
 	calls := []struct {
 		name, method, url string
@@ -29,7 +31,8 @@ func TestSavedChangeReportsWhenItsNodesCannotBeListed(t *testing.T) {
 		{"启用/停用账号", "POST", "/api/users/%[1]d/toggle", nil},
 		{"修改用户资料", "PATCH", "/api/users/%[1]d/profile", map[string]any{"max_forwards": 10}},
 		{"节点启停", "POST", "/api/nodes/%[2]d/toggle", nil},
-		{"设置中继地址", "POST", "/api/nodes/%[2]d/relay-host", map[string]any{"relay_host": "2.2.2.2"}},
+		// 名单里是已经持有授权的用户：授权被覆盖写，经过它的规则要重新下发。
+		{"节点授权名单", "POST", "/api/nodes/%[2]d/grants/batch", map[string]any{"add_user_ids": "USERS", "max_forwards": 5}},
 	}
 	for _, c := range calls {
 		t.Run(c.name, func(t *testing.T) {
@@ -41,8 +44,11 @@ func TestSavedChangeReportsWhenItsNodesCannotBeListed(t *testing.T) {
 				s, _ := New(d)
 				body := map[string]any{}
 				for k, v := range c.body {
-					if v == "NODE" {
+					switch v {
+					case "NODE":
 						v = node.ID
+					case "USERS":
+						v = []int64{uid}
 					}
 					body[k] = v
 				}

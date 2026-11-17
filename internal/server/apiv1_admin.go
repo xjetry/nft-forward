@@ -14,7 +14,7 @@ import (
 // admin write handlers reject bad ids before mutating.
 func (s *Server) v1RequireUser(w http.ResponseWriter, id int64) bool {
 	if _, err := db.GetUserByID(s.DB, id); err != nil {
-		v1Err(w, http.StatusNotFound, codeNotFound, "用户不存在")
+		v1LookupErr(w, err, http.StatusNotFound, codeNotFound, "用户不存在")
 		return false
 	}
 	return true
@@ -61,7 +61,7 @@ func (s *Server) v1AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		scope := db.NormalizeTokenScope(body.TokenScope)
 		tok, _, err := db.IssueUserToken(s.DB, user.ID, scope)
 		if err != nil {
-			v1Err(w, http.StatusInternalServerError, codeInternal, "建 token 失败")
+			v1Err(w, http.StatusInternalServerError, codeInternal, "用户已创建，但没能签发 token: "+err.Error())
 			return
 		}
 		out["token"] = tok
@@ -89,7 +89,7 @@ func (s *Server) v1AdminMintUserToken(w http.ResponseWriter, r *http.Request) {
 	scope := db.NormalizeTokenScope(body.Scope)
 	tok, rotated, err := db.IssueUserToken(s.DB, id, scope)
 	if err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败")
+		v1Err(w, http.StatusInternalServerError, codeInternal, "铸 token 失败: "+err.Error())
 		return
 	}
 	v1OK(w, map[string]any{"token": tok, "scope": scope, "token_prefix": db.TokenPrefix(tok), "rotated": rotated})
@@ -131,7 +131,7 @@ func (s *Server) v1AdminDeleteUserToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := db.DeleteAPIToken(s.DB, id); err != nil {
-		v1Err(w, http.StatusInternalServerError, codeInternal, "删除失败")
+		v1Err(w, http.StatusInternalServerError, codeInternal, "删除失败: "+err.Error())
 		return
 	}
 	v1OK(w, map[string]any{"deleted": true})
@@ -256,7 +256,7 @@ func (s *Server) v1AdminGrantNode(w http.ResponseWriter, r *http.Request) {
 		TrafficQuotaBytes int64 `json:"traffic_quota_bytes"`
 	}
 	_ = decodeJSON(r, &body)
-	if aerr := s.grantUserNode(admin.ID, id, nodeID, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
+	if aerr := s.grantUserNodes(admin.ID, id, []int64{nodeID}, body.MaxForwards, body.TrafficQuotaBytes); aerr != nil {
 		writeAdminErrV1(w, aerr)
 		return
 	}

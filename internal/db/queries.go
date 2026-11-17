@@ -287,7 +287,7 @@ func SetUserDisabled(d *sql.DB, id int64, disabled bool, reason string) error {
 	return err
 }
 
-func DeleteUser(d *sql.DB, id int64) error {
+func DeleteUser(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM users WHERE id=?`, id)
 	return err
 }
@@ -296,7 +296,7 @@ func GetUserByUsername(d *sql.DB, username string) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE username = ?`, username))
 }
 
-func GetUserByID(d *sql.DB, id int64) (*User, error) {
+func GetUserByID(d DBTX, id int64) (*User, error) {
 	return scanUser(d.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
 }
 
@@ -387,7 +387,7 @@ func GetSetting(d *sql.DB, key string) (string, error) {
 }
 
 // SetSetting upserts a global setting key.
-func SetSetting(d *sql.DB, key, value string) error {
+func SetSetting(d DBTX, key, value string) error {
 	_, err := d.Exec(
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -416,6 +416,12 @@ type LineSpec struct {
 	// RateMultiplier ≤ 0 时取 1.0：建节点的请求体分不清没填与填了 0，而 0 表示免费，
 	// 免费只经专门的倍率接口（UpdateNodeRateMultiplier）设置。
 	RateMultiplier float64
+	// GrantUserIDs 里的每个用户在建成时各得一条这条线路的授权，条数上限为
+	// GrantMaxForwards。授权与节点行在同一个事务里写：其中一条写不进去，节点也不建。
+	// 调用方先确认这些用户存在——外键也会拒绝不存在的用户，但那是一次失败的写入，
+	// 调用方读不出原因。
+	GrantUserIDs     []int64
+	GrantMaxForwards int
 }
 
 func (l LineSpec) rate() float64 {
@@ -427,14 +433,25 @@ func (l LineSpec) rate() float64 {
 
 const newLineRoles = NodeRoleEntry | NodeRoleVia
 
+// grantNewLine 在建节点的事务里写下 LineSpec 要求的初始授权。
+func grantNewLine(tx *sql.Tx, nodeID int64, l LineSpec) error {
+	for _, uid := range l.GrantUserIDs {
+		if err := GrantNode(tx, uid, nodeID, l.GrantMaxForwards, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateNode 建一台机器，只给名字、连接地址初值与凭据，其余取默认值。面板建节点走
 // CreateMachineNode（要带属主与端口段）；这个包装是给测试造节点用的。
 func CreateNode(d *sql.DB, name, address, secret string) (*Node, error) {
 	return CreateMachineNode(d, name, MachineSpec{Address: address, Secret: secret}, LineSpec{})
 }
 
-// CreateMachineNode 用一条 INSERT 建一台机器（node_type remote），机器属性与线路属性
-// 一次写全，不会留下只写了一半的行。
+// CreateMachineNode 建一台机器（node_type remote）：一条 INSERT 把机器属性与线路属性
+// 一次写全，初始授权（LineSpec.GrantUserIDs）在同一个事务里跟着写，返回的是事务里
+// 读回的那一行。任何一步失败都不留下东西，也就没有“建了一半”要向调用方交代。
 func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node, error) {
 	secret := m.Secret
 	if secret == "" {
@@ -444,7 +461,12 @@ func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node
 	if portRange == "" {
 		portRange = DefaultPortRange
 	}
-	res, err := d.Exec(`INSERT INTO nodes(name, node_type, owner_id, address, secret, port_range, unidirectional,
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO nodes(name, node_type, owner_id, address, secret, port_range, unidirectional,
 			rate_multiplier, roles, sort_order, created_at)
 		VALUES (?, 'remote', ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
 		name, m.OwnerID, m.Address, secret, portRange, boolInt(m.Unidirectional), l.rate(), newLineRoles, now())
@@ -455,11 +477,22 @@ func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node
 	if err != nil {
 		return nil, err
 	}
-	return GetNode(d, id)
+	if err := grantNewLine(tx, id, l); err != nil {
+		return nil, err
+	}
+	n, err := GetNode(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
-// CreateCompositeNode 建一个组合：节点行（node_type composite）与它的成员在同一个事务
-// 里写入，任何一步失败都不留下东西。组合行上不写任何机器列：凭据为空串、没有端口段、
+// CreateCompositeNode 建一个组合：节点行（node_type composite）、它的成员与初始授权
+// （LineSpec.GrantUserIDs）在同一个事务里写入，返回的是事务里读回的那一行；任何一步
+// 失败都不留下东西。组合行上不写任何机器列：凭据为空串、没有端口段、
 // 没有属主。空凭据不会让谁以组合的身份接入——server 包的 lookupNodeBySecret 拒绝空
 // 凭据，也不匹配组合行。成员按 members 的次序编号，mode 经 CreateNodeHops 落值。
 func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) (*Node, error) {
@@ -485,10 +518,17 @@ func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) 
 	if err := CreateNodeHops(tx, id, hops); err != nil {
 		return nil, err
 	}
+	if err := grantNewLine(tx, id, l); err != nil {
+		return nil, err
+	}
+	n, err := GetNode(tx, id)
+	if err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return GetNode(d, id)
+	return n, nil
 }
 
 func boolInt(b bool) int {
@@ -509,7 +549,7 @@ const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_hos
 // same-named columns make the SELECT ambiguous.
 var nodeColsQualified = "n." + strings.Join(strings.Split(nodeCols, ","), ",n.")
 
-func GetNode(d *sql.DB, id int64) (*Node, error) {
+func GetNode(d DBTX, id int64) (*Node, error) {
 	row := d.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id)
 	return scanNode(row)
 }
@@ -587,7 +627,7 @@ func RenameNode(d *sql.DB, id int64, name string) error {
 	return err
 }
 
-func DeleteNode(d *sql.DB, id int64) error {
+func DeleteNode(d DBTX, id int64) error {
 	_, err := d.Exec(`DELETE FROM nodes WHERE id = ?`, id)
 	return err
 }
@@ -621,7 +661,7 @@ func updateMachine(d DBTX, id int64, set string, args ...any) error {
 
 // UpdateNodeRelayHost sets a machine's data-plane reachable address (empty clears
 // it). Validation of the value (IPv4 / hostname) is the caller's job.
-func UpdateNodeRelayHost(d *sql.DB, id int64, relayHost string) error {
+func UpdateNodeRelayHost(d DBTX, id int64, relayHost string) error {
 	return updateMachine(d, id, `relay_host=?`, relayHost)
 }
 
@@ -707,7 +747,7 @@ func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	return h, nil
 }
 
-func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
+func DeleteRulesForUser(d DBTX, userID int64) ([]int64, error) {
 	nodes, err := DistinctUserNodes(d, userID)
 	if err != nil {
 		return nil, err
@@ -718,7 +758,7 @@ func DeleteRulesForUser(d *sql.DB, userID int64) ([]int64, error) {
 	return nodes, nil
 }
 
-func DistinctUserNodes(d *sql.DB, userID int64) ([]int64, error) {
+func DistinctUserNodes(d DBTX, userID int64) ([]int64, error) {
 	return queryInt64s(d, `SELECT DISTINCT rh.node_id FROM rule_hops rh JOIN rules r ON r.id = rh.rule_id WHERE r.owner_id=?`, userID)
 }
 

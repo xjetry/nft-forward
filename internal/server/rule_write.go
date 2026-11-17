@@ -82,11 +82,6 @@ func (s *Server) ruleChanged(res rulechange.Result) {
 	s.dispatchNodes("规则变更", res.Affected)
 }
 
-// apiRewireRules 按落库的链重新生成这些规则并下发（见 rulechange.Changes.Rewire）。
-func (s *Server) apiRewireRules(ruleIDs []int64) {
-	s.dispatchNodes("规则变更", s.Rules.Rewire(ruleIDs))
-}
-
 func (s *Server) apiCreateRule(w http.ResponseWriter, r *http.Request) {
 	var body ruleWriteBody
 	if err := decodeJSON(r, &body); err != nil {

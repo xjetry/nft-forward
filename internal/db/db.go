@@ -15,6 +15,15 @@ import (
 var migrations embed.FS
 
 func Open(path string) (*sql.DB, error) {
+	return OpenDriver("sqlite", path)
+}
+
+// OpenDriver is Open through the database/sql driver registered under
+// driverName. The driver has to speak SQLite and accept the same DSN: the
+// connection settings and the migrations below are SQLite's. It exists so a
+// test can register a driver that wraps the real one and fails chosen
+// statements, and still get a database set up exactly as Open sets it up.
+func OpenDriver(driverName, path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := ensureDir(dir); err != nil {
 			return nil, fmt.Errorf("create database directory: %w", err)
@@ -25,7 +34,7 @@ func Open(path string) (*sql.DB, error) {
 	// power loss. It avoids an fsync per commit, which matters here because the
 	// hot counters path commits frequently and MaxOpenConns(1) serializes every
 	// writer behind those fsyncs.
-	d, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	d, err := sql.Open(driverName, path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}

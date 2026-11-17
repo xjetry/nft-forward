@@ -26,7 +26,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -538,7 +537,7 @@ func (c *Changes) EditHop(actor Actor, ruleID int64, e HopEdit) (Result, *Error)
 	if !onRule(stored, actor.Node) {
 		return Result{}, forbidden("节点不在该规则上")
 	}
-	inputs := storedInputs(stored)
+	inputs := db.StoredHopInputs(stored)
 	for i, sh := range stored {
 		if sh.NodeID == actor.Node {
 			inputs[i].DesiredPort = e.ListenPort
@@ -567,7 +566,7 @@ func (c *Changes) ReallocateHop(actor Actor, ruleID int64, pos, port int) (Resul
 	if pos < 0 || pos >= len(stored) {
 		return Result{}, invalid("跳序号非法")
 	}
-	inputs := storedInputs(stored)
+	inputs := db.StoredHopInputs(stored)
 	var avoid map[int64]int
 	if port > 0 {
 		inputs[pos].DesiredPort = port
@@ -580,36 +579,6 @@ func (c *Changes) ReallocateHop(actor Actor, ruleID int64, pos, port int) (Resul
 	}
 	c.audit(actor, "reallocate", ruleID, strconv.Itoa(pos))
 	return res, nil
-}
-
-// Rewire 按各规则落库的链重新生成它们的跳，返回需要重新下发的节点。它不是某个发起方
-// 的变更，而是面板对拓扑变化的跟进：一跳的目标地址是下一跳所在节点的数据面地址，建
-// 规则时抄进了 rule_hops，节点换了地址或被删除之后要按现状重算。单条失败只记日志，
-// 不影响其余规则。
-func (c *Changes) Rewire(ruleIDs []int64) []int64 {
-	seen := map[int64]bool{}
-	var affected []int64
-	for _, id := range ruleIDs {
-		rl, stored, cerr := c.load(id)
-		if cerr == nil && len(stored) == 0 {
-			continue
-		}
-		var res Result
-		if cerr == nil {
-			res, cerr = c.regenerate(rl, storedInputs(stored), nil)
-		}
-		if cerr != nil {
-			log.Printf("rulechange: rewire rule %d: %s", id, cerr.Msg)
-			continue
-		}
-		for _, n := range res.Affected {
-			if !seen[n] {
-				seen[n] = true
-				affected = append(affected, n)
-			}
-		}
-	}
-	return affected
 }
 
 // --- 判定 ---
@@ -920,16 +889,6 @@ func hopInputs(hops []chain.Hop) []db.HopInput {
 	return inputs
 }
 
-// storedInputs 把规则落库的链原样变成 db.RegenerateRule 的输入。没给端口的跳由
-// RegenerateRule 沿用各节点现有的监听端口。
-func storedInputs(stored []*db.RuleHop) []db.HopInput {
-	inputs := make([]db.HopInput, len(stored))
-	for i, sh := range stored {
-		inputs[i] = db.HopInput{NodeID: sh.NodeID, Mode: sh.Mode, ViaNodeID: sh.ViaNodeID}
-	}
-	return inputs
-}
-
 func onRule(stored []*db.RuleHop, nodeID int64) bool {
 	for _, sh := range stored {
 		if sh.NodeID == nodeID {
@@ -973,15 +932,20 @@ func (c *Changes) regenerate(rl *db.Rule, inputs []db.HopInput, avoid map[int64]
 	return Result{Rule: rl, Entry: entry, EntryV6: entryV6, Hops: inputs, Affected: affected}, nil
 }
 
-// regenerateRefused 给 db.RegenerateRule 的拒绝分类。同一个物理节点在链上出现两次是
-// 发起方选的入口与中转层互相冲突，算 Conflict；其余的拒绝（例如节点缺数据面地址、
-// 要的端口用不了）算 Invalid。
+// regenerateRefused 给 db.RegenerateRule 的错误分类。db.ChainError 说的是这条链按要求
+// 搭不出来（节点缺数据面地址、要的端口用不了……），要改的是请求或节点的配置：同一个
+// 物理节点在链上出现两次是发起方选的入口与中转层互相冲突，算 Conflict，其余算
+// Invalid。不是 ChainError 的错误是语句没执行成，与这条链对不对无关，算 Internal——
+// 按 Invalid 回给发起方，是让他去改一条没有问题的规则。
 func regenerateRefused(err error) *Error {
-	kind := Invalid
-	if errors.Is(err, db.ErrDuplicateChainNode) {
-		kind = Conflict
+	switch {
+	case errors.Is(err, db.ErrDuplicateChainNode):
+		return &Error{Kind: Conflict, Msg: err.Error(), cause: err}
+	case db.IsChainError(err):
+		return &Error{Kind: Invalid, Msg: err.Error(), cause: err}
+	default:
+		return internal(err)
 	}
-	return &Error{Kind: kind, Msg: err.Error(), cause: err}
 }
 
 // origin 是写进审计备注里的来源：节点发起的变更记下是哪台节点。

@@ -127,9 +127,15 @@ type agentPeer struct {
 // localAgentOrigin 是本机入口的连接在 nodes.address 里的来源标记。
 const localAgentOrigin = "本机"
 
+// helloLookupFailed 是认定对端的那次查找没能执行时回给对端的拒绝原因。“token 不认识”
+// “面板没有 self 节点”是关于那一行的回答，而一次没能执行的查找对那一行一无所知：
+// 答成前者，节点的操作者会去换一个本来有效的 token。查找的错误原文只进面板日志、
+// 不回给对端——远程入口上对端此时还没有通过认证。
+const helloLookupFailed = "panel could not look up the node; see the panel's log"
+
 // ServeWS 是对外的 agent 入口（HTTP 路由上的 /v1/agents）：节点凭 hello 里的 token
-// 认定，token 对不上任何节点就拒绝。空 token 一律拒绝（lookupNodeBySecret），所以
-// 没有 token 的 self 节点不可能从这里接入。
+// 认定，token 对不上任何节点就拒绝。空 token 不认出任何节点（lookupNodeBySecret），
+// 所以没有 token 的 self 节点不可能从这里接入。
 //
 // 被停用的节点照样可以接入（两个入口都是）。停用的含义是“不承载转发”，由压制条件
 // 落实：经过它的规则不下发，它收到的规则集是空的。它必须连得上才收得到这次撤销——
@@ -138,7 +144,11 @@ const localAgentOrigin = "本机"
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.serveAgent(w, r, func(hello wsproto.Hello) (agentPeer, string) {
 		node, err := lookupNodeBySecret(h.DB, hello.NodeToken)
-		if err != nil || node == nil {
+		if err != nil {
+			log.Printf("hub: hello: look up the node by its token: %v", err)
+			return agentPeer{}, helloLookupFailed
+		}
+		if node == nil {
 			return agentPeer{}, "unknown or revoked token"
 		}
 		ip := extractIP(r)
@@ -153,8 +163,12 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) ServeLocalWS(w http.ResponseWriter, r *http.Request) {
 	h.serveAgent(w, r, func(wsproto.Hello) (agentPeer, string) {
 		node, err := db.GetSelfNode(h.DB)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return agentPeer{}, "panel has no self node"
+		}
+		if err != nil {
+			log.Printf("hub: local hello: look up the self node: %v", err)
+			return agentPeer{}, helloLookupFailed
 		}
 		return agentPeer{node: node, origin: localAgentOrigin}, ""
 	})
@@ -233,18 +247,15 @@ func (h *Hub) serveAgent(w http.ResponseWriter, r *http.Request, identify func(w
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, peer.origin); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
-	// 下面两步都可能改写 relay_host：声明值每次 hello 都覆盖库里的值，回填则在
-	// 字段为空或存着 v6 字面量时写入。两步都从 node 的字段出发做判断，并且只在对应
-	// 的写入成功之后才推进这些字段；第一步失败时 node 可能已不再与库里那一行一致，
-	// 所以第二步留给下一次 hello，它会从库里的那一行重新开始。
+	// storeHelloRelayHosts 可能改写 relay_host：声明值每次 hello 都覆盖库里的值，回填
+	// 则在字段为空或存着 v6 字面量时写入。
 	relayHostBefore := node.RelayHost
-	if err := applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6); err != nil {
-		log.Printf("hub: node %d: store declared relay hosts: %v", node.ID, err)
-	} else if err := fillNodeRelayHosts(h.DB, node, peer.observedIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6); err != nil {
+	if err := storeHelloRelayHosts(h.DB, node, peer.observedIP, hello); err != nil {
 		log.Printf("hub: node %d: store relay hosts: %v", node.ID, err)
 	}
 	// relay_host 改写之后要通知面板重接引用本节点的规则。判定以库里的最终值为准
-	// （重读一次），不依赖上面两步是否同步了内存里的 node。
+	// （重读一次），不依赖 storeHelloRelayHosts 是否同步了内存里的 node：它中途失败时
+	// 地址可能已经写进库里而 node 还没跟上。
 	if h.OnRelayHostChange != nil {
 		cur, err := db.GetNode(h.DB, node.ID)
 		if err != nil {
@@ -363,25 +374,31 @@ func (h *Hub) readerLoop(parent context.Context, ac *agentConn) {
 			log.Printf("hub: malformed envelope from node %d: %v", ac.nodeID, err)
 			continue
 		}
-		switch env.Type {
-		case wsproto.TypePing:
-			pong, _ := json.Marshal(wsproto.Pong{TS: time.Now().UnixMilli()})
-			ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypePong, ID: env.ID, Payload: pong})
-		case wsproto.TypeCounters:
-			var co wsproto.Counters
-			if err := json.Unmarshal(env.Payload, &co); err != nil {
-				log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
-				continue
-			}
-			h.applyCounters(ac.nodeID, co.Samples)
-		case wsproto.TypeRuleCreate, wsproto.TypeRuleUpdate, wsproto.TypeMigrateRules,
-			wsproto.TypeRuleHopEdit, wsproto.TypeRuleDelete:
-			h.handleRuleCommand(ac, env)
-		case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
-			ac.dispatchAck(env)
-		default:
-			log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
+		h.handleFrame(ac, env)
+	}
+}
+
+// handleFrame acts on one frame a node sent. Replies go out through
+// ac.enqueueWrite; nothing here touches the socket itself.
+func (h *Hub) handleFrame(ac *agentConn, env wsproto.Envelope) {
+	switch env.Type {
+	case wsproto.TypePing:
+		pong, _ := json.Marshal(wsproto.Pong{TS: time.Now().UnixMilli()})
+		ac.enqueueWrite(wsproto.Envelope{Type: wsproto.TypePong, ID: env.ID, Payload: pong})
+	case wsproto.TypeCounters:
+		var co wsproto.Counters
+		if err := json.Unmarshal(env.Payload, &co); err != nil {
+			log.Printf("hub: node %d malformed counters: %v", ac.nodeID, err)
+			return
 		}
+		h.applyCounters(ac.nodeID, co.Samples)
+	case wsproto.TypeRuleCreate, wsproto.TypeRuleUpdate, wsproto.TypeMigrateRules,
+		wsproto.TypeRuleHopEdit, wsproto.TypeRuleDelete:
+		h.handleRuleCommand(ac, env)
+	case wsproto.TypeApplyAck, wsproto.TypeHelloAck, wsproto.TypeUpgradeAck, wsproto.TypeProbeAck:
+		ac.dispatchAck(env)
+	default:
+		log.Printf("hub: node %d unknown frame type %q", ac.nodeID, env.Type)
 	}
 }
 
@@ -517,6 +534,24 @@ func extractIP(r *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
+// storeHelloRelayHosts brings a node's stored relay addresses in line with a
+// hello: what the daemon declares first (applyDeclaredRelayHosts), then the
+// seeding of whatever is still empty (fillNodeRelayHosts). node is the row as
+// loaded for this hello.
+//
+// It returns the first write's error. Both steps decide from node's fields
+// and advance them only after the write they mirror succeeded, so after a
+// failure node may no longer mirror the stored row; the seeding is therefore
+// not attempted on top of a failed first step. Nothing is lost by stopping:
+// every decision is a comparison against the stored row, so the next hello,
+// which loads the row afresh, makes the writes that are still outstanding.
+func storeHelloRelayHosts(d *sql.DB, node *db.Node, connectIP string, hello wsproto.Hello) error {
+	if err := applyDeclaredRelayHosts(d, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6); err != nil {
+		return err
+	}
+	return fillNodeRelayHosts(d, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+}
+
 // fillNodeRelayHosts seeds relay_host/relay_host_v6 for a node that hasn't
 // had them set yet. connectIP (the address the panel observed this WS
 // connection arrive from) is authoritative for whichever family it belongs
@@ -649,12 +684,13 @@ func applyDeclaredRelayHosts(d *sql.DB, node *db.Node, declaredV4, declaredV6 st
 	return nil
 }
 
-// lookupNodeBySecret 按接入凭据认出一台机器。空凭据一律拒绝：self 节点与组合的
-// secret 列都是空串，空凭据若参与匹配就会认出它们。组合不跑 agent，即使行上残留着
-// 凭据也不参与匹配。
+// lookupNodeBySecret 按接入凭据认出一台机器；没有这样的机器时返回 nil 节点、nil
+// 错误，错误只表示查找没能执行。空凭据不认出任何机器：self 节点与组合的 secret 列
+// 都是空串，空凭据若参与匹配就会认出它们。组合不跑 agent，即使行上残留着凭据也不
+// 参与匹配。
 func lookupNodeBySecret(d *sql.DB, secret string) (*db.Node, error) {
 	if secret == "" {
-		return nil, errors.New("empty secret")
+		return nil, nil
 	}
 	var id int64
 	err := d.QueryRow(`SELECT id FROM nodes WHERE secret=? AND node_type<>'composite'`, secret).Scan(&id)

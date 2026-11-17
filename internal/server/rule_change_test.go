@@ -25,9 +25,9 @@ func firstAdminID(t *testing.T, d *sql.DB) int64 {
 	return id
 }
 
-// ownedNode 建一台属主为 ownerID 的远程节点并让它的 agent 接入。v4 是它上报的出口
+// connectOwnedNode 建一台属主为 ownerID 的远程节点并让它的 agent 接入。v4 是它上报的出口
 // 地址，面板据此回填数据面地址；不同节点要给不同的值。
-func ownedNode(t *testing.T, e *localAgentEnv, name string, ownerID int64, v4 string) (*db.Node, *fakeAgent) {
+func connectOwnedNode(t *testing.T, e *localAgentEnv, name string, ownerID int64, v4 string) (*db.Node, *fakeAgent) {
 	t.Helper()
 	n, err := db.CreateNode(e.d, name, "", "tok-"+name)
 	if err != nil {
@@ -171,7 +171,7 @@ func TestHeaderOnlyEditByAUserKeepsTheStoredChain(t *testing.T) {
 func TestNodeSideCreateIsValidatedNamedAndAudited(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	adminID := firstAdminID(t, e.d)
-	_, a := ownedNode(t, e, "edge", adminID, "203.0.113.8")
+	_, a := connectOwnedNode(t, e, "edge", adminID, "203.0.113.8")
 
 	for _, bad := range []wsproto.RuleCreate{
 		{Proto: "tcp", ExitHost: "bad host!", ExitPort: 80, ListenPort: 12011},
@@ -223,7 +223,7 @@ func TestNodeSideCreateIsValidatedNamedAndAudited(t *testing.T) {
 func TestAdoptedLocalRulesAreValidatedNamedAndAudited(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	adminID := firstAdminID(t, e.d)
-	_, a := ownedNode(t, e, "edge", adminID, "203.0.113.8")
+	_, a := connectOwnedNode(t, e, "edge", adminID, "203.0.113.8")
 
 	ack := a.ruleCmd(t, wsproto.TypeMigrateRules, wsproto.MigrateRules{Rules: []nft.Rule{
 		{ID: "a1", Proto: "tcp", SrcPort: 12011, DestIP: "198.51.100.9", DestPort: 80},
@@ -264,7 +264,7 @@ func TestAdoptedLocalRulesAreValidatedNamedAndAudited(t *testing.T) {
 func TestNodeSideCommandsNeedTheOwnersGrant(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	uid, _ := loginAsUser(t, e.d, 5)
-	node, a := ownedNode(t, e, "user-edge", uid, "203.0.113.8")
+	node, a := connectOwnedNode(t, e, "user-edge", uid, "203.0.113.8")
 	create := func(port int) wsproto.RuleCmdAck {
 		return a.ruleCmd(t, wsproto.TypeRuleCreate, wsproto.RuleCreate{Proto: "tcp", ExitHost: "198.51.100.9", ExitPort: port, ListenPort: 12000 + port})
 	}
@@ -288,8 +288,8 @@ func TestNodeSideCommandsNeedTheOwnersGrant(t *testing.T) {
 func TestNodeSideUpdateOnlyReachesRulesOnThatNode(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	adminID := firstAdminID(t, e.d)
-	_, a1 := ownedNode(t, e, "edge-1", adminID, "203.0.113.8")
-	n2, a2 := ownedNode(t, e, "edge-2", adminID, "203.0.113.9")
+	_, a1 := connectOwnedNode(t, e, "edge-1", adminID, "203.0.113.8")
+	n2, a2 := connectOwnedNode(t, e, "edge-2", adminID, "203.0.113.9")
 
 	if ack := a2.ruleCmd(t, wsproto.TypeRuleCreate, wsproto.RuleCreate{Proto: "tcp", ExitHost: "198.51.100.9", ExitPort: 80, ListenPort: 12011}); !ack.OK {
 		t.Fatalf("在 edge-2 上建规则被拒: %s", ack.Error)
@@ -311,7 +311,7 @@ func TestNodeSideUpdateOnlyReachesRulesOnThatNode(t *testing.T) {
 func TestNodeSideCreateObeysTheNodesSeats(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	adminID := firstAdminID(t, e.d)
-	node, a := ownedNode(t, e, "edge", adminID, "203.0.113.8")
+	node, a := connectOwnedNode(t, e, "edge", adminID, "203.0.113.8")
 	create := func() wsproto.RuleCmdAck {
 		return a.ruleCmd(t, wsproto.TypeRuleCreate, wsproto.RuleCreate{Proto: "tcp", ExitHost: "198.51.100.9", ExitPort: 80, ListenPort: 12011})
 	}
@@ -340,7 +340,7 @@ func TestNodeSideCreateObeysTheNodesSeats(t *testing.T) {
 func TestProbeThroughANodeNeedsAGrant(t *testing.T) {
 	e := newLocalAgentEnv(t)
 	uid, cookie := loginAsUser(t, e.d, 5)
-	node, _ := ownedNode(t, e, "user-edge", uid, "203.0.113.8")
+	node, _ := connectOwnedNode(t, e, "user-edge", uid, "203.0.113.8")
 	status := func() int {
 		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/probe?target=9.9.9.9:80&node=%d", e.public.URL, node.ID), nil)
 		req.AddCookie(cookie)
