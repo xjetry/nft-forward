@@ -156,8 +156,8 @@ func (s *Server) markSuppressed(items []ruleListItem) {
 	}
 }
 
-// chainNode is one physical hop in a rule's flattened chain, resolved to its
-// node name and type for display.
+// chainNode 是规则展平后的物理链上的一跳，带着节点名与类型供展示。/api 的规则
+// 形状与 /api/v1 的规则形状（v1Rule.Chain、建规则的 dry-run 预览）用的是同一个类型。
 type chainNode struct {
 	NodeID   int64  `json:"node_id"`
 	Name     string `json:"name"`

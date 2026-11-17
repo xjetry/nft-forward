@@ -239,40 +239,29 @@ func toV1User(u *db.User) v1User {
 	}
 }
 
-// v1RuleChainHop is one physical hop of a rule's flattened chain.
-type v1RuleChainHop struct {
-	NodeID   int64  `json:"node_id"`
-	Name     string `json:"name"`
-	NodeType string `json:"node_type"`
-}
-
 // v1Rule is the slim rule shape: the persisted fields plus the resolved entry
 // endpoint(s) and the flattened physical chain, without the SPA's landing-URI /
 // billing-display extras.
 type v1Rule struct {
-	ID               int64            `json:"id"`
-	Name             string           `json:"name"`
-	NodeID           int64            `json:"node_id"`
-	Proto            string           `json:"proto"`
-	Entry            string           `json:"entry"`
-	EntryV6          string           `json:"entry_v6,omitempty"`
-	EntryFamily      string           `json:"entry_family"`
-	Exit             string           `json:"exit"`
-	ExitMode         string           `json:"exit_mode"`
-	Comment          string           `json:"comment,omitempty"`
-	ViaNodeIDs       []int64          `json:"via_node_ids"`
-	Chain            []v1RuleChainHop `json:"chain,omitempty"`
-	TrafficUsedBytes int64            `json:"traffic_used_bytes"`
-	CreatedAt        int64            `json:"created_at"`
+	ID               int64       `json:"id"`
+	Name             string      `json:"name"`
+	NodeID           int64       `json:"node_id"`
+	Proto            string      `json:"proto"`
+	Entry            string      `json:"entry"`
+	EntryV6          string      `json:"entry_v6,omitempty"`
+	EntryFamily      string      `json:"entry_family"`
+	Exit             string      `json:"exit"`
+	ExitMode         string      `json:"exit_mode"`
+	Comment          string      `json:"comment,omitempty"`
+	ViaNodeIDs       []int64     `json:"via_node_ids"`
+	Chain            []chainNode `json:"chain,omitempty"`
+	TrafficUsedBytes int64       `json:"traffic_used_bytes"`
+	CreatedAt        int64       `json:"created_at"`
 	// Suppressed 非空表示这条规则此刻不转发，值是原因（db.SuppressReason 的取值）。
 	Suppressed string `json:"suppressed,omitempty"`
 }
 
 func toV1Rule(it ruleListItem) v1Rule {
-	chain := make([]v1RuleChainHop, 0, len(it.Chain))
-	for _, c := range it.Chain {
-		chain = append(chain, v1RuleChainHop{NodeID: c.NodeID, Name: c.Name, NodeType: c.NodeType})
-	}
 	via := it.ViaNodeIDs
 	if via == nil {
 		via = []int64{}
@@ -281,7 +270,7 @@ func toV1Rule(it ruleListItem) v1Rule {
 		ID: it.ID, Name: it.Name, NodeID: it.NodeID, Proto: it.Proto,
 		Entry: it.Entry, EntryV6: it.EntryV6, EntryFamily: it.EntryFamily,
 		Exit: it.Exit, ExitMode: it.ExitMode, Comment: it.Comment,
-		ViaNodeIDs: via, Chain: chain, TrafficUsedBytes: it.WeightedBytes, CreatedAt: it.CreatedAt,
+		ViaNodeIDs: via, Chain: it.Chain, TrafficUsedBytes: it.WeightedBytes, CreatedAt: it.CreatedAt,
 		Suppressed: string(it.Suppressed),
 	}
 }
@@ -670,10 +659,10 @@ func (s *Server) resolveNodeName(name string) (int64, *rulechange.Error) {
 
 // hopsChainPreview resolves the physical hops of a would-be rule (dry run) to
 // their node names for the preview chain.
-func (s *Server) hopsChainPreview(hops []db.HopInput) []v1RuleChainHop {
-	out := make([]v1RuleChainHop, 0, len(hops))
+func (s *Server) hopsChainPreview(hops []db.HopInput) []chainNode {
+	out := make([]chainNode, 0, len(hops))
 	for _, h := range hops {
-		hop := v1RuleChainHop{NodeID: h.NodeID}
+		hop := chainNode{NodeID: h.NodeID}
 		if n, err := db.GetNode(s.DB, h.NodeID); err == nil {
 			hop.Name = n.Name
 			hop.NodeType = n.NodeType
