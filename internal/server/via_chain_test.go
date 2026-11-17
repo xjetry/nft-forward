@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -20,7 +21,7 @@ func bindVia(t *testing.T, d *sql.DB, up, down int64, mode string) {
 		t.Fatal(err)
 	}
 	n, _ := db.GetNode(d, down)
-	if err := db.UpdateNodeRoles(d, down, n.Roles|db.NodeRoleVia); err != nil {
+	if err := db.UpdateNodeSeats(d, down, n.Seats|chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -125,7 +126,7 @@ func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	}
 }
 
-// 服务端权威校验：无绑定边 / 无 via 角色 / 无授权 都必须拒绝。
+// 服务端权威校验：无绑定边 / 不能做中转 / 无授权 都必须拒绝。
 func TestViaChainValidation(t *testing.T) {
 	d := openDB(t)
 	entry, _ := db.CreateNode(d, "entry", "", "")
@@ -137,20 +138,20 @@ func TestViaChainValidation(t *testing.T) {
 	_ = db.GrantNode(d, uid, mid.ID, 5, 0)
 	s, _ := New(d)
 
-	// 有授权、有角色，但无绑定边 → 400
+	// 有授权、能做中转，但无绑定边 → 400
 	n, _ := db.GetNode(d, mid.ID)
-	_ = db.UpdateNodeRoles(d, mid.ID, n.Roles|db.NodeRoleVia)
+	_ = db.UpdateNodeSeats(d, mid.ID, n.Seats|chain.SeatVia)
 	if rec := createMyRuleVia(t, s, cookie, entry.ID, []int64{mid.ID}, "r-noedge"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("no edge: want 400, got %d %s", rec.Code, rec.Body.String())
 	}
-	// 有边但摘掉角色 → 400
+	// 有边但摘掉中转资格 → 400
 	bindVia(t, d, entry.ID, mid.ID, "userspace")
-	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry)
+	_ = db.UpdateNodeSeats(d, mid.ID, chain.SeatEntry)
 	if rec := createMyRuleVia(t, s, cookie, entry.ID, []int64{mid.ID}, "r-norole"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("no role: want 400, got %d", rec.Code)
 	}
-	// 有边有角色但撤销授权 → 403
-	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry|db.NodeRoleVia)
+	// 有边、能做中转，但撤销授权 → 403
+	_ = db.UpdateNodeSeats(d, mid.ID, chain.SeatEntry|chain.SeatVia)
 	_ = db.RevokeNode(d, uid, mid.ID)
 	if rec := createMyRuleVia(t, s, cookie, entry.ID, []int64{mid.ID}, "r-nogrant"); rec.Code != http.StatusForbidden {
 		t.Fatalf("no grant: want 403, got %d", rec.Code)
@@ -179,13 +180,13 @@ func TestViaChainDuplicatePhysicalNodeConflict(t *testing.T) {
 	}
 }
 
-// 服务端权威校验：仅持有 via 角色（无 entry 角色）的节点不能被当作入口，
+// 服务端权威校验：只能做中转（不能做入口）的节点不能被当作入口，
 // 即便用户已获得该节点的授权——UI 的入口选择器过滤不能替代服务端校验。
 func TestEntryRoleEnforced(t *testing.T) {
 	d := openDB(t)
 	viaOnly, _ := db.CreateNode(d, "via-only", "", "")
 	_ = db.UpdateNodeRelayHost(d, viaOnly.ID, "1.1.1.1")
-	_ = db.UpdateNodeRoles(d, viaOnly.ID, db.NodeRoleVia)
+	_ = db.UpdateNodeSeats(d, viaOnly.ID, chain.SeatVia)
 
 	uid, cookie := loginAsUser(t, d, 10)
 	_ = db.GrantNode(d, uid, viaOnly.ID, 5, 0)

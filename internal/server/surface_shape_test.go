@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -41,7 +42,7 @@ type surfaceFixture struct {
 
 // newSurfaceFixture 建一份所有时间戳、端口、凭据都固定的数据：几台物理节点（在线、
 // 离线、停用各有）、能展开的组合、嵌套组合、含停用成员的组合、成环展不开的组合，
-// 管理员与用户各自的规则（含中转层与落地出口），授权上的角色覆盖、配额与限速。
+// 管理员与用户各自的规则（含中转层与落地出口），授权上的入口/中转资格覆盖、配额与限速。
 func newSurfaceFixture(t *testing.T) *surfaceFixture {
 	t.Helper()
 	d := openDB(t)
@@ -108,7 +109,7 @@ func newSurfaceFixture(t *testing.T) *surfaceFixture {
 	mustExec(t, d, `UPDATE nodes SET online=0, relay_host='10.0.0.3', last_seen=1700000902 WHERE id=?`, f.c)
 	mustExec(t, d, `UPDATE nodes SET online=1, disabled=1, relay_host='10.0.0.4' WHERE id=?`, f.dd)
 	if rec := adminRequest(t, f.s, f.adminCookie, "POST", fmt.Sprintf("/api/nodes/%d/roles", f.c), map[string]any{"roles": 2}); rec.Code != http.StatusOK {
-		t.Fatalf("设中转角色：%d %s", rec.Code, rec.Body.String())
+		t.Fatalf("设中转用途：%d %s", rec.Code, rec.Body.String())
 	}
 	if rec := adminRequest(t, f.s, f.adminCookie, "POST", fmt.Sprintf("/api/nodes/%d/bindings", f.c), map[string]any{
 		"bindings": []map[string]any{{"upstream_node_id": f.a, "mode": "userspace"}},
@@ -134,7 +135,7 @@ func newSurfaceFixture(t *testing.T) *surfaceFixture {
 	if err := db.GrantNode(d, f.alice, f.a, 10, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetGrantRoles(d, f.alice, f.a, db.NodeRoleEntry); err != nil {
+	if err := db.SetGrantSeats(d, f.alice, f.a, chain.SeatEntry); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.GrantNode(d, f.alice, f.k, 5, 1<<30); err != nil {

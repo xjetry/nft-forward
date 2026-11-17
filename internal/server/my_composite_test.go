@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -140,8 +141,8 @@ func TestMyRulesCarriesGrantedBindings(t *testing.T) {
 	up, _ := db.CreateNode(d, "entry", "", "")
 	mid, _ := db.CreateNode(d, "akari", "", "")
 	other, _ := db.CreateNode(d, "misaka", "", "")
-	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleVia)
-	_ = db.UpdateNodeRoles(d, other.ID, db.NodeRoleVia)
+	_ = db.UpdateNodeSeats(d, mid.ID, chain.SeatVia)
+	_ = db.UpdateNodeSeats(d, other.ID, chain.SeatVia)
 	_ = db.ReplaceBindingsForDownstream(d, mid.ID, []db.NodeBinding{{UpstreamNodeID: up.ID, DownstreamNodeID: mid.ID, Mode: "userspace"}})
 	_ = db.ReplaceBindingsForDownstream(d, other.ID, []db.NodeBinding{{UpstreamNodeID: up.ID, DownstreamNodeID: other.ID, Mode: "userspace"}})
 

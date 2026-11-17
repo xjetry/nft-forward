@@ -12,10 +12,6 @@ import {
    确认流程、组合节点的跳序编辑器。 */
 
 
-/* 节点用途位，与服务端 nodes.roles 的位定义一致（db.NodeRoleEntry / NodeRoleVia）。 */
-export const ROLE_ENTRY = 1
-export const ROLE_VIA = 2
-
 /** 可以被授权使用节点的用户：授权的对象只有普通用户（role 为 user）。 */
 export function useGrantableUsers() {
   return useResource(async () => ((await api.get('/users')).users || []).filter(u => u.role === 'user'), [])

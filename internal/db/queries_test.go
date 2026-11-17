@@ -1,6 +1,10 @@
 package db
 
-import "testing"
+import (
+	"testing"
+
+	"nft-forward/internal/chain"
+)
 
 func TestNodeLastWarningRoundTrip(t *testing.T) {
 	d := openTestDB(t)
@@ -96,15 +100,15 @@ func TestNodeRolesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n.Roles != NodeRoleEntry|NodeRoleVia {
-		t.Fatalf("default roles want %d, got %d", NodeRoleEntry|NodeRoleVia, n.Roles)
+	if n.Seats != chain.SeatEntry|chain.SeatVia {
+		t.Fatalf("default roles want %d, got %d", chain.SeatEntry|chain.SeatVia, n.Seats)
 	}
-	if err := UpdateNodeRoles(d, n.ID, NodeRoleEntry|NodeRoleVia); err != nil {
+	if err := UpdateNodeSeats(d, n.ID, chain.SeatEntry|chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := GetNode(d, n.ID)
-	if got.Roles != NodeRoleEntry|NodeRoleVia {
-		t.Fatalf("roles want %d, got %d", NodeRoleEntry|NodeRoleVia, got.Roles)
+	if got.Seats != chain.SeatEntry|chain.SeatVia {
+		t.Fatalf("roles want %d, got %d", chain.SeatEntry|chain.SeatVia, got.Seats)
 	}
 }
 
@@ -112,7 +116,7 @@ func TestListNodesForUserCarriesRoles(t *testing.T) {
 	d := openTestDB(t)
 	uid, _ := CreateUser(d, "testuser", "hash", "user")
 	n, _ := CreateNode(d, "hk-1", "", "")
-	_ = UpdateNodeRoles(d, n.ID, NodeRoleVia)
+	_ = UpdateNodeSeats(d, n.ID, chain.SeatVia)
 	if err := GrantNode(d, uid, n.ID, 5, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -120,8 +124,8 @@ func TestListNodesForUserCarriesRoles(t *testing.T) {
 	if err != nil || len(nodes) != 1 {
 		t.Fatalf("want 1 node, err=%v n=%d", err, len(nodes))
 	}
-	if nodes[0].Roles != NodeRoleVia {
-		t.Fatalf("roles want %d, got %d", NodeRoleVia, nodes[0].Roles)
+	if nodes[0].Seats != chain.SeatVia {
+		t.Fatalf("roles want %d, got %d", chain.SeatVia, nodes[0].Seats)
 	}
 }
 

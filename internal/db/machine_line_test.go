@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"nft-forward/internal/chain"
 )
 
 // machineColumns 是 nodes 表上属于机器的列，与 Machine 的字段一一对应
@@ -136,7 +138,7 @@ func TestCreateWritesEachKindsOwnAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m.NodeType != "remote" || m.Secret != "tok" || m.OwnerID == nil || *m.OwnerID != uid || m.PortRange != "30000-30010" ||
-		!m.Unidirectional || m.RateMultiplier != 2.5 || m.Roles != NodeRoleEntry|NodeRoleVia {
+		!m.Unidirectional || m.RateMultiplier != 2.5 || m.Seats != chain.SeatEntry|chain.SeatVia {
 		t.Errorf("机器的属性没有按给的写入：%+v", m)
 	}
 	plain, err := CreateNode(d, "plain", "", "")
@@ -150,7 +152,7 @@ func TestCreateWritesEachKindsOwnAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.NodeType != "composite" || c.RateMultiplier != 3 || c.Roles != NodeRoleEntry|NodeRoleVia {
+	if c.NodeType != "composite" || c.RateMultiplier != 3 || c.Seats != chain.SeatEntry|chain.SeatVia {
 		t.Errorf("组合的线路属性没有按给的写入：%+v", c)
 	}
 	if set := setMachineColumns(t, d, c.ID); len(set) > 0 {

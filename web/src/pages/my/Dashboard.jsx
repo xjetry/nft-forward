@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtDate, fmtGrantTraffic, isExpired, pct } from '../../lib/fmt'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { SEAT_VIA } from '../../lib/seats'
 import { useResource } from '../../lib/useResource'
 import { browserStore, readSlot, writeSlot } from '../../lib/userStore'
 import { fmtSpeed, useSpeed } from '../../lib/useSpeed'
@@ -166,9 +167,6 @@ function RenameModal({ current, onClose, onRenamed }) {
   )
 }
 
-/* 节点用途位里的“中转”，取值与服务端 db.NodeRoleVia 一致。 */
-const NODE_ROLE_VIA = 2
-
 function readNodeOrder(userId) {
   try {
     const ids = JSON.parse(readSlot(browserStore(), userId, 'node-order') || '[]')
@@ -225,7 +223,7 @@ function GrantedNodes({ userId, nodes, grants, showRate, accountQuota }) {
     const s = speeds[n.id]
     return s ? `↑ ${fmtSpeed(s.up)} · ↓ ${fmtSpeed(s.down)}` : null
   }
-  const isVia = n => (n.roles & NODE_ROLE_VIA) !== 0
+  const isVia = n => (n.roles & SEAT_VIA) !== 0
 
   return (
     <Card>

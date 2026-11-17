@@ -160,7 +160,7 @@ type Fields struct {
 //
 //   - 点名逻辑节点：Entry 是入口，Vias 是其后的中转层，物理链由 chain.Topology.Derive
 //     按当前拓扑推导；
-//   - Hops：直接给出物理跳序列，只有面板上的管理员可以，不校验角色与绑定边（仍检查
+//   - Hops：直接给出物理跳序列，只有面板上的管理员可以，不校验入口/中转资格与绑定边（仍检查
 //     链尾能否直接转发）。表头里的入口与中转层由这些跳算出（见 explicitChain）；
 //     这时 Entry、Vias 不是另一种给法，只能是同一条路径的复述，与算出的不一致就拒绝；
 //   - 都不给：只在改规则时有意义，沿用规则落库的链。已存规则认的是落库的链，组合的
@@ -842,7 +842,7 @@ func (c *Changes) ownerSeats(owner *db.User) (map[int64]chain.Seat, *Error) {
 	}
 	seats := map[int64]chain.Seat{}
 	for _, g := range grants {
-		if s, ok := db.GrantSeats(g.Roles); ok {
+		if s, ok := db.GrantSeats(g.Seats); ok {
 			seats[g.NodeID] = s
 		}
 	}
@@ -866,7 +866,7 @@ func (c *Changes) ruleOwnerSeats(rl *db.Rule) (map[int64]chain.Seat, *Error) {
 }
 
 // explicitChain 把管理员直接给出的物理跳序列（p.Hops）变成链，并算出这条链在表头里
-// 的逻辑路径：入口节点与中转层。这是搭任意链的通道，有意不校验角色与绑定边；链尾
+// 的逻辑路径：入口节点与中转层。这是搭任意链的通道，有意不校验入口/中转资格与绑定边；链尾
 // 能否直接转发仍然检查（chain.CheckExit）。
 //
 // 没写 LogicalNodeID 的跳自成一段：按授权计流量时一个逻辑段只在段首记一次、记到

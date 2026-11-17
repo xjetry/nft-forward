@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -49,7 +50,7 @@ func onlineFlag(online bool) int {
 }
 
 // adminNodeView 是管理员面上的节点：行上的每一列（凭据除外，只在节点详情里给，见
-// adminNodeDetailView），加上派生属性。roles 是节点自己的掩码。
+// adminNodeDetailView），加上派生属性。roles 键给的是节点自己可占的位置。
 type adminNodeView struct {
 	ID                  int64          `json:"id"`
 	Name                string         `json:"name"`
@@ -78,7 +79,7 @@ type adminNodeView struct {
 	RateMultiplier      float64        `json:"rate_multiplier"`
 	Unidirectional      bool           `json:"unidirectional"`
 	NoDirectExit        bool           `json:"no_direct_exit"`
-	Roles               int64          `json:"roles"`
+	Seats               chain.Seat     `json:"roles"`
 	compositeView
 }
 
@@ -94,7 +95,7 @@ func adminNodeOf(c *db.NodeCatalog, n *db.Node) adminNodeView {
 		LastUpgradeAt: n.LastUpgradeAt, LastUpgradeVersion: n.LastUpgradeVersion,
 		LastUpgradeStatus: n.LastUpgradeStatus, LastUpgradeError: n.LastUpgradeError,
 		RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional, NoDirectExit: d.NoDirectExit,
-		Roles:         n.Roles,
+		Seats:         n.Seats,
 		compositeView: compositeViewOf(d),
 	}
 }
@@ -122,31 +123,31 @@ type adminNodeDetailView struct {
 }
 
 // myNodeView 是用户面上一个被授权的节点。只带用户页面读得到的字段：名字与类型、
-// 这条授权下的生效角色、倍率与计费方向、能否作链尾、停用与在线、中继地址（规则表单
+// 这条授权下生效的入口/中转资格、倍率与计费方向、能否作链尾、停用与在线、中继地址（规则表单
 // 据此标出 v4/v6 能力），以及组合的派生字段。机器的接入与运行状态（连接地址、
 // agent 版本、同步错误、升级记录）、属主、端口范围都不给。
 type myNodeView struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	NodeType       string  `json:"node_type"`
-	Roles          int64   `json:"roles"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	Unidirectional bool    `json:"unidirectional"`
-	NoDirectExit   bool    `json:"no_direct_exit"`
-	Disabled       bool    `json:"disabled"`
-	Online         int     `json:"online"`
-	RelayHost      string  `json:"relay_host"`
-	RelayHostV6    string  `json:"relay_host_v6"`
+	ID             int64      `json:"id"`
+	Name           string     `json:"name"`
+	NodeType       string     `json:"node_type"`
+	Seats          chain.Seat `json:"roles"`
+	RateMultiplier float64    `json:"rate_multiplier"`
+	Unidirectional bool       `json:"unidirectional"`
+	NoDirectExit   bool       `json:"no_direct_exit"`
+	Disabled       bool       `json:"disabled"`
+	Online         int        `json:"online"`
+	RelayHost      string     `json:"relay_host"`
+	RelayHostV6    string     `json:"relay_host_v6"`
 	compositeView
 }
 
-// myNodeOf 是被授权节点 n 在授权 g 下的用户视图。roles 取生效角色
-// （db.EffectiveNodeRoles）：用户能把这个节点当什么用，由授权决定。
+// myNodeOf 是被授权节点 n 在授权 g 下的用户视图。roles 键给的是授权下生效的位置
+// （db.EffectiveSeats）：用户能把这个节点当什么用，由授权决定。
 func myNodeOf(c *db.NodeCatalog, n *db.Node, g *db.UserNode) myNodeView {
 	d := c.Derive(n)
 	return myNodeView{
 		ID: n.ID, Name: n.Name, NodeType: n.NodeType,
-		Roles:          db.EffectiveNodeRoles(n.Roles, g.Roles),
+		Seats:          db.EffectiveSeats(n.Seats, g.Seats),
 		RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional, NoDirectExit: d.NoDirectExit,
 		Disabled: n.Disabled, Online: onlineFlag(d.Online),
 		RelayHost: n.RelayHost, RelayHostV6: n.RelayHostV6,

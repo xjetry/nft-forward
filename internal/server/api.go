@@ -865,7 +865,9 @@ func (s *Server) apiUpdateNodeHops(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) {
+// apiUpdateNodeSeats 设置节点可以占的位置（入口、中转，至少一位）。请求体的键是
+// roles：接口给出去的键不随 Go 名与列名改。
+func (s *Server) apiUpdateNodeSeats(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -875,7 +877,7 @@ func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Roles int64 `json:"roles"`
 	}
-	if err := decodeJSON(r, &body); err != nil || body.Roles&^(db.NodeRoleEntry|db.NodeRoleVia) != 0 || body.Roles == 0 {
+	if err := decodeJSON(r, &body); err != nil || body.Roles&^int64(db.SettableSeats) != 0 || body.Roles == 0 {
 		jsonErr(w, http.StatusBadRequest, "roles invalid")
 		return
 	}
@@ -883,7 +885,7 @@ func (s *Server) apiUpdateNodeRolesMask(w http.ResponseWriter, r *http.Request) 
 		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
-	if err := db.UpdateNodeRoles(s.DB, id, body.Roles); err != nil {
+	if err := db.UpdateNodeSeats(s.DB, id, chain.Seat(body.Roles)); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -929,8 +931,8 @@ func (s *Server) apiUpdateNodeBindings(w http.ResponseWriter, r *http.Request) {
 		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
-	if node.Roles&db.NodeRoleVia == 0 {
-		jsonErr(w, http.StatusBadRequest, "node is not a middle layer; enable the middle layer role first")
+	if node.Seats&chain.SeatVia == 0 {
+		jsonErr(w, http.StatusBadRequest, "node is not a middle layer; let it be used as a middle layer first")
 		return
 	}
 	var body struct {
@@ -1009,8 +1011,8 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 		jsonLookupErr(w, err, http.StatusNotFound, "node not found")
 		return
 	}
-	if node.Roles&(db.NodeRoleEntry|db.NodeRoleVia) == 0 {
-		jsonErr(w, http.StatusBadRequest, "node cannot host downstreams; enable the entry or middle layer role first")
+	if node.Seats&db.SettableSeats == 0 {
+		jsonErr(w, http.StatusBadRequest, "node cannot host downstreams; let it be used as an entry or a middle layer first")
 		return
 	}
 	var body struct {
@@ -1040,8 +1042,8 @@ func (s *Server) apiUpdateNodeDownstreamBindings(w http.ResponseWriter, r *http.
 			jsonLookupErr(w, err, http.StatusBadRequest, "downstream node not found")
 			return
 		}
-		if down.Roles&db.NodeRoleVia == 0 {
-			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中转角色")
+		if down.Seats&chain.SeatVia == 0 {
+			jsonErr(w, http.StatusBadRequest, "下游节点需先开启中转用途")
 			return
 		}
 		mode, err := chain.InterNodeLegMode(b.Mode)
@@ -2371,7 +2373,7 @@ func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiMyDashboard(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
-	// 节点带的是这个用户授权生效后的角色（myNodeOf），与规则表单筛选入口、中转层时
+	// 节点带的是这个用户授权下生效的入口/中转资格（myNodeOf），与规则表单筛选入口、中转层时
 	// 用的是同一个值，不是节点自身的掩码。
 	nodes, grants, _, err := s.grantedNodes(u)
 	if err != nil {
@@ -2665,7 +2667,9 @@ func (s *Server) apiSetPerNodeRateLimit(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]any{"ok": true})
 }
 
-func (s *Server) apiSetPerNodeRoles(w http.ResponseWriter, r *http.Request) {
+// apiSetGrantSeats 设置一条授权对节点入口/中转资格的覆盖。请求体的键是 roles，
+// 理由同 apiUpdateNodeSeats。
+func (s *Server) apiSetGrantSeats(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r.Context())
 	userID, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -2684,14 +2688,13 @@ func (s *Server) apiSetPerNodeRoles(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	// 0 = inherit the node mask; any other value must be a legal entry/via
-	// combination. This only changes what the grantee may do with the node, so
-	// there is no need to constrain it to a subset of the node's own mask.
-	if body.Roles&^(db.NodeRoleEntry|db.NodeRoleVia) != 0 {
+	// 0 表示沿用节点自己的资格；其余取值必须是入口、中转的合法组合。这里改的只是
+	// 被授权人能把节点当什么用，所以不要求它是节点自身资格的子集。
+	if body.Roles&^int64(db.SettableSeats) != 0 {
 		jsonErr(w, http.StatusBadRequest, "roles invalid")
 		return
 	}
-	if err := db.SetGrantRoles(s.DB, userID, nodeID, body.Roles); err != nil {
+	if err := db.SetGrantSeats(s.DB, userID, nodeID, chain.Seat(body.Roles)); err != nil {
 		jsonLookupErr(w, err, http.StatusNotFound, msgNoGrant)
 		return
 	}

@@ -62,7 +62,7 @@ func TestCreatingACompositeWithABadMemberModeLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// 链尾不许直接转发是硬约束：管理员直接给出物理跳序列时不校验角色与绑定边，但这一条
+// 链尾不许直接转发是硬约束：管理员直接给出物理跳序列时不校验入口/中转资格与绑定边，但这一条
 // 在建规则和改规则两条路径上都必须拒绝，并且被拒绝的编辑不能改动已落库的链。
 func TestExplicitHopsCannotEndOnANoDirectExitNodeOnCreateOrEdit(t *testing.T) {
 	d := openDB(t)

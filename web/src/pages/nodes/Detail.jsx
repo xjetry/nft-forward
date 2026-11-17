@@ -3,12 +3,13 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime, nullStr } from '../../lib/fmt'
 import { assertNever, combineResources } from '../../lib/resource'
+import { SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { upgradeVerdict, upgradeWorthShowing } from '../../lib/upgrade'
 import { useDraft } from '../../lib/useDraft'
 import { useResource } from '../../lib/useResource'
 import { ModeTag, NodeStackTags, NodeStatus, NodeTypeIcon, NodeTypeTag, ProtoTag } from '../../components/net'
 import { Page, PageHeader, TableBox } from '../../components/page'
-import { PerNodeRolesForm } from '../../components/PerNodeRolesForm'
+import { GrantSeatsSelect } from '../../components/GrantSeatsSelect'
 import { useBlur } from '../../components/prefs'
 import { ResourceView } from '../../components/ResourceView'
 import {
@@ -17,8 +18,7 @@ import {
   useToast,
 } from '../../components/ui'
 import {
-  GrantUserSelect, HopListEditor, MODE_OPTIONS, ROLE_ENTRY, ROLE_VIA, hopRowsError, hopRowsPayload, removeNode,
-  useGrantableUsers,
+  GrantUserSelect, HopListEditor, MODE_OPTIONS, hopRowsError, hopRowsPayload, removeNode, useGrantableUsers,
 } from './common'
 
 /* ==========================================================================
@@ -227,7 +227,7 @@ function NodeView({ data, resource }) {
         </div>
       )}
 
-      <RolesCard node={node} reload={reload} />
+      <SeatsCard node={node} reload={reload} />
 
       {composite && (
         <CompositeHopsCard nodeId={node.id} hops={data.node_hops || []} candidates={data.single_nodes || []} reload={reload} />
@@ -713,12 +713,12 @@ function EdgeEditor({ title, hint, placeholder, edge, roster, selfId, fit, unfit
   )
 }
 
-function RolesCard({ node, reload }) {
+function SeatsCard({ node, reload }) {
   const toast = useToast()
-  const rolesDraft = useDraft(node.roles)
-  const roles = rolesDraft.value
-  const entryOn = (roles & ROLE_ENTRY) !== 0
-  const viaOn = (roles & ROLE_VIA) !== 0
+  const seatsDraft = useDraft(node.roles)
+  const seats = seatsDraft.value
+  const entryOn = (seats & SEAT_ENTRY) !== 0
+  const viaOn = (seats & SEAT_VIA) !== 0
 
   // 候选节点与绑定行里的名称都来自这一份节点列表。
   const roster = useResource(async () => (await api.get('/nodes')).nodes || [], [])
@@ -727,7 +727,7 @@ function RolesCard({ node, reload }) {
   // 取消勾选的用途，其绑定编辑区不显示，里面的修改也不算待保存、不会被提交。
   const downDirty = entryOn && downstream.dirty
   const upDirty = viaOn && upstream.dirty
-  const dirty = rolesDraft.dirty || downDirty || upDirty
+  const dirty = seatsDraft.dirty || downDirty || upDirty
 
   // “保存”与“改模式即保存”共用一个动作：两者都会整表提交绑定，不能同时在途。
   const commit = useAction(async (kind, edge, rows) => {
@@ -737,7 +737,7 @@ function RolesCard({ node, reload }) {
       return
     }
     try {
-      if (rolesDraft.dirty) await api.post(`/nodes/${node.id}/roles`, { roles })
+      if (seatsDraft.dirty) await api.post(`/nodes/${node.id}/roles`, { roles: seats })
       if (upDirty) await upstream.save(upstream.rows)
       if (downDirty) {
         // 下游必须有中转用途才能接在本节点之后；只有入口用途的先补上，
@@ -745,7 +745,7 @@ function RolesCard({ node, reload }) {
         const all = roster.state.status === 'ready' ? roster.state.data : []
         for (const row of downstream.rows) {
           const peer = all.find(n => n.id === row.id)
-          if (peer && (peer.roles & ROLE_VIA) === 0) await api.post(`/nodes/${peer.id}/roles`, { roles: peer.roles | ROLE_VIA })
+          if (peer && (peer.roles & SEAT_VIA) === 0) await api.post(`/nodes/${peer.id}/roles`, { roles: peer.roles | SEAT_VIA })
         }
         await downstream.save(downstream.rows)
       }
@@ -757,17 +757,17 @@ function RolesCard({ node, reload }) {
     }
   })
 
-  const setRole = (bit, on) => rolesDraft.set(on ? roles | bit : roles & ~bit)
+  const setSeat = (bit, on) => seatsDraft.set(on ? seats | bit : seats & ~bit)
   const changeMode = (edge) => (id, mode) => {
     const next = edge.rows.map(r => (r.id === id ? { ...r, mode } : r))
     edge.edit(next)
     // 这一侧除了模式之外没有别的待保存修改（对端节点与已保存的一致、用途也
     // 没改）时，整表提交只会落下这一处模式变化，直接保存；否则留给“保存”
     // 连同其它修改一起提交。
-    if (!rolesDraft.dirty && sameEdgeMembers(next, edge.saved)) void commit.run('mode', edge, next)
+    if (!seatsDraft.dirty && sameEdgeMembers(next, edge.saved)) void commit.run('mode', edge, next)
   }
   const discard = () => {
-    rolesDraft.discard()
+    seatsDraft.discard()
     downstream.discard()
     upstream.discard()
   }
@@ -778,7 +778,7 @@ function RolesCard({ node, reload }) {
         title="节点用途"
         actions={<>
           {dirty && <Button size="sm" variant="ghost" disabled={commit.pending} onClick={discard}>放弃修改</Button>}
-          <Button size="sm" loading={commit.pendingKey === 'all'} disabled={!dirty || roles === 0 || commit.pending} onClick={() => commit.run('all')}>
+          <Button size="sm" loading={commit.pendingKey === 'all'} disabled={!dirty || seats === 0 || commit.pending} onClick={() => commit.run('all')}>
             保存用途
           </Button>
         </>}
@@ -788,10 +788,10 @@ function RolesCard({ node, reload }) {
           入口：可以被规则选作入口，并在它后面绑定下游。中转：可以绑定到上游之后，供规则级联。至少保留一个。
           模式作用于两个节点衔接的那一段；对绑定的修改只影响之后新建的规则。
         </p>
-        {roles === 0 && <Alert tone="danger">至少保留一个用途。</Alert>}
+        {seats === 0 && <Alert tone="danger">至少保留一个用途。</Alert>}
         <div className="grid gap-x-8 gap-y-6 md:grid-cols-2">
           <div className="flex flex-col gap-3">
-            <Checkbox checked={entryOn} onChange={on => setRole(ROLE_ENTRY, on)}>入口</Checkbox>
+            <Checkbox checked={entryOn} onChange={on => setSeat(SEAT_ENTRY, on)}>入口</Checkbox>
             {entryOn && (
               <EdgeEditor
                 title="已绑定的下游"
@@ -800,7 +800,7 @@ function RolesCard({ node, reload }) {
                 edge={downstream}
                 roster={roster}
                 selfId={node.id}
-                fit={n => (n.roles & ROLE_VIA) !== 0}
+                fit={n => (n.roles & SEAT_VIA) !== 0}
                 unfitLabel="以下节点只有入口用途，选中后保存时会自动为它们加上中转用途"
                 locked={commit.pending}
                 onMode={changeMode(downstream)}
@@ -808,7 +808,7 @@ function RolesCard({ node, reload }) {
             )}
           </div>
           <div className="flex flex-col gap-3">
-            <Checkbox checked={viaOn} onChange={on => setRole(ROLE_VIA, on)}>中转</Checkbox>
+            <Checkbox checked={viaOn} onChange={on => setSeat(SEAT_VIA, on)}>中转</Checkbox>
             {viaOn && (
               <EdgeEditor
                 title="已绑定的上游"
@@ -1021,7 +1021,7 @@ function GrantsCard({ node, grantedUsers, reload }) {
                 <tr key={g.user_id}>
                   <td><TextLink to={`/users/${g.user_id}`} tone="ink" className="font-medium">{g.username}</TextLink></td>
                   <td>{g.max_forwards}</td>
-                  <td><PerNodeRolesForm userId={g.user_id} nodeId={node.id} roles={g.roles} onDone={reload} /></td>
+                  <td><GrantSeatsSelect userId={g.user_id} nodeId={node.id} seats={g.roles} onDone={reload} /></td>
                   <td className="text-ink-soft">{fmtTime(g.granted_at)}</td>
                   <td className="num">
                     <Button size="sm" variant="ghost" danger loading={revoke.pendingKey === g.user_id} onClick={() => revoke.run(g.user_id, g.username)}>

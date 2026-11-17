@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -187,8 +188,8 @@ func TestNodeRolesAndBindingsEndpoints(t *testing.T) {
 		t.Fatalf("set roles: %d %s", w.Code, w.Body.String())
 	}
 	n, _ := db.GetNode(d, mid.ID)
-	if n.Roles != 3 {
-		t.Fatalf("roles want 3, got %d", n.Roles)
+	if n.Seats != 3 {
+		t.Fatalf("roles want 3, got %d", n.Seats)
 	}
 	// downstream must have via role to be bound
 	body := fmt.Sprintf(`{"bindings":[{"upstream_node_id":%d,"mode":"kernel"}]}`, up.ID)
@@ -204,7 +205,7 @@ func TestNodeRolesAndBindingsEndpoints(t *testing.T) {
 		t.Fatalf("list all: %d %s", w.Code, w.Body.String())
 	}
 	// remove via role then try to bind -> 400
-	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry)
+	_ = db.UpdateNodeSeats(d, mid.ID, chain.SeatEntry)
 	if w := do("POST", fmt.Sprintf("/api/nodes/%d/bindings", mid.ID), body); w.Code != http.StatusBadRequest {
 		t.Fatalf("bind non-via: want 400, got %d", w.Code)
 	}
@@ -219,7 +220,7 @@ func TestNodeBindingsModeDefaultValidationAndDuplicates(t *testing.T) {
 	d := openDB(t)
 	up, _ := db.CreateNode(d, "up", "", "")
 	mid, _ := db.CreateNode(d, "mid", "", "")
-	_ = db.UpdateNodeRoles(d, mid.ID, db.NodeRoleEntry|db.NodeRoleVia)
+	_ = db.UpdateNodeSeats(d, mid.ID, chain.SeatEntry|chain.SeatVia)
 	cookie := loginAsAdmin(t, d)
 	s, _ := New(d)
 
@@ -297,7 +298,7 @@ func TestDownstreamBindingsFromUpstream(t *testing.T) {
 	}
 
 	// A downstream lacking the via role is rejected.
-	_ = db.UpdateNodeRoles(d, m1.ID, db.NodeRoleEntry)
+	_ = db.UpdateNodeSeats(d, m1.ID, chain.SeatEntry)
 	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d,"mode":"kernel"}]}`, m1.ID)
 	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
 		t.Fatalf("downstream without via: want 400, got %d", w.Code)
@@ -323,7 +324,7 @@ func TestDownstreamBindingsFromUpstream(t *testing.T) {
 
 	// An upstream lacking both roles cannot host downstreams. A roleless node
 	// is impossible via the /roles API, so force it in DB to cover the branch.
-	_ = db.UpdateNodeRoles(d, up.ID, 0)
+	_ = db.UpdateNodeSeats(d, up.ID, 0)
 	body = fmt.Sprintf(`{"bindings":[{"downstream_node_id":%d}]}`, m2.ID)
 	if w := do("POST", fmt.Sprintf("/api/nodes/%d/downstream-bindings", up.ID), body); w.Code != http.StatusBadRequest {
 		t.Fatalf("roleless upstream: want 400, got %d", w.Code)

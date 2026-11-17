@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -111,7 +112,7 @@ func TestNestedCompositeEntryRoleChecked(t *testing.T) {
 	_ = db.UpdateNodeRelayHost(d, b.ID, "2.2.2.2")
 	inner := makeComposite(t, d, "inner", a.ID, b.ID)
 	outer := makeComposite(t, d, "outer", inner.ID, a.ID)
-	_ = db.UpdateNodeRoles(d, outer.ID, db.NodeRoleVia) // via only, not entry
+	_ = db.UpdateNodeSeats(d, outer.ID, chain.SeatVia) // via only, not entry
 
 	uid, cookie := loginAsUser(t, d, 10)
 	_ = db.GrantNode(d, uid, outer.ID, 5, 0)

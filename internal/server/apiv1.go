@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 	"nft-forward/internal/rulechange"
 )
@@ -191,38 +192,38 @@ func (s *Server) registerV1Routes(r chi.Router) {
 // v1Node is the slim node shape for the public API. It never carries the node
 // secret (unlike the admin SPA detail view) and omits SPA-only display fields.
 type v1Node struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	NodeType       string  `json:"node_type"`
-	Online         bool    `json:"online"`
-	Disabled       bool    `json:"disabled"`
-	AgentVersion   string  `json:"agent_version,omitempty"`
-	Roles          int64   `json:"roles"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	Unidirectional bool    `json:"unidirectional"`
-	NoDirectExit   bool    `json:"no_direct_exit"`
-	PortRange      string  `json:"port_range,omitempty"`
-	LastSeen       *int64  `json:"last_seen,omitempty"`
+	ID             int64      `json:"id"`
+	Name           string     `json:"name"`
+	NodeType       string     `json:"node_type"`
+	Online         bool       `json:"online"`
+	Disabled       bool       `json:"disabled"`
+	AgentVersion   string     `json:"agent_version,omitempty"`
+	Seats          chain.Seat `json:"roles"`
+	RateMultiplier float64    `json:"rate_multiplier"`
+	Unidirectional bool       `json:"unidirectional"`
+	NoDirectExit   bool       `json:"no_direct_exit"`
+	PortRange      string     `json:"port_range,omitempty"`
+	LastSeen       *int64     `json:"last_seen,omitempty"`
 }
 
 // toV1Node 是节点在 /api/v1 上的形状。在线状态、计费方向、链尾资格取
-// NodeCatalog.Derive（组合按成员算）；roles 由调用方给：管理员面给节点自己的掩码，
-// 用户面给授权下的生效角色。
-func toV1Node(c *db.NodeCatalog, n *db.Node, roles int64) v1Node {
+// NodeCatalog.Derive（组合按成员算）；seats（JSON 键 roles）由调用方给：管理员面给
+// 节点自己的，用户面给授权下生效的（db.EffectiveSeats）。
+func toV1Node(c *db.NodeCatalog, n *db.Node, seats chain.Seat) v1Node {
 	d := c.Derive(n)
 	return v1Node{
 		ID: n.ID, Name: n.Name, NodeType: n.NodeType,
 		Online: d.Online, Disabled: n.Disabled, AgentVersion: n.AgentVersion,
-		Roles: roles, RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional,
+		Seats: seats, RateMultiplier: n.RateMultiplier, Unidirectional: d.Unidirectional,
 		NoDirectExit: d.NoDirectExit, PortRange: n.PortRange, LastSeen: n.LastSeen,
 	}
 }
 
-// v1AdminNodes 是全部节点的 /api/v1 形状，roles 为节点自己的掩码。
+// v1AdminNodes 是全部节点的 /api/v1 形状，roles 键给的是节点自己可占的位置。
 func v1AdminNodes(c *db.NodeCatalog) []v1Node {
 	out := make([]v1Node, 0, len(c.Nodes()))
 	for _, n := range c.Nodes() {
-		out = append(out, toV1Node(c, n, n.Roles))
+		out = append(out, toV1Node(c, n, n.Seats))
 	}
 	return out
 }
@@ -412,7 +413,7 @@ func (s *Server) v1MyListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]v1Node, len(granted))
 	for i, n := range granted {
-		out[i] = toV1Node(cat, n, db.EffectiveNodeRoles(n.Roles, grants[i].Roles))
+		out[i] = toV1Node(cat, n, db.EffectiveSeats(n.Seats, grants[i].Seats))
 	}
 	v1OK(w, out)
 }

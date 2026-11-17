@@ -9,23 +9,9 @@ import (
 	"log"
 	"strings"
 	"time"
-)
 
-const (
-	NodeRoleEntry int64 = 1 << 0
-	NodeRoleVia   int64 = 1 << 1
+	"nft-forward/internal/chain"
 )
-
-// EffectiveNodeRoles resolves how a specific grant may use a node: the grant's
-// own mask when set, otherwise the node's mask. grantRoles == 0 means inherit;
-// any other value overrides the node mask entirely — it may add or drop bits,
-// the two masks are independent, not subset-constrained.
-func EffectiveNodeRoles(nodeRoles, grantRoles int64) int64 {
-	if grantRoles == 0 {
-		return nodeRoles
-	}
-	return grantRoles
-}
 
 // User 是 users 表的一行，外加两个读出时算出来的值（OverQuota、RuleCount）。行本身
 // 不序列化（见 MarshalJSON）：对外的形状由 server 包里的用户视图给出。
@@ -135,10 +121,11 @@ type Machine struct {
 // Line 是一行作为线路时的属性。授权（user_nodes）、绑定边（node_bindings）、组合的
 // 成员（node_hops）也挂在线路上，它们在各自的表里。
 type Line struct {
-	// Roles is a bitmask of what the line can be used as: NodeRoleEntry means
-	// it can be picked as a rule's entry, NodeRoleVia means it can be attached
-	// behind an upstream node as a middle-layer segment. A line may hold both.
-	Roles int64
+	// Seats 是这条线路可以占的位置，只含入口与中转两位（SettableSeats）：
+	// chain.SeatEntry 表示能被选作规则的入口，chain.SeatVia 表示能挂在上游之后做
+	// 中转层，可以两位都有。能不能做链尾不存在这里，由机器的 NoDirectExit 决定；
+	// NodeSeats 把两处合成链路推导用的那一个值。
+	Seats chain.Seat
 	// RateMultiplier 是计价倍率，取规则入口那条线路的值。
 	RateMultiplier float64
 }
@@ -429,8 +416,8 @@ type MachineSpec struct {
 	Unidirectional bool
 }
 
-// LineSpec 是建一条线路（机器或组合）时给的线路属性。角色一律是入口加中转
-// （NodeRoleEntry|NodeRoleVia），建好就能被选作入口或挂成中转层，不必再编辑一次。
+// LineSpec 是建一条线路（机器或组合）时给的线路属性。可占的位置一律是入口加中转
+// （SettableSeats），建好就能被选作入口或挂成中转层，不必再编辑一次。
 type LineSpec struct {
 	// RateMultiplier ≤ 0 时取 1.0：建节点的请求体分不清没填与填了 0，而 0 表示免费，
 	// 免费只经专门的倍率接口（UpdateNodeRateMultiplier）设置。
@@ -449,8 +436,6 @@ func (l LineSpec) rate() float64 {
 	}
 	return l.RateMultiplier
 }
-
-const newLineRoles = NodeRoleEntry | NodeRoleVia
 
 // grantNewLine 在建节点的事务里写下 LineSpec 要求的初始授权。
 func grantNewLine(tx *sql.Tx, nodeID int64, l LineSpec) error {
@@ -486,9 +471,9 @@ func CreateMachineNode(d *sql.DB, name string, m MachineSpec, l LineSpec) (*Node
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`INSERT INTO nodes(name, node_type, owner_id, address, secret, port_range, unidirectional,
-			rate_multiplier, roles, sort_order, created_at)
+			rate_multiplier, seats, sort_order, created_at)
 		VALUES (?, 'remote', ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
-		name, m.OwnerID, m.Address, secret, portRange, boolInt(m.Unidirectional), l.rate(), newLineRoles, now())
+		name, m.OwnerID, m.Address, secret, portRange, boolInt(m.Unidirectional), l.rate(), SettableSeats, now())
 	if err != nil {
 		return nil, err
 	}
@@ -520,9 +505,9 @@ func CreateCompositeNode(d *sql.DB, name string, l LineSpec, members []NodeHop) 
 		return nil, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO nodes(name, node_type, secret, port_range, rate_multiplier, roles, sort_order, created_at)
+	res, err := tx.Exec(`INSERT INTO nodes(name, node_type, secret, port_range, rate_multiplier, seats, sort_order, created_at)
 		VALUES (?, 'composite', '', '', ?, ?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM nodes), ?)`,
-		name, l.rate(), newLineRoles, now())
+		name, l.rate(), SettableSeats, now())
 	if err != nil {
 		return nil, err
 	}
@@ -560,11 +545,11 @@ func boolInt(b bool) int {
 // nodeCols 是读节点行的列清单，scanNodeAnd 按同样的次序扫描。凡是读节点行的查询都
 // 拼这一份清单、经 scanNodeAnd 扫描（ListNodesForUser 把授权的列接在后面，通过
 // extra 传入），所以加列只改这两处。
-const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,roles,no_direct_exit`
+const nodeCols = `id,name,node_type,owner_id,address,secret,relay_host,relay_host_v6,online,agent_version,agent_sha,last_seen,last_apply_at,last_error,last_warning,disabled,port_range,created_at,last_upgrade_at,last_upgrade_version,last_upgrade_status,last_upgrade_error,sort_order,rate_multiplier,unidirectional,relay_host_declared,relay_host_v6_declared,seats,no_direct_exit`
 
 // nodeColsQualified is nodeCols with every column prefixed by the "n." alias.
-// user_nodes has its own roles column (the grant-level override), so a query
-// that joins nodes against user_nodes must qualify nodes.roles or the two
+// user_nodes has its own seats column (the grant-level override), so a query
+// that joins nodes against user_nodes must qualify nodes.seats or the two
 // same-named columns make the SELECT ambiguous.
 var nodeColsQualified = "n." + strings.Join(strings.Split(nodeCols, ","), ",n.")
 
@@ -593,7 +578,7 @@ func scanNodeAnd(r rowScanner, extra ...any) (*Node, error) {
 		&disabled, &n.PortRange, &n.CreatedAt,
 		&n.LastUpgradeAt, &luVersion, &luStatus, &luError,
 		&n.SortOrder, &n.RateMultiplier, &unidirectional,
-		&relayHostDeclared, &relayHostV6Declared, &n.Roles, &noDirectExit,
+		&relayHostDeclared, &relayHostV6Declared, &n.Seats, &noDirectExit,
 	}
 	if err := r.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
@@ -737,8 +722,10 @@ func UpdateNodeRateMultiplier(d *sql.DB, id int64, mult float64) error {
 	return err
 }
 
-func UpdateNodeRoles(d *sql.DB, id, roles int64) error {
-	_, err := d.Exec(`UPDATE nodes SET roles=? WHERE id=?`, roles, id)
+// UpdateNodeSeats 写节点可以占的位置。seats 只应含 SettableSeats 里的位，由调用方
+// 校验（apiUpdateNodeSeats）；这里不校验。
+func UpdateNodeSeats(d *sql.DB, id int64, seats chain.Seat) error {
+	_, err := d.Exec(`UPDATE nodes SET seats=? WHERE id=?`, seats, id)
 	return err
 }
 

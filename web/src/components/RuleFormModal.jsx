@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { ROLE_LANDING, addLocalURI, hostPortKey, saveLocalRoles, setLocalRoleBatch, tryParseURI } from '../lib/landing'
 import { nodeStack } from '../lib/nodeHealth'
+import { SEAT_ENTRY, SEAT_VIA } from '../lib/seats'
 import { NodeTypeIcon } from './net'
 import { ProbeButton } from './probe'
 import { Alert, Button, Field, Input, Modal, ModalActions, Segmented, Select, useAction, useConfirm, useToast } from './ui'
@@ -108,10 +109,6 @@ export function ruleFormToPayload(form) {
 
 /* ---------- 链路推导 ---------- */
 
-/* 节点的角色位（服务端 nodes.roles / 授权覆盖后的生效值）。 */
-const NODE_ROLE_ENTRY = 1
-const NODE_ROLE_VIA = 2
-
 /* Select 的 label 必须是纯字符串（搜索按它过滤），所以 IP 栈与倍率写成文字
    前后缀；单点 / 组合 / 自身的区分放在选项的 icon 里。 */
 function nodeLabel(n, showRate) {
@@ -127,9 +124,9 @@ function nodeLabel(n, showRate) {
  * 由表单里的入口与线路层选择，推导出级联选择器要画的每一级。
  *
  * 第 i 级线路层的候选 = 绑定图里上一级（第 0 级的上一级是入口）的下游，再
- * 限定为：在 nodes 里（用户侧的 nodes 已经是授权范围内的节点）、带线路层
- * 角色、不是入口本身、也不在已选的链上。没有 roles 字段的节点按“不是线路层”
- * 处理 —— 与入口的缺省相反：一个没有声明角色的节点不应当悄悄变成可选的
+ * 限定为：在 nodes 里（用户侧的 nodes 已经是授权范围内的节点）、有中转
+ * 用途、不是入口本身、也不在已选的链上。没有 roles 字段的节点按“不能做中转”
+ * 处理 —— 与入口的缺省相反：一个没有声明用途的节点不应当悄悄变成可选的
  * 中间跳。
  *
  * 某一级没有候选也没有已选值时停止：有下拉框就一定有得选。
@@ -164,7 +161,7 @@ function deriveChain(form, nodes, bindings) {
       const candidates = bindings
         .filter(b => b.upstream_node_id === upstream)
         .map(b => byId.get(b.downstream_node_id))
-        .filter(n => n && ((n.roles ?? 0) & NODE_ROLE_VIA) !== 0 && n.id !== entryId && !used.includes(n.id))
+        .filter(n => n && ((n.roles ?? 0) & SEAT_VIA) !== 0 && n.id !== entryId && !used.includes(n.id))
       if (candidates.length === 0 && chosen === undefined) break
       levels.push({ level, candidates, chosen, mustVia: !!byId.get(upstream)?.no_direct_exit })
       if (chosen === undefined) break
@@ -306,8 +303,8 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
   })
 
   const option = (n) => ({ value: n.id, label: nodeLabel(n, showRate), icon: <NodeTypeIcon type={n.node_type} /> })
-  // 只有带入口角色的节点能作入口。没有 roles 字段的节点按“可作入口”处理。
-  const entryNodes = nodes.filter(n => ((n.roles ?? NODE_ROLE_ENTRY) & NODE_ROLE_ENTRY) !== 0)
+  // 只有有入口用途的节点能作入口。没有 roles 字段的节点按“可作入口”处理。
+  const entryNodes = nodes.filter(n => ((n.roles ?? SEAT_ENTRY) & SEAT_ENTRY) !== 0)
   const entryGroups = [
     { label: '单点', options: entryNodes.filter(n => n.node_type !== 'composite').map(option) },
     { label: '组合', options: entryNodes.filter(n => n.node_type === 'composite').map(option) },

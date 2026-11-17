@@ -123,7 +123,7 @@ func TestDeleteCompositeEndpointRemovesRules(t *testing.T) {
 	}
 }
 
-// 4: explicit-hops 是 admin 的任意链逃生通道，角色/绑定边有意不校验，但 no_direct_exit
+// 4: explicit-hops 是 admin 的任意链逃生通道，入口/中转资格与绑定边有意不校验，但 no_direct_exit
 // 是硬安全约束——禁止直出的节点即便经此路径也不能坐在出口位。
 func TestExplicitHopsRejectsNoDirectExitTail(t *testing.T) {
 	d := openDB(t)

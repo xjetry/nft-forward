@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 )
 
@@ -17,13 +18,13 @@ func TestGrantEntryOverrideAllowsViaNodeAsEntry(t *testing.T) {
 	d := openDB(t)
 	m, _ := db.CreateNode(d, "middle", "", "")
 	_ = db.UpdateNodeRelayHost(d, m.ID, "2.2.2.2")
-	if err := db.UpdateNodeRoles(d, m.ID, db.NodeRoleVia); err != nil {
+	if err := db.UpdateNodeSeats(d, m.ID, chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 
 	uid, cookie := loginAsUser(t, d, 20)
 	_ = db.GrantNode(d, uid, m.ID, 5, 0)
-	if err := db.SetGrantRoles(d, uid, m.ID, db.NodeRoleEntry); err != nil {
+	if err := db.SetGrantSeats(d, uid, m.ID, chain.SeatEntry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,7 +45,7 @@ func TestViaNodeWithoutOverrideRejectedAsEntry(t *testing.T) {
 	d := openDB(t)
 	m, _ := db.CreateNode(d, "middle", "", "")
 	_ = db.UpdateNodeRelayHost(d, m.ID, "2.2.2.2")
-	if err := db.UpdateNodeRoles(d, m.ID, db.NodeRoleVia); err != nil {
+	if err := db.UpdateNodeSeats(d, m.ID, chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,16 +61,16 @@ func TestViaNodeWithoutOverrideRejectedAsEntry(t *testing.T) {
 
 // The my rule-form node list reports the grantee's effective role: a via-only
 // node with an entry override surfaces as entry-capable (bit 0 set).
-func TestMyNodesReportEffectiveRoles(t *testing.T) {
+func TestMyNodesReportEffectiveSeats(t *testing.T) {
 	d := openDB(t)
 	m, _ := db.CreateNode(d, "middle", "", "")
 	_ = db.UpdateNodeRelayHost(d, m.ID, "2.2.2.2")
-	if err := db.UpdateNodeRoles(d, m.ID, db.NodeRoleVia); err != nil {
+	if err := db.UpdateNodeSeats(d, m.ID, chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 	uid, cookie := loginAsUser(t, d, 22)
 	_ = db.GrantNode(d, uid, m.ID, 5, 0)
-	if err := db.SetGrantRoles(d, uid, m.ID, db.NodeRoleEntry); err != nil {
+	if err := db.SetGrantSeats(d, uid, m.ID, chain.SeatEntry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,8 +84,8 @@ func TestMyNodesReportEffectiveRoles(t *testing.T) {
 	}
 	var resp struct {
 		Nodes []struct {
-			ID    int64 `json:"id"`
-			Roles int64 `json:"roles"`
+			ID    int64      `json:"id"`
+			Seats chain.Seat `json:"roles"`
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -94,8 +95,8 @@ func TestMyNodesReportEffectiveRoles(t *testing.T) {
 	for _, n := range resp.Nodes {
 		if n.ID == m.ID {
 			found = true
-			if n.Roles&db.NodeRoleEntry == 0 {
-				t.Fatalf("middle node effective roles = %d, want entry bit set", n.Roles)
+			if n.Seats&chain.SeatEntry == 0 {
+				t.Fatalf("middle node effective roles = %d, want entry bit set", n.Seats)
 			}
 		}
 	}
@@ -105,7 +106,7 @@ func TestMyNodesReportEffectiveRoles(t *testing.T) {
 }
 
 // The per-node roles endpoint writes the override; an illegal bit is rejected.
-func TestSetPerNodeRolesEndpoint(t *testing.T) {
+func TestSetGrantSeatsEndpoint(t *testing.T) {
 	d := openDB(t)
 	m, _ := db.CreateNode(d, "middle", "", "")
 	uid, _ := loginAsUser(t, d, 23)
@@ -114,7 +115,7 @@ func TestSetPerNodeRolesEndpoint(t *testing.T) {
 
 	s, _ := New(d)
 
-	setRoles := func(val int64) *httptest.ResponseRecorder {
+	setRoles := func(val chain.Seat) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]any{"roles": val})
 		req := httptest.NewRequest("POST",
 			"/api/users/"+strconv.FormatInt(uid, 10)+"/nodes/"+strconv.FormatInt(m.ID, 10)+"/roles",
@@ -126,12 +127,12 @@ func TestSetPerNodeRolesEndpoint(t *testing.T) {
 		return rec
 	}
 
-	if rec := setRoles(db.NodeRoleEntry); rec.Code != http.StatusOK {
+	if rec := setRoles(chain.SeatEntry); rec.Code != http.StatusOK {
 		t.Fatalf("set entry override: %d %s", rec.Code, rec.Body.String())
 	}
 	g, _ := db.GetNodeGrant(d, uid, m.ID)
-	if g.Roles != db.NodeRoleEntry {
-		t.Fatalf("stored roles = %d, want %d", g.Roles, db.NodeRoleEntry)
+	if g.Seats != chain.SeatEntry {
+		t.Fatalf("stored roles = %d, want %d", g.Seats, chain.SeatEntry)
 	}
 
 	if rec := setRoles(4); rec.Code == http.StatusOK {
@@ -142,19 +143,19 @@ func TestSetPerNodeRolesEndpoint(t *testing.T) {
 // The my overview reports the same effective roles as the rule form: a grant
 // override replaces the node's own mask in both directions, and a grant
 // without one inherits it.
-func TestMyDashboardReportsEffectiveRoles(t *testing.T) {
+func TestMyDashboardReportsEffectiveSeats(t *testing.T) {
 	d := openDB(t)
 	overridden, _ := db.CreateNode(d, "via-node-entry-grant", "", "")
 	inherited, _ := db.CreateNode(d, "via-node-plain-grant", "", "")
 	for _, n := range []*db.Node{overridden, inherited} {
-		if err := db.UpdateNodeRoles(d, n.ID, db.NodeRoleVia); err != nil {
+		if err := db.UpdateNodeSeats(d, n.ID, chain.SeatVia); err != nil {
 			t.Fatal(err)
 		}
 	}
 	uid, cookie := loginAsUser(t, d, 22)
 	_ = db.GrantNode(d, uid, overridden.ID, 5, 0)
 	_ = db.GrantNode(d, uid, inherited.ID, 5, 0)
-	if err := db.SetGrantRoles(d, uid, overridden.ID, db.NodeRoleEntry); err != nil {
+	if err := db.SetGrantSeats(d, uid, overridden.ID, chain.SeatEntry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -168,21 +169,21 @@ func TestMyDashboardReportsEffectiveRoles(t *testing.T) {
 	}
 	var resp struct {
 		Nodes []struct {
-			ID    int64 `json:"id"`
-			Roles int64 `json:"roles"`
+			ID    int64      `json:"id"`
+			Seats chain.Seat `json:"roles"`
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	got := map[int64]int64{}
+	got := map[int64]chain.Seat{}
 	for _, n := range resp.Nodes {
-		got[n.ID] = n.Roles
+		got[n.ID] = n.Seats
 	}
-	if got[overridden.ID] != db.NodeRoleEntry {
-		t.Fatalf("node with an entry override: roles = %d, want %d (the override, not the node's via mask)", got[overridden.ID], db.NodeRoleEntry)
+	if got[overridden.ID] != chain.SeatEntry {
+		t.Fatalf("node with an entry override: roles = %d, want %d (the override, not the node's via mask)", got[overridden.ID], chain.SeatEntry)
 	}
-	if got[inherited.ID] != db.NodeRoleVia {
-		t.Fatalf("node without an override: roles = %d, want the node's own %d", got[inherited.ID], db.NodeRoleVia)
+	if got[inherited.ID] != chain.SeatVia {
+		t.Fatalf("node without an override: roles = %d, want the node's own %d", got[inherited.ID], chain.SeatVia)
 	}
 }

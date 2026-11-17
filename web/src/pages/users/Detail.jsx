@@ -9,6 +9,7 @@ import {
   nodeRoleKey, rolesFirstOrder,
 } from '../../lib/landing'
 import { combineResources } from '../../lib/resource'
+import { GRANT_SEAT_OPTIONS, SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { useResource } from '../../lib/useResource'
 import { NodeTypeTag, ProtoTag } from '../../components/net'
 import { Page, PageHeader, TableBox, Toolbar } from '../../components/page'
@@ -21,15 +22,6 @@ import {
 } from '../../components/ui'
 import { ExpiryField, NewPasswordModal, expiryAlert, parseNumber, userConfirms } from './common'
 import PasteGrantsModal from './PasteGrantsModal'
-
-/* 授权上的用途：0 = 沿用节点自己的用途，其余是只对这个用户生效的
-   入口(1) / 中转(2) 组合。 */
-const GRANT_ROLE_OPTIONS = [
-  { value: 0, label: '跟随节点' },
-  { value: 1, label: '仅入口' },
-  { value: 2, label: '仅中转' },
-  { value: 3, label: '入口 + 中转' },
-]
 
 /* ==========================================================================
    用户详情页
@@ -287,12 +279,12 @@ function SettingsCard({ userId, user, reload }) {
 
 /* ---------- 节点授权 ---------- */
 
-function GrantRoles({ roles }) {
-  if (!roles) return <span className="text-ink-mut">跟随节点</span>
+function GrantSeats({ seats }) {
+  if (!seats) return <span className="text-ink-mut">跟随节点</span>
   return (
     <span className="inline-flex items-center gap-1">
-      {(roles & 1) !== 0 && <Tag>入口</Tag>}
-      {(roles & 2) !== 0 && <Tag>中转</Tag>}
+      {(seats & SEAT_ENTRY) !== 0 && <Tag>入口</Tag>}
+      {(seats & SEAT_VIA) !== 0 && <Tag>中转</Tag>}
     </span>
   )
 }
@@ -463,7 +455,7 @@ function GrantsCard({ userId, user, nodes, grants, allNodes, rules, reload }) {
                           </span>
                         </td>
                         <td className="num">{g.rate_limit_mbytes > 0 ? `${g.rate_limit_mbytes} MB/s` : '不限'}</td>
-                        <td><GrantRoles roles={g.roles} /></td>
+                        <td><GrantSeats seats={g.roles} /></td>
                         <td className="num">
                           <div className="flex items-center justify-end gap-1">
                             <Button size="sm" onClick={() => setDialog({ kind: 'edit', nodeId: n.id })}>编辑</Button>
@@ -569,7 +561,7 @@ function grantFormOf(grant) {
     maxRules: String(grant.max_forwards),
     quotaGB: bytesToGBText(grant.traffic_quota_bytes),
     rate: String(grant.rate_limit_mbytes || 0),
-    roles: grant.roles || 0,
+    seats: grant.roles || 0,
   }
 }
 
@@ -601,7 +593,7 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
       changed('maxRules') && ['max-forwards', { max_forwards: maxRules }],
       changed('quotaGB') && ['quota', { traffic_quota_bytes: Math.round(quotaGB * GB) }],
       changed('rate') && ['rate-limit', { rate_limit_mbytes: rate }],
-      changed('roles') && ['roles', { roles: form.roles }],
+      changed('seats') && ['roles', { roles: form.seats }],
     ].filter(Boolean)
     if (requests.length === 0) {
       onClose()
@@ -641,7 +633,7 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
           <Input type="number" min="0" step="1" className="w-44" value={form.rate} onChange={set('rate')} suffix="MB/s" />
         </Field>
         <Field label="用途" hint="该用户可以把这个节点用作入口、中转，还是两者都可以。“跟随节点”沿用节点自己的用途。">
-          <Select className="w-44" value={form.roles} onChange={set('roles')} options={GRANT_ROLE_OPTIONS} />
+          <Select className="w-44" value={form.seats} onChange={set('seats')} options={GRANT_SEAT_OPTIONS} />
         </Field>
       </form>
     </Modal>

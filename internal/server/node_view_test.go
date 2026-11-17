@@ -114,7 +114,7 @@ func derivedOf(n map[string]any) map[string]any {
 }
 
 // 同一个节点，不论出现在哪个面、哪个字段里，派生属性（在线、出入口地址、成员链）
-// 都一样，并且都是按全量拓扑算出的值；用户面的 roles 一律是这条授权下的生效角色。
+// 都一样，并且都是按全量拓扑算出的值；用户面的 roles 一律是这条授权下生效的入口/中转资格。
 func TestEveryNodeSurfaceDerivesTheSameAttributes(t *testing.T) {
 	f := newSurfaceFixture(t)
 	admin := map[string]map[string]any{}
@@ -193,7 +193,7 @@ func TestEveryNodeSurfaceDerivesTheSameAttributes(t *testing.T) {
 		}
 	}
 	check("管理员", admin, nil)
-	// alice 对 edge-a 的授权把角色覆盖成只能做入口。
+	// alice 对 edge-a 的授权把资格覆盖成只能做入口。
 	check("用户", user, map[int64]float64{f.a: 1})
 }
 

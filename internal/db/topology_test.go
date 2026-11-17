@@ -10,55 +10,57 @@ import (
 func TestNodeSeatsAndGrantSeats(t *testing.T) {
 	e, v, x := chain.SeatEntry, chain.SeatVia, chain.SeatExit
 	nodeCases := []struct {
-		roles        int64
+		stored       chain.Seat
 		noDirectExit bool
 		want         chain.Seat
 	}{
-		{NodeRoleEntry, false, e | x},
-		{NodeRoleVia, false, v | x},
-		{NodeRoleEntry | NodeRoleVia, false, e | v | x},
-		{NodeRoleEntry | NodeRoleVia, true, e | v},
+		{chain.SeatEntry, false, e | x},
+		{chain.SeatVia, false, v | x},
+		{chain.SeatEntry | chain.SeatVia, false, e | v | x},
+		{chain.SeatEntry | chain.SeatVia, true, e | v},
 		{0, false, x},
 		{0, true, 0},
+		// 列里混进了链尾那一位：读出来不算数，链尾资格只看 no_direct_exit。
+		{e | x, true, e},
 	}
 	for _, c := range nodeCases {
-		if got := NodeSeats(c.roles, c.noDirectExit); got != c.want {
-			t.Errorf("NodeSeats(%d, %v) = %b，期望 %b", c.roles, c.noDirectExit, got, c.want)
+		if got := NodeSeats(c.stored, c.noDirectExit); got != c.want {
+			t.Errorf("NodeSeats(%d, %v) = %b，期望 %b", c.stored, c.noDirectExit, got, c.want)
 		}
 	}
 
 	grantCases := []struct {
-		roles     int64
+		stored    chain.Seat
 		want      chain.Seat
 		overrides bool
 	}{
 		{0, 0, false}, // 不覆盖
-		{NodeRoleEntry, e, true},
-		{NodeRoleVia, v, true},
-		{NodeRoleEntry | NodeRoleVia, e | v, true},
+		{chain.SeatEntry, e, true},
+		{chain.SeatVia, v, true},
+		{chain.SeatEntry | chain.SeatVia, e | v, true},
+		{e | x, e, true}, // 链尾那一位不属于覆盖
 	}
 	for _, c := range grantCases {
-		got, overrides := GrantSeats(c.roles)
+		got, overrides := GrantSeats(c.stored)
 		if got != c.want || overrides != c.overrides {
-			t.Errorf("GrantSeats(%d) = %b, %v；期望 %b, %v", c.roles, got, overrides, c.want, c.overrides)
+			t.Errorf("GrantSeats(%d) = %b, %v；期望 %b, %v", c.stored, got, overrides, c.want, c.overrides)
 		}
 	}
 }
 
-// GrantSeats 与 EffectiveNodeRoles 是同一条“授权怎样覆盖节点资格”的规则的两种表达：
-// 前者给链路推导，后者给节点列表里展示的生效角色。两者对每一种掩码组合必须给出相同
-// 的入口/中转资格。
-func TestGrantSeatsAgreesWithEffectiveNodeRoles(t *testing.T) {
-	entryVia := chain.SeatEntry | chain.SeatVia
-	for nodeRoles := int64(0); nodeRoles <= 3; nodeRoles++ {
-		for grantRoles := int64(0); grantRoles <= 3; grantRoles++ {
-			viaSeats := NodeSeats(nodeRoles, false) & entryVia
-			if seats, overrides := GrantSeats(grantRoles); overrides {
-				viaSeats = seats
+// 链路推导判定入口/中转资格时用的是“节点自己的资格，被 GrantSeats 给出的覆盖整体取
+// 代”（chain 对 Request.SeatOverrides 的处理），接口展示的是 EffectiveSeats。两者对
+// 节点与授权上每一种取值都必须给出相同的入口/中转资格，否则页面上显示能用的位置建规则
+// 时会被拒，或者反过来。
+func TestEffectiveSeatsMatchWhatChainDerivationUses(t *testing.T) {
+	for node := chain.Seat(0); node <= SettableSeats; node++ {
+		for grant := chain.Seat(0); grant <= SettableSeats; grant++ {
+			derivation := NodeSeats(node, false) & SettableSeats
+			if seats, overrides := GrantSeats(grant); overrides {
+				derivation = seats
 			}
-			viaRoles := NodeSeats(EffectiveNodeRoles(nodeRoles, grantRoles), false) & entryVia
-			if viaSeats != viaRoles {
-				t.Errorf("节点掩码 %d、授权掩码 %d：GrantSeats 给出 %b，EffectiveNodeRoles 给出 %b", nodeRoles, grantRoles, viaSeats, viaRoles)
+			if shown := EffectiveSeats(node, grant); shown != derivation {
+				t.Errorf("节点 %b、授权 %b：链路推导用的是 %b，EffectiveSeats 给出 %b", node, grant, derivation, shown)
 			}
 		}
 	}
@@ -70,10 +72,10 @@ func TestLoadTopology(t *testing.T) {
 	b, _ := CreateNode(d, "b", "", "")
 	c, _ := CreateNode(d, "c", "", "")
 	combo := createTestComposite(t, d, "combo")
-	if err := UpdateNodeRoles(d, a.ID, NodeRoleEntry); err != nil {
+	if err := UpdateNodeSeats(d, a.ID, chain.SeatEntry); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpdateNodeRoles(d, b.ID, NodeRoleVia); err != nil {
+	if err := UpdateNodeSeats(d, b.ID, chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateNodeNoDirectExit(d, b.ID, true); err != nil {
@@ -97,8 +99,8 @@ func TestLoadTopology(t *testing.T) {
 	wantNodes := map[int64]chain.Node{
 		a.ID:     {ID: a.ID, Name: "a", Seats: chain.SeatEntry | chain.SeatExit},
 		b.ID:     {ID: b.ID, Name: "b", Seats: chain.SeatVia},
-		c.ID:     {ID: c.ID, Name: "c", Seats: NodeSeats(c.Roles, false)},
-		combo.ID: {ID: combo.ID, Name: "combo", Composite: true, Seats: NodeSeats(combo.Roles, false)},
+		c.ID:     {ID: c.ID, Name: "c", Seats: NodeSeats(c.Seats, false)},
+		combo.ID: {ID: combo.ID, Name: "combo", Composite: true, Seats: NodeSeats(combo.Seats, false)},
 	}
 	if !reflect.DeepEqual(topo.Nodes, wantNodes) {
 		t.Errorf("节点：得到 %+v\n期望 %+v", topo.Nodes, wantNodes)

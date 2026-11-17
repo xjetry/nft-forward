@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes, fmtTime } from '../../lib/fmt'
+import { SEAT_ENTRY, SEAT_VIA } from '../../lib/seats'
 import { upgradeAllReport } from '../../lib/upgrade'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
@@ -14,8 +15,7 @@ import {
   ModalActions, Segmented, Tag, TextLink, ToggleChip, cx, useAction, useConfirm, useToast,
 } from '../../components/ui'
 import {
-  GrantUserSelect, HopListEditor, ROLE_ENTRY, ROLE_VIA, hopRowsError, hopRowsPayload, newHopRow,
-  removeNode, useGrantableUsers,
+  GrantUserSelect, HopListEditor, hopRowsError, hopRowsPayload, newHopRow, removeNode, useGrantableUsers,
 } from './common'
 
 /**
@@ -46,7 +46,7 @@ const UNSORTED = { col: null, dir: null }
 const isSort = v => !!v && typeof v === 'object' && (v.col === null || v.col === 'traffic' || v.col === 'speed')
 
 /** 节点的用途位；没有这个字段的节点按“入口”处理，与服务端的缺省一致。 */
-const rolesOf = node => node.roles ?? ROLE_ENTRY
+const seatsOf = node => node.roles ?? SEAT_ENTRY
 
 export default function NodeList() {
   const nodes = useResource(() => api.get('/nodes'), [])
@@ -117,12 +117,12 @@ function Speed({ speed }) {
   return <span className="whitespace-nowrap">↑ {fmtSpeed(speed.up)}　↓ {fmtSpeed(speed.down)}</span>
 }
 
-function RoleTags({ node }) {
-  const roles = rolesOf(node)
+function SeatTags({ node }) {
+  const seats = seatsOf(node)
   return (
     <>
-      {(roles & ROLE_ENTRY) !== 0 && <Tag>入口</Tag>}
-      {(roles & ROLE_VIA) !== 0 && <Tag>中转</Tag>}
+      {(seats & SEAT_ENTRY) !== 0 && <Tag>入口</Tag>}
+      {(seats & SEAT_VIA) !== 0 && <Tag>中转</Tag>}
     </>
   )
 }
@@ -144,7 +144,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
   const [tab, setTab] = useStoredState(localStorage, 'nodes.tab', 'single', v => v === 'single' || v === 'composite')
   const [search, setSearch] = useStoredState(sessionStorage, 'nodes.search', '', v => typeof v === 'string')
   // 用途筛选的位掩码，与节点的 roles 同构；0 = 不筛选，两个都选 = 要求兼具。
-  const [roleMask, setRoleMask] = useStoredState(sessionStorage, 'nodes.roleMask', 0, v => v === 0 || v === 1 || v === 2 || v === 3)
+  const [seatFilter, setSeatFilter] = useStoredState(sessionStorage, 'nodes.seatFilter', 0, v => v === 0 || v === 1 || v === 2 || v === 3)
   const [sort, setSort] = useStoredState(sessionStorage, 'nodes.sort', UNSORTED, isSort)
   // 按速度排序时用点击那一刻的速度：速度每秒都在变，按实时值排序行会不停换位。
   const [speedSnap, setSpeedSnap] = useState(null)
@@ -155,7 +155,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
   const inTab = tab === 'composite' ? composite : single
   const q = search.trim().toLowerCase()
   const matched = inTab
-    .filter(n => !roleMask || (rolesOf(n) & roleMask) === roleMask)
+    .filter(n => !seatFilter || (seatsOf(n) & seatFilter) === seatFilter)
     .filter(n => !q || (n.name || '').toLowerCase().includes(q))
 
   const trafficOf = n => Number(rawTraffic[n.id] || 0)
@@ -188,7 +188,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
     }
   })
   // 排序、搜索或筛选生效时，屏幕上的顺序不是保存的顺序，调序没有意义。
-  const canReorder = !sort.col && !q && !roleMask
+  const canReorder = !sort.col && !q && !seatFilter
   const moveTo = (id, to) => {
     const from = rows.findIndex(n => n.id === id)
     if (from < 0 || from === to) return
@@ -238,7 +238,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
       </Empty>
     )
   } else if (rows.length === 0) {
-    body = <Empty title="没有匹配的节点" desc={roleMask ? '换一个关键词，或取消上面的用途筛选。' : '换一个关键词试试。'} />
+    body = <Empty title="没有匹配的节点" desc={seatFilter ? '换一个关键词，或取消上面的用途筛选。' : '换一个关键词试试。'} />
   } else if (isMobile) {
     body = (
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -249,7 +249,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
               <NodeStatus node={n} />
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-small text-ink-soft">
-              <span className="inline-flex gap-1"><RoleTags node={n} /></span>
+              <span className="inline-flex gap-1"><SeatTags node={n} /></span>
               <span>{fmtBytes(trafficOf(n))}</span>
               {speeds[n.id] && <Speed speed={speeds[n.id]} />}
             </div>
@@ -310,7 +310,7 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
                 <td>
                   <span className="inline-flex items-center gap-2">
                     <TextLink to={`/nodes/${n.id}`} tone="ink" className="font-medium" onClick={e => e.stopPropagation()}>{n.name}</TextLink>
-                    <RoleTags node={n} />
+                    <SeatTags node={n} />
                   </span>
                 </td>
                 <td><span className="inline-flex flex-wrap items-center gap-1.5"><NodeStackTags node={n} /></span></td>
@@ -357,8 +357,8 @@ function NodeTable({ data, resource, onAdd, onComposite }) {
         />
         <span className="flex items-center gap-1.5">
           <span className="text-small text-ink-mut">用途</span>
-          <ToggleChip pressed={(roleMask & ROLE_ENTRY) !== 0} onChange={() => setRoleMask(m => m ^ ROLE_ENTRY)} title="只看有入口用途的节点">入口</ToggleChip>
-          <ToggleChip pressed={(roleMask & ROLE_VIA) !== 0} onChange={() => setRoleMask(m => m ^ ROLE_VIA)} title="只看有中转用途的节点">中转</ToggleChip>
+          <ToggleChip pressed={(seatFilter & SEAT_ENTRY) !== 0} onChange={() => setSeatFilter(m => m ^ SEAT_ENTRY)} title="只看有入口用途的节点">入口</ToggleChip>
+          <ToggleChip pressed={(seatFilter & SEAT_VIA) !== 0} onChange={() => setSeatFilter(m => m ^ SEAT_VIA)} title="只看有中转用途的节点">中转</ToggleChip>
         </span>
       </Toolbar>
       {body}

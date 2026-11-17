@@ -6,37 +6,43 @@ import (
 	"nft-forward/internal/chain"
 )
 
-// NodeSeats 把节点行上的两处设置换算成它在链里可以占的位置：角色掩码 roles 给出
-// 入口与中转，no_direct_exit 取反给出链尾。这是“库里怎么存”到 chain.Seat 的唯一
+// SettableSeats 是节点行（nodes.seats）与授权行（user_nodes.seats）上能存的位置：
+// 入口与中转。链尾资格不存在这两列里，它由 nodes.no_direct_exit 取反得出，而且看的
+// 是链尾那台物理机器、不能按授权覆盖（见 chain.Seat）。写这两列的接口用它拒绝别的
+// 位；读的一侧（NodeSeats、GrantSeats）也用它屏蔽，所以列里即使混进了别的位，也不会
+// 被当成链尾资格放出去。
+const SettableSeats = chain.SeatEntry | chain.SeatVia
+
+// NodeSeats 把节点行上的两处设置合成它在链里可以占的位置：seats 列给出入口与中转，
+// no_direct_exit 取反给出链尾。这是“库里怎么存”到链路推导所用的 chain.Seat 的唯一
 // 换算，LoadTopology 用它填每个节点的 Seats。
-func NodeSeats(roles int64, noDirectExit bool) chain.Seat {
-	var seats chain.Seat
-	if roles&NodeRoleEntry != 0 {
-		seats |= chain.SeatEntry
-	}
-	if roles&NodeRoleVia != 0 {
-		seats |= chain.SeatVia
-	}
+func NodeSeats(stored chain.Seat, noDirectExit bool) chain.Seat {
+	seats := stored & SettableSeats
 	if !noDirectExit {
 		seats |= chain.SeatExit
 	}
 	return seats
 }
 
-// GrantSeats 把一条授权上的角色掩码换算成对节点入口/中转资格的覆盖。roles 为 0
+// GrantSeats 把一条授权上的 seats 列换算成对节点入口/中转资格的覆盖。stored 为 0
 // 表示这条授权不覆盖、沿用节点自身的资格，此时 overrides 为 false。覆盖值整体取代
 // 节点自身的入口/中转资格（可以多出、也可以少掉某一位），不涉及链尾资格。
-func GrantSeats(roles int64) (seats chain.Seat, overrides bool) {
-	if roles == 0 {
+func GrantSeats(stored chain.Seat) (seats chain.Seat, overrides bool) {
+	if stored == 0 {
 		return 0, false
 	}
-	if roles&NodeRoleEntry != 0 {
-		seats |= chain.SeatEntry
+	return stored & SettableSeats, true
+}
+
+// EffectiveSeats 给出一条授权下被授权人能把节点当什么用（只含入口与中转）：授权上
+// 有覆盖就取覆盖值，没有就取节点自己的。“有没有覆盖、覆盖成什么”取自 GrantSeats，
+// 链路推导拿到的覆盖（rulechange 的 ownerSeats 填进 chain.Request.SeatOverrides）
+// 也取自它，所以接口展示的资格与建规则时判定的资格出自同一处。
+func EffectiveSeats(node, grant chain.Seat) chain.Seat {
+	if seats, overrides := GrantSeats(grant); overrides {
+		return seats
 	}
-	if roles&NodeRoleVia != 0 {
-		seats |= chain.SeatVia
-	}
-	return seats, true
+	return node & SettableSeats
 }
 
 // LoadTopology 读出链路推导（internal/chain）要用的拓扑快照：全部节点、组合的成员
@@ -79,7 +85,7 @@ func topologyOf(nodes []*Node, hops []*NodeHop, bindings []*NodeBinding) chain.T
 		topo.Nodes[n.ID] = chain.Node{
 			ID: n.ID, Name: n.Name,
 			Composite: n.NodeType == "composite",
-			Seats:     NodeSeats(n.Roles, n.NoDirectExit),
+			Seats:     NodeSeats(n.Seats, n.NoDirectExit),
 		}
 	}
 	for _, h := range hops {

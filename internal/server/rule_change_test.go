@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"nft-forward/internal/chain"
 	"nft-forward/internal/db"
 	"nft-forward/internal/nft"
 	"nft-forward/internal/wsproto"
@@ -323,13 +324,13 @@ func TestNodeSideCreateObeysTheNodesSeats(t *testing.T) {
 		t.Fatalf("禁止直接转发的节点从节点侧也不能建单跳规则，实际 %+v", ack)
 	}
 	_ = db.UpdateNodeNoDirectExit(e.d, node.ID, false)
-	if err := db.UpdateNodeRoles(e.d, node.ID, db.NodeRoleVia); err != nil {
+	if err := db.UpdateNodeSeats(e.d, node.ID, chain.SeatVia); err != nil {
 		t.Fatal(err)
 	}
 	if ack := create(); ack.OK || !strings.Contains(ack.Error, "不是入口") {
 		t.Fatalf("不是入口的节点从节点侧也不能建规则，实际 %+v", ack)
 	}
-	_ = db.UpdateNodeRoles(e.d, node.ID, db.NodeRoleEntry|db.NodeRoleVia)
+	_ = db.UpdateNodeSeats(e.d, node.ID, chain.SeatEntry|chain.SeatVia)
 	if ack := create(); !ack.OK {
 		t.Fatalf("恢复之后应能建，实际被拒: %s", ack.Error)
 	}

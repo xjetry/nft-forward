@@ -46,7 +46,7 @@ func TestApplyGrantsOverwritesCapsAndKeepsTheRest(t *testing.T) {
 	if err := GrantNode(d, other, nid, 3, 100); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes=42, roles=2, rate_limit_mbytes=9 WHERE user_id=? AND node_id=?`, uid, nid); err != nil {
+	if _, err := d.Exec(`UPDATE user_nodes SET traffic_used_bytes=42, seats=2, rate_limit_mbytes=9 WHERE user_id=? AND node_id=?`, uid, nid); err != nil {
 		t.Fatal(err)
 	}
 	before, err := GrantShapes(d)
@@ -75,7 +75,7 @@ func TestApplyGrantsOverwritesCapsAndKeepsTheRest(t *testing.T) {
 	if g.MaxRules != 7 || g.TrafficQuotaBytes != 500 || g.RateLimitMBytes != 4 {
 		t.Fatalf("caps not overwritten: %+v", g)
 	}
-	if g.TrafficUsedBytes != 42 || g.Roles != 2 {
+	if g.TrafficUsedBytes != 42 || g.Seats != 2 {
 		t.Fatalf("usage and roles must survive an overwrite: %+v", g)
 	}
 }
