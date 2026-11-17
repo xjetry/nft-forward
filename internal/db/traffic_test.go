@@ -124,7 +124,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 
 	// reset_days=0 means never reset
 	u, _ := GetUserByID(d, uid)
-	reset, _ := CheckAndResetTrafficCycle(d, u)
+	reset, _, _ := CheckAndResetTrafficCycle(d, u)
 	if reset {
 		t.Fatal("reset_days=0 should not trigger reset")
 	}
@@ -136,7 +136,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	d.Exec(`UPDATE user_nodes SET traffic_used_bytes=traffic_used_bytes+? WHERE user_id=? AND node_id=?`, 8888, uid, nid)
 
 	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
+	reset, _, _ = CheckAndResetTrafficCycle(d, u)
 	if !reset {
 		t.Fatal("should have reset after 31 days with 30-day cycle")
 	}
@@ -152,7 +152,7 @@ func TestCheckAndResetTrafficCycle(t *testing.T) {
 	// calling again in the same cycle should not reset
 	d.Exec(`UPDATE users SET traffic_used_bytes=traffic_used_bytes+? WHERE id=?`, 100, uid)
 	u, _ = GetUserByID(d, uid)
-	reset, _ = CheckAndResetTrafficCycle(d, u)
+	reset, _, _ = CheckAndResetTrafficCycle(d, u)
 	if reset {
 		t.Fatal("should not reset again in same cycle")
 	}
@@ -371,7 +371,7 @@ func TestTrafficResetLiftsOnlyTheOverQuotaBan(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reset, err := CheckAndResetTrafficCycle(d, u)
+			reset, _, err := CheckAndResetTrafficCycle(d, u)
 			if err != nil || !reset {
 				t.Fatalf("cycle reset did not happen: reset=%v err=%v", reset, err)
 			}
@@ -425,7 +425,7 @@ func TestCycleResetAndBanLiftAreOneTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reset, err := CheckAndResetTrafficCycle(d, u); err == nil || reset {
+	if reset, _, err := CheckAndResetTrafficCycle(d, u); err == nil || reset {
 		t.Fatalf("want an error and no reset, got reset=%v err=%v", reset, err)
 	}
 	u, err = GetUserByID(d, uid)

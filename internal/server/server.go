@@ -34,6 +34,10 @@ type Server struct {
 	// nodeRolesMu serializes apiSetNodeRoles' read-modify-write of the
 	// "node_roles" settings row.
 	nodeRolesMu sync.Mutex
+	// pushInline makes redispatchNodes push on the caller's goroutine instead
+	// of one goroutine per node. Tests set it, so that a push's statements
+	// are issued where they can be counted and failed like the caller's own.
+	pushInline bool
 }
 
 func New(d *sql.DB) (*Server, error) {
@@ -78,16 +82,21 @@ func (s *Server) expiryEnforcer() {
 		case <-s.stopExpiry:
 			return
 		case <-ticker.C:
-			nodes, err := db.ExpiredUserNodeIDs(s.DB)
-			if err != nil {
-				log.Printf("expiry: query expired-user nodes: %v", err)
-				continue
-			}
-			for _, n := range nodes {
-				if err := s.dispatchToNode(n); err != nil {
-					log.Printf("expiry: re-dispatch node %d: %v", n, err)
-				}
-			}
+			s.expiryPass()
+		}
+	}
+}
+
+// expiryPass is one round of expiryEnforcer.
+func (s *Server) expiryPass() {
+	nodes, err := db.ExpiredUserNodeIDs(s.DB)
+	if err != nil {
+		log.Printf("expiry: query expired-user nodes: %v", err)
+		return
+	}
+	for _, n := range nodes {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("expiry: re-dispatch node %d: %v", n, err)
 		}
 	}
 }
@@ -113,35 +122,36 @@ func (s *Server) cycleResetEnforcer() {
 		case <-s.stopCycle:
 			return
 		case <-ticker.C:
-			users, err := db.ListUsers(s.DB)
-			if err != nil {
-				log.Printf("cycle: list users: %v", err)
-				continue
-			}
-			for _, u := range users {
-				if u.TrafficResetDays <= 0 {
-					continue
-				}
-				reset, err := db.CheckAndResetTrafficCycle(s.DB, u)
-				if err != nil {
-					log.Printf("cycle: check reset for user %d: %v", u.ID, err)
-					continue
-				}
-				if !reset {
-					continue
-				}
-				// Quota exclusions are evaluated at push time only; a fresh
-				// cycle must re-push or suppressed rules stay dead.
-				nodes, err := db.DistinctUserNodes(s.DB, u.ID)
-				if err != nil {
-					log.Printf("cycle: user %d was reset but its nodes could not be listed for re-dispatch: %v", u.ID, err)
-					continue
-				}
-				for _, n := range nodes {
-					if err := s.dispatchToNode(n); err != nil {
-						log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
-					}
-				}
+			s.cycleResetPass()
+		}
+	}
+}
+
+// cycleResetPass is one round of cycleResetEnforcer.
+func (s *Server) cycleResetPass() {
+	users, err := db.ListUsers(s.DB)
+	if err != nil {
+		log.Printf("cycle: list users: %v", err)
+		return
+	}
+	for _, u := range users {
+		if u.TrafficResetDays <= 0 {
+			continue
+		}
+		// A reset comes with the nodes to re-push, or does not happen
+		// (db.CheckAndResetTrafficCycle); one that failed is due again on
+		// the next pass.
+		reset, nodes, err := db.CheckAndResetTrafficCycle(s.DB, u)
+		if err != nil {
+			log.Printf("cycle: check reset for user %d: %v", u.ID, err)
+			continue
+		}
+		if !reset {
+			continue
+		}
+		for _, n := range nodes {
+			if err := s.dispatchToNode(n); err != nil {
+				log.Printf("cycle: re-dispatch node %d for user %d: %v", n, u.ID, err)
 			}
 		}
 	}
@@ -203,16 +213,15 @@ func (s *Server) enforceUserQuota(userID int64) {
 	if u.Disabled || u.TrafficQuotaBytes <= 0 || u.TrafficUsedBytes < u.TrafficQuotaBytes {
 		return
 	}
-	if err := db.SetUserDisabled(s.DB, userID, true, db.DisableReasonOverQuota); err != nil {
+	// Disabling comes with the nodes to re-push, or does not happen
+	// (db.DisableUserOverQuota). A user left enabled here is still over
+	// quota at the next counters batch, which brings this function back.
+	nodes, err := db.DisableUserOverQuota(s.DB, userID)
+	if err != nil {
 		log.Printf("quota: disable user %d: %v", userID, err)
 		return
 	}
 	log.Printf("user %d disabled: traffic quota reached (%d/%d bytes)", userID, u.TrafficUsedBytes, u.TrafficQuotaBytes)
-	nodes, err := db.DistinctUserNodes(s.DB, userID)
-	if err != nil {
-		log.Printf("quota: user %d nodes: %v", userID, err)
-		return
-	}
 	for _, n := range nodes {
 		if err := s.dispatchToNode(n); err != nil {
 			log.Printf("quota: re-dispatch node %d after disabling user %d: %v", n, userID, err)
@@ -349,12 +358,17 @@ func (s *Server) dispatchAfterFanout(w http.ResponseWriter, nodeIDs []int64, act
 // redispatchNodes re-pushes kernel state to every node a background (WS-driven)
 // rule mutation touched. Dispatches run off the caller's goroutine.
 func (s *Server) redispatchNodes(nodeIDs []int64) {
+	push := func(n int64) {
+		if err := s.dispatchToNode(n); err != nil {
+			log.Printf("dispatch node %d (规则变更): %v", n, err)
+		}
+	}
 	for _, n := range nodeIDs {
-		go func(n int64) {
-			if err := s.dispatchToNode(n); err != nil {
-				log.Printf("dispatch node %d (规则变更): %v", n, err)
-			}
-		}(n)
+		if s.pushInline {
+			push(n)
+		} else {
+			go push(n)
+		}
 	}
 }
 

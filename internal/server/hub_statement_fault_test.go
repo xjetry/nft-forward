@@ -43,6 +43,21 @@ type frameRun struct {
 	failedStack []string             // see statementScript.failedStack
 	// before and after are snapshot's view of the database around the frame.
 	before, after map[string]string
+	// redispatched receives each list of nodes the hub handed to Redispatch.
+	// The hub does that on a goroutine of its own, so a list can arrive
+	// after the frame has been handled (awaitRedispatch).
+	redispatched chan []int64
+}
+
+// awaitRedispatch returns the next list of nodes handed to Redispatch, or nil
+// if none arrives within wait.
+func (r frameRun) awaitRedispatch(wait time.Duration) []int64 {
+	select {
+	case nodes := <-r.redispatched:
+		return nodes
+	case <-time.After(wait):
+		return nil
+	}
 }
 
 const frameID = "frame-1"
@@ -50,16 +65,19 @@ const frameID = "frame-1"
 // runNodeFrame has the hub handle f on a fresh copy of the seeded database,
 // failing where fault says in the statements the handling issues.
 //
-// Re-dispatch and quota enforcement are switched off: the hub hands both to
-// other goroutines, whose statements the script does not count, and which
-// would still be running when the database is closed.
+// Re-dispatch and quota enforcement do not run: the hub hands both to other
+// goroutines, whose statements the script does not count, and which would
+// still be running when the database is closed. What is handed to Redispatch
+// is kept (frameRun.redispatched); what those pieces do with the database is
+// TestBackgroundWorkLeavesNoNodeSilentlyOutOfStep's subject.
 func runNodeFrame(seed faultSeed, path string, f nodeFrame, fault faultAt, snapshot func(*sql.DB) (map[string]string, error)) (frameRun, error) {
 	s, script, release, err := openFaulted(seed, path)
 	if err != nil {
 		return frameRun{}, err
 	}
 	defer release()
-	s.Hub.Redispatch = func([]int64) {}
+	redispatched := make(chan []int64, 8)
+	s.Hub.Redispatch = func(nodes []int64) { redispatched <- nodes }
 	s.Hub.OnTrafficUpdate = nil
 
 	typ, payload, err := f.prepare(s, seed)
@@ -70,7 +88,7 @@ func runNodeFrame(seed faultSeed, path string, f nodeFrame, fault faultAt, snaps
 	if err != nil {
 		return frameRun{}, err
 	}
-	run := frameRun{}
+	run := frameRun{redispatched: redispatched}
 	if run.before, err = snapshot(s.DB); err != nil {
 		return frameRun{}, err
 	}
@@ -386,12 +404,12 @@ var countersSurvives = map[string]struct {
 	// the batch is recorded on top of the cycle's usage so far.
 	unreset bool
 }{
-	"nft-forward/internal/db.SegmentFirstHops":          {without: "user_nodes"},
-	"nft-forward/internal/db.PresentLandingExitSet":     {without: "user_landing_exits"},
-	"nft-forward/internal/db.MaxHopPositions":           {without: "user_landing_exits"},
+	"nft-forward/internal/db.SegmentFirstHops":      {without: "user_nodes"},
+	"nft-forward/internal/db.PresentLandingExitSet": {without: "user_landing_exits"},
+	"nft-forward/internal/db.MaxHopPositions":       {without: "user_landing_exits"},
+	// The nodes to re-push after a reset are read inside it, so failing to
+	// read them is one more way for the reset not to happen.
 	"nft-forward/internal/db.CheckAndResetTrafficCycle": {unreset: true},
-	// Lists the nodes to re-push after a reset that has already happened.
-	"nft-forward/internal/db.DistinctUserNodes": {},
 }
 
 // A counters batch carries bytes that are reported once: what the panel does
@@ -522,9 +540,36 @@ func TestCountersBatchRecordsItsBytesInFullOrNotAtAllPerLedger(t *testing.T) {
 	// With a reset in the picture, only the statements that belong to the
 	// reset are new; the others are the ones the first frame already fails,
 	// and their outcome here is the same one shifted by the reset.
-	check(entryResetDue, func(fn string) bool {
-		return fn == "nft-forward/internal/db.CheckAndResetTrafficCycle" || fn == "nft-forward/internal/db.DistinctUserNodes"
-	}, full[entry.name])
+	const resetFn = "nft-forward/internal/db.CheckAndResetTrafficCycle"
+	check(entryResetDue, func(fn string) bool { return fn == resetFn }, full[entry.name])
+
+	// A reset reaches the nodes only by re-pushing them, so the two go
+	// together: the user's nodes are handed to Redispatch when the reset
+	// happens, and only then.
+	wantNodes := []int64{seed.nodeID, seed.viaID}
+	sort.Slice(wantNodes, func(i, j int) bool { return wantNodes[i] < wantNodes[j] })
+	got := full[entryResetDue.name].awaitRedispatch(5 * time.Second)
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	if !reflect.DeepEqual(got, wantNodes) {
+		t.Errorf("%s: with nothing failing, Redispatch got %v, want the nodes of the owner's rules %v", entryResetDue.name, got, wantNodes)
+	}
+	if got := full[entry.name].awaitRedispatch(100 * time.Millisecond); got != nil {
+		t.Errorf("%s: no reset is due, but Redispatch got %v", entry.name, got)
+	}
+	resetFailures := 0
+	for _, fault := range everyFault(len(full[entryResetDue.name].stmts)) {
+		r := run(entryResetDue, fault)
+		if r.failed == "" || firstOf(r.failedStack, countersSurvives) != resetFn {
+			continue
+		}
+		resetFailures++
+		if got := r.awaitRedispatch(100 * time.Millisecond); got != nil {
+			t.Errorf("%s, failed statement %d: %s\n    the reset did not happen, but Redispatch got %v", entryResetDue.name, fault.stmt, r.failed, got)
+		}
+	}
+	if resetFailures < 3 {
+		t.Errorf("only %d failures inside the reset were checked for a re-push", resetFailures)
+	}
 
 	for fn := range countersSurvives {
 		if !exercised[fn] {

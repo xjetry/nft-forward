@@ -883,21 +883,18 @@ func (h *Hub) applyCounters(nodeID int64, samples []wsproto.CounterSample) {
 				}
 				userCache[userID] = u
 				if u != nil {
-					reset, err := db.CheckAndResetTrafficCycle(h.DB, u)
+					// A reset comes with the nodes to re-push, or does not
+					// happen (db.CheckAndResetTrafficCycle).
+					reset, nodes, err := db.CheckAndResetTrafficCycle(h.DB, u)
 					if err != nil {
 						// Not fatal to the batch: the reset is due until it
 						// happens, and the cycle enforcer checks it as well.
 						log.Printf("hub: node %d check traffic cycle for user %d: %v", nodeID, userID, err)
 					}
-					if reset && h.Redispatch != nil {
+					if reset && len(nodes) > 0 && h.Redispatch != nil {
 						// Quota exclusions are evaluated at push time only; a
 						// fresh cycle must re-push or suppressed rules stay dead.
-						nodes, err := db.DistinctUserNodes(h.DB, userID)
-						if err != nil {
-							log.Printf("hub: user %d was reset but its nodes could not be listed for re-dispatch: %v", userID, err)
-						} else {
-							go h.Redispatch(nodes)
-						}
+						go h.Redispatch(nodes)
 					}
 				}
 			}

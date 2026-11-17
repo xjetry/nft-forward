@@ -69,27 +69,24 @@ func dedupLandingNodes(nodes []landing.Node) []landing.Node {
 }
 
 // syncLandingExits materializes a successfully resolved landing set and
-// re-pushes any exits whose push-exclusion state flipped with presence —
-// excluded rules generate no traffic, so no counters-driven path would ever
-// revive them. An error means the ledger was not brought up to date.
+// re-pushes the nodes of any exits whose push-exclusion state flipped with
+// presence — excluded rules generate no traffic, so no counters-driven path
+// would ever revive them. The nodes come out of the sync's own transaction
+// (db.SyncUserLandingExits); only pushing them is left to do afterwards. An
+// error means the ledger was not brought up to date.
 func (s *Server) syncLandingExits(u *db.User, nodes []landing.Node) error {
 	deduped := dedupLandingNodes(nodes)
 	exits := make([]db.LandingExitInput, 0, len(deduped))
 	for _, n := range deduped {
 		exits = append(exits, db.LandingExitInput{Host: n.Host, Port: n.Port, Name: n.Name, Protocol: n.Protocol, URI: n.URI})
 	}
-	flipped, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
+	repush, synced, err := db.SyncUserLandingExits(s.DB, u.ID, exits, u.LandingSubURL, u.LandingURIs)
 	if err != nil {
 		return err
 	}
-	if !synced || len(flipped) == 0 {
-		return nil
+	if synced {
+		s.redispatchNodes(repush)
 	}
-	go func() {
-		for _, k := range flipped {
-			s.redispatchUserExit(u.ID, k.Host, k.Port)
-		}
-	}()
 	return nil
 }
 
@@ -105,8 +102,31 @@ func (s *Server) refreshLandingLedger(u *db.User, nodes []landing.Node) {
 	}
 }
 
+// repushUserExit re-pushes, for a request that has just changed a landing
+// exit's ledger, the nodes carrying rules that exit there. It reports
+// whether the request can still be answered as done: if the nodes cannot be
+// listed it answers the request itself (500, opening with stored — what was
+// stored, such as "配额已保存") and returns false.
+//
+// The change is stored by then and only pushing is outstanding, which is
+// what the answer says; the call is declarative, so repeating it pushes.
+// Listing happens here, on the request's goroutine, because the admin is the
+// only one who can be told; the pushes themselves are handed off
+// (redispatchNodes), and a push that fails is recorded on its node.
+func (s *Server) repushUserExit(w http.ResponseWriter, stored string, userID int64, host string, port int) bool {
+	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, stored+"，但没能确定需要重新下发的节点: "+err.Error())
+		return false
+	}
+	s.redispatchNodes(nodes)
+	return true
+}
+
 // redispatchUserExit re-pushes every node carrying rules that exit to the
 // given landing exit so a changed ledger/quota state reaches the data plane.
+// It is for work nobody is waiting on (enforceExitQuota): a failure to list
+// the nodes is logged, and the exit is still over quota the next time.
 func (s *Server) redispatchUserExit(userID int64, host string, port int) {
 	nodes, err := db.NodesForUserExit(s.DB, userID, host, port)
 	if err != nil {
@@ -335,13 +355,13 @@ func (s *Server) apiSetLandingExitQuota(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
-	// A lowered quota may start excluding immediately; a raised/cleared one
-	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
-	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
-	}
 	db.WriteAudit(s.DB, u.ID, "user.set_exit_quota", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d bytes=%d", body.Host, body.Port, body.QuotaBytes))
+	// A lowered quota may start excluding immediately; a raised/cleared one
+	// lifts the exclusion. Residual rows sit outside the exclusion — no push.
+	if present && !s.repushUserExit(w, "配额已保存", id, body.Host, body.Port) {
+		return
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 
@@ -366,11 +386,11 @@ func (s *Server) apiResetLandingExitTraffic(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusNotFound, "出口不存在")
 		return
 	}
-	if present {
-		go s.redispatchUserExit(id, body.Host, body.Port)
-	}
 	db.WriteAudit(s.DB, u.ID, "user.reset_exit_traffic", strconv.FormatInt(id, 10),
 		fmt.Sprintf("%s:%d", body.Host, body.Port))
+	if present && !s.repushUserExit(w, "用量已重置", id, body.Host, body.Port) {
+		return
+	}
 	jsonOK(w, map[string]any{"ok": true})
 }
 

@@ -59,10 +59,17 @@ type UserExitKey struct {
 // enforcing and usage survives. quota/used are never touched here. srcSubURL/srcURIs
 // are the source values the resolution ran against: if the users row no
 // longer matches (the admin changed the source during a slow subscription
-// fetch), the stale result is discarded with synced=false. The returned keys
-// flipped presence while at/over quota — their push-exclusion state changed,
-// so the caller must re-dispatch the rules pointed at them.
-func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, srcSubURL, srcURIs string) (flipped []LandingExitKey, synced bool, err error) {
+// fetch), the stale result is discarded with synced=false.
+//
+// An exit that flips presence while at/over quota changes which rules are
+// excluded from a push, and that reaches a node only when it is pushed
+// again. repush is the nodes carrying rules that exit to such an exit, read
+// in the transaction that flips them: if they cannot be read nothing is
+// synced, and the next sync finds the same exits to flip. Read afterwards, a
+// failure would leave the flip stored and the nodes untold, with nothing for
+// the next sync to notice.
+func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, srcSubURL, srcURIs string) (repush []int64, synced bool, err error) {
+	var flipped []LandingExitKey
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, false, err
@@ -146,10 +153,23 @@ func SyncUserLandingExits(d *sql.DB, userID int64, exits []LandingExitInput, src
 			flipped = append(flipped, k)
 		}
 	}
+	seen := map[int64]bool{}
+	for _, k := range flipped {
+		nodes, err := NodesForUserExit(tx, userID, k.Host, k.Port)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, n := range nodes {
+			if !seen[n] {
+				seen[n] = true
+				repush = append(repush, n)
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
-	return flipped, true, nil
+	return repush, true, nil
 }
 
 const landingExitCols = `user_id, host, port, name, name_override, protocol, uri, present, quota_bytes, used_bytes, used_bytes_up, used_bytes_down, updated_at`
@@ -322,7 +342,7 @@ func ExitsExceedingQuota(d *sql.DB, userID int64) ([]LandingExitKey, error) {
 // that exit to host:port. Composite entries are already expanded into physical
 // hops in rule_hops; composite virtual nodes have no agent connection and must
 // never enter a dispatch set.
-func NodesForUserExit(d *sql.DB, userID int64, host string, port int) ([]int64, error) {
+func NodesForUserExit(d DBTX, userID int64, host string, port int) ([]int64, error) {
 	return queryInt64s(d, `
 		SELECT DISTINCT rh.node_id
 		FROM rule_hops rh

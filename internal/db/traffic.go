@@ -161,45 +161,77 @@ func SegmentFirstHops(d *sql.DB, ruleIDs []int64) (map[int64]map[int]int64, erro
 //
 // The over-quota ban is lifted in the same transaction (liftOverQuotaBan).
 //
+// A reset reaches the nodes only by re-pushing them: quota exclusions are
+// evaluated when a ruleset is built, so the rules a quota suppressed stay off
+// a node until it is pushed again. The nodes to push are therefore read in
+// the transaction that resets, and returned with it. Were they read
+// afterwards, a failure to read them would leave the reset stored with
+// nobody told, and the next check would find no reset due.
+//
 // traffic_reset_days == 0 means the user is never auto-reset.
 // The window is anchored to the account creation date so the cycle boundary is
 // predictable (e.g. "every 30 days from account open date").
-func CheckAndResetTrafficCycle(d *sql.DB, u *User) (bool, error) {
+func CheckAndResetTrafficCycle(d *sql.DB, u *User) (reset bool, repush []int64, err error) {
 	if u.TrafficResetDays <= 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	nowTs := time.Now().Unix()
 	period := int64(u.TrafficResetDays) * 86400
 	var createdAt int64
 	if err := d.QueryRow(`SELECT created_at FROM users WHERE id=?`, u.ID).Scan(&createdAt); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	elapsed := nowTs - createdAt
 	if elapsed < 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	cycleStart := createdAt + (elapsed/period)*period
 	if u.LastTrafficResetAt >= cycleStart {
-		return false, nil
+		return false, nil, nil
 	}
-	tx, err := d.Begin()
+	err = inTx(d, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0, last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
+			return err
+		}
+		if err := liftOverQuotaBan(tx, u.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, u.ID); err != nil {
+			return err
+		}
+		var err error
+		repush, err = DistinctUserNodes(tx, u.ID)
+		return err
+	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET traffic_used_bytes = 0, last_traffic_reset_at = ? WHERE id=?`, nowTs, u.ID); err != nil {
-		return false, err
+	return true, repush, nil
+}
+
+// DisableUserOverQuota disables a user for having reached the traffic quota
+// and returns the nodes its rules are on. A disabled user's rules leave a
+// node only when the node is pushed again, so the nodes are read in the
+// transaction that disables: if they cannot be read the user is not
+// disabled, and the caller — which acts on a user that is over quota and not
+// yet disabled — finds the same thing to do the next time.
+func DisableUserOverQuota(d *sql.DB, userID int64) ([]int64, error) {
+	var repush []int64
+	err := inTx(d, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE users SET disabled=1, disable_reason=? WHERE id=?`, DisableReasonOverQuota, userID); err != nil {
+			return err
+		}
+		var err error
+		repush, err = DistinctUserNodes(tx, userID)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	if err := liftOverQuotaBan(tx, u.ID); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(`UPDATE user_nodes SET traffic_used_bytes = 0 WHERE user_id=?`, u.ID); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(`UPDATE user_landing_exits SET used_bytes = 0, used_bytes_up = 0, used_bytes_down = 0 WHERE user_id=?`, u.ID); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
+	return repush, nil
 }
 
 // NodesExceedingQuota returns the IDs of nodes where the user's per-grant
