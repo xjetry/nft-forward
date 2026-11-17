@@ -1,119 +1,129 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
-import { api } from '../../lib/api'
-import { Layout, useToast, useBlur, useUser } from '../../components/Layout'
-import { Loading, Empty, CopyText, SensText, Badge } from '../../components/ui'
-import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../../components/page'
-import { parseURIs, mergeLanding, loadLocalURIs, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING } from '../../lib/landing'
+import { useMemo, useState } from 'react'
 import { fmtTrafficGB } from '../../lib/fmt'
+import { hostPortKey } from '../../lib/landing'
+import { useLandingCatalog } from '../../lib/useLandingCatalog'
+import { Page, PageHeader, SearchInput, TableScroll, Toolbar } from '../../components/page'
+import { useBlur } from '../../components/prefs'
+import { ResourceView } from '../../components/ResourceView'
+import { useUser } from '../../components/session'
+import { Alert, Badge, Button, Card, CopyText, Empty, IconRefresh, SensText, Tag, useAction, useToast } from '../../components/ui'
 
-/* Landing-nodes nav: lists the nodes available to the user — the admin-assigned
-   ones (resolved server-side from a subscription and/or URIs) plus the user's
-   own browser-local URIs — each with a one-click copy of its original (direct)
-   proxy URI. The user's own URIs win on a host:port collision. The refresh
-   button appears only for a dynamic source (a subscription URL); local URIs are
-   edited on the overview page. */
+/* 落地节点页：当前用户可以选作规则出口的节点 —— 目录里的 landing，即生效
+   角色含“落地”的节点。来源可以是管理员分配，也可以是用户自己添加（手动
+   填写或订阅）；同一个地址两边都有时，目录保留用户自己的那份。 */
 export default function MyLandingNodes() {
-  const [serverNodes, setServerNodes] = useState(null)
-  const [roles, setRoles] = useState(null)
-  const [hasDynamic, setHasDynamic] = useState(false)
-  const [stale, setStale] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const [search, setSearch] = useState('')
-  const toast = useToast()
-  const blurred = useBlur()
   const { user } = useUser()
+  const catalog = useLandingCatalog(user)
+  const toast = useToast()
+  const data = catalog.state.status === 'ready' ? catalog.state.data : null
 
-  const localNodes = useMemo(
-    () => parseURIs(loadLocalURIs(user?.username)).map(n => ({ ...n, source: 'local' })),
-    [user])
-
-  const load = (refresh = false) => {
-    if (refresh) setRefreshing(true)
-    api.get(`/my/landing-nodes${refresh ? '?refresh=1' : ''}`)
-      .then(d => {
-        setServerNodes((d?.nodes || []).map(n => ({ ...n, source: 'admin' })))
-        setHasDynamic(!!d?.has_dynamic)
-        setStale(!!d?.stale)
-      })
-      .catch(console.error)
-      .finally(() => setRefreshing(false))
-  }
-  useEffect(() => {
-    load(false)
-    fetchNodeRoles().then(sr => setRoles({ ...sr, ...loadLocalRoles(user?.username) }))
-  }, [])
-
-  if (serverNodes === null || roles === null) return <Layout><Loading /></Layout>
-
-  const refresh = () => { load(true); toast('已刷新订阅') }
-
-  /* Quotas are enforced per host:port regardless of which URI won the merge,
-     so the ledger lookup must not depend on the row's source: a user pasting
-     their own copy of an admin-assigned node keeps seeing its quota. */
-  const ledger = new Map((serverNodes || []).map(n => [`${n.host}:${n.port}`, n]))
-
-  const allNodes = mergeLanding(localNodes, serverNodes)
-  const nodes = allNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING))
-
-  const q = search.trim().toLowerCase()
-  const filtered = !q ? nodes : nodes.filter(n =>
-    [n.name, n.protocol, `${n.host}:${n.port}`].some(v => (v || '').toLowerCase().includes(q)))
+  // 管理员分配的来源里有订阅时，让面板重新抓取一次。面板抓取失败时接口
+  // 仍然成功返回，只是带 stale —— 那是上一次的结果，不能报成“已刷新”。
+  const refresh = useAction(async () => {
+    const { stale } = await catalog.refreshAssigned()
+    if (stale) toast('管理员分配的订阅没有刷新成功，仍显示上次的结果', 'error')
+    else toast('分配的节点已刷新')
+  })
 
   return (
-    <Layout>
-      <div className="user-page h-full flex flex-col">
-      <PageHeader title="落地节点" count={nodes.length} unit="个" />
-      <Panel fill className="user-panel">
-        <PanelToolbar>
-          <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
-          {stale && <span className="text-xs text-amber-600 ml-2">订阅刷新失败，显示上次结果</span>}
-          {hasDynamic && (
-            <button onClick={refresh} disabled={refreshing}
-              className="btn-secondary ml-auto text-xs disabled:opacity-50">
-              {refreshing ? '刷新中…' : '刷新订阅'}
-            </button>
-          )}
-        </PanelToolbar>
-
-        <TableScroll>
-        {nodes.length === 0 ? (
-          <Empty title="暂无落地节点" desc={<>在<Link to="/my" className="text-blue-600 font-semibold">概览页</Link>添加你的代理 URI，或联系管理员配置订阅。</>} />
-        ) : filtered.length === 0 ? (
-          <Empty title="无匹配节点" desc="试试别的关键词。" />
-        ) : (
-          <table className="tbl">
-            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>已用/总量</th><th>来源</th><th className="text-right">操作</th></tr></thead>
-            <tbody>
-              {filtered.map((n, i) => (
-                <tr key={i}>
-                  <td className="font-semibold"><span className="route-name">{n.name || '(未命名)'}</span></td>
-                  <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
-                  <td className="font-mono text-xs"><SensText blurred={blurred}>{n.host}:{n.port}</SensText></td>
-                  <td className="font-mono text-xs">
-                    {(() => {
-                      const ex = ledger.get(`${n.host}:${n.port}`)
-                      if (!ex) return '—'
-                      return (
-                        <>
-                          {fmtTrafficGB(ex.used_bytes, ex.quota_bytes)}
-                          {ex.exceeded && <Badge color="red">已超额</Badge>}
-                        </>
-                      )
-                    })()}
-                  </td>
-                  <td>{n.source === 'local' ? <Badge color="blue">本地</Badge> : <Badge color="gray">分配</Badge>}</td>
-                  <td className="text-right">
-                    <CopyText text={n.uri}><span className="text-blue-600 font-sans text-xs font-semibold">复制节点</span></CopyText>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <Page fill>
+      <PageHeader
+        title="落地节点"
+        meta={<>
+          {data && <span>共 {data.landing.length} 个</span>}
+          <span>可以选作规则出口的节点：管理员分配给你的落地节点，以及你自己添加并标记为“落地”的节点。</span>
+        </>}
+        actions={data?.hasDynamic && (
+          <Button icon={<IconRefresh />} loading={refresh.pending} onClick={() => refresh.run()}>刷新分配的节点</Button>
         )}
+      />
+      <ResourceView resource={catalog}>
+        {ready => <LandingList data={ready} />}
+      </ResourceView>
+    </Page>
+  )
+}
+
+function LandingList({ data }) {
+  const blurred = useBlur()
+  const [search, setSearch] = useState('')
+
+  /* 配额账本按出口地址记，与这一行最终用的是谁的链接无关：用户自己也填了
+     一份管理员分配的节点时，目录里留下的是用户那份（source 为 local），
+     它的用量仍要按地址查到。键用 hostPortKey —— 目录去重用的就是它，手拼
+     host:port 在 IPv6 地址上会与它对不上。 */
+  const ledger = useMemo(
+    () => new Map(data.serverNodes.map(n => [hostPortKey(n.host, n.port), n])),
+    [data.serverNodes],
+  )
+
+  const q = search.trim().toLowerCase()
+  const rows = data.landing.map(node => ({ node, address: hostPortKey(node.host, node.port) }))
+  const shown = q
+    ? rows.filter(({ node, address }) => [node.name, node.protocol, address].some(v => (v || '').toLowerCase().includes(q)))
+    : rows
+
+  return (
+    <>
+      {data.stale && (
+        <Alert tone="warn" className="flex-none">
+          管理员分配的订阅上次没有刷新成功，下面显示的是此前的结果。
+        </Alert>
+      )}
+      <Card fill>
+        <Toolbar>
+          <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
+        </Toolbar>
+        <TableScroll>
+          {rows.length === 0 ? (
+            <Empty
+              title="还没有落地节点"
+              desc="落地节点来自管理员为你分配的节点，或你在概览页“我添加的节点”里添加并标记为“落地”的节点。有了落地节点，创建规则时就可以把它选作出口。"
+            >
+              <Button to="/my">去概览页添加</Button>
+            </Empty>
+          ) : shown.length === 0 ? (
+            <Empty title="没有匹配的落地节点" desc="换一个关键词试试。" />
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>协议</th>
+                  <th>地址</th>
+                  <th>来源</th>
+                  <th className="num">已用 / 配额</th>
+                  <th className="num">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(({ node, address }) => {
+                  const usage = ledger.get(address)
+                  return (
+                    <tr key={address}>
+                      <td className="font-medium">{node.name || '未命名'}</td>
+                      <td><Tag mono>{node.protocol}</Tag></td>
+                      <td className="font-mono"><SensText blurred={blurred}>{address}</SensText></td>
+                      <td><Tag>{node.source === 'local' ? '自己添加' : '管理员分配'}</Tag></td>
+                      <td className="num">
+                        {usage ? (
+                          <span className="inline-flex items-center justify-end gap-2">
+                            {usage.exceeded && <Badge tone="danger">已超额</Badge>}
+                            {fmtTrafficGB(usage.used_bytes, usage.quota_bytes)}
+                          </span>
+                        ) : (
+                          <span className="text-ink-mut">—</span>
+                        )}
+                      </td>
+                      <td className="num"><CopyText text={node.uri}>复制链接</CopyText></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </TableScroll>
-      </Panel>
-      </div>
-    </Layout>
+      </Card>
+    </>
   )
 }

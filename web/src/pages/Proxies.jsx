@@ -1,162 +1,192 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../lib/api'
-import { Layout, useToast, useBlur, useUser, useCopyFmt } from '../components/Layout'
-import { Loading, Empty, CopyText, SensText, Badge } from '../components/ui'
 import { copyToClipboard } from '../lib/clipboard'
-import { PageHeader, Panel, PanelToolbar, SearchInput, TableScroll } from '../components/page'
-import {
-  parseURIs, loadLocalURIs, loadSubCache, fetchNodeRoles, loadLocalRoles, nodeHasRole, ROLE_LANDING, ROLE_DIRECT,
-  landingIndex, splitEndpoint, rewriteEndpoint, mergeLanding,
-} from '../lib/landing'
+import { exportNames, hostPortKey, relayExportName, relayFor } from '../lib/landing'
+import { combineResources, mapResource } from '../lib/resource'
+import { useLandingCatalog } from '../lib/useLandingCatalog'
+import { useResource } from '../lib/useResource'
 import { uriToClashYaml } from '../lib/yaml-convert'
+import { Page, PageHeader, SearchInput, TableScroll, Toolbar } from '../components/page'
+import { useBlur, useCopyFmt } from '../components/prefs'
+import { ResourceView } from '../components/ResourceView'
+import { useUser } from '../components/session'
+import { Button, Card, CopyText, Empty, IconCopy, Segmented, SensText, Tag, TextLink, useAction, useToast } from '../components/ui'
+
+/* 把规则与目录推导成“可以导入客户端的代理”。
+   - 直连：目录的 direct（生效角色含“直连”的节点，目录已按地址去重），
+     客户端连的就是节点自己的地址。
+   - 中转：出口是落地节点的规则。客户端连的是规则的入口，所以地址取规则
+     入口，链接取 relayFor 把落地节点链接的端点换成入口之后的结果。双栈
+     规则有两个入口，各算一条。
+
+   exportName 是导出成 Clash 配置时用的名称（口径见 lib/landing.js 的
+   relayExportName）。exportNames 对整份列表（不是筛选后的）兜住剩余的重名，
+   所以逐条复制与“复制全部”拿到的是同一个名称。 */
+function listProxies(rules, catalog) {
+  const direct = catalog.direct.map((node) => {
+    const address = hostPortKey(node.host, node.port)
+    return { key: `direct:${address}`, kind: 'direct', name: node.name, exportBase: node.name, protocol: node.protocol, address, uri: node.uri, rule: null }
+  })
+  const relay = []
+  for (const rule of rules) {
+    const hit = relayFor(rule, catalog.landingByKey)
+    if (!hit) continue
+    const entries = [
+      { slot: 'entry', address: rule.entry, uri: hit.relay_uri, v6: false },
+      { slot: 'entry_v6', address: rule.entry_v6, uri: hit.relay_uri_v6, v6: true },
+    ]
+    for (const { slot, address, uri, v6 } of entries) {
+      // relayFor 在入口不是可解析的地址（规则还没有入口）或链接无法改写时
+      // 给出 null：这个入口没有可导入的链接。
+      if (!uri) continue
+      relay.push({ key: `relay:${rule.id}:${slot}`, kind: 'relay', name: hit.node.name, exportBase: relayExportName(hit.node.name, rule.name, v6), protocol: hit.node.protocol, address, uri, rule })
+    }
+  }
+  const list = [...direct, ...relay]
+  const names = exportNames(list.map(proxy => proxy.exportBase))
+  return list.map((proxy, i) => ({ ...proxy, exportName: names[i] }))
+}
+
+/* 复制出去的内容：偏好是 YAML 且这条链接能转成 Clash 配置时给 YAML，否则
+   给链接本身。按钮文字跟着实际给出的内容走，转不了的那几行不会写着
+   “复制 YAML”却复制出链接。 */
+function copyPayload(proxy, copyFmt) {
+  const yaml = copyFmt === 'yaml' ? uriToClashYaml(proxy.uri, proxy.exportName) : null
+  return yaml ? { text: yaml, label: '复制 YAML' } : { text: proxy.uri, label: '复制链接' }
+}
 
 export default function Proxies() {
-  const [rules, setRules] = useState(null)
-  const [serverNodes, setServerNodes] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [tab, setTab] = useState('all')
-  const { copyFmt } = useCopyFmt()
+  const { user } = useUser()
+  const isAdmin = user.role === 'admin'
+  const copyFmt = useCopyFmt()
   const blurred = useBlur()
   const toast = useToast()
-  const { user } = useUser()
+  const [search, setSearch] = useState('')
+  const [kind, setKind] = useState('all')
 
-  const isAdmin = user?.role === 'admin'
+  // /my/rules 只对普通用户开放；管理员从全部规则里取属于自己的。
+  const rules = useResource(
+    async () => (await api.get(isAdmin ? `/rules?owner_ids=${user.id}` : '/my/rules'))?.rules || [],
+    [isAdmin, user.id],
+  )
+  const catalog = useLandingCatalog(user)
+  // 规则与目录缺一不可：少了任何一份，推导出的列表都不完整，不能当成
+  // “没有代理”显示，所以两者并成一个资源，任一失败即失败。
+  const state = useMemo(
+    () => mapResource(combineResources(rules.state, catalog.state), ([ruleList, cat]) => listProxies(ruleList, cat)),
+    [rules.state, catalog.state],
+  )
+  const reload = async () => { await Promise.all([rules.reload(), catalog.reload()]) }
 
-  const [roles, setRoles] = useState({})
-
-  useEffect(() => {
-    const rulesEndpoint = isAdmin ? `/rules?owner_ids=${user?.id}` : '/my/rules'
-    const rulesP = api.get(rulesEndpoint).then(d => d?.rules || []).catch(() => [])
-    const serverP = !isAdmin
-      ? api.get('/my/landing-nodes').then(d => d?.nodes || []).catch(() => [])
-      : Promise.resolve([])
-    const rolesP = fetchNodeRoles()
-    Promise.all([rulesP, serverP, rolesP]).then(([r, s, sr]) => {
-      setRules(r); setServerNodes(s); setRoles({ ...sr, ...loadLocalRoles(user?.username) })
-    }).finally(() => setLoading(false))
-  }, [])
-
-  const manualNodes = useMemo(() => parseURIs(loadLocalURIs(user?.username)), [user])
-  const localSubNodes = useMemo(() => loadSubCache(user?.username), [user])
-
-  const allSubNodes = useMemo(() => mergeLanding(localSubNodes, serverNodes), [localSubNodes, serverNodes])
-
-  const directSub = useMemo(() => allSubNodes.filter(n => nodeHasRole(roles, n, ROLE_DIRECT)), [allSubNodes, roles])
-  const landingSub = useMemo(() => allSubNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING)), [allSubNodes, roles])
-  const directManual = useMemo(() => manualNodes.filter(n => nodeHasRole(roles, n, ROLE_DIRECT)), [manualNodes, roles])
-  const landingManual = useMemo(() => manualNodes.filter(n => nodeHasRole(roles, n, ROLE_LANDING)), [manualNodes, roles])
-
-  const allLanding = useMemo(() => {
-    const manual = landingManual.map(n => ({ ...n, source: 'local' }))
-    const sub = landingSub.map(n => ({ ...n, source: serverNodes.some(s => s.host === n.host && s.port === n.port) ? 'admin' : 'local' }))
-    return mergeLanding(manual, sub)
-  }, [landingManual, landingSub, serverNodes])
-  const allLandingIdx = useMemo(() => landingIndex(allLanding), [allLanding])
-
-  const relayProxies = useMemo(() => {
-    if (!rules) return []
-    const out = []
-    for (const r of rules) {
-      const key = r.exit_host && r.exit_port ? `${r.exit_host}:${r.exit_port}` : null
-      if (!key || !allLandingIdx.has(key) || !r.entry) continue
-      const ep = splitEndpoint(r.entry)
-      const node = allLandingIdx.get(key)
-      const relay = ep && rewriteEndpoint(node.uri, ep.host, ep.port)
-      if (relay) out.push({ ...node, relay, ruleName: r.name })
-    }
-    return out
-  }, [rules, allLandingIdx])
-
-  if (loading) return <Layout><Loading /></Layout>
-
-  const directProxies = [...directManual, ...directSub]
-  const allProxies = [...directProxies.map(n => ({ ...n, kind: 'direct' })), ...relayProxies.map(n => ({ ...n, kind: 'relay' }))]
-
-  const tabbed = tab === 'all' ? allProxies : allProxies.filter(n => n.kind === (tab === 'relay' ? 'relay' : 'direct'))
+  const ready = state.status === 'ready'
+  const proxies = ready ? state.data : []
+  const countOf = k => proxies.filter(p => p.kind === k).length
   const q = search.trim().toLowerCase()
-  const filtered = !q ? tabbed : tabbed.filter(n =>
-    [n.name, n.protocol, `${n.host}:${n.port}`, n.ruleName].some(v => (v || '').toLowerCase().includes(q)))
+  const shown = proxies.filter(p =>
+    (kind === 'all' || p.kind === kind)
+    && (!q || [p.name, p.protocol, p.address, p.rule?.name].some(v => (v || '').toLowerCase().includes(q))))
+  const narrowed = kind !== 'all' || q !== ''
+  const overviewPath = isAdmin ? '/' : '/my'
 
-  const copyText = (n) => {
-    const uri = n.kind === 'relay' ? n.relay : n.uri
-    if (!uri) return null
-    if (copyFmt === 'yaml') {
-      const yaml = uriToClashYaml(uri)
-      if (yaml) return yaml
+  const copyAll = useAction(async () => {
+    await copyToClipboard(shown.map(p => copyPayload(p, copyFmt).text).join('\n'))
+    toast(`已复制 ${shown.length} 条`)
+  }, { onError: () => toast('没能复制到剪贴板，请重试', 'error') })
+
+  const emptyState = () => {
+    if (proxies.length === 0) {
+      return (
+        <Empty
+          title="还没有可以导入客户端的代理"
+          desc="在概览页“我添加的节点”里添加节点：标记为“直连”的会直接出现在这里；标记为“落地”的，被某条规则选作出口后，这里会多出一条经该规则中转的代理。"
+        >
+          <Button to={overviewPath}>去概览页添加</Button>
+        </Empty>
+      )
     }
-    return uri
+    if (q) return <Empty title="没有匹配的代理" desc="换一个关键词，或切换连接方式。" />
+    if (kind === 'relay') return <Empty title="还没有中转代理" desc="把一条规则的出口设为落地节点后，这里会出现经该规则入口中转的代理。" />
+    return <Empty title="还没有直连代理" desc="在概览页“我添加的节点”里把节点标记为“直连”，它就会出现在这里。" />
   }
 
   return (
-    <Layout>
-      <div className="user-page h-full flex flex-col">
-      <PageHeader title="我的代理" count={allProxies.length} unit="个" />
-      <Panel fill className="user-panel">
-        <PanelToolbar>
-          <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址…" />
-        </PanelToolbar>
-        <div className="user-tabs px-[22px] py-3 border-b border-line-soft">
-          {[['all', '全部', allProxies.length], ['direct', '直连', directProxies.length], ['relay', '中转', relayProxies.length]].map(([key, label, n]) => (
-            <button key={key} onClick={() => setTab(key)}
-              className={`user-tab ${tab === key ? 'user-tab-active' : ''}`}>{label} {n}</button>
-          ))}
-          {filtered.length > 0 && (
-            <button onClick={() => {
-              const all = filtered.map(n => copyText(n)).filter(Boolean).join('\n')
-              copyToClipboard(all).then(() => toast(`已复制 ${filtered.length} 条`)).catch(() => toast('复制失败', 'error'))
-            }} className="user-tab ml-auto">
-              复制全部
-            </button>
-          )}
-        </div>
-
-        <TableScroll>
-        {allProxies.length === 0 ? (
-          <Empty title="暂无可用代理" desc="在概览页添加代理 URI 或订阅地址，并标记为直连或落地。" />
-        ) : filtered.length === 0 ? (
-          <Empty title="无匹配" desc="试试别的关键词。" />
-        ) : (
-          <table className="tbl">
-            <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>类型</th><th className="text-right">操作</th></tr></thead>
-            <tbody>
-              {filtered.map((n, i) => {
-                const text = copyText(n)
-                return (
-                  <tr key={i}>
-                    <td className="font-semibold">
-                      <span className="route-name">{n.name || '(未命名)'}</span>
-                      {n.kind === 'relay' && <span className="proxy-name-sub">← {n.ruleName}</span>}
-                    </td>
-                    <td className="font-mono text-xs text-ink-soft">{n.protocol}</td>
-                    <td className="font-mono text-xs">
-                      <SensText blurred={blurred}>
-                        {n.kind === 'relay' ? `${splitEndpoint(n.relay)?.host || n.host}:${splitEndpoint(n.relay)?.port || n.port}` : `${n.host}:${n.port}`}
-                      </SensText>
-                    </td>
-                    <td>
-                      {n.kind === 'relay'
-                        ? <Badge color="emerald">中转</Badge>
-                        : <Badge color="blue">直连</Badge>}
-                    </td>
-                    <td className="text-right">
-                      {text && (
-                        <CopyText text={text}>
-                          <span className="text-blue-600 font-sans text-xs font-semibold">
-                            {copyFmt === 'yaml' && uriToClashYaml(n.kind === 'relay' ? n.relay : n.uri) ? '复制YAML' : '复制'}
-                          </span>
-                        </CopyText>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+    <Page fill>
+      <PageHeader
+        title="我的代理"
+        meta={<>
+          {ready && <span>共 {proxies.length} 个</span>}
+          <span>可以直接导入客户端的代理：标记为“直连”的节点，以及出口是落地节点的规则所提供的中转入口。</span>
+        </>}
+        actions={ready && proxies.length > 0 && (
+          <Button
+            variant="primary"
+            icon={<IconCopy />}
+            loading={copyAll.pending}
+            disabled={shown.length === 0}
+            onClick={() => copyAll.run()}
+          >
+            {narrowed ? `复制筛选出的 ${shown.length} 条` : '复制全部'}
+          </Button>
         )}
-        </TableScroll>
-      </Panel>
-      </div>
-    </Layout>
+      />
+      <ResourceView resource={{ state, reload }}>
+        {() => (
+          <Card fill>
+            <Toolbar>
+              <SearchInput value={search} onChange={setSearch} placeholder="搜索名称、协议、地址、规则…" />
+              <Segmented
+                label="连接方式"
+                value={kind}
+                onChange={setKind}
+                options={[
+                  { value: 'all', label: '全部', count: proxies.length },
+                  { value: 'direct', label: '直连', count: countOf('direct') },
+                  { value: 'relay', label: '中转', count: countOf('relay') },
+                ]}
+              />
+            </Toolbar>
+            <TableScroll>
+              {shown.length === 0 ? emptyState() : (
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>名称</th>
+                      <th>连接方式</th>
+                      <th>协议</th>
+                      <th>地址</th>
+                      <th className="num">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((p) => {
+                      const { text, label } = copyPayload(p, copyFmt)
+                      return (
+                        <tr key={p.key}>
+                          <td className="font-medium">{p.name || '未命名'}</td>
+                          <td>
+                            <span className="inline-flex items-center gap-2">
+                              <Tag>{p.kind === 'relay' ? '中转' : '直连'}</Tag>
+                              {p.rule && (
+                                <span className="text-ink-soft">
+                                  经规则{' '}
+                                  <TextLink tone="ink" to={isAdmin ? `/rules/${p.rule.id}` : `/my/rules/${p.rule.id}`}>{p.rule.name}</TextLink>
+                                </span>
+                              )}
+                            </span>
+                          </td>
+                          <td><Tag mono>{p.protocol}</Tag></td>
+                          <td className="font-mono"><SensText blurred={blurred}>{p.address}</SensText></td>
+                          <td className="num"><CopyText text={text}>{label}</CopyText></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </TableScroll>
+          </Card>
+        )}
+      </ResourceView>
+    </Page>
   )
 }

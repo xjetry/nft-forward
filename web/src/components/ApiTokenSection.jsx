@@ -1,187 +1,227 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/api'
-import { useToast } from './Layout'
-import { Loading, Badge, useConfirm } from './ui'
 import { fmtDate } from '../lib/fmt'
-import { copyToClipboard } from '../lib/clipboard'
+import { useResource } from '../lib/useResource'
+import { ResourceView } from './ResourceView'
+import { useUser } from './session'
+import {
+  Alert, Badge, Button, Card, CardHeader, CardSection, CodeBlock, Collapsible, DescItem, DescList, Empty, Modal,
+  ModalActions, Segmented, Tag, TextLink, useAction, useConfirm, useToast,
+} from './ui'
 
-// /my/token is session-authenticated, not role-gated — any signed-in account
-// (regular user or admin) manages its own token here. Admins are routed away
-// from /my by UserRoute, so this section is shared between the user dashboard
-// and the admin settings page instead of living only under /my.
+const SCOPE_OPTIONS = [
+  { value: 'read', label: '只读' },
+  { value: 'readwrite', label: '读写' },
+]
+
+/* 一个 Token 能调用哪些接口取决于账号的角色：/api/v1 的路由按角色分组
+   （服务端 registerV1Routes），管理员的 Token 调不了 /my/*，普通用户的调不了
+   /nodes、/users 等管理接口。说明文字因此按角色给出。
+
+   read 列的是只读 Token 常用的查询接口，write 概括读写 Token 额外能做的事，
+   writeDetail 是对它的补充说明。两者都是摘要，完整的接口表以服务端提供的
+   OpenAPI 文档为准（说明末尾有链接）。 */
+const API_ACCESS = {
+  user: {
+    read: ['/info', '/my/nodes', '/my/rules', '/probe', '/probe-chain'],
+    write: '创建、修改、删除你自己的转发规则',
+    writeDetail: (
+      <>
+        对应 <code>POST / PUT / DELETE /my/rules</code>；创建规则时可以用 <code>node_name</code> 按名称指定节点，
+        加 <code>?dry_run=1</code> 预览端口，带 <code>Idempotency-Key</code> 请求头做幂等重试。
+      </>
+    ),
+  },
+  admin: {
+    read: ['/info', '/nodes', '/users', '/dashboard', '/usage', '/landing-usage', '/probe', '/probe-chain'],
+    write: '创建用户，调整用户的配额、到期、启用状态与节点授权，管理用户的 Token，重新同步节点等',
+    writeDetail: null,
+  },
+}
+
+/**
+ * 调用方式说明。示例里的地址取当前页面的 origin，所以示例是一条指向本面板的
+ * 完整命令，把 YOUR_TOKEN 换成真实的 Token 即可。
+ * @param {{ access: typeof API_ACCESS.user | typeof API_ACCESS.admin }} props
+ */
+function ApiUsage({ access }) {
+  const base = `${window.location.origin}/api/v1`
+  return (
+    <div className="flex flex-col gap-3 text-small text-ink-soft">
+      <p>每个请求都要带上 Token：放在 Authorization 请求头里，或者作为 token 参数。</p>
+      <CodeBlock text={`curl -H "Authorization: Bearer YOUR_TOKEN" ${base}/info`} />
+      <CodeBlock text={`curl "${base}/info?token=YOUR_TOKEN"`} />
+      <DescList>
+        <DescItem label="只读 Token">
+          可以查询，例如：
+          {access.read.map((path, i) => (
+            <span key={path}>{i > 0 && '、'}<code>GET {path}</code></span>
+          ))}
+        </DescItem>
+        <DescItem label="读写 Token">
+          除了查询，还可以{access.write}。{access.writeDetail}
+        </DescItem>
+      </DescList>
+      <p>
+        完整的接口定义见{' '}
+        <TextLink href="/api/v1/openapi.json" target="_blank" rel="noreferrer">OpenAPI 文档</TextLink>。
+      </p>
+    </div>
+  )
+}
+
+/** @param {{ token: { token_prefix: string, scope: string, disabled: boolean, created_at: number, last_used_at: number | null } }} props */
+function TokenFacts({ token }) {
+  return (
+    <DescList>
+      <DescItem label="Token"><span className="font-mono">{token.token_prefix}…</span></DescItem>
+      <DescItem label="状态">
+        {token.disabled ? <Badge tone="warn" dot>已停用</Badge> : <Badge tone="ok" dot>启用中</Badge>}
+      </DescItem>
+      <DescItem label="权限"><Tag>{token.scope === 'readwrite' ? '读写' : '只读'}</Tag></DescItem>
+      <DescItem label="创建时间">{fmtDate(token.created_at)}</DescItem>
+      <DescItem label="最近使用">{token.last_used_at ? fmtDate(token.last_used_at) : '从未使用'}</DescItem>
+    </DescList>
+  )
+}
+
+/**
+ * 刚签发的 Token 明文。服务端只在签发的那次响应里给出明文，之后只存哈希，
+ * 所以这个弹窗关掉就再也拿不回来：
+ * - persistent：Esc 与点遮罩不关闭，只有“我已保存”和右上角的关闭按钮能关。
+ * - 初始焦点放在正文容器上而不是某个按钮上。弹窗默认聚焦第一个可聚焦元素，
+ *   也就是右上角的关闭按钮；那样的话弹窗一出现，一次回车或空格就把它关掉了。
+ *
+ * @param {{ secret: string, regenerated: boolean, onClose: () => void }} props
+ */
+function IssuedTokenModal({ secret, regenerated, onClose }) {
+  return (
+    <Modal
+      persistent
+      title={regenerated ? 'Token 已重新生成' : 'Token 已创建'}
+      onClose={onClose}
+      footer={<ModalActions><Button variant="primary" onClick={onClose}>我已保存</Button></ModalActions>}
+    >
+      <div data-autofocus tabIndex={-1} className="flex flex-col gap-3 outline-none">
+        <Alert tone="warn">完整的 Token 只显示这一次，关闭后无法再次查看。请现在复制并保存到安全的地方。</Alert>
+        <CodeBlock text={secret} />
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * 当前账号的 API Token：查看、创建、停用 / 启用、重新生成、删除。
+ *
+ * /my/token 按会话鉴权、不分角色，每个账号管理自己的那一个 Token，所以这张
+ * 卡片同时用在普通用户的概览页和管理员的系统设置页，不带任何 props。
+ */
 export function ApiTokenSection() {
   const toast = useToast()
   const confirm = useConfirm()
-
-  const [token, setToken] = useState(null)
-  const [tokenLoading, setTokenLoading] = useState(true)
-  const [showTokenModal, setShowTokenModal] = useState(false)
-  const [newToken, setNewToken] = useState('')
-
-  useEffect(() => {
-    api.get('/my/token').then(setToken).catch(console.error).finally(() => setTokenLoading(false))
-  }, [])
-
-  const createToken = async (scope) => {
-    try {
-      const res = await api.post('/my/token', { scope })
-      setNewToken(res.token)
-      setShowTokenModal(true)
-      const t = await api.get('/my/token')
-      setToken(t)
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  const deleteToken = async () => {
-    if (!(await confirm({ title: '删除 Token', message: '删除后使用此 Token 的所有外部服务将失效。', confirmText: '删除', danger: true }))) return
-    try {
-      await api.del('/my/token')
-      setToken({ has_token: false })
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  const refreshToken = async () => {
-    if (!(await confirm({ title: '刷新 Token', message: '旧 Token 将立即失效，使用它的外部服务需要更新。', confirmText: '刷新', danger: true }))) return
-    try {
-      const res = await api.post('/my/token/refresh')
-      setNewToken(res.token)
-      setShowTokenModal(true)
-      const t = await api.get('/my/token')
-      setToken(t)
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  const toggleToken = async () => {
-    try {
-      const res = await api.post('/my/token/toggle')
-      setToken(prev => ({ ...prev, disabled: res.disabled }))
-    } catch (err) { toast(err.message, 'error') }
-  }
-
-  return (
-    <>
-      <TokenCard token={token} tokenLoading={tokenLoading}
-        createToken={createToken} deleteToken={deleteToken}
-        refreshToken={refreshToken} toggleToken={toggleToken} />
-
-      {showTokenModal && <TokenModal token={newToken} onClose={() => setShowTokenModal(false)} />}
-    </>
-  )
-}
-
-function TokenCard({ token, tokenLoading, createToken, deleteToken, refreshToken, toggleToken }) {
-  const [showHelp, setShowHelp] = useState(false)
-  // Default to the least-privileged read scope; a user opts into write power
-  // (creating/editing their own forward rules over the API) explicitly.
+  const { user } = useUser()
+  const token = useResource(() => api.get('/my/token'), [])
+  // 新 Token 默认只读（权限最小的一档）；需要写权限时由用户显式选择。
   const [scope, setScope] = useState('read')
+  const [issued, setIssued] = useState(/** @type {null | { secret: string, regenerated: boolean }} */ (null))
+  const [usageOpen, setUsageOpen] = useState(false)
 
-  if (tokenLoading) return (
-    <section className="user-section">
-      <div className="user-section-head">
-        <h3 className="user-section-title">API Token</h3>
-      </div>
-      <Loading />
-    </section>
-  )
+  // 角色只按“是否管理员”二分，与路由守卫 RequireAuth 的判定一致。
+  const access = user.role === 'admin' ? API_ACCESS.admin : API_ACCESS.user
+  const current = token.state.status === 'ready' && token.state.data.has_token ? token.state.data : null
 
-  return (
-    <section className="user-section">
-      <div className="user-section-head">
-        <div>
-          <h3 className="user-section-title">API Token</h3>
-          <div className="user-section-sub">程序化 / AI agent 调用 API 的访问凭证</div>
-        </div>
-        <div className="relative">
-          <button onClick={() => setShowHelp(!showHelp)} className="btn-secondary text-xs h-8 px-3">使用说明</button>
-          {showHelp && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowHelp(false)} />
-              <div className="absolute right-0 top-full mt-2 z-50 bg-surface border border-line rounded-xl shadow-xl p-4 w-[min(380px,calc(100vw-32px))] text-sm">
-                <p className="font-semibold mb-2">程序化 / AI agent 调用 API</p>
-                <p className="text-ink-soft mb-2">鉴权（二选一）：</p>
-                <code className="block bg-raised rounded-lg p-2 text-xs font-mono mb-1.5 break-all">GET /api/v1/info?token=YOUR_TOKEN</code>
-                <code className="block bg-raised rounded-lg p-2 text-xs font-mono mb-3 break-all">curl -H "Authorization: Bearer YOUR_TOKEN" /api/v1/info</code>
-                <p className="text-ink-soft text-xs mb-1"><b>只读</b>：<code className="font-mono">GET /api/v1/info</code>、<code className="font-mono">/my/rules</code>、<code className="font-mono">/my/nodes</code>、<code className="font-mono">/probe</code>、<code className="font-mono">/probe-chain</code>。</p>
-                <p className="text-ink-soft text-xs"><b>读写</b>（需读写 Token）：<code className="font-mono">POST/PUT/DELETE /my/rules</code> 自助建改删转发规则；建规支持 <code className="font-mono">node_name</code> 按名寻址、<code className="font-mono">?dry_run=1</code> 预览端口、<code className="font-mono">Idempotency-Key</code> 幂等重试。</p>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="px-5 sm:px-6 py-5">
-        {!token?.has_token ? (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <div className="font-semibold text-ink">尚未创建 Token</div>
-              <div className="text-sm text-ink-soft mt-1">创建后只会完整显示一次。</div>
-              <div className="flex items-center gap-2 mt-3 flex-wrap">
-                <span className="text-sm text-ink-soft">权限</span>
-                <select value={scope} onChange={e => setScope(e.target.value)} className="input-field text-sm !py-1 !w-auto">
-                  <option value="read">只读（查询）</option>
-                  <option value="readwrite">读写（自助管理转发规则）</option>
-                </select>
-              </div>
-            </div>
-            <button onClick={() => createToken(scope)} className="btn-primary text-sm">创建 API Token</button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="user-token-grid">
-              <div className="user-token-item">
-                <div className="user-token-label">Token</div>
-                <div className="user-token-value font-mono flex items-center gap-2 flex-wrap">
-                  {token.token_prefix}...
-                  <Badge color={token.disabled ? 'gray' : 'green'}>{token.disabled ? '已停用' : '启用中'}</Badge>
-                  <Badge color={token.scope === 'readwrite' ? 'blue' : 'gray'}>{token.scope === 'readwrite' ? '读写' : '只读'}</Badge>
-                </div>
-              </div>
-              <div className="user-token-item">
-                <div className="user-token-label">创建时间</div>
-                <div className="user-token-value">{fmtDate(token.created_at)}</div>
-              </div>
-              <div className="user-token-item">
-                <div className="user-token-label">最近使用</div>
-                <div className="user-token-value">{token.last_used_at ? fmtDate(token.last_used_at) : '从未使用'}</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <button onClick={toggleToken} className="btn-secondary text-xs">{token.disabled ? '启用' : '停用'}</button>
-              <button onClick={refreshToken} className="btn-secondary text-xs">刷新</button>
-              <button onClick={deleteToken} className="btn-danger text-xs">删除</button>
-            </div>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-function TokenModal({ token, onClose }) {
-  const [copied, setCopied] = useState(false)
-  const copy = () => {
-    copyToClipboard(token).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => { /* token stays visible for manual copy; no toast here */ })
+  const operations = {
+    create: async () => {
+      const res = await api.post('/my/token', { scope })
+      setIssued({ secret: res.token, regenerated: false })
+      await token.reload()
+    },
+    toggle: async () => {
+      const res = await api.post('/my/token/toggle')
+      token.patch(t => ({ ...t, disabled: res.disabled }))
+      toast(res.disabled ? 'Token 已停用' : 'Token 已启用')
+    },
+    regenerate: async () => {
+      const res = await api.post('/my/token/refresh')
+      setIssued({ secret: res.token, regenerated: true })
+      await token.reload()
+    },
+    remove: async () => {
+      await api.del('/my/token')
+      token.patch(() => ({ has_token: false }))
+      toast('Token 已删除')
+    },
   }
+  /* 四种操作作用在同一个 Token 上，共用一个 action：useAction 的重入守卫因此
+     覆盖任意两种操作之间（停用的请求在途时点删除会被忽略），而不只是同一种
+     操作的连点。停用 / 启用在服务端是翻转语义（每收到一次请求就取反一次），
+     连点两次等于没改，靠的也是这个守卫。pendingKey 是在途操作的名字，按钮
+     据此只让被点的那一个显示进行中。 */
+  const operation = useAction(/** @param {keyof typeof operations} name */ name => operations[name]())
+
+  /* 每种操作在这里声明执行前要不要确认：不可恢复的两种（重新生成、删除）
+     确认，创建与可撤销的停用 / 启用不确认。 */
+  const confirmations = {
+    create: null,
+    toggle: null,
+    regenerate: {
+      title: '重新生成 Token',
+      message: '当前的 Token 会立即失效，正在使用它的程序要换成新的 Token 才能继续调用。权限保持不变。'
+        + (current?.disabled ? '\n这个 Token 目前已停用，重新生成后会恢复启用。' : ''),
+      confirmText: '重新生成',
+    },
+    remove: {
+      title: '删除 Token',
+      message: '正在使用这个 Token 的程序会立即失效。删除后无法恢复，需要时只能重新创建一个新的 Token。',
+      confirmText: '删除',
+    },
+  }
+  /* 确认框在 action 之外：等待用户回答期间 action 不在途，触发它的按钮没有被
+     禁用，确认框关闭时 Modal 才能把焦点还给这个按钮（禁用的按钮不能获得焦点）。
+     这段时间不会有第二个操作插进来 —— 确认框是模态的，盖住并困住了整个页面。 */
+  const start = async (/** @type {keyof typeof operations} */ name) => {
+    const question = confirmations[name]
+    if (question && !(await confirm({ ...question, danger: true }))) return
+    await operation.run(name)
+  }
+  const button = (/** @type {keyof typeof operations} */ name) => ({
+    loading: operation.pendingKey === name,
+    disabled: operation.pending,
+    onClick: () => start(name),
+  })
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[2px] px-4" onClick={onClose}>
-      <div className="bg-surface border border-line rounded-2xl shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)] max-w-lg w-full overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-5 border-b border-line-soft">
-          <h3 className="text-lg font-bold">API Token 已生成</h3>
-          <p className="text-sm text-ink-soft mt-1">请立即复制保存，关闭后无法再次查看。</p>
-        </div>
-        <div className="p-6">
-          <div className="copy-panel">
-            <span className="copy-panel-label">TOKEN</span>
-            <code className="copy-panel-value select-all">{token}</code>
-            <button onClick={copy} className="copy-panel-button">{copied ? '已复制' : '复制'}</button>
-          </div>
-          <div className="mt-5 flex justify-end">
-            <button onClick={onClose} className="btn-secondary text-sm">关闭</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <Card>
+      <CardHeader
+        title="API Token"
+        description="脚本或 AI agent 调用面板 API 时使用的访问凭证"
+        actions={current && (
+          <>
+            <Button size="sm" {...button('toggle')}>{current.disabled ? '启用' : '停用'}</Button>
+            <Button size="sm" {...button('regenerate')}>重新生成</Button>
+            <Button size="sm" danger {...button('remove')}>删除</Button>
+          </>
+        )}
+      />
+      <CardSection className="flex flex-col gap-4">
+        <ResourceView resource={token}>
+          {data => (data.has_token ? <TokenFacts token={data} /> : (
+            <Empty
+              title="还没有 Token"
+              desc={`只读 Token 只能查询；读写 Token 还可以${access.write}。完整的 Token 只在创建时显示一次。`}
+            >
+              <Segmented label="权限" value={scope} onChange={setScope} options={SCOPE_OPTIONS} />
+              <Button {...button('create')}>创建 Token</Button>
+            </Empty>
+          ))}
+        </ResourceView>
+      </CardSection>
+      <CardSection>
+        <Collapsible title="调用方式" open={usageOpen} onToggle={() => setUsageOpen(open => !open)}>
+          <ApiUsage access={access} />
+        </Collapsible>
+      </CardSection>
+      {issued && <IssuedTokenModal secret={issued.secret} regenerated={issued.regenerated} onClose={() => setIssued(null)} />}
+    </Card>
   )
 }

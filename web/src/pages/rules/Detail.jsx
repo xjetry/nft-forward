@@ -1,202 +1,190 @@
-import { useState, useEffect } from 'react'
-import { useParams, Link, useNavigate, useLocation } from 'react-router-dom'
+import { useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { fmtBytes } from '../../lib/fmt'
-import { Layout, useToast, useBlur } from '../../components/Layout'
-import { Loading, Empty, ProtoBadge, ModeBadge, SensText, useConfirm, ExitKindBadge, SuppressedBadge, ProbeChainButton } from '../../components/ui'
-import { TableBox } from '../../components/page'
-import { copyToClipboard } from '../../lib/clipboard'
-import { RuleFormModal, ruleToForm, ruleFormToPayload } from '../../components/RuleFormModal'
+import { enrichRule, hostPortKey } from '../../lib/landing'
+import { ModeTag, NodeTypeIcon, ProtoTag, SuppressedBadge } from '../../components/net'
+import { Page, PageHeader, TableBox } from '../../components/page'
+import { useBlur } from '../../components/prefs'
+import { ResourceView } from '../../components/ResourceView'
+import { RULE_SCOPES, RuleDialog, isPort, useDeleteRule } from '../../components/RuleFormModal'
+import { RuleEntryCard, RuleExit, useRulesWithCatalog } from '../../components/RulesTable'
+import { useUser } from '../../components/session'
+import {
+  Button, Card, CardHeader, CardSection, DescItem, DescList, Empty, Input, SensText, TextLink, useAction, useToast,
+} from '../../components/ui'
+
+const SCOPE = RULE_SCOPES.admin
 
 export default function RulesDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  // Set by the list page's row click so "返回规则列表" restores its filter/search
-  // instead of landing on a bare, unfiltered list.
+  const { user } = useUser()
+  // 列表页进入详情时带来它当时的搜索与筛选；返回与删除后都回到那个列表。
   const backTo = `/rules${location.state?.rulesQuery || ''}`
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [showEdit, setShowEdit] = useState(false)
-  const [bindings, setBindings] = useState([])
-  const toast = useToast()
-  const blurred = useBlur()
-  const confirm = useConfirm()
 
-  const load = () => {
-    setLoading(true)
-    api.get(`/rules/${id}`).then(setData).catch(console.error).finally(() => setLoading(false))
-    api.get('/node-bindings').then(d => setBindings(d?.bindings || [])).catch(console.error)
-  }
-  useEffect(load, [id])
+  // 绑定关系是全局的一张图，编辑表单的线路层级联要用它，随规则一起取。
+  const { resource, reload } = useRulesWithCatalog(user, async () => {
+    const [detail, graph] = await Promise.all([api.get(`/rules/${id}`), api.get('/node-bindings')])
+    return { ...detail, bindings: graph.bindings || [] }
+  }, [id])
+  const [editing, setEditing] = useState(false)
+  const deletion = useDeleteRule(SCOPE, () => navigate(backTo))
 
-  if (loading) return <Layout><Loading /></Layout>
-  if (!data) return <Layout><Empty title="规则不存在" /></Layout>
-
-  const { rule, hops = [], nodes = [], node_by_id = {} } = data
-  const node = node_by_id[rule.node_id]
-
-  const saveEdit = async (form) => {
-    await api.put(`/rules/${rule.id}`, ruleFormToPayload(form))
-    toast('已保存并重下发'); setShowEdit(false); load()
-  }
-
-  const deleteRule = async () => {
-    if (!(await confirm({ title: '删除规则', message: `确认删除规则「${rule.name}」？`, confirmText: '删除', danger: true }))) return
-    try { await api.del(`/rules/${rule.id}`); toast('已删除'); navigate(backTo) } catch (err) { toast(err.message, 'error') }
-  }
+  const loaded = resource.state.status === 'ready' ? resource.state.data : null
+  const rule = loaded ? enrichRule(loaded[0].rule, loaded[1].landingByKey) : null
 
   return (
-    <Layout>
-      <div className="admin-detail-page admin-rule-detail-page">
-      {/* Entry info */}
-      <div className="card mb-5">
-        <div className="card-header"><h3 className="text-sm font-bold">入口</h3><span className="text-xs text-ink-mut">复制给客户端</span></div>
-        <div className="p-5">
-          {rule.entry ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY</span>
-                {rule.entry_node_id && node_by_id[rule.entry_node_id] && <span className="bg-indigo-600/20 text-indigo-300 text-[11px] font-semibold px-2 py-0.5 rounded">{node_by_id[rule.entry_node_id].name}</span>}
-                <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry}</SensText></span>
-                <button onClick={() => copyToClipboard(rule.entry).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
-                  className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-                  复制
-                </button>
-              </div>
-              {rule.entry_v6 && (
-                <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">ENTRY (v6)</span>
-                  <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1"><SensText blurred={blurred}>{rule.entry_v6}</SensText></span>
-                  <button onClick={() => copyToClipboard(rule.entry_v6).then(() => toast('入口地址已复制')).catch(() => toast('复制失败', 'error'))}
-                    className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-                    复制
-                  </button>
-                </div>
+    <Page>
+      <PageHeader
+        title={rule ? rule.name : '规则'}
+        meta={rule ? <><span className="font-mono">#{rule.id}</span><SuppressedBadge reason={rule.suppressed} detailed /></> : null}
+        back={{ to: backTo, label: '规则' }}
+        actions={rule && (
+          <>
+            <Button danger loading={deletion.pending} onClick={() => deletion.request(rule)}>删除规则</Button>
+            <Button variant="primary" onClick={() => setEditing(true)}>编辑规则</Button>
+          </>
+        )}
+      />
+      <ResourceView resource={resource} notFound="规则不存在">
+        {([data, catalog]) => {
+          const nodeById = data.node_by_id || {}
+          const node = nodeById[rule.node_id]
+          const hops = data.hops || []
+          return (
+            <>
+              <RuleEntryCard rule={rule} entryNodeName={nodeById[rule.entry_node_id]?.name} />
+
+              <Card>
+                <CardHeader title="规则信息" />
+                <CardSection>
+                  <DescList>
+                    {rule.owner_id?.Valid && (
+                      <DescItem label="所有者">
+                        <TextLink to={`/users/${rule.owner_id.Int64}`}>{rule.owner_name}</TextLink>
+                      </DescItem>
+                    )}
+                    <DescItem label="入口节点">
+                      {node ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <NodeTypeIcon type={node.node_type} />
+                          <TextLink to={`/nodes/${node.id}`}>{node.name}</TextLink>
+                        </span>
+                      ) : `#${rule.node_id}`}
+                    </DescItem>
+                    <DescItem label="协议"><ProtoTag proto={rule.proto} /></DescItem>
+                    <DescItem label="出口"><RuleExit rule={rule} scope={SCOPE} /></DescItem>
+                    <DescItem label="流量">{fmtBytes(rule.total_bytes || 0)}</DescItem>
+                    {rule.comment && <DescItem label="备注">{rule.comment}</DescItem>}
+                  </DescList>
+                </CardSection>
+              </Card>
+
+              <Card>
+                <CardHeader title="各跳状态" description={hops.length ? `共 ${hops.length} 跳` : undefined} />
+                {hops.length === 0 ? (
+                  <Empty title="还没有跳数据" desc="规则下发到节点之后，这里会列出链路上每一跳的监听端口、转发目标与流量。" />
+                ) : (
+                  <HopsTable ruleId={rule.id} hops={hops} nodeById={nodeById} onChanged={reload} />
+                )}
+              </Card>
+
+              {editing && (
+                <RuleDialog
+                  dialog={{ kind: 'edit', rule }}
+                  scope={SCOPE}
+                  nodes={data.nodes || []}
+                  bindings={data.bindings}
+                  catalog={catalog}
+                  userId={user.id}
+                  onSaved={reload}
+                  onClose={() => setEditing(false)}
+                />
               )}
-              {/* Relay proxy URI: the landing/custom proxy with its host:port
-                  rewritten to the entry endpoint, so a client dials the relay. */}
-              {rule.relay_uri && (
-                <div className="flex items-center gap-2.5 bg-[#0e1117] rounded-lg px-4 py-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">PROXY</span>
-                  <span className="text-[#e8edf4] font-mono text-sm font-semibold flex-1 truncate"><SensText blurred={blurred}>{rule.relay_uri}</SensText></span>
-                  <button onClick={() => copyToClipboard(rule.relay_uri).then(() => toast('代理 URI 已复制')).catch(() => toast('复制失败', 'error'))}
-                    className="ml-auto bg-[#1c242f] border border-[#2a3340] text-[#aeb9c7] h-7 px-2.5 rounded text-xs flex items-center gap-1.5 hover:bg-[#26323f] hover:text-[#e8edf4]">
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-                    复制
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : <span className="text-ink-mut text-sm">尚未分配入口</span>}
-          <div className="grid grid-cols-[90px_1fr] gap-4 items-center mt-5 text-sm">
-            <span className="text-ink-soft font-semibold">名称</span>
-            <span className="font-semibold inline-flex items-center gap-2 flex-wrap">{rule.name}<SuppressedBadge reason={rule.suppressed} detailed /></span>
-            {rule.owner_id?.Valid && <><span className="text-ink-soft font-semibold">用户</span>
-            <span className="font-semibold">
-              <Link to={`/users/${rule.owner_id.Int64}`} className="text-blue-600 hover:underline">{rule.owner_name}</Link>
-            </span></>}
-            <span className="text-ink-soft font-semibold">节点</span>
-            <span className="inline-flex items-center gap-1.5 font-mono">
-              {node ? <Link to={`/nodes/${node.id}`} className="text-blue-600 hover:underline">{node.name}</Link> : `#${rule.node_id}`}
-            </span>
-            <span className="text-ink-soft font-semibold">协议</span>
-            <span><ProtoBadge proto={rule.proto} /></span>
-            <span className="text-ink-soft font-semibold">出口</span>
-            <span className="font-mono inline-flex items-center gap-2">
-              <ExitKindBadge kind={rule.exit_kind} protocol={rule.landing_protocol} />
-              <SensText blurred={blurred}>{rule.exit || '--'}</SensText>
-              {rule.exit_kind === 'landing' && rule.landing_name && <span className="text-ink-mut text-xs font-sans">{rule.landing_name}</span>}
-            </span>
-            <span className="text-ink-soft font-semibold">流量</span>
-            <span className="font-mono text-ink-mut">{fmtBytes(rule.total_bytes || 0)}</span>
-            {rule.comment && <>
-              <span className="text-ink-soft font-semibold">备注</span>
-              <span className="text-ink-soft">{rule.comment}</span>
-            </>}
-          </div>
-        </div>
-      </div>
-
-      {/* Hop table */}
-      <div className="card mb-5">
-        <div className="card-header">
-          <h3 className="text-sm font-bold">各跳状态</h3>
-          <span className="text-xs text-ink-mut">{hops.length} 跳</span>
-          <span className="ml-auto"><ProbeChainButton ruleId={rule.id} /></span>
-        </div>
-        {hops.length ? (
-          <TableBox>
-          <table className="tbl">
-            <thead><tr><th className="w-10">#</th><th>节点</th><th>所属段</th><th>监听端口</th><th>目标</th><th>模式</th><th>流量</th><th className="text-right">操作</th></tr></thead>
-            <tbody>
-              {hops.map(h => {
-                const hopNode = node_by_id?.[h.node_id]
-                const viaNode = node_by_id?.[h.via_node_id]
-                return (
-                  <tr key={h.position}>
-                    <td className="font-mono text-xs text-ink-mut">{h.position + 1}</td>
-                    <td className="font-semibold"><Link to={`/nodes/${h.node_id}`} className="text-blue-600 hover:underline">{hopNode?.name || `#${h.node_id}`}</Link></td>
-                    <td className="font-mono text-xs text-ink-soft">{viaNode?.name || `#${h.via_node_id}`}</td>
-                    <td className="font-mono">:{h.listen_port}</td>
-                    <td className="font-mono"><SensText blurred={blurred}>{h.target_host ? `${h.target_host}:${h.target_port}` : '--'}</SensText></td>
-                    <td><ModeBadge mode={h.mode} /></td>
-                    <td className="font-mono text-xs text-ink-mut">{fmtBytes(h.total_bytes)}</td>
-                    <td className="text-right">
-                      <ReallocateForm ruleId={rule.id} position={h.position} current={h.listen_port} onDone={load} />
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          </TableBox>
-        ) : <Empty title="暂无跳数据" />}
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-3 flex-wrap mt-5">
-        <button onClick={() => setShowEdit(true)} className="btn-primary text-xs">编辑规则</button>
-        <button onClick={deleteRule} className="btn-secondary text-xs">删除规则</button>
-        <Link to={backTo} className="text-blue-600 text-[13px] font-semibold hover:underline inline-flex items-center gap-1">
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-          返回规则列表
-        </Link>
-      </div>
-      </div>
-
-      <RuleFormModal
-        open={showEdit} onClose={() => setShowEdit(false)} title="编辑规则" submitLabel="保存并重下发"
-        nodes={nodes} bindings={bindings} initial={ruleToForm(rule)} onSubmit={saveEdit} />
-    </Layout>
+            </>
+          )
+        }}
+      </ResourceView>
+    </Page>
   )
 }
 
-function ReallocateForm({ ruleId, position, current, onDone }) {
-  // Prefill with the currently allocated port so admins can tweak it in place;
-  // clearing the input falls back to random allocation (placeholder "随机").
-  const [port, setPort] = useState(current ? String(current) : '')
-  const [loading, setLoading] = useState(false)
-  const toast = useToast()
-  // Resync after a reallocation refreshes the hop list with the new port.
-  useEffect(() => { setPort(current ? String(current) : '') }, [current])
+function HopsTable({ ruleId, hops, nodeById, onChanged }) {
+  const blurred = useBlur()
+  return (
+    <TableBox>
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>节点</th>
+            <th>所属段</th>
+            <th>监听端口</th>
+            <th>转发目标</th>
+            <th>模式</th>
+            <th className="num">流量</th>
+            <th className="num">更换端口</th>
+          </tr>
+        </thead>
+        <tbody>
+          {hops.map(h => (
+            <tr key={h.position}>
+              <td className="text-ink-mut">{h.position + 1}</td>
+              <td>
+                <TextLink to={`/nodes/${h.node_id}`} tone="ink" className="font-medium">
+                  {nodeById[h.node_id]?.name || `#${h.node_id}`}
+                </TextLink>
+              </td>
+              <td className="text-ink-soft">{nodeById[h.via_node_id]?.name || `#${h.via_node_id}`}</td>
+              <td className="font-mono">:{h.listen_port}</td>
+              <td className="font-mono">
+                <SensText blurred={blurred}>{h.target_host ? hostPortKey(h.target_host, h.target_port) : '--'}</SensText>
+              </td>
+              <td><ModeTag mode={h.mode} /></td>
+              <td className="num text-ink-soft">{fmtBytes(h.total_bytes)}</td>
+              <td className="num">
+                {/* 以当前端口为 key：刷新后端口变了的那一跳，输入框从新端口重新
+                    开始；端口没变的行保持原样，包括输入到一半的内容。 */}
+                <ReallocateForm key={h.listen_port} ruleId={ruleId} position={h.position} current={h.listen_port} onDone={onChanged} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableBox>
+  )
+}
 
-  const submit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      await api.post(`/rules/${ruleId}/hops/${position}/reallocate`, { port: port ? Number(port) : undefined })
-      toast('端口已重分配')
-      onDone()
-    } catch (err) { toast(err.message, 'error') } finally { setLoading(false) }
-  }
+/* 给某一跳换监听端口。输入框预填当前端口，方便在原值上微调；清空提交时
+   请求里不带端口，由服务端另行分配。 */
+function ReallocateForm({ ruleId, position, current, onDone }) {
+  const toast = useToast()
+  const [port, setPort] = useState(current ? String(current) : '')
+  const valid = port === '' || isPort(port)
+  const reallocate = useAction(async () => {
+    await api.post(`/rules/${ruleId}/hops/${position}/reallocate`, { port: port ? Number(port) : undefined })
+    toast('端口已更换')
+    await onDone()
+  })
 
   return (
-    <form onSubmit={submit} className="inline-flex items-center gap-1.5">
-      <input className="input-field font-mono" type="number" min="1" max="65535" value={port} onChange={e => setPort(e.target.value)} placeholder="随机" style={{ width: 90, height: 28, fontSize: 12, padding: '0 6px' }} />
-      <button type="submit" disabled={loading} className="btn-secondary text-xs">换端口</button>
+    <form className="inline-flex items-center gap-1.5" onSubmit={e => { e.preventDefault(); if (valid) reallocate.run() }}>
+      <Input
+        size="sm"
+        mono
+        type="number"
+        min={1}
+        max={65535}
+        value={port}
+        onChange={setPort}
+        invalid={!valid}
+        placeholder="随机"
+        aria-label={`第 ${position + 1} 跳的监听端口，1–65535，留空随机分配`}
+        className="w-24"
+      />
+      <Button size="sm" type="submit" loading={reallocate.pending} disabled={!valid}>换端口</Button>
     </form>
   )
 }
