@@ -119,6 +119,13 @@ func (e *upgradeTestEnv) connectAgentAt(t *testing.T, name, arch, sha, version s
 	if env := recvEnvelope(t, c); json.Unmarshal(env.Payload, &ack) != nil || ack.Error != "" || ack.NodeID != n.ID {
 		t.Fatalf("hello for %s rejected: %+v", name, ack)
 	}
+	// 面板先回握手应答，之后才把 hello 上报的版本与 sha 写进节点行（Hub 的握手处理里
+	// db.MarkNodeOnline 在写应答之后）。升级的各项判定读的是节点行，应答一到就发请求
+	// 会读到握手之前的值，所以等节点行追上 hello 再把连接交给测试。
+	waitFor(t, name+" 的节点行记下 hello 上报的版本与 sha", func() bool {
+		cur, err := db.GetNode(e.d, n.ID)
+		return err == nil && cur.Online != 0 && cur.AgentVersion == version && cur.AgentSHA == sha
+	})
 
 	upgrades := make(chan wsproto.Upgrade, 4)
 	reply := func(typ, id string, v any) {
