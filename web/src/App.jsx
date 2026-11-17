@@ -1,6 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { UserProvider, useUser, BlurProvider, CopyFmtProvider } from './components/Layout'
-import { Loading, ConfirmProvider } from './components/ui'
+import { Fragment } from 'react'
+import { BrowserRouter, Routes, Route, useParams } from 'react-router-dom'
+import { AppLayout } from './components/Layout'
+import { PrefsProvider } from './components/prefs'
+import { RequireAuth, SessionProvider } from './components/session'
+import { ConfirmProvider, ErrorState, ToastProvider } from './components/ui'
 
 import Login from './pages/Login'
 import Settings from './pages/Settings'
@@ -20,85 +23,60 @@ import MyRuleDetail from './pages/my/RuleDetail'
 import MyLandingNodes from './pages/my/LandingNodes'
 import Proxies from './pages/Proxies'
 
-function ProtectedRoute({ children }) {
-  const { user } = useUser()
-  if (user === undefined) return <Loading />
-  if (user === null) return <Navigate to="/login" replace />
-  return children
-}
-
-function AdminRoute({ children }) {
-  const { user } = useUser()
-  if (user === undefined) return <Loading />
-  if (user === null) return <Navigate to="/login" replace />
-  if (user.role !== 'admin') return <Navigate to="/my" replace />
-  return children
-}
-
-function UserRoute({ children }) {
-  const { user } = useUser()
-  if (user === undefined) return <Loading />
-  if (user === null) return <Navigate to="/login" replace />
-  if (user.role === 'admin') return <Navigate to="/" replace />
-  return children
-}
-
-function RootRedirect() {
-  const { user } = useUser()
-  if (user === undefined) return <Loading />
-  if (user === null) return <Navigate to="/login" replace />
-  if (user.role !== 'admin') return <Navigate to="/my" replace />
-  return <Dashboard />
+/**
+ * 详情页按路由里的 id 取 key：从一个对象直接跳到另一个对象时整页重新挂载。
+ * 详情页里有大量本地表单状态（输入到一半的名称、展开的编辑区），它们属于
+ * 某一个对象；不重新挂载的话，A 的未保存输入会留在 B 的页面上并可能被保存到 B。
+ */
+function PerId({ children }) {
+  const { id } = useParams()
+  return <Fragment key={id}>{children}</Fragment>
 }
 
 function NotFound() {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-app">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-ink">404</h1>
-        <p className="mt-2 text-ink-soft">页面不存在</p>
-      </div>
-    </div>
-  )
+  return <ErrorState title="页面不存在" />
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <UserProvider>
-        <ConfirmProvider>
-        <BlurProvider>
-        <CopyFmtProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
+      <ToastProvider>
+        <SessionProvider>
+          <PrefsProvider>
+            <ConfirmProvider>
+              <Routes>
+                <Route path="/login" element={<Login />} />
 
-          <Route path="/" element={<RootRedirect />} />
+                <Route element={<RequireAuth />}>
+                  <Route element={<AppLayout />}>
+                    <Route element={<RequireAuth role="admin" />}>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/nodes" element={<NodeList />} />
+                      <Route path="/nodes/:id" element={<PerId><NodeDetail /></PerId>} />
+                      <Route path="/rules" element={<RulesList />} />
+                      <Route path="/rules/:id" element={<PerId><RulesDetail /></PerId>} />
+                      <Route path="/users" element={<UserList />} />
+                      <Route path="/users/:id" element={<PerId><UserDetail /></PerId>} />
+                      <Route path="/settings" element={<Settings />} />
+                    </Route>
 
-          {/* Admin routes */}
-          <Route path="/nodes" element={<AdminRoute><NodeList /></AdminRoute>} />
-          <Route path="/nodes/:id" element={<AdminRoute><NodeDetail /></AdminRoute>} />
-          <Route path="/rules" element={<AdminRoute><RulesList /></AdminRoute>} />
-          <Route path="/rules/:id" element={<AdminRoute><RulesDetail /></AdminRoute>} />
-          <Route path="/users" element={<AdminRoute><UserList /></AdminRoute>} />
-          <Route path="/users/:id" element={<AdminRoute><UserDetail /></AdminRoute>} />
-          <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />
+                    <Route element={<RequireAuth role="user" />}>
+                      <Route path="/my" element={<MyDashboard />} />
+                      <Route path="/my/rules" element={<MyRules />} />
+                      <Route path="/my/rules/:id" element={<PerId><MyRuleDetail /></PerId>} />
+                      <Route path="/my/landing" element={<MyLandingNodes />} />
+                    </Route>
 
-          {/* Regular user routes */}
-          <Route path="/my" element={<UserRoute><MyDashboard /></UserRoute>} />
-          <Route path="/my/rules" element={<UserRoute><MyRules /></UserRoute>} />
-          <Route path="/my/rules/:id" element={<UserRoute><MyRuleDetail /></UserRoute>} />
-          <Route path="/my/landing" element={<UserRoute><MyLandingNodes /></UserRoute>} />
-
-          {/* Shared routes */}
-          <Route path="/proxies" element={<ProtectedRoute><Proxies /></ProtectedRoute>} />
-          <Route path="/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
-
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-        </CopyFmtProvider>
-        </BlurProvider>
-        </ConfirmProvider>
-      </UserProvider>
+                    <Route path="/proxies" element={<Proxies />} />
+                    <Route path="/change-password" element={<ChangePassword />} />
+                    <Route path="*" element={<NotFound />} />
+                  </Route>
+                </Route>
+              </Routes>
+            </ConfirmProvider>
+          </PrefsProvider>
+        </SessionProvider>
+      </ToastProvider>
     </BrowserRouter>
   )
 }

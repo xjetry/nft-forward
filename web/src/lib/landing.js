@@ -1,13 +1,25 @@
-/* Client-side proxy-URI parsing and endpoint rewriting — the JS counterpart of
-   the server's internal/landing package. It lives in the browser because the
-   user's own proxy URIs are kept in localStorage and must never reach the
-   server (privacy). The server still resolves admin-assigned landing nodes;
-   this handles the user's own ones and merges them in, with the user's URIs
-   winning on a host:port collision. */
+/* 代理 URI 的解析、端点改写，以及“代理节点目录”的推导 —— 服务端
+   internal/landing 包在浏览器里的对应物。
+
+   隐私边界：用户手动填写的代理 URI 只存在 localStorage，不会发给服务端。
+   订阅地址不在这条边界内：抓取订阅要经过服务端的 /sub-fetch 代理，订阅
+   URL 会到达服务端（抓回来的节点缓存仍只存在浏览器）。
+
+   服务端负责解析管理员分配的落地节点；这里负责用户自己的节点，并把两者
+   合并成一份目录，host:port 冲突时用户自己的优先。 */
+
+import { api } from './api.js'
 
 const LS_PREFIX = 'nf-landing-uris:'
 const LS_SUB_URL_PREFIX = 'nf-sub-urls:'
 const LS_SUB_CACHE_PREFIX = 'nf-sub-cache:'
+
+/* 本地数据（URI、订阅、订阅缓存、本地角色）任何一项变化都发同一个事件。
+   同一个标签页里的其它组件收不到原生的 storage 事件，靠它得知变化；
+   useLandingCatalog 同时监听两者，所以所有读取方只有这一种同步方式。 */
+function notifyChanged() {
+  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch { /* 非浏览器环境 */ }
+}
 
 export function loadLocalURIs(username) {
   if (!username) return ''
@@ -20,9 +32,7 @@ export function saveLocalURIs(username, text) {
     if (text.trim()) localStorage.setItem(LS_PREFIX + username, text)
     else localStorage.removeItem(LS_PREFIX + username)
   } catch { /* storage unavailable — non-fatal */ }
-  // Same-tab listeners (the nav) don't get the native 'storage' event, so emit
-  // our own so the landing-nodes entry can appear/disappear immediately.
-  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch { /* SSR/no window */ }
+  notifyChanged()
 }
 
 export function hasLocalURIs(username) {
@@ -44,7 +54,7 @@ export function saveSubURLs(username, text) {
     if (text.trim()) localStorage.setItem(LS_SUB_URL_PREFIX + username, text)
     else localStorage.removeItem(LS_SUB_URL_PREFIX + username)
   } catch {}
-  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+  notifyChanged()
 }
 
 export function loadSubCache(username) {
@@ -61,7 +71,7 @@ export function saveSubCache(username, nodes) {
     if (nodes.length) localStorage.setItem(LS_SUB_CACHE_PREFIX + username, JSON.stringify(nodes))
     else localStorage.removeItem(LS_SUB_CACHE_PREFIX + username)
   } catch {}
-  try { window.dispatchEvent(new Event('nf-landing-changed')) } catch {}
+  notifyChanged()
 }
 
 export function nodeRoleKey(n) {
@@ -89,62 +99,125 @@ export function nodeHasRole(roles, n, bit) {
   return !!(key && (roleBits(roles[key]) & bit))
 }
 
-export async function fetchNodeRoles() {
-  try {
-    const res = await fetch('/api/node-roles')
-    if (!res.ok) return {}
-    const d = await res.json()
-    const out = {}
-    for (const [k, v] of Object.entries(d?.roles || {})) {
-      const bits = roleBits(v)
-      if (bits) out[k] = bits
-    }
-    return out
-  } catch { return {} }
+function cleanRoles(roles) {
+  const out = {}
+  for (const [k, v] of Object.entries(roles || {})) {
+    const bits = roleBits(v)
+    if (bits) out[k] = bits
+  }
+  return out
 }
 
-export async function saveNodeRoles(roles) {
-  const clean = {}
-  for (const [k, v] of Object.entries(roles)) {
-    const bits = roleBits(v)
-    if (bits) clean[k] = bits
-  }
-  await fetch('/api/node-roles', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ roles: clean }),
+/* 读取服务端的角色表。失败时抛出，而不是返回空表：空表与“确实没有任何
+   角色”无法区分，调用方会据此把所有节点当成未配置，写入方更会用这张
+   空表覆盖掉服务端的整张表。 */
+export async function fetchNodeRoles() {
+  const d = await api.get('/node-roles')
+  return cleanRoles(d?.roles)
+}
+
+/* 服务端角色表的写入口。
+
+   服务端接口是“整表覆盖”：POST 的内容就是新的全表，而这张表是全局的
+   （所有用户、所有节点共用一行设置）。所以写入必须基于最新的表来改，
+   不能基于页面加载时读到的那份：
+   - 每次写入都先重新读表，再把改动（mutate）应用上去，然后整表写回；
+   - 写入排成一条串行队列，同一个页面连续点击不会并发发出多份整表、
+     以到达顺序决定谁覆盖谁。
+   这把“用旧表覆盖别人的改动”的窗口从“页面打开期间”缩到“一次读写之间”；
+   要彻底消除需要服务端提供按键更新的接口。
+
+   返回写入后的整表。 */
+let roleWriteQueue = Promise.resolve()
+export function mutateNodeRoles(mutate) {
+  const task = roleWriteQueue.then(async () => {
+    const next = cleanRoles(mutate(await fetchNodeRoles()))
+    await api.post('/node-roles', { roles: next })
+    return next
   })
-  return clean
+  // 队列本身不能因某次失败而中断；失败由 task 的调用方处理。
+  roleWriteQueue = task.catch(() => {})
+  return task
 }
 
 const LS_LOCAL_ROLES_PREFIX = 'nf-local-roles:'
+
+/* 本地角色是对服务端角色表的“逐节点覆盖”：某个 key 在本地有值，就以本地
+   为准，否则沿用服务端的值。本地值可以是 0 —— 它表示“我明确不要这个节点
+   的任何角色”，用来盖掉服务端给它标的角色，所以读写都必须保留 0，不能把
+   它当成“没有这一项”清理掉。 */
+function normalizeOverrides(roles) {
+  const out = {}
+  for (const [k, v] of Object.entries(roles || {})) out[k] = roleBits(v)
+  return out
+}
 
 export function loadLocalRoles(username) {
   if (!username) return {}
   try {
     const raw = localStorage.getItem(LS_LOCAL_ROLES_PREFIX + username)
-    const parsed = raw ? JSON.parse(raw) : {}
-    const out = {}
-    for (const [k, v] of Object.entries(parsed)) {
-      const bits = roleBits(v)
-      if (bits) out[k] = bits
-    }
-    return out
+    return normalizeOverrides(raw ? JSON.parse(raw) : {})
   } catch { return {} }
 }
 
 export function saveLocalRoles(username, roles) {
   if (!username) return
-  const clean = {}
-  for (const [k, v] of Object.entries(roles)) {
-    const bits = roleBits(v)
-    if (bits) clean[k] = bits
-  }
+  const clean = normalizeOverrides(roles)
   try {
     if (Object.keys(clean).length) localStorage.setItem(LS_LOCAL_ROLES_PREFIX + username, JSON.stringify(clean))
     else localStorage.removeItem(LS_LOCAL_ROLES_PREFIX + username)
   } catch {}
+  notifyChanged()
 }
+
+/* 生效角色 = 本地覆盖优先，否则服务端值。返回的表里只有非 0 的项。 */
+export function effectiveRoles(serverRoles, localRoles) {
+  const out = { ...(serverRoles || {}) }
+  for (const [k, v] of Object.entries(localRoles || {})) {
+    if (v) out[k] = v
+    else delete out[k]
+  }
+  return out
+}
+
+/* 把某个节点的生效角色设为 value，返回新的本地覆盖表。覆盖值与服务端值
+   相同时删掉这一项：它不再表达任何差异，留着只会在服务端值以后变化时
+   继续把它盖住。 */
+function withOverride(serverRoles, localRoles, key, value) {
+  const next = { ...localRoles }
+  if (value === roleBits(serverRoles?.[key])) delete next[key]
+  else next[key] = value
+  return next
+}
+
+function effectiveBits(serverRoles, localRoles, key) {
+  return key in (localRoles || {}) ? roleBits(localRoles[key]) : roleBits(serverRoles?.[key])
+}
+
+/* 在“生效角色”上翻转一个角色位，结果记为本地覆盖。必须从生效值出发计算：
+   只在本地表上翻转的话，服务端已经标了的位永远关不掉（本地表里没有它，
+   翻转等于把它再打开一次）。 */
+export function toggleLocalRole(serverRoles, localRoles, n, bit) {
+  const key = nodeRoleKey(n)
+  if (!key) return localRoles
+  return withOverride(serverRoles, localRoles, key, effectiveBits(serverRoles, localRoles, key) ^ bit)
+}
+
+/* 对一批节点统一打开（on=true）或关闭某个角色位，语义同 toggleLocalRole。 */
+export function setLocalRoleBatch(serverRoles, localRoles, nodes, bit, on) {
+  let next = localRoles
+  for (const n of nodes) {
+    const key = nodeRoleKey(n)
+    if (!key) continue
+    const cur = effectiveBits(serverRoles, next, key)
+    next = withOverride(serverRoles, next, key, on ? (cur | bit) : (cur & ~bit))
+  }
+  return next
+}
+
+/* 下面两个函数直接改一张角色表，用于管理员编辑服务端角色表（配合
+   mutateNodeRoles）。用户侧编辑的是本地覆盖，用上面的 toggleLocalRole /
+   setLocalRoleBatch。 */
 
 // Toggle a single role bit for one node, leaving its other bit untouched.
 export function applyNodeRole(roles, n, bit) {
@@ -181,8 +254,15 @@ export function rolesFirstOrder(nodes, roleOf) {
   return configured.concat(unconfigured)
 }
 
+/* 节点 / 出口地址的规范键："host:port"，IPv6 的 host 带方括号。
+   landingIndex、mergeLanding 以及规则出口与落地节点的匹配都用这一个函数
+   产生键 —— 任何地方手写 `${host}:${port}` 都会在 IPv6 下与这里对不上。 */
+export function hostPortKey(host, port) {
+  return joinHostPort(String(host), port)
+}
+
 export function nodeKey(n) {
-  return n.host && n.port ? joinHostPort(n.host, n.port) : null
+  return n.host && n.port ? hostPortKey(n.host, n.port) : null
 }
 
 /* Parse a multiline blob of proxy URIs into landing nodes, skipping blank
@@ -243,6 +323,68 @@ export function rewriteEndpoint(uri, host, port) {
 
 export function tryParseURI(uri) {
   return parseOne((uri || '').trim())
+}
+
+/* ---------- 代理节点目录 ----------
+
+   “有哪些落地节点 / 直连节点”由这一处推导，所有页面（规则表单的出口
+   选择、规则列表的中转 URI、落地节点页、我的代理页）消费同一份结果。
+   口径：
+     全部节点 = 手动 URI ∪ 订阅缓存 ∪ 服务端分配；按 hostPortKey 去重，
+               先出现的保留，所以用户自己的节点优先于分配的。
+     落地节点 = 全部节点里生效角色含 ROLE_LANDING 的（可作规则出口）。
+     直连节点 = 全部节点里生效角色含 ROLE_DIRECT 的（直接出现在代理列表）。
+   每个节点带 source：'local'（来自本浏览器）或 'admin'（服务端分配）。 */
+
+/* 读出本浏览器里的两类节点。 */
+export function loadLocalNodes(username) {
+  return { manual: parseURIs(loadLocalURIs(username)), sub: loadSubCache(username) }
+}
+
+/**
+ * 纯函数：由三路来源与生效角色表推导目录。
+ * @param {{ manual?: any[], sub?: any[], server?: any[], roles?: Record<string, number> }} sources
+ */
+export function buildCatalog({ manual = [], sub = [], server = [], roles = {} }) {
+  const tag = (list, source) => (list || []).map(n => ({ ...n, source }))
+  const all = mergeLanding(tag(manual, 'local'), tag(sub, 'local'), tag(server, 'admin'))
+  const landing = all.filter(n => nodeHasRole(roles, n, ROLE_LANDING))
+  const direct = all.filter(n => nodeHasRole(roles, n, ROLE_DIRECT))
+  return { all, landing, direct, landingByKey: landingIndex(landing) }
+}
+
+/* 规则的出口若是目录里的落地节点，返回该节点以及“把节点 URI 的端点换成
+   规则入口”后的中转 URI（双栈规则另有一条 v6 的）；否则返回 null。 */
+export function relayFor(rule, landingByKey) {
+  if (!rule?.exit_host || !rule?.exit_port) return null
+  const node = landingByKey.get(hostPortKey(rule.exit_host, rule.exit_port))
+  if (!node) return null
+  const rewrite = (entry) => {
+    const ep = entry ? splitEndpoint(entry) : null
+    return ep ? rewriteEndpoint(node.uri, ep.host, ep.port) : null
+  }
+  return { node, relay_uri: rewrite(rule.entry), relay_uri_v6: rewrite(rule.entry_v6) }
+}
+
+/* 给规则补上落地出口的展示信息与中转 URI。出口不是落地节点、或规则还没有
+   入口可用于改写时，原样返回。 */
+export function enrichRule(rule, landingByKey) {
+  const hit = relayFor(rule, landingByKey)
+  if (!hit || !hit.relay_uri) return rule
+  const out = { ...rule, exit_kind: 'landing', landing_name: hit.node.name, landing_protocol: hit.node.protocol, relay_uri: hit.relay_uri }
+  if (hit.relay_uri_v6) out.relay_uri_v6 = hit.relay_uri_v6
+  return out
+}
+
+/* 往手动 URI 列表末尾追加一条（已存在则不动）。返回是否真的追加了。 */
+export function addLocalURI(username, uri) {
+  const line = (uri || '').trim()
+  if (!username || !line) return false
+  const lines = loadLocalURIs(username).split('\n').map(l => l.trim()).filter(Boolean)
+  if (lines.includes(line)) return false
+  lines.push(line)
+  saveLocalURIs(username, lines.join('\n'))
+  return true
 }
 
 /* ---------- internals ---------- */
