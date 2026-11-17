@@ -85,7 +85,7 @@ test('动效、全大写、原生对话框', () => {
   assert.deepEqual(rulesHit('startTransition(() => setX(1))'), [])
 })
 
-test('已移除的旧类名', () => {
+test('没有样式定义的类名', () => {
   assert.deepEqual(rulesHit('<i className="btn-primary" />'), ['legacy-class'])
   assert.deepEqual(rulesHit('<i className="input-field font-mono" />'), ['legacy-class'])
   assert.deepEqual(rulesHit('<i className="user-hero-main" />'), ['legacy-class'])

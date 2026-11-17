@@ -97,13 +97,13 @@ const FEATURE_ONLY = [
   {
     id: 'legacy-class',
     re: /(?<![\w-])(?:btn-(?:primary|secondary|danger(?:-sm)?)|icon-btn(?:-danger)?|input-field|card-header|stat-card|stat-sub|seg-label|seg-span|mobile-card|tbl-scroll|copy-panel[a-z-]*|detail-(?:grid|item|label|value)|route-(?:stack|line|name|node)|proxy-[a-z-]+|user-[a-z]+(?:-[a-z]+)*|admin-[a-z]+(?:-[a-z]+)*|settings-[a-z]+(?:-[a-z]+)*|sidebar-[a-z]+(?:-[a-z]+)*|app-(?:sidebar|main|content|topbar|panel|table-scroll)|panel-(?:toolbar|filterbar)|page-header|search-input(?:-field)?|toolbar-button[a-z-]*|mini-metric[a-z-]*|donut-[a-z]+|dot-grid|tag-(?:tcp|udp|tcpudp|kernel|user)|animate-(?:in|toast|fadeout))(?![\w-])/g,
-    why: '这个类名已从 index.css 移除，不再有任何样式',
+    why: 'index.css 里没有这个类，写上去不会有任何样式',
   },
   {
     // card / fl 是普通英文单词，只在 className 的字面量里才当作类名看待。
     id: 'legacy-class',
     re: /className=\{?[`"'][^`"']*?(?<![\w-])(?:card|fl)(?![\w-])/g,
-    why: '.card / .fl 已移除，用 <Card> 与 <Field>',
+    why: 'index.css 里没有 .card / .fl，用 <Card> 与 <Field>',
   },
 ]
 

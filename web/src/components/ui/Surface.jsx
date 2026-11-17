@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { copyToClipboard } from '../../lib/clipboard'
 import { cx } from './cx'
 import { IconButton } from './Button'
-import { IconCheck, IconChevronRight, IconCopy, IconMore } from './icons'
+import { IconAlert, IconCheck, IconChevronRight, IconCopy, IconMore } from './icons'
 import { moveFocusByArrow, useAnchoredPosition, useDismiss } from './popover'
 
 /* ---------- 卡片 ---------- */
@@ -143,41 +143,56 @@ export function Meter({ value, max, tone = 'accent', label, className }) {
 
 /* ---------- 复制 ---------- */
 
-/* 复制成功后图标短暂换成对勾：反馈就落在用户刚点的位置上，不需要另弹
-   气泡或 toast。 */
-function useCopied() {
-  const [copied, setCopied] = useState(false)
+/* 复制的结果就落在用户刚点的位置上：成功换成对勾，失败换成警示并说明
+   怎么办，片刻后都回到原样。失败必须可见 —— 非安全上下文（HTTP 且不是
+   localhost）下剪贴板 API 不可用，execCommand 兜底也可能被浏览器拒绝，
+   这时如果什么都不显示，用户分不清“已经复制了”和“没有反应”。 */
+const COPY_LABEL = { idle: '复制', copied: '已复制', failed: '复制失败，请手动选中后复制' }
+
+/** @returns {readonly ['idle' | 'copied' | 'failed', (text: string) => void]} */
+function useCopy() {
+  const [status, setStatus] = useState(/** @type {'idle' | 'copied' | 'failed'} */ ('idle'))
   const timer = useRef(/** @type {ReturnType<typeof setTimeout> | undefined} */ (undefined))
-  const flash = () => {
-    setCopied(true)
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setCopied(false), 1500)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = (/** @type {string} */ text) => {
+    const settle = (/** @type {'copied' | 'failed'} */ next) => {
+      setStatus(next)
+      clearTimeout(timer.current)
+      timer.current = setTimeout(() => setStatus('idle'), next === 'failed' ? 4000 : 1500)
+    }
+    copyToClipboard(text).then(() => settle('copied'), () => settle('failed'))
   }
-  return /** @type {const} */ ([copied, flash])
+  return /** @type {const} */ ([status, copy])
 }
+
+/** @param {{ status: 'idle' | 'copied' | 'failed', size: number }} props */
+function CopyGlyph({ status, size }) {
+  if (status === 'copied') return <IconCheck size={size} strokeWidth={2.5} />
+  if (status === 'failed') return <IconAlert size={size} />
+  return <IconCopy size={size} />
+}
+
+const COPY_TONE = { idle: undefined, copied: 'text-ok-ink', failed: 'text-danger-ink' }
 
 /**
  * 可点击复制的行内文字（表格里的地址等）。是真正的 <button>，键盘可达。
- * 复制失败时文字仍在屏幕上，可以手动选中复制，所以失败不额外打扰。
  * @param {{ text: string, className?: string, children?: import('react').ReactNode }} props
  */
 export function CopyText({ text, className, children }) {
-  const [copied, flash] = useCopied()
-  const copy = (e) => {
-    e.stopPropagation()
-    copyToClipboard(text).then(flash).catch(() => {})
-  }
+  const [status, copy] = useCopy()
   return (
     <button
       type="button"
-      onClick={copy}
-      title={copied ? '已复制' : '点击复制'}
+      onClick={(e) => { e.stopPropagation(); copy(text) }}
+      title={status === 'idle' ? '点击复制' : COPY_LABEL[status]}
       className={cx('group inline-flex max-w-full items-center gap-1 rounded-chip text-left', className)}
     >
       <span className="min-w-0 truncate">{children ?? text}</span>
-      <span className={cx('flex-none', copied ? 'text-ok-ink' : 'text-ink-mut opacity-60 group-hover:opacity-100')}>
-        {copied ? <IconCheck size={12} strokeWidth={2.5} /> : <IconCopy size={12} />}
+      <span className={cx('flex-none', COPY_TONE[status] ?? 'text-ink-mut opacity-60 group-hover:opacity-100')}>
+        <CopyGlyph status={status} size={12} />
       </span>
+      {/* 行内没有位置放文字，结果另外读给读屏软件。 */}
+      <span className="sr-only" role="status">{status === 'idle' ? '' : COPY_LABEL[status]}</span>
     </button>
   )
 }
@@ -189,7 +204,7 @@ export function CopyText({ text, className, children }) {
  * children 用于需要自定义渲染（如脱敏）的情况，复制的始终是 `text`。
  */
 export function CodeBlock({ text, copyable = true, wrap = true, className, children }) {
-  const [copied, flash] = useCopied()
+  const [status, copy] = useCopy()
   return (
     <div className={cx('flex items-start gap-1 rounded-control border border-line bg-subtle py-1 pl-3 pr-1', className)}>
       <pre className={cx(
@@ -199,13 +214,8 @@ export function CodeBlock({ text, copyable = true, wrap = true, className, child
         {children ?? text}
       </pre>
       {copyable && (
-        <IconButton
-          size="sm"
-          label={copied ? '已复制' : '复制'}
-          onClick={() => copyToClipboard(text).then(flash).catch(() => {})}
-          className={copied ? 'text-ok-ink' : undefined}
-        >
-          {copied ? <IconCheck size={14} strokeWidth={2.5} /> : <IconCopy size={14} />}
+        <IconButton size="sm" label={COPY_LABEL[status]} onClick={() => copy(text)} className={COPY_TONE[status]}>
+          <CopyGlyph status={status} size={14} />
         </IconButton>
       )}
     </div>

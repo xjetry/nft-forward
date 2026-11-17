@@ -13,8 +13,9 @@ import { Button, Card, CardHeader, Empty, Meter, SensText, Stat, TextLink } from
 export default function Dashboard() {
   const dashboard = useResource(() => api.get('/dashboard'), [])
   return (
-    // 宽屏下整页占满视口高度，两张卡片各自在内部滚动；窄屏下按内容自然增高。
-    <Page className="lg:h-full lg:min-h-0">
+    // 两张卡片并排时（xl 起）整页占满视口高度，各自在内部滚动；上下堆叠时
+    // 按内容自然增高。
+    <Page className="xl:h-full xl:min-h-0">
       <PageHeader title="概览" />
       <ResourceView resource={dashboard}>
         {data => <Overview data={data} />}
@@ -61,7 +62,10 @@ function Overview({ data }) {
         <Stat label="用户" value={user_count} />
       </Card>
 
-      <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-[minmax(0,1fr)]">
+      {/* 节点表是这一页的主体，拿走剩余宽度；右栏固定为窄屏卡片的宽度，
+          “我添加的节点”在那个宽度下本来就要能用。并排从 xl 才开始：再窄
+          的话节点表放不下它的列。 */}
+      <div className="grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_22.5rem] xl:grid-rows-[minmax(0,1fr)]">
         <div className="flex min-h-0 flex-col">
           <NodesCard nodes={nodes} rulesOf={rulesOf} trafficOf={trafficOf} />
         </div>
@@ -74,6 +78,9 @@ function Overview({ data }) {
 }
 
 const UNSORTED = { col: null, dir: null }
+
+/** 节点的入口地址；组合节点等没有地址的返回空串。 */
+const entryOf = n => n.relay_host || n.address || ''
 
 function NodesCard({ nodes, rulesOf, trafficOf }) {
   const blurred = useBlur()
@@ -119,7 +126,6 @@ function NodesCard({ nodes, rulesOf, trafficOf }) {
             <thead>
               <tr>
                 <th>节点</th>
-                <th>入口地址</th>
                 <th>类型</th>
                 <SortableTh col="rules" sort={sort} onSort={onSort} align="right">规则</SortableTh>
                 <SortableTh col="traffic" sort={sort} onSort={onSort} align="right">流量</SortableTh>
@@ -130,15 +136,21 @@ function NodesCard({ nodes, rulesOf, trafficOf }) {
             <tbody>
               {rows.map(n => (
                 <tr key={n.id}>
-                  <td><TextLink to={`/nodes/${n.id}`} tone="ink" className="font-medium">{n.name}</TextLink></td>
-                  <td className="font-mono text-small text-ink-soft">
-                    <SensText blurred={blurred}>{n.relay_host || n.address || '--'}</SensText>
+                  {/* 入口地址作为名称下的第二行，而不是单独一列：流量格本来就是
+                      “数值 + 条形”两行，行高不变，表格却能少一列的宽度。 */}
+                  <td>
+                    <TextLink to={`/nodes/${n.id}`} tone="ink" className="font-medium">{n.name}</TextLink>
+                    {entryOf(n) && (
+                      <div className="mt-0.5 font-mono text-caption text-ink-mut">
+                        <SensText blurred={blurred}>{entryOf(n)}</SensText>
+                      </div>
+                    )}
                   </td>
                   <td><NodeTypeTag type={n.node_type} /></td>
                   <td className="num">{rulesOf(n)}</td>
                   <td className="num">
                     {/* 条形是相对值：以流量最大的节点为满格，用来比较节点之间的占比。 */}
-                    <div className="ml-auto flex w-24 flex-col items-end gap-1">
+                    <div className="ml-auto flex w-20 flex-col items-end gap-1">
                       <span>{fmtBytes(trafficOf(n))}</span>
                       <Meter value={trafficOf(n)} max={maxTraffic} label={`${n.name} 的流量占比`} />
                     </div>

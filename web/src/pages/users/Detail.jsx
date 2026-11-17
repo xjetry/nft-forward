@@ -517,7 +517,7 @@ function GrantNodesModal({ userId, allNodes, granted, onClose, reload }) {
     if (max == null) found.maxForwards = '填写不小于 1 的整数'
     setErrors(found)
     if (Object.keys(found).length) return
-    await api.post(`/users/${userId}/grants`, { node_ids: nodeIds.map(Number), max_forwards: max })
+    await api.post(`/users/${userId}/grants`, { node_ids: nodeIds, max_forwards: max })
     toast(`已授权 ${nodeIds.length} 个节点`)
     await reload()
     onClose()
@@ -569,7 +569,7 @@ function grantFormOf(grant) {
     maxForwards: String(grant.max_forwards),
     quotaGB: bytesToGBText(grant.traffic_quota_bytes),
     rate: String(grant.rate_limit_mbytes || 0),
-    roles: String(grant.roles || 0),
+    roles: grant.roles || 0,
   }
 }
 
@@ -601,7 +601,7 @@ function GrantEditModal({ userId, node, grant, onClose, reload }) {
       changed('maxForwards') && ['max-forwards', { max_forwards: maxForwards }],
       changed('quotaGB') && ['quota', { traffic_quota_bytes: Math.round(quotaGB * GB) }],
       changed('rate') && ['rate-limit', { rate_limit_mbytes: rate }],
-      changed('roles') && ['roles', { roles: Number(form.roles) }],
+      changed('roles') && ['roles', { roles: form.roles }],
     ].filter(Boolean)
     if (requests.length === 0) {
       onClose()

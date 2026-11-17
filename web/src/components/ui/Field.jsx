@@ -41,10 +41,12 @@ export function Field({ label, hint, error, optional = false, layout = 'stack', 
         className,
       )}>
         {/* row 布局下标签占一个控件高度并垂直居中，文字因此与右侧控件里的
-            文字落在同一条视觉中线上，而不是贴着控件顶边。 */}
+            文字落在同一条视觉中线上，而不是贴着控件顶边。self-start 让它
+            不被网格拉伸到整行高度：右侧还有提示文字时，行比控件高，拉伸后
+            标签会对着“控件 + 提示”的中线而不是控件的中线。 */}
         <label htmlFor={id} className={cx(
           'text-small font-medium text-ink-soft',
-          layout === 'row' && 'sm:flex sm:min-h-control sm:items-center',
+          layout === 'row' && 'sm:flex sm:min-h-control sm:items-center sm:self-start',
         )}>
           {label}
           {optional && <span className="ml-1.5 font-normal text-ink-mut">可选</span>}
