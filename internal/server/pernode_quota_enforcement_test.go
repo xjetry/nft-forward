@@ -75,8 +75,8 @@ func TestChainExcludedWhenOneHopExceedsQuota(t *testing.T) {
 	ruleID, _ := db.CreateRule(tx, rl)
 	rl.ID = ruleID
 	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
-		{NodeID: n1.ID, ViaNodeID: n1.ID},
-		{NodeID: n2.ID, ViaNodeID: n2.ID},
+		{NodeID: n1.ID, LogicalNodeID: n1.ID},
+		{NodeID: n2.ID, LogicalNodeID: n2.ID},
 	}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)

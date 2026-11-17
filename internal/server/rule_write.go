@@ -64,12 +64,13 @@ func decodeRuleBody(r *http.Request, body ruleBody) string {
 	return ""
 }
 
-// explicitHop 是管理员直接给出的物理链里的一跳。ViaNodeID 标明这一跳属于哪个逻辑节
+// explicitHop 是管理员直接给出的物理链里的一跳。LogicalNodeID 标明这一跳属于哪个逻辑节
 // 点，省略时取这一跳自己的 node_id（见 rulechange 对显式链的说明）。
 type explicitHop struct {
-	NodeID    int64  `json:"node_id"`
-	Mode      string `json:"mode"`
-	ViaNodeID int64  `json:"via_node_id"`
+	NodeID int64  `json:"node_id"`
+	Mode   string `json:"mode"`
+	// 请求里的键仍是 via_node_id（与逐跳视图给出的键同名），不随 Go 名改。
+	LogicalNodeID int64 `json:"via_node_id"`
 }
 
 func (b ruleWriteBody) fields() rulechange.Fields {
@@ -82,7 +83,7 @@ func (b ruleWriteBody) path() rulechange.Path {
 		ExitMode: b.ExitMode, EntryPort: b.EntryPort,
 	}
 	for _, h := range b.Hops {
-		p.Hops = append(p.Hops, chain.Hop{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID})
+		p.Hops = append(p.Hops, chain.Hop{NodeID: h.NodeID, Mode: h.Mode, LogicalNodeID: h.LogicalNodeID})
 	}
 	return p
 }

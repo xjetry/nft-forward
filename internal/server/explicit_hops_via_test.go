@@ -7,7 +7,7 @@ import (
 	"nft-forward/internal/db"
 )
 
-// Billing groups rule_hops by (rule_id, via_node_id) and charges each logical
+// Billing groups rule_hops by (rule_id, logical_node_id) and charges each logical
 // segment once at its via (accounting.Place). A composite is the grant unit:
 // all its flattened physical children must share via = the composite's id so the
 // traffic bills to the composite's grant, not to the (ungranted) children. The
@@ -35,8 +35,8 @@ func TestExplicitHopsCreateHonorsViaNodeID(t *testing.T) {
 		t.Fatalf("want 2 hops, got %d", len(hops))
 	}
 	for i, h := range hops {
-		if h.ViaNodeID != comp.ID {
-			t.Errorf("hop %d (node %d) via = %d, want composite %d", i, h.NodeID, h.ViaNodeID, comp.ID)
+		if h.LogicalNodeID != comp.ID {
+			t.Errorf("hop %d (node %d) via = %d, want composite %d", i, h.NodeID, h.LogicalNodeID, comp.ID)
 		}
 	}
 }
@@ -61,7 +61,7 @@ func TestExplicitHopsCreateViaDefaultsToNode(t *testing.T) {
 		},
 	})
 	hops, _ := db.ListRuleHops(d, rid)
-	if len(hops) != 2 || hops[0].ViaNodeID != a.ID || hops[1].ViaNodeID != b.ID {
+	if len(hops) != 2 || hops[0].LogicalNodeID != a.ID || hops[1].LogicalNodeID != b.ID {
 		t.Fatalf("plain explicit hops via should default to node id, got %+v", hops)
 	}
 }
@@ -94,8 +94,8 @@ func TestExplicitHopsUpdateHonorsViaNodeID(t *testing.T) {
 		t.Fatalf("want 2 hops, got %d", len(hops))
 	}
 	for i, h := range hops {
-		if h.ViaNodeID != comp.ID {
-			t.Errorf("updated hop %d (node %d) via = %d, want composite %d", i, h.NodeID, h.ViaNodeID, comp.ID)
+		if h.LogicalNodeID != comp.ID {
+			t.Errorf("updated hop %d (node %d) via = %d, want composite %d", i, h.NodeID, h.LogicalNodeID, comp.ID)
 		}
 	}
 }

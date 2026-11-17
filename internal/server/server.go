@@ -306,7 +306,7 @@ func buildRules(d *sql.DB, ruleHops []*db.RuleHop) ([]nft.Rule, error) {
 				// Shaping follows the hop's logical segment's grant: the entry
 				// segment reads the entry grant, a middle-layer segment reads the
 				// layer grant — the same logical node its quota is tracked on.
-				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, rh.ViaNodeID}]; ok {
+				if gs, ok := shapes[[2]int64{r.OwnerID.Int64, rh.LogicalNodeID}]; ok {
 					rule.ShapeGroup = gs.GrantID
 					rule.RateMBytes = int(gs.RateLimitMBytes)
 				}

@@ -156,9 +156,9 @@ func TestBillingEntryOnlyAndFoldedGrantBytes(t *testing.T) {
 	id, _ := db.CreateRule(tx, r)
 	r.ID = id
 	_, _, _, err := db.RegenerateRule(tx, r, []db.HopInput{
-		{NodeID: entry.ID, Mode: "userspace", ViaNodeID: entry.ID},
-		{NodeID: m1.ID, Mode: "userspace", ViaNodeID: mid.ID},
-		{NodeID: m2.ID, Mode: "userspace", ViaNodeID: mid.ID},
+		{NodeID: entry.ID, Mode: "userspace", LogicalNodeID: entry.ID},
+		{NodeID: m1.ID, Mode: "userspace", LogicalNodeID: mid.ID},
+		{NodeID: m2.ID, Mode: "userspace", LogicalNodeID: mid.ID},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -227,8 +227,8 @@ func TestApplyCountersMultiplier(t *testing.T) {
 	ruleID, _ := db.CreateRule(tx, rl)
 	rl.ID = ruleID
 	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
-		{NodeID: n1.ID, Mode: "kernel", ViaNodeID: comp.ID},
-		{NodeID: n2.ID, Mode: "kernel", ViaNodeID: comp.ID},
+		{NodeID: n1.ID, Mode: "kernel", LogicalNodeID: comp.ID},
+		{NodeID: n2.ID, Mode: "kernel", LogicalNodeID: comp.ID},
 	}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestApplyCountersZeroMultiplierIsFree(t *testing.T) {
 	ruleID, _ := db.CreateRule(tx, rl)
 	rl.ID = ruleID
 	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
-		{NodeID: n1.ID, Mode: "kernel", ViaNodeID: comp.ID},
+		{NodeID: n1.ID, Mode: "kernel", LogicalNodeID: comp.ID},
 	}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestApplyCountersNegativeMultiplierBillsAtUnit(t *testing.T) {
 	ruleID, _ := db.CreateRule(tx, rl)
 	rl.ID = ruleID
 	if _, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
-		{NodeID: n1.ID, Mode: "kernel", ViaNodeID: comp.ID},
+		{NodeID: n1.ID, Mode: "kernel", LogicalNodeID: comp.ID},
 	}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)

@@ -7,18 +7,18 @@ import (
 )
 
 // seedChainRule 建一条两跳规则：入口跳在 entry 上，第二跳在 next 上；两跳都记在
-// 逻辑节点 via 名下（rule_hops.via_node_id）。返回规则 id 与两跳的 id。
-func seedChainRule(t *testing.T, d *sql.DB, uid, entry, next, via int64, port int) (ruleID, entryHop, nextHop int64) {
+// 逻辑节点 logical 名下（rule_hops.logical_node_id）。返回规则 id 与两跳的 id。
+func seedChainRule(t *testing.T, d *sql.DB, uid, entry, next, logical int64, port int) (ruleID, entryHop, nextHop int64) {
 	t.Helper()
 	res, err := d.Exec(`INSERT INTO rules(node_id, owner_id, name, proto, exit_host, exit_port, created_at) VALUES (?,?,?,?,?,?,0)`,
-		via, uid, "r", "tcp", "203.0.113.9", 443)
+		logical, uid, "r", "tcp", "203.0.113.9", 443)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ruleID, _ = res.LastInsertId()
 	hop := func(pos int, node int64, listen int) int64 {
-		res, err := d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, via_node_id) VALUES (?,?,?,?,?,?,?,?)`,
-			ruleID, pos, node, "tcp", listen, "203.0.113.9", 443, via)
+		res, err := d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, logical_node_id) VALUES (?,?,?,?,?,?,?,?)`,
+			ruleID, pos, node, "tcp", listen, "203.0.113.9", 443, logical)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -49,26 +49,26 @@ func TestEachSuppressionClauseWithdrawsTheRuleEverywhereAndNamesTheReason(t *tes
 	past := time.Now().Add(-time.Hour).Unix()
 	cases := []struct {
 		reason SuppressReason
-		// arrange 让规则命中这一条压制条件。via 是规则所记的逻辑节点（这里与入口
+		// arrange 让规则命中这一条压制条件。logical 是规则所记的逻辑节点（这里与入口
 		// 节点是同一个），next 是第二跳所在的节点。
-		arrange func(t *testing.T, d *sql.DB, uid, via, next int64)
+		arrange func(t *testing.T, d *sql.DB, uid, logical, next int64)
 	}{
-		{SuppressUserDisabled, func(t *testing.T, d *sql.DB, uid, via, next int64) {
+		{SuppressUserDisabled, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
 			mustExec(t, d, `UPDATE users SET disabled=1 WHERE id=?`, uid)
 		}},
-		{SuppressUserExpired, func(t *testing.T, d *sql.DB, uid, via, next int64) {
+		{SuppressUserExpired, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
 			mustExec(t, d, `UPDATE users SET expires_at=? WHERE id=?`, past, uid)
 		}},
-		{SuppressUserQuota, func(t *testing.T, d *sql.DB, uid, via, next int64) {
+		{SuppressUserQuota, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
 			mustExec(t, d, `UPDATE users SET traffic_quota_bytes=1000, traffic_used_bytes=1000 WHERE id=?`, uid)
 		}},
-		{SuppressNodeDisabled, func(t *testing.T, d *sql.DB, uid, via, next int64) {
+		{SuppressNodeDisabled, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
 			mustExec(t, d, `UPDATE nodes SET disabled=1 WHERE id=?`, next)
 		}},
-		{SuppressGrantQuota, func(t *testing.T, d *sql.DB, uid, via, next int64) {
-			mustExec(t, d, `UPDATE user_nodes SET traffic_quota_bytes=1000, traffic_used_bytes=1000 WHERE user_id=? AND node_id=?`, uid, via)
+		{SuppressGrantQuota, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
+			mustExec(t, d, `UPDATE user_nodes SET traffic_quota_bytes=1000, traffic_used_bytes=1000 WHERE user_id=? AND node_id=?`, uid, logical)
 		}},
-		{SuppressExitQuota, func(t *testing.T, d *sql.DB, uid, via, next int64) {
+		{SuppressExitQuota, func(t *testing.T, d *sql.DB, uid, logical, next int64) {
 			mustExec(t, d, `INSERT INTO user_landing_exits(user_id, host, port, present, quota_bytes, used_bytes) VALUES (?,?,?,1,1000,1000)`,
 				uid, "203.0.113.9", 443)
 		}},
@@ -86,7 +86,7 @@ func TestEachSuppressionClauseWithdrawsTheRuleEverywhereAndNamesTheReason(t *tes
 			// 对照规则只有一跳、只在入口节点上：命中“第二跳所在节点被停用”的是
 			// 被测规则，不是它。
 			controlHop := seedRuleWithTraffic(t, d, other, entry, 22001, 0)
-			mustExec(t, d, `UPDATE rule_hops SET via_node_id=node_id WHERE id=?`, controlHop)
+			mustExec(t, d, `UPDATE rule_hops SET logical_node_id=node_id WHERE id=?`, controlHop)
 
 			if got := pushedHopIDs(t, d, entry); !got[entryHop] || !got[controlHop] {
 				t.Fatalf("前置：压制条件成立之前两条规则都应下发到入口节点，实际 %v", got)
@@ -182,7 +182,7 @@ func TestSuppressionReportsTheFirstApplicableReason(t *testing.T) {
 	}
 }
 
-// 规则记在某个逻辑节点名下（rule_hops.via_node_id，例如一个组合）而物理跳在别的
+// 规则记在某个逻辑节点名下（rule_hops.logical_node_id，例如一个组合）而物理跳在别的
 // 节点上时，停用这个逻辑节点同样压制规则：它是用户买到的那条线路。
 func TestDisablingTheLogicalNodeSuppressesRulesBoughtThroughIt(t *testing.T) {
 	d := openTestDB(t)

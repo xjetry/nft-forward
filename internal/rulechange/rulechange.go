@@ -461,7 +461,7 @@ func (c *Changes) Update(actor Actor, ruleID int64, f Fields, p Path) (Result, *
 		}
 		kept := make([]chain.Hop, len(stored))
 		for i, sh := range stored {
-			kept[i] = chain.Hop{NodeID: sh.NodeID, Mode: sh.Mode, ViaNodeID: sh.ViaNodeID}
+			kept[i] = chain.Hop{NodeID: sh.NodeID, Mode: sh.Mode, LogicalNodeID: sh.LogicalNodeID}
 		}
 		chain.ExitChoice{Explicit: p.ExitMode, Current: kept[len(kept)-1].Mode}.Apply(kept)
 		hops = hopInputs(kept)
@@ -869,8 +869,8 @@ func (c *Changes) ruleOwnerSeats(rl *db.Rule) (map[int64]chain.Seat, *Error) {
 // 的逻辑路径：入口节点与中转层。这是搭任意链的通道，有意不校验角色与绑定边；链尾
 // 能否直接转发仍然检查（chain.CheckExit）。
 //
-// 没写 ViaNodeID 的跳自成一段：按授权计流量时一个逻辑段只在段首记一次、记到
-// ViaNodeID 指的逻辑节点上（accounting.Place 的 SegmentStart 与 Segment），把组合
+// 没写 LogicalNodeID 的跳自成一段：按授权计流量时一个逻辑段只在段首记一次、记到
+// LogicalNodeID 指的逻辑节点上（accounting.Place 的 SegmentStart 与 Segment），把组合
 // 展开写成显式链时各跳要带组合的 id。
 //
 // 逻辑路径由跳算出（db.LogicalPath），不由请求另给。表头的入口与中转层有三处读者：
@@ -885,13 +885,13 @@ func explicitChain(topo chain.Topology, p Path) (inputs []db.HopInput, entry int
 	hops := make([]chain.Hop, len(p.Hops))
 	segments := make([]int64, len(p.Hops))
 	for i, h := range p.Hops {
-		if h.ViaNodeID == 0 {
-			h.ViaNodeID = h.NodeID
+		if h.LogicalNodeID == 0 {
+			h.LogicalNodeID = h.NodeID
 		}
-		if _, ok := topo.Nodes[h.ViaNodeID]; !ok {
-			return nil, 0, nil, invalid("节点 %d 不存在", h.ViaNodeID)
+		if _, ok := topo.Nodes[h.LogicalNodeID]; !ok {
+			return nil, 0, nil, invalid("节点 %d 不存在", h.LogicalNodeID)
 		}
-		hops[i], segments[i] = h, h.ViaNodeID
+		hops[i], segments[i] = h, h.LogicalNodeID
 	}
 	entry, vias, err := db.LogicalPath(segments)
 	if err != nil {
@@ -912,7 +912,7 @@ func explicitChain(topo chain.Topology, p Path) (inputs []db.HopInput, entry int
 func hopInputs(hops []chain.Hop) []db.HopInput {
 	inputs := make([]db.HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
+		inputs[i] = db.HopInput{NodeID: h.NodeID, Mode: h.Mode, LogicalNodeID: h.LogicalNodeID}
 	}
 	return inputs
 }

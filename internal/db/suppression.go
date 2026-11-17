@@ -17,7 +17,7 @@ const (
 	// 属主的全局流量配额用尽。
 	SuppressUserQuota SuppressReason = "user_quota"
 	// 规则经过的某个节点被停用：某一跳所在的物理节点，或某一跳所属的逻辑节点
-	// （rule_hops.via_node_id，组合与中转层都记在这里）。
+	// （rule_hops.logical_node_id，组合与中转层都记在这里）。
 	SuppressNodeDisabled SuppressReason = "node_disabled"
 	// 规则经过的某条授权的流量配额用尽。
 	SuppressGrantQuota SuppressReason = "grant_quota"
@@ -70,13 +70,13 @@ const suppressedRulesSQL = `
 	 WHERE u.traffic_quota_bytes > 0 AND u.traffic_used_bytes >= u.traffic_quota_bytes
 	UNION ALL
 	SELECT rh.rule_id, 'node_disabled', 4
-	  FROM rule_hops rh JOIN nodes n ON n.id IN (rh.node_id, rh.via_node_id)
+	  FROM rule_hops rh JOIN nodes n ON n.id IN (rh.node_id, rh.logical_node_id)
 	 WHERE n.disabled = 1
 	UNION ALL
 	SELECT rh.rule_id, 'grant_quota', 5
 	  FROM rule_hops rh
 	  JOIN rules r ON r.id = rh.rule_id
-	  JOIN user_nodes un ON un.user_id = r.owner_id AND un.node_id = rh.via_node_id
+	  JOIN user_nodes un ON un.user_id = r.owner_id AND un.node_id = rh.logical_node_id
 	 WHERE un.traffic_quota_bytes > 0 AND un.traffic_used_bytes >= un.traffic_quota_bytes
 	UNION ALL
 	SELECT r.id, 'exit_quota', 6
@@ -92,7 +92,7 @@ const suppressedRulesSQL = `
 func NodesCarryingRulesThrough(d *sql.DB, nodeID int64) ([]int64, error) {
 	return queryInt64s(d, `
 		SELECT DISTINCT node_id FROM rule_hops
-		WHERE rule_id IN (SELECT rule_id FROM rule_hops WHERE node_id = ? OR via_node_id = ?)`,
+		WHERE rule_id IN (SELECT rule_id FROM rule_hops WHERE node_id = ? OR logical_node_id = ?)`,
 		nodeID, nodeID)
 }
 

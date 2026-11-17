@@ -197,13 +197,16 @@ type RuleHop struct {
 	TargetHost string `json:"target_host"`
 	TargetPort int    `json:"target_port"`
 	Mode       string `json:"mode"`
-	// ViaNodeID 是这一跳所属的逻辑节点：按入口与中转层推导的链里，是展开出这一跳的
+	// LogicalNodeID 是这一跳所属的逻辑节点：按入口与中转层推导的链里，是展开出这一跳的
 	// 那个入口或中转层（组合展开出的各跳都记组合的 id）；管理员直接给物理跳时由请求
 	// 写明，省略则是这一跳自己的节点。配额压制、按授权计流量、限速都按它分组，不按
 	// 物理节点。规则表头里的入口与中转层由各跳的这个值算出（LogicalPath），由
 	// RegenerateRule 与跳行一起写。
-	ViaNodeID int64  `json:"via_node_id"`
-	Comment   string `json:"comment"`
+	//
+	// JSON 键仍是 via_node_id：接口给出去的键不随 Go 名与列名改（server 包
+	// testdata/surfaces 的基线里有它）。
+	LogicalNodeID int64  `json:"via_node_id"`
+	Comment       string `json:"comment"`
 	// FoldedBytes 是这一跳的折算流量（rule_hops.total_bytes）：按这一跳所在物理节点
 	// 的计费方向折算，双向节点取上下行之和，单向节点取较大的一侧；不乘倍率与费率。
 	// 每一跳都是这个单位，入口跳也一样。它记在“规则的第几跳、哪台物理节点”这一格上：
@@ -753,11 +756,11 @@ func scanRule(r rowScanner) (*Rule, error) {
 	return rl, nil
 }
 
-const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,total_bytes,via_node_id`
+const ruleHopCols = `id,rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,total_bytes,logical_node_id`
 
 func scanRuleHop(r rowScanner) (*RuleHop, error) {
 	h := &RuleHop{}
-	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.FoldedBytes, &h.ViaNodeID); err != nil {
+	if err := r.Scan(&h.ID, &h.RuleID, &h.Position, &h.NodeID, &h.Proto, &h.ListenPort, &h.TargetHost, &h.TargetPort, &h.Mode, &h.Comment, &h.FoldedBytes, &h.LogicalNodeID); err != nil {
 		return nil, err
 	}
 	return h, nil

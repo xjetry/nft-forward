@@ -14,11 +14,11 @@ import (
 //   - u：规则属主——费率。无属主时为 NULL。
 //   - 末跳、段首由同一规则的其它跳行算出；落地出口看属主名下有没有在册的同一出口。
 const bookSQL = `
-SELECT rh.id, rh.rule_id, rh.proto, rh.listen_port, rh.via_node_id,
+SELECT rh.id, rh.rule_id, rh.proto, rh.listen_port, rh.logical_node_id,
        rh.position = 0,
        rh.position = (SELECT MAX(f.position) FROM rule_hops f WHERE f.rule_id = rh.rule_id),
        rh.position = (SELECT MIN(s.position) FROM rule_hops s
-                      WHERE s.rule_id = rh.rule_id AND s.via_node_id = rh.via_node_id),
+                      WHERE s.rule_id = rh.rule_id AND s.logical_node_id = rh.logical_node_id),
        rn.unidirectional,
        r.owner_id, en.rate_multiplier, u.billing_rate,
        r.exit_host, r.exit_port,

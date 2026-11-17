@@ -9,7 +9,7 @@
 //   - 逻辑节点：规则引用的节点——入口节点，或中转层里的一层。它可以是一台物理
 //     节点，也可以是一个组合。授权、配额、计价都记在逻辑节点上。
 //   - 物理节点：跑 agent、真正转发流量的那一台。组合不是物理节点。
-//   - 段：一个逻辑节点展开出的那一串物理跳。段里每一跳的 ViaNodeID 都是这个逻辑
+//   - 段：一个逻辑节点展开出的那一串物理跳。段里每一跳的 LogicalNodeID 都是这个逻辑
 //     节点。
 //   - 腿：相邻两跳之间，或末跳到目标之间的一段转发。腿的转发模式记在发起它的那
 //     一跳上（Hop.Mode）。
@@ -80,8 +80,8 @@ type Hop struct {
 	// Mode 是从这一跳出发的那条腿的转发模式。空表示推导没有为它指定，由
 	// EnforceModes 落成默认值。
 	Mode string
-	// ViaNodeID 是这一跳所属的逻辑节点。
-	ViaNodeID int64
+	// LogicalNodeID 是这一跳所属的逻辑节点。
+	LogicalNodeID int64
 }
 
 // MaxFlattenedHops 是一个逻辑节点展开后物理跳数的上限。嵌套可以让跳数成倍增长
@@ -92,7 +92,7 @@ const MaxFlattenedHops = 32
 
 // Flatten 把逻辑节点 nodeID 展开成它的段。物理节点展开成它自己这一跳（Mode 留空）；
 // 组合递归展开到物理节点为止——嵌套的组合是透明的，每一跳取“直接包含它的那个
-// 组合”里配置的 Mode，ViaNodeID 则一律是最外层的 nodeID。
+// 组合”里配置的 Mode，LogicalNodeID 则一律是最外层的 nodeID。
 //
 // 展开失败（节点不存在、组合没有成员、成员不存在、成环、超过 MaxFlattenedHops）
 // 返回错误，不返回部分结果：一个展不开的逻辑节点不能承载规则，展示时也没有可信
@@ -110,7 +110,7 @@ func (t Topology) segment(nodeID int64) (hops []Hop, composite bool, err error) 
 		return nil, false, errors.New("节点不存在")
 	}
 	if !n.Composite {
-		return []Hop{{NodeID: nodeID, ViaNodeID: nodeID}}, false, nil
+		return []Hop{{NodeID: nodeID, LogicalNodeID: nodeID}}, false, nil
 	}
 	count := 0
 	hops, err = t.flatten(nodeID, nodeID, map[int64]bool{}, &count)
@@ -120,10 +120,11 @@ func (t Topology) segment(nodeID int64) (hops []Hop, composite bool, err error) 
 	return hops, true, nil
 }
 
-// flatten 展开组合 compositeID。onPath 是当前递归路径上的组合，用来发现环：写入
+// flatten 展开组合 compositeID，展开出的每一跳都记在逻辑节点 logical 名下（最外层
+// 被展开的那个节点，嵌套的组合不改它）。onPath 是当前递归路径上的组合，用来发现环：写入
 // 时已拒绝成环，这里仍然检查，是为了对库里可能存在的陈旧数据也保证终止。count
 // 在整次展开里累计物理跳数。
-func (t Topology) flatten(compositeID, via int64, onPath map[int64]bool, count *int) ([]Hop, error) {
+func (t Topology) flatten(compositeID, logical int64, onPath map[int64]bool, count *int) ([]Hop, error) {
 	if onPath[compositeID] {
 		return nil, errors.New("组合节点存在环引用")
 	}
@@ -141,7 +142,7 @@ func (t Topology) flatten(compositeID, via int64, onPath map[int64]bool, count *
 			return nil, errors.New("子节点不存在")
 		}
 		if child.Composite {
-			sub, err := t.flatten(m.NodeID, via, onPath, count)
+			sub, err := t.flatten(m.NodeID, logical, onPath, count)
 			if err != nil {
 				return nil, err
 			}
@@ -152,7 +153,7 @@ func (t Topology) flatten(compositeID, via int64, onPath map[int64]bool, count *
 		if *count > MaxFlattenedHops {
 			return nil, fmt.Errorf("组合展平后物理跳数超过上限 %d", MaxFlattenedHops)
 		}
-		hops = append(hops, Hop{NodeID: m.NodeID, Mode: m.Mode, ViaNodeID: via})
+		hops = append(hops, Hop{NodeID: m.NodeID, Mode: m.Mode, LogicalNodeID: logical})
 	}
 	return hops, nil
 }

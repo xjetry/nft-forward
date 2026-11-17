@@ -133,18 +133,18 @@ func newLedgerFixture(t *testing.T) *ledgerFixture {
 		f.hops[id] = hs
 		return id
 	}
-	f.r1 = build("R1", f.u, f.e1, "tcp", "8.8.8.8", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", ViaNodeID: f.e1}})
+	f.r1 = build("R1", f.u, f.e1, "tcp", "8.8.8.8", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", LogicalNodeID: f.e1}})
 	f.r2 = build("R2", f.u, f.e2, "tcp", "9.9.9.9", []int64{f.c}, []db.HopInput{
-		{NodeID: f.e2, Mode: "userspace", ViaNodeID: f.e2},
-		{NodeID: f.m1, Mode: "userspace", ViaNodeID: f.c},
-		{NodeID: f.m2, Mode: "kernel", ViaNodeID: f.c},
+		{NodeID: f.e2, Mode: "userspace", LogicalNodeID: f.e2},
+		{NodeID: f.m1, Mode: "userspace", LogicalNodeID: f.c},
+		{NodeID: f.m2, Mode: "kernel", LogicalNodeID: f.c},
 	})
 	f.r3 = build("R3", f.u, f.ce, "tcp+udp", "7.7.7.7", nil, []db.HopInput{
-		{NodeID: f.p1, Mode: "userspace", ViaNodeID: f.ce},
-		{NodeID: f.p2, Mode: "kernel", ViaNodeID: f.ce},
+		{NodeID: f.p1, Mode: "userspace", LogicalNodeID: f.ce},
+		{NodeID: f.p2, Mode: "kernel", LogicalNodeID: f.ce},
 	})
-	f.r4 = build("R4", f.a, f.e1, "tcp", "6.6.6.6", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", ViaNodeID: f.e1}})
-	f.r5 = build("R5", 0, f.e1, "tcp", "5.5.5.5", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", ViaNodeID: f.e1}})
+	f.r4 = build("R4", f.a, f.e1, "tcp", "6.6.6.6", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", LogicalNodeID: f.e1}})
+	f.r5 = build("R5", 0, f.e1, "tcp", "5.5.5.5", nil, []db.HopInput{{NodeID: f.e1, Mode: "kernel", LogicalNodeID: f.e1}})
 
 	s, err := New(d)
 	if err != nil {
@@ -370,9 +370,9 @@ func TestRuleTrafficSurvivesHeaderEditAndRegeneration(t *testing.T) {
 
 	inTx(func(tx *sql.Tx) error {
 		_, _, _, err := db.RegenerateRule(tx, rl, []db.HopInput{
-			{NodeID: f.e2, Mode: "userspace", ViaNodeID: f.e2},
-			{NodeID: f.m1, Mode: "userspace", ViaNodeID: f.c},
-			{NodeID: f.m2, Mode: "kernel", ViaNodeID: f.c},
+			{NodeID: f.e2, Mode: "userspace", LogicalNodeID: f.e2},
+			{NodeID: f.m1, Mode: "userspace", LogicalNodeID: f.c},
+			{NodeID: f.m2, Mode: "kernel", LogicalNodeID: f.c},
 		}, nil)
 		return err
 	})
@@ -473,7 +473,7 @@ func TestQuotaCallbackOncePerOwnerPerBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	viaK.ID = id
-	if _, _, _, err := db.RegenerateRule(tx, viaK, []db.HopInput{{NodeID: n.ID, Mode: "kernel", ViaNodeID: k.ID}}, nil); err != nil {
+	if _, _, _, err := db.RegenerateRule(tx, viaK, []db.HopInput{{NodeID: n.ID, Mode: "kernel", LogicalNodeID: k.ID}}, nil); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

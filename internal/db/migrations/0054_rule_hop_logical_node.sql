@@ -1,0 +1,11 @@
+-- rule_hops.via_node_id is renamed to logical_node_id.
+--
+-- The column says which logical node (a single node, or a composite) a
+-- physical hop was expanded from, the entry's hops included. Its old name was
+-- one letter away from rules.via_node_ids, which is something else: the layers
+-- after the entry, the entry excluded. Only the name changes; every row keeps
+-- its value.
+--
+-- The JSON key under which the panel's API gives and takes this value is still
+-- via_node_id.
+ALTER TABLE rule_hops RENAME COLUMN via_node_id TO logical_node_id;

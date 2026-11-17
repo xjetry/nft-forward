@@ -110,11 +110,11 @@ type Place struct {
 	// Final：末跳（规则里最大的 position）。落地出口账只在这里记：中间跳的目标是
 	// 下一跳的中继地址，即使恰好与出口地址相同也不是属主的目的地。
 	Final bool
-	// SegmentStart：这一跳是所在逻辑段的第一跳（同一 via_node_id 里最小的
+	// SegmentStart：这一跳是所在逻辑段的第一跳（同一 logical_node_id 里最小的
 	// position）。一段里每一跳过的是同一批字节，授权账只在段首记一次。入口跳所在的
 	// 段从 position 0 开始，所以入口跳总是段首。
 	SegmentStart bool
-	// Segment：这一跳所在逻辑段的逻辑节点（rule_hops.via_node_id），授权账记在属主
+	// Segment：这一跳所在逻辑段的逻辑节点（rule_hops.logical_node_id），授权账记在属主
 	// 在它上面的授权上。
 	Segment int64
 }

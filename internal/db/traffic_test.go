@@ -47,7 +47,7 @@ func TestNodesExceedingQuota(t *testing.T) {
 // TestActiveRuleHopsForPushCompositeQuota verifies that a composite node's
 // per-grant quota is enforced in ActiveRuleHopsForPush. The quota is tracked on
 // the composite's user_nodes row (its logical node); every physical hop of the
-// composite carries the composite id as its via_node_id, so the logical-segment
+// composite carries the composite id as its logical_node_id, so the logical-segment
 // match suppresses the whole chain when that grant is exhausted.
 func TestActiveRuleHopsForPushCompositeQuota(t *testing.T) {
 	d := openTestDB(t)
@@ -73,10 +73,10 @@ func TestActiveRuleHopsForPushCompositeQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Insert a rule_hop manually on the physical node. Its via is the composite
-	// (the entry segment's via is rules.node_id), which is how RegenerateRule
+	// Insert a rule_hop manually on the physical node. Its logical node is the
+	// composite (the entry segment's logical node is rules.node_id), which is how RegenerateRule
 	// records a composite chain's hops.
-	if _, err := d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,via_node_id) VALUES (?,0,?,'tcp',12345,'1.2.3.4',80,'kernel','',?)`, ruleID, physID, compID); err != nil {
+	if _, err := d.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,logical_node_id) VALUES (?,0,?,'tcp',12345,'1.2.3.4',80,'kernel','',?)`, ruleID, physID, compID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,8 +102,8 @@ func TestActiveRuleHopsForPushCompositeQuota(t *testing.T) {
 	}
 }
 
-// The via_node_id backfill assigns each physical hop the logical segment it
-// belongs to. A composite-entry chain is a single entry segment, so every hop
+// Migration 0033 backfilled the column now called logical_node_id, assigning
+// each physical hop the logical segment it belongs to. A composite-entry chain is a single entry segment, so every hop
 // keeps the composite entry id and the whole chain bills and suppresses on the
 // composite grant. An explicit-hops chain (non-composite entry) is one segment
 // per hop, so each hop must carry its own node id — otherwise a downstream hop's
@@ -125,13 +125,13 @@ func TestLegacyChainBackfillPerHopSegments(t *testing.T) {
 		id, _ := res.LastInsertId()
 		return id
 	}
-	// via = entryNodeID for every hop reproduces the first backfill
-	// (via_node_id = rules.node_id) before the per-segment refinement runs.
+	// logical = entryNodeID for every hop reproduces that migration's first
+	// backfill (the column = rules.node_id) before its per-segment refinement runs.
 	port := 20000
-	insertHop := func(ruleID, position, hopNode, via int64) {
+	insertHop := func(ruleID, position, hopNode, logical int64) {
 		port++
-		if _, err := d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, via_node_id)
-			VALUES (?, ?, ?, 'tcp', ?, '127.0.0.1', 443, ?)`, ruleID, position, hopNode, port, via); err != nil {
+		if _, err := d.Exec(`INSERT INTO rule_hops(rule_id, position, node_id, proto, listen_port, target_host, target_port, logical_node_id)
+			VALUES (?, ?, ?, 'tcp', ?, '127.0.0.1', 443, ?)`, ruleID, position, hopNode, port, logical); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,32 +145,36 @@ func TestLegacyChainBackfillPerHopSegments(t *testing.T) {
 	insertHop(compRule, 1, relay.ID, comp.ID)
 
 	// The refining statement verbatim from migration 0033: explicit-hops chains
-	// get each hop's via rewritten to its own node; composite-entry chains are
-	// left untouched.
+	// get each hop's logical node rewritten to its own node; composite-entry
+	// chains are left untouched. The statement names the column as it was
+	// called then (via_node_id, renamed by migration 0054), so it runs on that
+	// shape and the column is renamed forward again afterwards.
+	mustExec(t, d, `ALTER TABLE rule_hops RENAME COLUMN logical_node_id TO via_node_id`)
 	if _, err := d.Exec(`UPDATE rule_hops SET via_node_id = node_id
 		WHERE rule_id IN (SELECT r.id FROM rules r JOIN nodes n ON n.id = r.node_id WHERE n.node_type != 'composite')`); err != nil {
 		t.Fatal(err)
 	}
+	mustExec(t, d, `ALTER TABLE rule_hops RENAME COLUMN via_node_id TO logical_node_id`)
 
-	viaOf := func(ruleID, position int64) int64 {
-		var via int64
-		if err := d.QueryRow(`SELECT via_node_id FROM rule_hops WHERE rule_id=? AND position=?`, ruleID, position).Scan(&via); err != nil {
+	logicalNodeOf := func(ruleID, position int64) int64 {
+		var logical int64
+		if err := d.QueryRow(`SELECT logical_node_id FROM rule_hops WHERE rule_id=? AND position=?`, ruleID, position).Scan(&logical); err != nil {
 			t.Fatal(err)
 		}
-		return via
+		return logical
 	}
 
-	if got := viaOf(explicitRule, 0); got != plain.ID {
-		t.Fatalf("explicit entry hop via: want %d, got %d", plain.ID, got)
+	if got := logicalNodeOf(explicitRule, 0); got != plain.ID {
+		t.Fatalf("explicit entry hop logical node: want %d, got %d", plain.ID, got)
 	}
-	if got := viaOf(explicitRule, 1); got != relay.ID {
-		t.Fatalf("explicit downstream hop via: want own node %d, got %d", relay.ID, got)
+	if got := logicalNodeOf(explicitRule, 1); got != relay.ID {
+		t.Fatalf("explicit downstream hop logical node: want own node %d, got %d", relay.ID, got)
 	}
-	if got := viaOf(compRule, 0); got != comp.ID {
-		t.Fatalf("composite hop 0 via: want entry %d, got %d", comp.ID, got)
+	if got := logicalNodeOf(compRule, 0); got != comp.ID {
+		t.Fatalf("composite hop 0 logical node: want entry %d, got %d", comp.ID, got)
 	}
-	if got := viaOf(compRule, 1); got != comp.ID {
-		t.Fatalf("composite hop 1 via: want entry %d, got %d", comp.ID, got)
+	if got := logicalNodeOf(compRule, 1); got != comp.ID {
+		t.Fatalf("composite hop 1 logical node: want entry %d, got %d", comp.ID, got)
 	}
 }
 

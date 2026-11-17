@@ -37,10 +37,10 @@ func TestLoadBookResolvesPricingAndPlaceFromTheHop(t *testing.T) {
 	seedExit(t, d, uid, "8.8.8.8", 443)
 	_, hops := newRule(t, d, &db.Rule{NodeID: ce, OwnerID: owned(uid), Name: "r", Proto: "tcp",
 		ExitHost: "8.8.8.8", ExitPort: 443, ViaNodeIDs: []int64{layer}}, []db.HopInput{
-		{NodeID: p1, Mode: "userspace", ViaNodeID: ce},
-		{NodeID: p2, Mode: "userspace", ViaNodeID: ce},
-		{NodeID: m1, Mode: "userspace", ViaNodeID: layer},
-		{NodeID: m2, Mode: "kernel", ViaNodeID: layer},
+		{NodeID: p1, Mode: "userspace", LogicalNodeID: ce},
+		{NodeID: p2, Mode: "userspace", LogicalNodeID: ce},
+		{NodeID: m1, Mode: "userspace", LogicalNodeID: layer},
+		{NodeID: m2, Mode: "kernel", LogicalNodeID: layer},
 	})
 
 	exit := &ExitKey{User: uid, Host: "8.8.8.8", Port: 443}

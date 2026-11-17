@@ -70,8 +70,8 @@ func TestViaChainAssembly(t *testing.T) {
 	if hops[0].Mode != "kernel" || hops[1].Mode != "userspace" || hops[2].Mode != "userspace" {
 		t.Fatalf("modes: %s/%s/%s", hops[0].Mode, hops[1].Mode, hops[2].Mode)
 	}
-	if hops[0].ViaNodeID != entry.ID || hops[1].ViaNodeID != mid.ID || hops[2].ViaNodeID != mid.ID {
-		t.Fatalf("provenance: %d/%d/%d", hops[0].ViaNodeID, hops[1].ViaNodeID, hops[2].ViaNodeID)
+	if hops[0].LogicalNodeID != entry.ID || hops[1].LogicalNodeID != mid.ID || hops[2].LogicalNodeID != mid.ID {
+		t.Fatalf("provenance: %d/%d/%d", hops[0].LogicalNodeID, hops[1].LogicalNodeID, hops[2].LogicalNodeID)
 	}
 	if got := rules[0].ViaNodeIDs; len(got) != 1 || got[0] != mid.ID {
 		t.Fatalf("rule via persisted wrong: %+v", got)
@@ -120,8 +120,8 @@ func TestCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	// hop3 tailVia（规则末跳）：exit_mode kernel。
 	wantModes(t, chainModes(t, s, rules[0].ID), "userspace", "kernel", "kernel", "kernel")
 	hops, _ := db.ListRuleHops(d, rules[0].ID)
-	if hops[0].ViaNodeID != entry.ID || hops[1].ViaNodeID != mid.ID || hops[2].ViaNodeID != mid.ID || hops[3].ViaNodeID != tailVia.ID {
-		t.Fatalf("provenance: %d/%d/%d/%d", hops[0].ViaNodeID, hops[1].ViaNodeID, hops[2].ViaNodeID, hops[3].ViaNodeID)
+	if hops[0].LogicalNodeID != entry.ID || hops[1].LogicalNodeID != mid.ID || hops[2].LogicalNodeID != mid.ID || hops[3].LogicalNodeID != tailVia.ID {
+		t.Fatalf("provenance: %d/%d/%d/%d", hops[0].LogicalNodeID, hops[1].LogicalNodeID, hops[2].LogicalNodeID, hops[3].LogicalNodeID)
 	}
 }
 

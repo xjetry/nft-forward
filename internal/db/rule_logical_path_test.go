@@ -58,10 +58,10 @@ func regenerateHops(t *testing.T, d *sql.DB, ruleID int64, hops ...HopInput) (*R
 }
 
 func hop(n, logical *Node) HopInput {
-	return HopInput{NodeID: n.ID, Mode: "kernel", ViaNodeID: logical.ID}
+	return HopInput{NodeID: n.ID, Mode: "kernel", LogicalNodeID: logical.ID}
 }
 
-// 规则表头里的逻辑路径由它的跳行决定：跳按所属的逻辑节点（rule_hops.via_node_id）分成
+// 规则表头里的逻辑路径由它的跳行决定：跳按所属的逻辑节点（rule_hops.logical_node_id）分成
 // 连续的段，第一段的逻辑节点是入口（rules.node_id），其余各段依次是中转层
 // （rules.via_node_ids）。RegenerateRule 是唯一写跳行的地方，表头在同一处写。
 func TestRuleHeaderFollowsItsHops(t *testing.T) {
@@ -106,7 +106,7 @@ func TestRuleHeaderFollowsItsHops(t *testing.T) {
 		hops []HopInput
 	}{
 		{"同一个逻辑节点的跳被别的段隔开", []HopInput{hop(b, k), hop(a, a), hop(c, k)}},
-		{"跳所属的逻辑节点不存在", []HopInput{{NodeID: a.ID, Mode: "kernel", ViaNodeID: 987654}}},
+		{"跳所属的逻辑节点不存在", []HopInput{{NodeID: a.ID, Mode: "kernel", LogicalNodeID: 987654}}},
 	} {
 		if _, err := regenerateHops(t, d, ruleID, tc.hops...); !IsChainError(err) {
 			t.Errorf("%s：应被当作搭不成的链拒绝，实际 err=%v", tc.name, err)
@@ -202,7 +202,7 @@ func TestMigrationRecomputesRuleHeadersFromHops(t *testing.T) {
 	}
 	// 第一跳所属的逻辑节点不存在：跳行直接改出来（RegenerateRule 不收这样的链）。
 	dangling := chainRule(t, d, "第一跳的逻辑节点已不存在", a, b)
-	mustExec(t, d, `UPDATE rule_hops SET via_node_id=987654 WHERE rule_id=? AND position=0`, dangling)
+	mustExec(t, d, `UPDATE rule_hops SET logical_node_id=987654 WHERE rule_id=? AND position=0`, dangling)
 	mustExec(t, d, `UPDATE rules SET node_id=?, via_node_ids='[]' WHERE id=?`, a.ID, dangling)
 	// 没有跳的规则。
 	var hopless int64
@@ -220,12 +220,15 @@ func TestMigrationRecomputesRuleHeadersFromHops(t *testing.T) {
 		}
 	}
 
-	res, err := d.Exec(`DELETE FROM schema_migrations WHERE version=?`, migration)
+	// 回到迁移 0053 之前的形状：那时跳行上的这一列还叫 via_node_id（0054 才改名），
+	// 0053 的 SQL 写的是这个名字。两个迁移的登记都删掉，migrate 按序重放它们。
+	mustExec(t, d, `ALTER TABLE rule_hops RENAME COLUMN logical_node_id TO via_node_id`)
+	res, err := d.Exec(`DELETE FROM schema_migrations WHERE version IN (?, ?)`, migration, "0054_rule_hop_logical_node.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		t.Fatalf("前置条件：迁移 %s 应已登记，删除了 %d 行", migration, n)
+	if n, _ := res.RowsAffected(); n != 2 {
+		t.Fatalf("前置条件：迁移 %s 与改列名的迁移应都已登记，删除了 %d 行", migration, n)
 	}
 	if err := migrate(d); err != nil {
 		t.Fatal(err)

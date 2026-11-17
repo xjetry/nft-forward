@@ -53,7 +53,7 @@ func testTopology() Topology {
 }
 
 func hop(node int64, mode string, via int64) Hop {
-	return Hop{NodeID: node, Mode: mode, ViaNodeID: via}
+	return Hop{NodeID: node, Mode: mode, LogicalNodeID: via}
 }
 
 func TestFlatten(t *testing.T) {

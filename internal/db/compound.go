@@ -215,7 +215,7 @@ func rewireRules(tx DBTX, ruleIDs []int64) ([]int64, error) {
 func StoredHopInputs(hops []*RuleHop) []HopInput {
 	inputs := make([]HopInput, len(hops))
 	for i, h := range hops {
-		inputs[i] = HopInput{NodeID: h.NodeID, Mode: h.Mode, ViaNodeID: h.ViaNodeID}
+		inputs[i] = HopInput{NodeID: h.NodeID, Mode: h.Mode, LogicalNodeID: h.LogicalNodeID}
 	}
 	return inputs
 }

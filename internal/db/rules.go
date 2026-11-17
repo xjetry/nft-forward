@@ -257,10 +257,10 @@ type HopInput struct {
 	Mode        string
 	DesiredPort int
 	Comment     string
-	// ViaNodeID is the logical-segment node this hop belongs to, written to
-	// rule_hops.via_node_id. RegenerateRule falls back to the rule's node_id
+	// LogicalNodeID is the logical-segment node this hop belongs to, written to
+	// rule_hops.logical_node_id. RegenerateRule falls back to the rule's node_id
 	// when a caller leaves this 0, so no code path can write 0 provenance.
-	ViaNodeID int64
+	LogicalNodeID int64
 }
 
 // encodeViaNodeIDs/decodeViaNodeIDs marshal the rule's middle-layer path for
@@ -431,11 +431,11 @@ func TotalRuleTrafficBytes(d *sql.DB) (int64, error) {
 // user's forwarding stops instead of lingering. rule_hops cascade-delete.
 func DeleteRulesForUserNode(d DBTX, userID, nodeID int64) ([]int64, error) {
 	// A rule "uses" a granted logical node when the node is its entry OR one of
-	// its middle layers — both surface as rule_hops.via_node_id == nodeID (the
-	// entry segment's hops carry via_node_id = the rule's node_id). Matching on
-	// via_node_id, not rules.node_id, tears down a via-only rule too, so revoking
+	// its middle layers — both surface as rule_hops.logical_node_id == nodeID (the
+	// entry segment's hops carry logical_node_id = the rule's node_id). Matching on
+	// logical_node_id, not rules.node_id, tears down a via-only rule too, so revoking
 	// a middle-layer grant stops the still-running (still-billing) chain.
-	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT r.id FROM rules r JOIN rule_hops rh ON rh.rule_id=r.id WHERE r.owner_id=? AND rh.via_node_id=?`, userID, nodeID)
+	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT r.id FROM rules r JOIN rule_hops rh ON rh.rule_id=r.id WHERE r.owner_id=? AND rh.logical_node_id=?`, userID, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +461,7 @@ func DeleteRulesForUserNode(d DBTX, userID, nodeID int64) ([]int64, error) {
 // never appears in rule_hops.node_id, so an FK cascade alone would leave the
 // composite's physical children carrying stale kernel rules.
 func DeleteRulesUsingNode(d DBTX, nodeID int64) ([]int64, error) {
-	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT rule_id FROM rule_hops WHERE node_id=? OR via_node_id=?`, nodeID, nodeID)
+	ruleIDs, err := queryInt64s(d, `SELECT DISTINCT rule_id FROM rule_hops WHERE node_id=? OR logical_node_id=?`, nodeID, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +570,7 @@ func nodeLabel(tx DBTX, nodeID int64) string {
 }
 
 // LogicalPath 从一条物理链各跳所属的逻辑节点（segments[i] 是第 i 跳的，与
-// rule_hops.via_node_id 同义）算出规则表头里的逻辑路径：相邻且属于同一个逻辑节点的
+// rule_hops.logical_node_id 同义）算出规则表头里的逻辑路径：相邻且属于同一个逻辑节点的
 // 跳是一段，第一段的逻辑节点是入口（rules.node_id），其余各段依次是中转层
 // （rules.via_node_ids）。
 //
@@ -613,7 +613,7 @@ func LogicalPath(segments []int64) (entry int64, vias []int64, err error) {
 // 表头里的逻辑路径（rules.node_id、rules.via_node_ids）也在这里写，由这次的跳算出
 // （LogicalPath），r 上的两个字段同步成写进去的值。跳行只在本函数里插入，这两列在
 // 规则建成之后也只在这里写（UpdateRuleHeader 不写它们），所以经本函数生成过的规则
-// 都满足“表头的逻辑路径 = 跳行按 via_node_id 分成的段”，不依赖调用方记得去改表头：
+// 都满足“表头的逻辑路径 = 跳行按 logical_node_id 分成的段”，不依赖调用方记得去改表头：
 // 按入口与中转层推导的链、管理员直接给的物理链、删掉一台节点后在剩下的跳上重接
 // （rewireRules），走的都是这一处。此前留下的规则由迁移 0053 按同一算法重算一次，
 // 第一跳的逻辑节点已经不存在的除外。
@@ -623,14 +623,14 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	}
 
 	type resolved struct {
-		nodeID      int64
-		relayHost   string
-		relayHostV6 string
-		mode        string
-		desiredPort int
-		comment     string
-		portSegs    [][2]int // parsed from the node's port_range column
-		viaNodeID   int64
+		nodeID        int64
+		relayHost     string
+		relayHostV6   string
+		mode          string
+		desiredPort   int
+		comment       string
+		portSegs      [][2]int // parsed from the node's port_range column
+		logicalNodeID int64
 	}
 	rs := make([]resolved, len(hops))
 	seen := map[int64]bool{}
@@ -655,19 +655,19 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if err != nil {
 			return "", "", nil, ChainErrorf("节点 %s 端口范围格式错误: %v", name, err)
 		}
-		// 没写 ViaNodeID 的跳归到规则现有的入口节点（r.NodeID）那一段。这是缺省，不是
-		// 另一种含义：一条全不写 ViaNodeID 的链算出的入口仍是 r.NodeID、没有中转层。
+		// 没写 LogicalNodeID 的跳归到规则现有的入口节点（r.NodeID）那一段。这是缺省，不是
+		// 另一种含义：一条全不写 LogicalNodeID 的链算出的入口仍是 r.NodeID、没有中转层。
 		// r.NodeID 也是 0 时这一跳没有归属，下面的存在性检查会以“节点 0 不存在”拒绝。
-		viaNodeID := hop.ViaNodeID
-		if viaNodeID == 0 {
-			viaNodeID = r.NodeID
+		logicalNodeID := hop.LogicalNodeID
+		if logicalNodeID == 0 {
+			logicalNodeID = r.NodeID
 		}
-		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, viaNodeID: viaNodeID}
+		rs[i] = resolved{nodeID: hop.NodeID, relayHost: relay, relayHostV6: relayV6, desiredPort: hop.DesiredPort, comment: hop.Comment, portSegs: segs, logicalNodeID: logicalNodeID}
 	}
 
 	segments := make([]int64, len(rs))
 	for i, h := range rs {
-		segments[i] = h.viaNodeID
+		segments[i] = h.logicalNodeID
 	}
 	entryNode, viaNodes, err := LogicalPath(segments)
 	if err != nil {
@@ -802,8 +802,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if fwdComment == "" {
 			fwdComment = fmt.Sprintf("链路 %s · 第%d跳", r.Name, i+1)
 		}
-		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,via_node_id,total_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment, h.viaNodeID, keptBytes[i]); err != nil {
+		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,logical_node_id,total_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment, h.logicalNodeID, keptBytes[i]); err != nil {
 			return "", "", nil, err
 		}
 		affected[h.nodeID] = true

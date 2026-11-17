@@ -23,7 +23,7 @@ func chainRule(t *testing.T, d *sql.DB, name string, nodes ...*Node) int64 {
 	}
 	hops := make([]HopInput, len(nodes))
 	for i, n := range nodes {
-		hops[i] = HopInput{NodeID: n.ID, Mode: "kernel", ViaNodeID: n.ID}
+		hops[i] = HopInput{NodeID: n.ID, Mode: "kernel", LogicalNodeID: n.ID}
 	}
 	if _, _, _, err := RegenerateRule(tx, r, hops, nil); err != nil {
 		t.Fatal(err)

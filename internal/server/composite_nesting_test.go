@@ -48,8 +48,8 @@ func TestNestedCompositeRuleFlattens(t *testing.T) {
 		t.Fatalf("leaf order = %d/%d/%d, want a/b/x", hops[0].NodeID, hops[1].NodeID, hops[2].NodeID)
 	}
 	for i, h := range hops {
-		if h.ViaNodeID != outer.ID {
-			t.Errorf("hop %d via = %d, want top-level outer %d", i, h.ViaNodeID, outer.ID)
+		if h.LogicalNodeID != outer.ID {
+			t.Errorf("hop %d via = %d, want top-level outer %d", i, h.LogicalNodeID, outer.ID)
 		}
 	}
 	// a,b keep inner's kernel; x (rule's exit hop) takes exit_mode userspace.
@@ -159,13 +159,13 @@ func TestNestedCompositeAsMiddleKeepsConfigMode(t *testing.T) {
 	// edge; tailVia (rule tail): exit_mode kernel.
 	wantModes(t, chainModes(t, s, rules[0].ID), "userspace", "kernel", "kernel", "userspace", "kernel")
 	hops, _ := db.ListRuleHops(d, rules[0].ID)
-	wantVia := []int64{entry.ID, outer.ID, outer.ID, outer.ID, tailVia.ID}
-	if len(hops) != len(wantVia) {
-		t.Fatalf("hops = %d, want %d", len(hops), len(wantVia))
+	wantLogical := []int64{entry.ID, outer.ID, outer.ID, outer.ID, tailVia.ID}
+	if len(hops) != len(wantLogical) {
+		t.Fatalf("hops = %d, want %d", len(hops), len(wantLogical))
 	}
 	for i, h := range hops {
-		if h.ViaNodeID != wantVia[i] {
-			t.Fatalf("hop %d via = %d, want %d", i, h.ViaNodeID, wantVia[i])
+		if h.LogicalNodeID != wantLogical[i] {
+			t.Fatalf("hop %d via = %d, want %d", i, h.LogicalNodeID, wantLogical[i])
 		}
 	}
 }

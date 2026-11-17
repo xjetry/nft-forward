@@ -36,7 +36,7 @@ func regenerateOver(t *testing.T, d *sql.DB, ruleID int64, exitPort int, avoid m
 	r.ExitPort = exitPort
 	hops := make([]HopInput, len(nodes))
 	for i, n := range nodes {
-		hops[i] = HopInput{NodeID: n.ID, Mode: "kernel", ViaNodeID: n.ID}
+		hops[i] = HopInput{NodeID: n.ID, Mode: "kernel", LogicalNodeID: n.ID}
 	}
 	if _, _, _, err := RegenerateRule(tx, r, hops, avoid); err != nil {
 		t.Fatal(err)

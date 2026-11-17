@@ -141,8 +141,8 @@ func TestRuleViaRoundTripAndHopProvenance(t *testing.T) {
 	}
 	r.ID = id
 	hops := []HopInput{
-		{NodeID: a.ID, Mode: "userspace", ViaNodeID: a.ID},
-		{NodeID: b.ID, Mode: "kernel", ViaNodeID: b.ID},
+		{NodeID: a.ID, Mode: "userspace", LogicalNodeID: a.ID},
+		{NodeID: b.ID, Mode: "kernel", LogicalNodeID: b.ID},
 	}
 	if _, _, _, err := RegenerateRule(tx, r, hops, nil); err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestRuleViaRoundTripAndHopProvenance(t *testing.T) {
 		t.Fatalf("via round-trip failed: %+v", got.ViaNodeIDs)
 	}
 	rh, _ := ListRuleHops(d, id)
-	if len(rh) != 2 || rh[0].ViaNodeID != a.ID || rh[1].ViaNodeID != b.ID {
+	if len(rh) != 2 || rh[0].LogicalNodeID != a.ID || rh[1].LogicalNodeID != b.ID {
 		t.Fatalf("hop provenance wrong: %+v", rh)
 	}
 }
