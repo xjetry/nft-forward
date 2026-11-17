@@ -1,14 +1,9 @@
-import { fmtDate, GB } from '../../lib/fmt'
+import { fmtDate } from '../../lib/fmt'
 import { Badge, Button, CodeBlock, Field, Input, Modal, ModalActions, TextLink } from '../../components/ui'
 
 /* 用户列表页、用户详情页与粘贴授权弹窗共用的部分：数值输入的解析、到期日的
    显示与输入、账号级操作的确认文案、一次性凭据弹窗。 */
 
-
-/** 字节数 → GB 输入框里的文字：至多两位小数，不带多余的 0。 */
-export function bytesToGBText(bytes) {
-  return String(Number(((bytes || 0) / GB).toFixed(2)))
-}
 
 /**
  * 解析数值输入框里的文字。空、不是数字、小于 min、或要求整数却带小数时返回

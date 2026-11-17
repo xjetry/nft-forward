@@ -20,11 +20,59 @@ function fmtAdaptive(bytes) {
   return (bytes / GB).toFixed(1) + ' GB'
 }
 
-/** Format used/quota traffic; sub-1 GB values shown as MB. */
+/* GB 文本被读回成字节数时有两种算法：前端 Math.round(n * GB)（授权与落地
+   出口的配额），服务端更新用户时 int64(n * GB)（截断）。一段文本算“读得回
+   来”，指两种算法都落在原值 ±1 字节以内，并且不会把非 0 读成 0 —— 配额 0
+   的含义是不限。 */
+function readsBackAs(n, bytes) {
+  return [Math.round(n * GB), Math.floor(n * GB)]
+    .every(read => Math.abs(read - bytes) <= 1 && (read === 0) === (bytes === 0))
+}
+
+/**
+ * 字节数 → GB 数的文本，用在输入框与授权文本里：读得回来（见 readsBackAs）
+ * 的写法中小数位最少的那个，从两位试起。
+ *
+ * 不能固定保留两位：不足 0.005 GB 的配额会被写成 "0"，这段文本再被存回去，
+ * 一个很小的配额就变成了没有配额。
+ */
+export function bytesToGBText(bytes) {
+  const value = bytes || 0
+  // GB = 2^30，所以这个除法在浮点数里是精确的，商至多有 30 位二进制小数，
+  // 写成 30 位十进制小数时没有舍入 —— 循环最迟在 30 位时结束。
+  const exact = value / GB
+  let text = ''
+  for (let digits = 2; digits <= 30; digits++) {
+    text = exact.toFixed(digits).replace(/\.?0+$/, '')
+    if (readsBackAs(Number(text), value)) break
+  }
+  return text
+}
+
+/** “已用 / 配额”，不足 1 GB 的值用 MB。配额为 0 表示不限，显示为 ∞。 */
 export function fmtTrafficGB(used, quota) {
   const u = fmtAdaptive(used || 0)
   if (!quota || quota === 0) return `${u} / ∞`
   return `${u} / ${fmtAdaptive(quota)}`
+}
+
+/**
+ * 单个节点授权的“已用 / 配额”。
+ *
+ * 授权自己的配额为 0 只表示这个节点没有单独的上限（服务端 NodesExceedingQuota
+ * 不把它算作超额），流量仍计入账户的总量；账户有配额时，用到上限整个账户会
+ * 被停用（服务端以“流量超额”停用用户）。所以这时写“账户配额”，只有账户
+ * 也不限时才是 ∞。
+ *
+ * 三个参数都可能缺省（节点还没有对应的授权记录时），缺省按 0 处理。
+ *
+ * @param {number | undefined} used
+ * @param {number | undefined} grantQuota 授权自己的配额，0 = 没有单独的上限
+ * @param {number | undefined} accountQuota 账户的总配额，0 = 不限
+ */
+export function fmtGrantTraffic(used, grantQuota, accountQuota) {
+  if (!grantQuota && (accountQuota || 0) > 0) return `${fmtAdaptive(used || 0)} / 账户配额`
+  return fmtTrafficGB(used, grantQuota)
 }
 
 export function fmtTime(unix) {

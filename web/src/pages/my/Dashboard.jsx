@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { api } from '../../lib/api'
-import { fmtBytes, fmtDate, fmtTrafficGB, isExpired, nullStr, pct } from '../../lib/fmt'
+import { fmtBytes, fmtDate, fmtGrantTraffic, isExpired, nullStr, pct } from '../../lib/fmt'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
 import { browserStore, readSlot, writeSlot } from '../../lib/userStore'
@@ -101,7 +101,7 @@ function Overview({ data, onRenamed }) {
         </CardSection>
       </Card>
 
-      <GrantedNodes userId={user.id} nodes={nodes} grants={grants} showRate={showRate} />
+      <GrantedNodes userId={user.id} nodes={nodes} grants={grants} showRate={showRate} accountQuota={quota} />
 
       {renaming && <RenameModal current={user.username} onClose={() => setRenaming(false)} onRenamed={onRenamed} />}
     </>
@@ -173,7 +173,7 @@ function readNodeOrder(userId) {
  * @param {{ userId: number, nodes: any[], grants: any[], showRate: boolean }} props
  * `nodes` 与 `grants` 按下标一一对应（服务端 ListNodesForUser 同序返回）。
  */
-function GrantedNodes({ userId, nodes, grants, showRate }) {
+function GrantedNodes({ userId, nodes, grants, showRate, accountQuota }) {
   const isMobile = useIsMobile()
   const speeds = useSpeed()
   const grantOf = new Map(nodes.map((n, i) => [n.id, grants[i]]))
@@ -260,7 +260,7 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
                   {showRate && <span>×{n.rate_multiplier ?? 1}</span>}
                   {showRate && n.unidirectional && <Tag>单向</Tag>}
                   {speed && <span className="font-mono">{speed}</span>}
-                  <span>{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</span>
+                  <span>{fmtGrantTraffic(g?.traffic_used_bytes, g?.traffic_quota_bytes, accountQuota)}</span>
                   {g?.rate_limit_mbytes > 0 && <span>限速 {g.rate_limit_mbytes} MB/s</span>}
                   {g?.max_forwards != null && <span>规则上限 {g.max_forwards}</span>}
                 </div>
@@ -319,7 +319,7 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
                     )}
                     <td><NodeStatus node={n} detailed={false} /></td>
                     <td className="font-mono">{speed ?? <span className="text-ink-mut">--</span>}</td>
-                    <td className="num">{fmtTrafficGB(g?.traffic_used_bytes, g?.traffic_quota_bytes)}</td>
+                    <td className="num">{fmtGrantTraffic(g?.traffic_used_bytes, g?.traffic_quota_bytes, accountQuota)}</td>
                     <td className="num">{g?.rate_limit_mbytes > 0 ? `${g.rate_limit_mbytes} MB/s` : '不限'}</td>
                     <td className="num">{g?.max_forwards ?? '--'}</td>
                   </tr>
