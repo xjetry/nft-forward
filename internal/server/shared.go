@@ -57,16 +57,20 @@ type ruleListItem struct {
 	Suppressed db.SuppressReason `json:"suppressed,omitempty"`
 }
 
-// ruleItems 是规则对外形状的唯一装配处：管理员与用户的列表、详情、/api/v1（经
-// toV1Rule 再收窄）都从这里取。每一项一次给全——规则自身的列（含加权流量，它是规则
+// ruleItems 装配规则的完整对外形状：管理员与用户的规则列表、规则详情从这里取，
+// /api/v1 经 toV1Rule 再收窄。每一项一次给全——规则自身的列（含加权流量，它是规则
 // 行上的一列，随行读出）、入口地址与两端模式、所有者名、出口归类、倍率、展平后的
 // 物理链、压制原因。
+//
+// 另有三处响应直接给规则行（db.Rule 自己的列，没有上面这些算出来的字段）：管理员的
+// 用户详情、用户仪表盘（/api/my）、规则写接口的回显。
 //
 // cat 是同一次请求里装配节点视图用的那份目录：入口地址按入口那台机器此刻的中继地址
 // 算，链路上每一跳的名字从目录里解析（链路会经过用户没被授权的组合成员，所以必须是
 // 全量节点，LoadNodeCatalog 保证）。倍率取规则入口节点（rules.node_id）的
-// rate_multiplier，计费读的是同一列（accounting.LoadBook）。relayURI 决定是否算出可复制的代理 URI：只在
-// 提供复制操作的面上算（管理员详情、用户的列表与详情），管理员列表只显示出口类型。
+// rate_multiplier，计费读的是同一列（accounting.LoadBook）。relayURI 决定是否算出
+// 可复制的代理 URI：只在提供复制操作的面上算（管理员详情、用户的列表与详情），
+// 管理员列表只显示出口类型。
 func (s *Server) ruleItems(rules []*db.Rule, cat *db.NodeCatalog, relayURI bool) []ruleListItem {
 	owners, err := db.UsersByID(s.DB)
 	if err != nil {
