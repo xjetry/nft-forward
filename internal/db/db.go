@@ -65,6 +65,9 @@ func migrate(d *sql.DB) error {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	if err := refuseNewerSchema(d, names); err != nil {
+		return err
+	}
 	for _, name := range names {
 		var dummy string
 		if err := d.QueryRow(`SELECT version FROM schema_migrations WHERE version = ?`, name).Scan(&dummy); err == nil {
@@ -75,6 +78,34 @@ func migrate(d *sql.DB) error {
 		if err := applyMigration(d, name); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// refuseNewerSchema 在库比本二进制新的时候报错。known 是本二进制带的迁移，已按名字
+// 排序；迁移名以递增的四位序号开头，所以名字的字典序就是迁移的先后。
+//
+// 库里登记的最新迁移排在 known 的最后一个之后，说明这个库被更新的版本迁移过。本
+// 二进制的 SQL 是按它自己那一版表结构写的，在更新的结构上不能照常运行：列被改名或
+// 删掉时语句直接报错；只改了取值含义的（例如哪个值表示“永不到期”）语句照常执行，
+// 写进去的值却会被新版读成另一个意思。所以这里拒绝打开，不让进程带着半数可用的
+// 接口起来。
+//
+// 只比“最新”，不要求登记的每个名字都认识：0001_init.sql 自己就登记了一个没有对应
+// 文件的名字（0004_simplify_schema.sql），所以每个库里都有本二进制不带的登记；历史
+// 上被合并进 0001_init.sql 的那些迁移，在合并之前建的库里也还登记着。这些名字都排在
+// known 的最后一个之前。
+func refuseNewerSchema(d *sql.DB, known []string) error {
+	if len(known) == 0 {
+		return nil
+	}
+	var newest sql.NullString
+	if err := d.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+		return err
+	}
+	if newest.Valid && newest.String > known[len(known)-1] {
+		return fmt.Errorf("database schema is newer than this binary: it has migration %s applied, and this binary knows none after %s; use a binary at least as new as the one that migrated it, or restore the database from before that upgrade",
+			newest.String, known[len(known)-1])
 	}
 	return nil
 }
