@@ -980,11 +980,21 @@ func (s *Server) apiSetNodeRelayHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.WriteAudit(s.DB, u.ID, "node.set_relay_host", strconv.FormatInt(id, 10), host)
-	ruleIDs, _ := db.RulesReferencingNode(s.DB, id)
+	s.rewireRulesReferencingNode(id)
+	jsonOK(w, map[string]any{"ok": true})
+}
+
+// rewireRulesReferencingNode 重新生成所有引用 nodeID 的规则，并下发受影响的节点。
+//
+// relay_host 是其他节点把流量送到本节点时用的数据面地址，建规则时被抄进上游跳的
+// rule_hops.target_host。所以改写 relay_host 的每一条路径都要经过这里：管理员接口
+// apiSetNodeRelayHost 直接调用，节点 hello 里的声明与回填经 Hub.OnRelayHostChange
+// 调用。
+func (s *Server) rewireRulesReferencingNode(nodeID int64) {
+	ruleIDs, _ := db.RulesReferencingNode(s.DB, nodeID)
 	if len(ruleIDs) > 0 {
 		s.apiRewireRules(ruleIDs)
 	}
-	jsonOK(w, map[string]any{"ok": true})
 }
 
 func (s *Server) apiSetNodeRelayHostV6(w http.ResponseWriter, r *http.Request) {

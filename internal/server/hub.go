@@ -42,6 +42,12 @@ type Hub struct {
 	// mutates rule state on their behalf. Keeps the hub transport-only.
 	Redispatch func(nodeIDs []int64)
 
+	// OnRelayHostChange 在一次 hello 改写了节点的 relay_host 之后被调用（另起
+	// goroutine）。其他节点上指向该节点的跳，目标地址是建规则时从 relay_host 抄下
+	// 的快照（rule_hops.target_host），地址变了就得重新生成这些规则；规则的重新
+	// 生成与下发属于面板，hub 只负责报告“地址变了”。
+	OnRelayHostChange func(nodeID int64)
+
 	mu         sync.RWMutex
 	conns      map[int64]*agentConn
 	speedCache *speedCache
@@ -165,8 +171,17 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err := db.MarkNodeOnline(h.DB, node.ID, hello.AgentVersion, hello.AgentSHA, connectIP); err != nil {
 		log.Printf("hub: MarkNodeOnline: %v", err)
 	}
+	// 下面两步都可能改写 relay_host：声明值每次 hello 都覆盖库里的值，回填则在
+	// 字段为空或存着 v6 字面量时写入。改写之后要通知面板重接引用本节点的规则，
+	// 判定以库里的最终值为准（重读一次），不依赖这两个函数是否同步了内存里的 node。
+	relayHostBefore := node.RelayHost
 	applyDeclaredRelayHosts(h.DB, node, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
 	fillNodeRelayHosts(h.DB, node, connectIP, hello.ProbedV4, hello.ProbedV6, hello.DeclaredRelayHost, hello.DeclaredRelayHostV6)
+	if h.OnRelayHostChange != nil {
+		if cur, err := db.GetNode(h.DB, node.ID); err == nil && cur.RelayHost != relayHostBefore {
+			go h.OnRelayHostChange(node.ID)
+		}
+	}
 	if hello.PortRange != "" {
 		if err := db.ValidatePortRange(hello.PortRange); err == nil {
 			_ = db.UpdateNodePortRange(h.DB, node.ID, hello.PortRange)

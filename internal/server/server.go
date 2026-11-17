@@ -46,6 +46,7 @@ func New(d *sql.DB) (*Server, error) {
 		s.enforceExitQuota(userID)
 	}
 	hub.Redispatch = s.redispatchNodes
+	hub.OnRelayHostChange = s.rewireRulesReferencingNode
 	go s.expiryEnforcer()
 	go s.cycleResetEnforcer()
 	go s.landingSyncEnforcer()
