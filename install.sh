@@ -142,12 +142,25 @@ switch_role_cleanup() {
   esac
 }
 
+# 清空 daemon 的 panel 段（面板下发的规则）。成功返回 0。
+#
+# 走的是面板向本机 daemon 下发规则集的同一入口：POST /v1/apply（internal/daemon/
+# handlers.go 的 handleApplyRuleset → SetPanelRuleset）。它把 panel 段整体替换为
+# 请求体里的规则集，所以提交空集就是清空；daemon 随即把这些规则撤出数据面并落盘。
+clear_panel_segment() {
+  curl -sf --unix-socket /var/run/nft-forward.sock \
+       -X POST -H 'Content-Type: application/json' \
+       http://daemon/v1/apply \
+       -d '{"rules":[]}' >/dev/null 2>&1
+}
+
 # Inline uninstall implementation: target is server/agent/daemon, purge is 0/1.
 # Called both from the top-level "mode=uninstall" path and from
 # switch_role_cleanup (which always passes purge=0).
 do_uninstall() {
   local target="$1"
   local purge="${2:-0}"
+  local seg_note
   case "$target" in
     server)
       systemctl disable --now nft-forward-server.service 2>/dev/null || true
@@ -157,33 +170,39 @@ do_uninstall() {
       rm -f "$INSTALL_DIR/nft-server"
       systemctl daemon-reload
       if [[ "$purge" -eq 1 ]]; then
-        # Clear daemon's panel segment so leftover rules from server pushes
-        # don't keep forwarding after the panel database is gone.
-        curl -sf --unix-socket /var/run/nft-forward.sock \
-             -X POST -H 'Content-Type: application/json' \
-             http://daemon/v1/ruleset/panel \
-             -d '{"rules":[]}' >/dev/null 2>&1 \
-          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
+        # 面板数据库删掉之后没有人再管这些规则，所以先把它们从本机 daemon 清掉。
+        # 面板服务在上面已经停了，清空之后不会再有下发把它们填回来。
+        if clear_panel_segment; then
+          seg_note="daemon 的 panel 段已清空"
+        else
+          seg_note="daemon 的 panel 段未能清空"
+          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则若还在，会继续转发" >&2
+        fi
         rm -f /var/lib/nft-forward/panel.db \
               /var/lib/nft-forward/panel.db-wal \
               /var/lib/nft-forward/panel.db-shm
-        ok "已卸载 server 角色 + 清 panel.db 与 daemon panel 段"
+        ok "已卸载 server 角色 + 清 panel.db；${seg_note}"
       else
         ok "已卸载 server 角色（daemon 保留；panel.db 与 daemon panel 段保留）"
       fi
       ;;
     agent)
+      # 不带 --purge 时，面板下发的规则要留下来继续转发。这件事不在这里做：下面
+      # 把 daemon 改成不带 --connect 再重启，daemon 启动时发现自己是单机模式而
+      # panel 段非空，就把 panel 段的规则转成本地规则（internal/daemon/daemon.go
+      # 的 Bootstrap）。
+      #
+      # 带 --purge 时这些规则要去掉，而上述转换恰恰会把它们留下，所以必须赶在
+      # 重启之前清空 panel 段。清空与重启之间 daemon 仍连着面板：面板若恰好在这
+      # 之间又下发一次，那一批规则会在重启时被转成本地规则留下来。
+      seg_note=""
       if [[ "$purge" -eq 1 ]]; then
-        curl -sf --unix-socket /var/run/nft-forward.sock \
-             -X POST -H 'Content-Type: application/json' \
-             http://daemon/v1/ruleset/panel \
-             -d '{"rules":[]}' >/dev/null 2>&1 \
-          || echo "警告: 未能通过 daemon API 清 panel 段（daemon 可能已停）" >&2
-      else
-        # Migrate panel segment back into tui segment so live forwards survive.
-        curl -sf --unix-socket /var/run/nft-forward.sock \
-             -X POST http://daemon/v1/admin/demote-to-tui >/dev/null 2>&1 \
-          || echo "警告: 未能通过 daemon API 降级 panel→tui 段（daemon 可能已停）" >&2
+        if clear_panel_segment; then
+          seg_note="daemon 的 panel 段已清空"
+        else
+          seg_note="daemon 的 panel 段未能清空，其中的规则已转为本地规则"
+          echo "警告: 未能清空 daemon 的 panel 段（daemon 未运行，或拒绝了请求）；面板下发过的规则会转为本地规则继续转发，可在 TUI 里删除" >&2
+        fi
       fi
       write_daemon_unit ""
       rm -f /etc/nft-forward/panel.token
@@ -191,9 +210,9 @@ do_uninstall() {
       systemctl restart nft-forward-daemon.service
       if [[ "$purge" -eq 1 ]]; then
         rm -rf /etc/nft-forward/
-        ok "已卸载 agent 角色 + 清 /etc/nft-forward/ 与 daemon panel 段"
+        ok "已卸载 agent 角色 + 清 /etc/nft-forward/；${seg_note}"
       else
-        ok "已卸载 agent 角色（daemon 保留；panel 段已迁回 tui 段，token 文件已删）"
+        ok "已卸载 agent 角色（daemon 保留；面板下发的规则已转为本地规则，token 文件已删）"
       fi
       ;;
     daemon)
