@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { fmtBytes } from '../lib/fmt'
-import { enrichRule, hostPortKey, splitEndpoint } from '../lib/landing'
+import { enrichRule, hostPortKey, relayExportName, splitEndpoint } from '../lib/landing'
 import { batchProgress, probeStateOf } from '../lib/probe'
 import { combineResources } from '../lib/resource'
 import { useIsMobile } from '../lib/useIsMobile'
@@ -35,7 +35,7 @@ import {
  * 两者到齐才算就绪：出口是否显示成落地节点、有没有中转链接、编辑表单按
  * 哪种出口预填，都要对照目录才能得出。
  *
- * @param {{ username: string, role: string }} user
+ * @param {{ id: number, role: string }} user
  * @param {() => Promise<any>} fetcher
  * @param {readonly unknown[]} deps
  * @returns {{
@@ -77,16 +77,18 @@ function exitAddress(rule) {
 }
 
 /* 复制中转链接时写进剪贴板的文本：复制格式选了 YAML、且这条链接能转成
-   Clash 配置时是 YAML，否则是链接本身。 */
-function relayCopyText(uri, copyFmt) {
-  return (copyFmt === 'yaml' && uriToClashYaml(uri)) || uri
+   Clash 配置时是 YAML，否则是链接本身。YAML 里的名称用 relayExportName，
+   与“我的代理”页导出同一条中转时的名称一致。 */
+function relayCopyText({ uri, name }, copyFmt) {
+  return (copyFmt === 'yaml' && uriToClashYaml(uri, name)) || uri
 }
 
 /** 规则的中转链接（出口是落地节点且规则有入口时才有）；双栈规则有两条。 */
 function relayLinks(rule) {
+  const link = (uri, v6, family) => uri && { uri, family, name: relayExportName(rule.landing_name, rule.name, v6) }
   return [
-    rule.relay_uri && { uri: rule.relay_uri, family: rule.relay_uri_v6 ? 'v4' : null },
-    rule.relay_uri_v6 && { uri: rule.relay_uri_v6, family: 'v6' },
+    link(rule.relay_uri, false, rule.relay_uri_v6 ? 'v4' : null),
+    link(rule.relay_uri_v6, true, 'v6'),
   ].filter(Boolean)
 }
 
@@ -240,7 +242,7 @@ export function RulesListPage({ scope, title, load, search, onSearch, onReset, f
             scope={scope}
             data={data}
             catalog={catalog}
-            username={user.username}
+            userId={user.id}
             reload={reload}
             dialog={dialog}
             onDialog={setDialog}
@@ -257,7 +259,7 @@ export function RulesListPage({ scope, title, load, search, onSearch, onReset, f
   )
 }
 
-function RulesListBody({ scope, data, catalog, username, reload, dialog, onDialog, search, onSearch, onReset, filters, narrow, linkState }) {
+function RulesListBody({ scope, data, catalog, userId, reload, dialog, onDialog, search, onSearch, onReset, filters, narrow, linkState }) {
   const rules = useMemo(
     () => data.rules.map(rule => enrichRule(rule, catalog.landingByKey)),
     [data.rules, catalog.landingByKey],
@@ -288,7 +290,7 @@ function RulesListBody({ scope, data, catalog, username, reload, dialog, onDialo
           nodes={data.nodes}
           bindings={data.bindings}
           catalog={catalog}
-          username={username}
+          userId={userId}
           showRate={data.show_rate}
           onSaved={reload}
           onClose={() => onDialog(null)}
@@ -472,11 +474,11 @@ function ExitLines({ rule, scope, blurred, copyFmt }) {
   if (links.length === 0) {
     return <div className="flex items-center gap-1.5 text-ink-soft">{tag}{text}</div>
   }
-  return links.map(({ uri, family }) => (
-    <div key={family ?? 'single'} className="flex items-center gap-1.5 text-ink-soft">
+  return links.map(link => (
+    <div key={link.family ?? 'single'} className="flex items-center gap-1.5 text-ink-soft">
       {tag}
-      {family && <span className="text-caption text-ink-mut">{family}</span>}
-      <CopyText text={relayCopyText(uri, copyFmt)}>{text}</CopyText>
+      {link.family && <span className="text-caption text-ink-mut">{link.family}</span>}
+      <CopyText text={relayCopyText(link, copyFmt)}>{text}</CopyText>
     </div>
   ))
 }
@@ -530,8 +532,9 @@ export function RuleEntryCard({ rule, entryNodeName }) {
               <SensText blurred={blurred}>{v6}</SensText>
             </Endpoint>
           )}
-          {relayLinks(rule).map(({ uri, family }) => {
-            const copyText = relayCopyText(uri, copyFmt)
+          {relayLinks(rule).map((link) => {
+            const { uri, family } = link
+            const copyText = relayCopyText(link, copyFmt)
             return (
               <Endpoint
                 key={family ?? 'single'}

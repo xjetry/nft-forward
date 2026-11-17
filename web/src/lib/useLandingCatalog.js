@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import { buildCatalog, effectiveRoles, fetchNodeRoles, loadLocalNodes, loadLocalRoles } from './landing.js'
 import { mapResource } from './resource.ts'
@@ -41,27 +41,29 @@ export function useLocalLandingVersion() {
  *   hasDynamic    分配来源里是否有订阅（可刷新）
  *   stale         订阅刷新失败、当前是旧缓存
  *
- * @param {{ username: string, role: string } | null} user
+ * @param {{ id: number, role: string } | null} user
  */
 export function useLandingCatalog(user) {
-  const username = user?.username
+  const userId = user?.id
   const isAdmin = user?.role === 'admin'
 
-  const server = useResource(async () => {
+  // refresh 为真时让服务端先重新抓取分配来源里的订阅，再返回节点。
+  const load = async (refresh) => {
     const [roles, assigned] = await Promise.all([
       fetchNodeRoles(),
       // 管理员没有“被分配的落地节点”这个概念，接口只对普通用户有意义。
-      isAdmin ? null : api.get('/my/landing-nodes'),
+      isAdmin ? null : api.get(refresh ? '/my/landing-nodes?refresh=1' : '/my/landing-nodes'),
     ])
     return { roles, nodes: assigned?.nodes || [], hasDynamic: !!assigned?.has_dynamic, stale: !!assigned?.stale }
-  }, [username, isAdmin])
+  }
+  const server = useResource(() => load(false), [userId, isAdmin])
 
   const version = useLocalLandingVersion()
   const state = useMemo(() => mapResource(server.state, (s) => {
-    const localRoles = loadLocalRoles(username)
+    const localRoles = loadLocalRoles(userId)
     const roles = effectiveRoles(s.roles, localRoles)
     return {
-      ...buildCatalog({ ...loadLocalNodes(username), server: s.nodes, roles }),
+      ...buildCatalog({ ...loadLocalNodes(userId), server: s.nodes, roles }),
       roles,
       serverRoles: s.roles,
       localRoles,
@@ -70,15 +72,34 @@ export function useLandingCatalog(user) {
       stale: s.stale,
     }
     // version 不参与计算，但它变化意味着 localStorage 里的数据变了，需要重读。
-  }), [server.state, username, version])
+  }), [server.state, userId, version])
 
-  const { patch } = server
-  /** 让服务端重新抓取分配来源里的订阅，并用结果更新目录。失败时抛出。 */
+  const { reloadWith } = server
+  const loadRef = useRef(load)
+  loadRef.current = load
+  /**
+   * 让服务端重新抓取分配来源里的订阅，并用结果更新目录。失败时抛出（目录
+   * 同时带上刷新失败的提示，屏幕上仍是上一次的内容）。
+   *
+   * 走资源自己的加载路径（reloadWith），不直接改写 data：直接改写的话，一次
+   * 更早发起、更晚返回的普通重新加载会用刷新之前的数据把结果盖掉。
+   */
   const refreshAssigned = useCallback(async () => {
-    const d = await api.get('/my/landing-nodes?refresh=1')
-    patch(s => ({ ...s, nodes: d?.nodes || [], hasDynamic: !!d?.has_dynamic, stale: !!d?.stale }))
-    return { stale: !!d?.stale }
-  }, [patch])
+    let outcome = null
+    let failure = null
+    await reloadWith(async () => {
+      try {
+        const data = await loadRef.current(true)
+        outcome = { stale: data.stale }
+        return data
+      } catch (err) {
+        failure = err
+        throw err
+      }
+    })
+    if (failure) throw failure
+    return outcome
+  }, [reloadWith])
 
   return { state, reload: server.reload, refreshAssigned }
 }

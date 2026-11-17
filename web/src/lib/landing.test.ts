@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ROLE_DIRECT, ROLE_LANDING, buildCatalog, effectiveRoles, enrichRule, exportNames, hostPortKey, landingIndex, mergeLanding,
-  migrateSubCaches, nextSubCache, nodeKey, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
+  migrateSubCache, nextSubCache, nodeKey, relayExportName, relayFor, setLocalRoleBatch, subscriptionURLs, toggleLocalRole,
 } from './landing.js'
 
 const node = (host: string, port: number, extra: Record<string, unknown> = {}) =>
@@ -130,76 +130,63 @@ test('第一次添加就抓取失败的订阅没有节点可留', () => {
   assert.deepEqual(nextSubCache({}, ['constructor', '__proto__'], new Map()), {})
 })
 
-function fakeStorage(init: Record<string, string>) {
+function fakeStore(init: Record<string, string>) {
   const m = new Map(Object.entries(init))
   return {
-    get length() { return m.size },
-    key: (i: number) => [...m.keys()][i] ?? null,
     getItem: (k: string) => m.get(k) ?? null,
     setItem: (k: string, v: string) => void m.set(k, v),
     removeItem: (k: string) => void m.delete(k),
     dump: () => Object.fromEntries(m),
   }
 }
+const URLS = 'nf-user:2:sub-urls'
+const CACHE = 'nf-user:2:sub-cache'
 
 test('迁移：数组形式的缓存记到名单里第一条订阅名下', () => {
-  const st = fakeStorage({
-    'nf-sub-urls:alice': `${A}\n${B}`,
-    'nf-sub-cache:alice': JSON.stringify([a1, b1]),
-  })
-  migrateSubCaches(st)
-  assert.deepEqual(JSON.parse(st.dump()['nf-sub-cache:alice']), { [A]: [a1, b1] })
-  assert.equal(st.dump()['nf-sub-urls:alice'], `${A}\n${B}`)
+  const st = fakeStore({ [URLS]: `${A}\n${B}`, [CACHE]: JSON.stringify([a1, b1]) })
+  migrateSubCache(st, 2)
+  assert.deepEqual(JSON.parse(st.dump()[CACHE]), { [A]: [a1, b1] })
+  assert.equal(st.dump()[URLS], `${A}\n${B}`)
 })
 
-test('迁移：没有订阅地址的数组缓存没有所属的订阅，丢掉', () => {
-  const st = fakeStorage({ 'nf-sub-cache:bob': JSON.stringify([a1]), 'nf-sub-urls:carol': A, 'nf-sub-cache:carol': '[]' })
-  migrateSubCaches(st)
-  assert.deepEqual(Object.keys(st.dump()), ['nf-sub-urls:carol'])
+test('迁移：没有订阅地址的数组缓存没有所属的订阅，丢掉；空数组也丢掉', () => {
+  const orphan = fakeStore({ [CACHE]: JSON.stringify([a1]) })
+  migrateSubCache(orphan, 2)
+  assert.deepEqual(orphan.dump(), {})
+  const empty = fakeStore({ [URLS]: A, [CACHE]: '[]' })
+  migrateSubCache(empty, 2)
+  assert.deepEqual(empty.dump(), { [URLS]: A })
 })
 
-test('迁移：已经按地址分开的缓存、别的键、解析不了的内容都不动', () => {
-  const init = {
-    'nf-sub-urls:alice': A,
-    'nf-sub-cache:alice': JSON.stringify({ [A]: [a1] }),
-    'nf-sub-cache:dave': '{not json',
-    'nf-landing-uris:alice': '[1,2]',
+test('迁移：已经按地址分开的缓存、解析不了的内容、别的用户的数据都不动', () => {
+  for (const cache of [JSON.stringify({ [A]: [a1] }), '{not json']) {
+    const init = { [URLS]: A, [CACHE]: cache, 'nf-user:3:sub-cache': JSON.stringify([b1]), 'nf-user:3:sub-urls': B }
+    const st = fakeStore(init)
+    migrateSubCache(st, 2)
+    assert.deepEqual(st.dump(), init)
   }
-  const st = fakeStorage(init)
-  migrateSubCaches(st)
-  assert.deepEqual(st.dump(), init)
 })
 
 test('迁移可以重复执行：第二次不再改动', () => {
-  const st = fakeStorage({ 'nf-sub-urls:alice': A, 'nf-sub-cache:alice': JSON.stringify([a1]) })
-  migrateSubCaches(st)
+  const st = fakeStore({ [URLS]: A, [CACHE]: JSON.stringify([a1]) })
+  migrateSubCache(st, 2)
   const once = st.dump()
-  migrateSubCaches(st)
+  migrateSubCache(st, 2)
   assert.deepEqual(st.dump(), once)
 })
 
 /* ---------- 导出名称 ---------- */
 
-test('导出名称：不重名的保持原名，重名的加上各自的限定', () => {
-  assert.deepEqual(
-    exportNames([
-      { name: 'solo', qualifier: '' },
-      { name: 'land-a', qualifier: '' },
-      { name: 'land-a', qualifier: '经 web' },
-      { name: 'land-a', qualifier: '经 web v6' },
-      { name: 'other', qualifier: '经 web' },
-    ]),
-    ['solo', 'land-a', 'land-a（经 web）', 'land-a（经 web v6）', 'other'],
-  )
+test('中转条目的导出名称由节点、规则、入口决定，与直连节点自己的名称不同', () => {
+  assert.equal(relayExportName('land-a', 'web'), 'land-a（经 web）')
+  assert.equal(relayExportName('land-a', 'web', true), 'land-a（经 web v6）')
+  const names = ['land-a', relayExportName('land-a', 'web'), relayExportName('land-a', 'web', true), relayExportName('land-a', 'db')]
+  assert.equal(new Set(names).size, names.length)
 })
 
-test('导出名称：加了限定仍然撞名时用序号区分，结果里没有重复', () => {
-  const names = exportNames([
-    { name: 'n', qualifier: '经 r' },
-    { name: 'n', qualifier: '经 r' },          // 两条同名规则
-    { name: 'n（经 r）', qualifier: '' },       // 原名恰好等于别人的限定名
-    { name: 'x' }, { name: 'x' },              // 没有限定可用
-  ])
-  assert.deepEqual(names, ['n（经 r）', 'n（经 r） 2', 'n（经 r） 3', 'x', 'x 2'])
+test('导出名称：不重复的原样返回，重复的从第二个起加序号', () => {
+  assert.deepEqual(exportNames(['solo', 'land-a', 'land-a（经 web）']), ['solo', 'land-a', 'land-a（经 web）'])
+  const names = exportNames(['x', 'x', 'x 2', 'x'])
+  assert.deepEqual(names, ['x', 'x 2', 'x 2 2', 'x 3'])
   assert.equal(new Set(names).size, names.length)
 })

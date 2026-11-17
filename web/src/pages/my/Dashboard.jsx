@@ -3,6 +3,7 @@ import { api } from '../../lib/api'
 import { fmtBytes, fmtDate, fmtTrafficGB, isExpired, nullStr, pct } from '../../lib/fmt'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { useResource } from '../../lib/useResource'
+import { browserStore, readSlot, writeSlot } from '../../lib/userStore'
 import { fmtSpeed, useSpeed } from '../../lib/useSpeed'
 import { ApiTokenSection } from '../../components/ApiTokenSection'
 import { NodeStatus, NodeTypeTag } from '../../components/net'
@@ -18,8 +19,8 @@ import {
 export default function MyDashboard() {
   const my = useResource(() => api.get('/my'), [])
   const { refresh: refreshSession } = useUser()
-  // 用户名同时出现在会话里（外壳、按用户名存放的本地数据都从那里取）和本页
-  // 的数据里，改名之后两处都要重新取。返回会话那一份有没有取到：没取到时
+  // 用户名同时出现在会话里（外壳显示的那一份）和本页的数据里，改名之后两处
+  // 都要重新取。本地数据按用户 id 存放，不受改名影响。返回会话那一份有没有取到：没取到时
   // 会话保持原样（见 lib/session 的 settle），外壳上还是旧用户名。
   const onRenamed = async () => {
     const [confirmed] = await Promise.all([refreshSession(), my.reload()])
@@ -158,11 +159,9 @@ function RenameModal({ current, onClose, onRenamed }) {
 /* 节点用途位里的“中转”，取值与服务端 db.NodeRoleVia 一致。 */
 const NODE_ROLE_VIA = 2
 
-const orderKey = userId => `my.nodeOrder.${userId}`
-
 function readNodeOrder(userId) {
   try {
-    const ids = JSON.parse(localStorage.getItem(orderKey(userId)) || '[]')
+    const ids = JSON.parse(readSlot(browserStore(), userId, 'node-order') || '[]')
     return Array.isArray(ids) ? ids : []
   } catch {
     return []
@@ -179,8 +178,8 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
   const speeds = useSpeed()
   const grantOf = new Map(nodes.map((n, i) => [n.id, grants[i]]))
 
-  // 展示顺序是个人偏好，只存在本浏览器；键按用户 id 区分，同一浏览器换账号
-  // 互不影响。
+  // 展示顺序是个人偏好，只存在本浏览器，与这个用户的其它本地数据一样按用户
+  // id 存放（lib/userStore），同一浏览器换账号互不影响。
   const [order, setOrder] = useState(() => readNodeOrder(userId))
   const [dragId, setDragId] = useState(/** @type {number | null} */ (null))
 
@@ -209,7 +208,7 @@ function GrantedNodes({ userId, nodes, grants, showRate }) {
       ? [...singles.map(n => n.id), ...ids]
       : [...ids, ...composites.map(n => n.id)]
     setOrder(next)
-    try { localStorage.setItem(orderKey(userId), JSON.stringify(next)) } catch { /* 存不下时顺序只在本次访问内有效 */ }
+    try { writeSlot(browserStore(), userId, 'node-order', JSON.stringify(next)) } catch { /* 存不下时顺序只在本次访问内有效 */ }
   }
 
   const speedText = (n) => {

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { Navigate, Outlet } from 'react-router-dom'
 import { ApiError, api } from '../lib/api'
 import { assertNever, createLatest } from '../lib/resource'
+import { adoptLocalData } from '../lib/landing'
 import { answerFromFailure, guard, settle } from '../lib/session'
 import { ErrorState, Loading } from './ui'
 
@@ -39,6 +40,9 @@ export function SessionProvider({ children }) {
       if (!latest.isCurrent(token)) return true
       setBranding({ panelName: data?.panel_name || '', version: data?.version || '' })
       answer = data?.user ? { kind: 'user', user: data.user } : { kind: 'anonymous' }
+      // 本地数据按用户 id 存放。要在会话变成已登录、页面开始读取之前整理好：
+      // 之后的读取只认整理后的形式。
+      if (data?.user) adoptLocalData(data.user)
     } catch (err) {
       if (!latest.isCurrent(token)) return true
       answer = answerFromFailure(

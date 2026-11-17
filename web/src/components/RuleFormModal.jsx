@@ -229,14 +229,14 @@ const EXIT_KIND_OPTIONS = [{ value: 'custom', label: '自定义地址' }, { valu
  *   nodes: object[],
  *   bindings: Array<{ upstream_node_id: number, downstream_node_id: number }>,
  *   catalog: object,
- *   username: string,
+ *   userId: number,
  *   showRate?: boolean,
  *   onSubmit: (payload: ReturnType<typeof ruleFormToPayload>) => Promise<unknown>,
  *   onClose: () => void,
  * }} props `catalog` 是 useLandingCatalog 就绪后的 data；`showRate === false`
  * 时节点选项里不显示倍率（用户侧由面板设置决定）。
  */
-export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, catalog, username, showRate, onSubmit, onClose }) {
+export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, catalog, userId, showRate, onSubmit, onClose }) {
   const toast = useToast()
   const formId = useId()
   const [form, setForm] = useState(() => initial ?? BLANK)
@@ -276,8 +276,14 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
     const uri = current.exit.address.trim()
     const node = tryParseURI(uri)
     if (!node) return current
-    addLocalURI(username, uri)
-    saveLocalRoles(username, setLocalRoleBatch(catalog.serverRoles, catalog.localRoles, [node], ROLE_LANDING, true))
+    try {
+      addLocalURI(userId, uri)
+      saveLocalRoles(userId, setLocalRoleBatch(catalog.serverRoles, catalog.localRoles, [node], ROLE_LANDING, true))
+    } catch (err) {
+      // 存不进本浏览器就没有这个落地节点可指：出口保持原样，由校验去提示。
+      toast(err instanceof Error ? err.message : '没能保存到本浏览器', 'error')
+      return current
+    }
     const next = {
       ...current,
       exit: { kind: 'landing', key: hostPortKey(node.host, node.port) },
@@ -458,13 +464,13 @@ export function RuleFormModal({ title, submitLabel, initial, nodes, bindings, ca
  *   nodes: object[],
  *   bindings: object[],
  *   catalog: object,
- *   username: string,
+ *   userId: number,
  *   showRate?: boolean,
  *   onSaved?: () => Promise<unknown>,
  *   onClose: () => void,
  * }} props
  */
-export function RuleDialog({ dialog, scope, nodes, bindings, catalog, username, showRate, onSaved, onClose }) {
+export function RuleDialog({ dialog, scope, nodes, bindings, catalog, userId, showRate, onSaved, onClose }) {
   const toast = useToast()
   const navigate = useNavigate()
   const editing = dialog.kind === 'edit'
@@ -494,7 +500,7 @@ export function RuleDialog({ dialog, scope, nodes, bindings, catalog, username, 
       nodes={nodes}
       bindings={bindings}
       catalog={catalog}
-      username={username}
+      userId={userId}
       showRate={showRate}
       onSubmit={submit}
       onClose={onClose}

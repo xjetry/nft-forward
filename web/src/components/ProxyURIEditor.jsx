@@ -6,6 +6,7 @@ import {
   subscriptionURLs, toggleLocalRole, tryParseURI,
 } from '../lib/landing'
 import { useLandingCatalog, useLocalLandingVersion } from '../lib/useLandingCatalog'
+import { browserStore, readSlot, writeSlot } from '../lib/userStore'
 import { useBlur } from './prefs'
 import { ResourceView } from './ResourceView'
 import { useUser } from './session'
@@ -65,7 +66,8 @@ function describeLines(lines) {
 }
 
 /**
- * 记住文本框被拖出来的高度（存在本浏览器的 `key` 下），下次出现时恢复。
+ * 记住文本框被拖出来的高度（存在本浏览器里这个用户的 `slot` 下），下次出现
+ * 时恢复。高度只影响观感，存不下时不打扰用户。
  *
  * 返回一个 ref 回调而不是 ref 对象：文本框在折叠区里，展开才挂载、收起就
  * 卸载。观察器的生命周期必须跟着元素走 —— 元素挂上时建立、卸下或 key 变化
@@ -74,20 +76,19 @@ function describeLines(lines) {
  * 高度写在元素的 style.height 上：浏览器的拖拽手柄改的就是这个属性，恢复时
  * 写同一个属性，两者不会各管一个高度。
  */
-function usePersistedHeight(key) {
+function usePersistedHeight(userId, slot) {
   return useCallback((el) => {
     if (!el) return undefined
-    let saved = 0
-    try { saved = Number(localStorage.getItem(key)) } catch { /* 读不到就用默认高度 */ }
+    const saved = Number(readSlot(browserStore(), userId, slot))
     if (saved > 0) el.style.height = `${saved}px`
     const observer = new ResizeObserver(() => {
       const height = el.offsetHeight
       if (height <= 0) return
-      try { localStorage.setItem(key, String(height)) } catch { /* 存不下不影响编辑 */ }
+      try { writeSlot(browserStore(), userId, slot, String(height)) } catch { /* 见上：存不下不打扰用户 */ }
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [key])
+  }, [userId, slot])
 }
 
 /**
@@ -96,21 +97,21 @@ function usePersistedHeight(key) {
  */
 export function ProxyURIEditor({ fill = false }) {
   const { user } = useUser()
-  // 本地数据按用户名分开存放。草稿、勾选、展开状态都属于某一个用户名下的
-  // 数据，用户名变了就整体重建，上一个用户名下没保存的草稿不会被存到新的名下。
-  return <Editor key={user.username} user={user} fill={fill} />
+  // 本地数据按用户 id 分开存放。草稿、勾选、展开状态都属于某一个用户的数据，
+  // 换了用户就整体重建，上一个用户没保存的草稿不会被存到新用户名下。
+  return <Editor key={user.id} user={user} fill={fill} />
 }
 
 function Editor({ user, fill }) {
-  const username = user.username
+  const userId = user.id
   const blurred = useBlur()
   const toast = useToast()
   const catalog = useLandingCatalog(user)
   const version = useLocalLandingVersion()
   const saved = useMemo(
-    () => ({ uris: loadLocalURIs(username), subURLs: loadSubURLs(username), ...loadLocalNodes(username) }),
+    () => ({ uris: loadLocalURIs(userId), subURLs: loadSubURLs(userId), ...loadLocalNodes(userId) }),
     // version 不参与计算：它变化表示存储里的内容变了，需要重读。
-    [username, version],
+    [userId, version],
   )
 
   // 草稿为 null 表示用户没有动过文本框，显示的就是已保存的内容。
@@ -133,8 +134,8 @@ function Editor({ user, fill }) {
   // 最近一次订阅更新里失败的订阅；kept 是这条订阅沿用的上一次的节点数。
   const [subReport, setSubReport] = useState(/** @type {{ failed: Array<{ url: string, message: string, kept: number }> } | null} */ (null))
 
-  const subHeightRef = usePersistedHeight(`nf-sub-textarea-h:${username}`)
-  const manualHeightRef = usePersistedHeight(`nf-manual-textarea-h:${username}`)
+  const subHeightRef = usePersistedHeight(userId, 'sub-textarea-h')
+  const manualHeightRef = usePersistedHeight(userId, 'manual-textarea-h')
 
   const catalogData = catalog.state.status === 'ready' ? catalog.state.data : null
   const rows = useMemo(
@@ -149,7 +150,7 @@ function Editor({ user, fill }) {
   const skippedLines = unparsedLines(uriText)
 
   const saveManual = useAction(async () => {
-    saveLocalURIs(username, uriText)
+    saveLocalURIs(userId, uriText)
     setUriDraft(null)
     toast(skippedLines.length ? `已保存，其中 ${skippedLines.length} 行无法识别，没有计入节点` : '已保存到本浏览器')
   })
@@ -161,9 +162,9 @@ function Editor({ user, fill }) {
      名单在抓取之前就生效：先按新名单把缓存裁一遍，再去抓取。抓取要等网络，
      中途关掉页面时存储里也已经是“新名单 + 仍在名单里的那些订阅的节点”。 */
   const refreshSubs = useAction(async () => {
-    saveSubURLs(username, subText)
+    saveSubURLs(userId, subText)
     setSubDraft(null)
-    saveSubCache(username, nextSubCache(loadSubCache(username), urls, new Map()))
+    saveSubCache(userId, nextSubCache(loadSubCache(userId), urls, new Map()))
     if (urls.length === 0) {
       setSubReport(null)
       toast(canClearSub ? '订阅已清空，订阅来的节点已移除' : '已保存到本浏览器')
@@ -179,8 +180,8 @@ function Editor({ user, fill }) {
         failed.push({ url, message: err instanceof Error ? err.message : '请求失败' })
       }
     }
-    const next = nextSubCache(loadSubCache(username), urls, fetched)
-    saveSubCache(username, next)
+    const next = nextSubCache(loadSubCache(userId), urls, fetched)
+    saveSubCache(userId, next)
     const total = Object.values(next).flat().length
     setSubReport(failed.length
       ? { failed: failed.map(f => ({ ...f, kept: Object.hasOwn(next, f.url) ? next[f.url].length : 0 })) }
@@ -194,7 +195,15 @@ function Editor({ user, fill }) {
 
      角色写进本地覆盖表。新表由目录给出的“服务端表 + 当前覆盖表”算出
      （toggleLocalRole / setLocalRoleBatch 从生效值出发），saveLocalRoles 写入
-     后发出变更事件，目录随之重新推导，下一次点击拿到的就是新的覆盖表。 */
+     后发出变更事件，目录随之重新推导，下一次点击拿到的就是新的覆盖表。
+     写不进去时开关不会变（显示的始终是存储里的值），所以要说明原因。 */
+  const writeRoles = (next) => {
+    try {
+      saveLocalRoles(userId, next)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '没能保存到本浏览器', 'error')
+    }
+  }
   const nodeList = (section, foldedNote) => {
     if (saved[section].length === 0) return null
     return (
@@ -208,8 +217,8 @@ function Editor({ user, fill }) {
               foldedNote={foldedNote}
               roles={data.roles}
               blurred={blurred}
-              onToggle={(node, bit) => saveLocalRoles(username, toggleLocalRole(data.serverRoles, data.localRoles, node, bit))}
-              onBatch={(nodes, bit, on) => saveLocalRoles(username, setLocalRoleBatch(data.serverRoles, data.localRoles, nodes, bit, on))}
+              onToggle={(node, bit) => writeRoles(toggleLocalRole(data.serverRoles, data.localRoles, node, bit))}
+              onBatch={(nodes, bit, on) => writeRoles(setLocalRoleBatch(data.serverRoles, data.localRoles, nodes, bit, on))}
             />
           )}
         </ResourceView>

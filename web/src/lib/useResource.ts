@@ -10,6 +10,12 @@ export interface ResourceHandle<T> {
    * 返回的 Promise 在这次拉取落定后完成，保存动作可以 `await reload()`。
    */
   readonly reload: () => Promise<void>
+  /**
+   * 用另一种取法做一次拉取（例如让服务端先重新抓取再返回）。与 reload 走同
+   * 一条路径、共用同一个请求序号，所以它的结果同样只在“自己是最后发起的
+   * 那次”时才被采用，不会被更早发起、更晚返回的请求盖掉。
+   */
+  readonly reloadWith: (fetcher: () => Promise<T>) => Promise<void>
   /** 本地改写 data（乐观更新）；失败时调用 reload() 以服务端为准纠正回来。 */
   readonly patch: (update: (data: T) => T) => void
 }
@@ -66,7 +72,12 @@ export function useResource<T>(fetcher: () => Promise<T>, deps: readonly unknown
     // 依赖数组里展开的 deps 由调用方声明：它们变了就是换了资源，要重新加载。
   }, [reload, latest, ...deps])
 
+  const reloadWith = useCallback(
+    (via: () => Promise<T>) => runLoad(latest, dispatch, via, describeError),
+    [latest],
+  )
+
   const patch = useCallback((update: (data: T) => T) => dispatch({ type: 'patch', update }), [])
 
-  return { state, reload, patch }
+  return { state, reload, reloadWith, patch }
 }

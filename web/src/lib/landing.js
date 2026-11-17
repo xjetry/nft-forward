@@ -9,10 +9,7 @@
    合并成一份目录，host:port 冲突时用户自己的优先。 */
 
 import { api } from './api.js'
-
-const LS_PREFIX = 'nf-landing-uris:'
-const LS_SUB_URL_PREFIX = 'nf-sub-urls:'
-const LS_SUB_CACHE_PREFIX = 'nf-sub-cache:'
+import { adoptUserData, browserStore, readSlot, writeSlot } from './userStore.ts'
 
 /* 本地数据（URI、订阅、订阅缓存、本地角色）任何一项变化都发同一个事件。
    同一个标签页里的其它组件收不到原生的 storage 事件，靠它得知变化；
@@ -21,40 +18,44 @@ function notifyChanged() {
   try { window.dispatchEvent(new Event('nf-landing-changed')) } catch { /* 非浏览器环境 */ }
 }
 
-export function loadLocalURIs(username) {
-  if (!username) return ''
-  try { return localStorage.getItem(LS_PREFIX + username) || '' } catch { return '' }
-}
-
-export function saveLocalURIs(username, text) {
-  if (!username) return
-  try {
-    if (text.trim()) localStorage.setItem(LS_PREFIX + username, text)
-    else localStorage.removeItem(LS_PREFIX + username)
-  } catch { /* storage unavailable — non-fatal */ }
+/* 本模块对用户本地数据的读写都经过这两个函数，键与失败语义由 lib/userStore
+   统一决定：读不到按没有处理，写不进去会抛出 StoreWriteError，由发起保存的
+   界面告诉用户。写入成功后发变更事件。 */
+const read = (userId, slot) => (userId == null ? null : readSlot(browserStore(), userId, slot))
+function write(userId, slot, value) {
+  writeSlot(browserStore(), userId, slot, value)
   notifyChanged()
 }
 
-export function hasLocalURIs(username) {
-  return loadLocalURIs(username).trim() !== ''
+/** 读出 JSON 形式的一项；没有或解析不了时返回 null。 */
+function readJSON(userId, slot) {
+  const raw = read(userId, slot)
+  if (raw === null) return null
+  try { return JSON.parse(raw) } catch { return null }
 }
 
-export function hasLocalProxies(username) {
-  return hasLocalURIs(username) || loadSubURLs(username).trim() !== ''
+export function loadLocalURIs(userId) {
+  return read(userId, 'landing-uris') || ''
 }
 
-export function loadSubURLs(username) {
-  if (!username) return ''
-  try { return localStorage.getItem(LS_SUB_URL_PREFIX + username) || '' } catch { return '' }
+export function saveLocalURIs(userId, text) {
+  write(userId, 'landing-uris', text.trim() ? text : null)
 }
 
-export function saveSubURLs(username, text) {
-  if (!username) return
-  try {
-    if (text.trim()) localStorage.setItem(LS_SUB_URL_PREFIX + username, text)
-    else localStorage.removeItem(LS_SUB_URL_PREFIX + username)
-  } catch {}
-  notifyChanged()
+export function hasLocalURIs(userId) {
+  return loadLocalURIs(userId).trim() !== ''
+}
+
+export function hasLocalProxies(userId) {
+  return hasLocalURIs(userId) || loadSubURLs(userId).trim() !== ''
+}
+
+export function loadSubURLs(userId) {
+  return read(userId, 'sub-urls') || ''
+}
+
+export function saveSubURLs(userId, text) {
+  write(userId, 'sub-urls', text.trim() ? text : null)
 }
 
 /** 订阅文本框的内容 → 订阅地址名单：每行一个，去掉空行、# 注释行与重复项。 */
@@ -72,22 +73,14 @@ export function subscriptionURLs(text) {
    状态。 */
 
 /** @returns {Record<string, any[]>} */
-export function loadSubCache(username) {
-  if (!username) return {}
-  try {
-    const value = JSON.parse(localStorage.getItem(LS_SUB_CACHE_PREFIX + username) || 'null')
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
-  } catch { return {} }
+export function loadSubCache(userId) {
+  const value = readJSON(userId, 'sub-cache')
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-/** @param {string} username @param {Record<string, any[]>} cache */
-export function saveSubCache(username, cache) {
-  if (!username) return
-  try {
-    if (Object.keys(cache).length) localStorage.setItem(LS_SUB_CACHE_PREFIX + username, JSON.stringify(cache))
-    else localStorage.removeItem(LS_SUB_CACHE_PREFIX + username)
-  } catch {}
-  notifyChanged()
+/** @param {number} userId @param {Record<string, any[]>} cache */
+export function saveSubCache(userId, cache) {
+  write(userId, 'sub-cache', Object.keys(cache).length ? JSON.stringify(cache) : null)
 }
 
 /**
@@ -113,37 +106,44 @@ export function nextSubCache(previous, urls, fetched) {
 }
 
 /**
- * 把数组形式的订阅缓存改写成按地址分开的形式。
+ * 把一个用户的数组形式的订阅缓存改写成按地址分开的形式。
  *
  * 浏览器里可能还存着数组形式的缓存：一张不记录来源的节点表。它的节点全部
  * 记到名单里第一条订阅名下 —— 只有一条订阅时这就是事实；有多条时，其余
  * 订阅在下一次更新成功后各自拿到自己的节点，地址相同的由 buildCatalog 去重。
  * 名单为空时这些节点没有所属的订阅，按上面的不变式丢掉。
  *
- * @param {Pick<Storage, 'length' | 'key' | 'getItem' | 'setItem' | 'removeItem'>} storage
+ * @param {import('./userStore.ts').KeyValueStore} store
+ * @param {number} userId
  */
-export function migrateSubCaches(storage) {
-  const keys = []
-  for (let i = 0; i < storage.length; i++) {
-    const key = storage.key(i)
-    if (key?.startsWith(LS_SUB_CACHE_PREFIX)) keys.push(key)
-  }
-  for (const key of keys) {
-    let value
-    // 解析不了的内容不动它：loadSubCache 会把它读成空缓存。
-    try { value = JSON.parse(storage.getItem(key) || 'null') } catch { continue }
-    if (!Array.isArray(value)) continue
-    const username = key.slice(LS_SUB_CACHE_PREFIX.length)
-    const [first] = subscriptionURLs(storage.getItem(LS_SUB_URL_PREFIX + username) || '')
-    if (first === undefined || value.length === 0) storage.removeItem(key)
-    else storage.setItem(key, JSON.stringify(Object.fromEntries([[first, value]])))
-  }
+export function migrateSubCache(store, userId) {
+  let value
+  // 解析不了的内容不动它：loadSubCache 会把它读成空缓存。
+  try { value = JSON.parse(readSlot(store, userId, 'sub-cache') || 'null') } catch { return }
+  if (!Array.isArray(value)) return
+  const [first] = subscriptionURLs(readSlot(store, userId, 'sub-urls') || '')
+  const next = first === undefined || value.length === 0 ? null : JSON.stringify(Object.fromEntries([[first, value]]))
+  writeSlot(store, userId, 'sub-cache', next)
 }
 
-// 模块加载时迁移一次，所以本模块其余部分读到的订阅缓存只有按地址分开这一种
-// 形式。没有 window 的环境（单元测试）里没有可迁移的存储。
-if (typeof window !== 'undefined') {
-  try { migrateSubCaches(window.localStorage) } catch { /* 存储不可用：没有可迁移的内容 */ }
+/**
+ * 登录确认之后、任何读取之前调用一次：把这个用户按别的布局存放的本地数据
+ * 整理成本模块读写的唯一形式 —— 按用户 id 分键（lib/userStore 的
+ * adoptUserData），订阅缓存按地址分开（migrateSubCache）。两步都可以重复
+ * 执行。
+ *
+ * 整理失败（存储不可用或已满）时数据留在原处，下次登录再试；这里没有需要
+ * 用户处理的事，所以不向上报告。
+ *
+ * @param {{ id: number, username: string }} user
+ */
+export function adoptLocalData(user) {
+  const store = browserStore()
+  if (!store) return
+  try {
+    adoptUserData(store, user)
+    migrateSubCache(store, user.id)
+  } catch { /* 见上：留在原处，下次再试 */ }
 }
 
 export function nodeRoleKey(n) {
@@ -212,8 +212,6 @@ export function mutateNodeRoles(mutate) {
   return task
 }
 
-const LS_LOCAL_ROLES_PREFIX = 'nf-local-roles:'
-
 /* 本地角色是对服务端角色表的“逐节点覆盖”：某个 key 在本地有值，就以本地
    为准，否则沿用服务端的值。本地值可以是 0 —— 它表示“我明确不要这个节点
    的任何角色”，用来盖掉服务端给它标的角色，所以读写都必须保留 0，不能把
@@ -224,22 +222,13 @@ function normalizeOverrides(roles) {
   return out
 }
 
-export function loadLocalRoles(username) {
-  if (!username) return {}
-  try {
-    const raw = localStorage.getItem(LS_LOCAL_ROLES_PREFIX + username)
-    return normalizeOverrides(raw ? JSON.parse(raw) : {})
-  } catch { return {} }
+export function loadLocalRoles(userId) {
+  return normalizeOverrides(readJSON(userId, 'local-roles') || {})
 }
 
-export function saveLocalRoles(username, roles) {
-  if (!username) return
+export function saveLocalRoles(userId, roles) {
   const clean = normalizeOverrides(roles)
-  try {
-    if (Object.keys(clean).length) localStorage.setItem(LS_LOCAL_ROLES_PREFIX + username, JSON.stringify(clean))
-    else localStorage.removeItem(LS_LOCAL_ROLES_PREFIX + username)
-  } catch {}
-  notifyChanged()
+  write(userId, 'local-roles', Object.keys(clean).length ? JSON.stringify(clean) : null)
 }
 
 /* 生效角色 = 本地覆盖优先，否则服务端值。返回的表里只有非 0 的项。 */
@@ -409,8 +398,8 @@ export function tryParseURI(uri) {
    每个节点带 source：'local'（来自本浏览器）或 'admin'（服务端分配）。 */
 
 /* 读出本浏览器里的两类节点。订阅节点按名单顺序把各条订阅的节点接在一起。 */
-export function loadLocalNodes(username) {
-  return { manual: parseURIs(loadLocalURIs(username)), sub: Object.values(loadSubCache(username)).flat() }
+export function loadLocalNodes(userId) {
+  return { manual: parseURIs(loadLocalURIs(userId)), sub: Object.values(loadSubCache(userId)).flat() }
 }
 
 /**
@@ -438,27 +427,38 @@ export function relayFor(rule, landingByKey) {
   return { node, relay_uri: rewrite(rule.entry), relay_uri_v6: rewrite(rule.entry_v6) }
 }
 
+/* 导出成 Clash 配置时，名称就是代理的标识：mihomo 1.19.33 遇到同名代理会
+   拒绝整份配置（proxy … is the duplicate name）。而中转条目的链接是由落地
+   节点的链接改写端点得到的，链接里带的仍是落地节点的名称 —— 同一个节点
+   既是直连节点、又被规则选作出口时，两条就同名。
+
+   所以中转条目导出时不用链接里的名称，用 relayExportName：它只由落地节点、
+   规则、是哪个入口决定，规则页与“我的代理”页复制同一条中转拿到的名称相同，
+   也不会与直连节点自己的名称相同。 */
+
 /**
- * 给一组一起导出的代理条目各取一个名称，互不相同。纯函数。
- *
- * 导出成 Clash 配置时名称就是代理的标识：mihomo 1.19.33 遇到同名代理会拒绝
- * 整份配置（proxy … is the duplicate name）。同名在这里是常态而不是意外 ——
- * 中转条目沿用落地节点的名称，而同一个落地节点可以同时是直连节点、被多条
- * 规则选作出口。
- *
- * 取名规则：名称在这一组里独一无二的条目保持原名；重名的条目加上它的限定
- * （qualifier，说明它是哪一条，如经哪条规则）；仍然撞名时再加序号。结果只
- * 取决于条目的内容与顺序，所以同一份列表每次导出的名称相同。
- *
- * @param {Array<{ name: string, qualifier?: string }>} entries
- * @returns {string[]} 与 entries 一一对应
+ * 中转条目导出用的名称。
+ * @param {string} nodeName 落地节点的名称
+ * @param {string} ruleName 经过的规则
+ * @param {boolean} [v6] 是不是规则的 v6 入口那一条
  */
-export function exportNames(entries) {
-  const count = new Map()
-  for (const e of entries) count.set(e.name, (count.get(e.name) || 0) + 1)
+export function relayExportName(nodeName, ruleName, v6 = false) {
+  return `${nodeName}（经 ${ruleName}${v6 ? ' v6' : ''}）`
+}
+
+/**
+ * 让一组一起导出的名称互不相同：重复出现的名称从第二个起加序号。纯函数，
+ * 结果只取决于名称与顺序，所以同一份列表每次导出的名称相同。
+ *
+ * relayExportName 已经把直连与中转、不同规则分开了，这里兜的是剩下的情形：
+ * 两个节点本来就同名，或两条同名规则指向同一个落地节点。
+ *
+ * @param {string[]} names
+ * @returns {string[]} 与 names 一一对应
+ */
+export function exportNames(names) {
   const taken = new Set()
-  return entries.map((e) => {
-    const base = count.get(e.name) > 1 && e.qualifier ? `${e.name}（${e.qualifier}）` : e.name
+  return names.map((base) => {
     let name = base
     for (let n = 2; taken.has(name); n++) name = `${base} ${n}`
     taken.add(name)
@@ -477,13 +477,13 @@ export function enrichRule(rule, landingByKey) {
 }
 
 /* 往手动 URI 列表末尾追加一条（已存在则不动）。返回是否真的追加了。 */
-export function addLocalURI(username, uri) {
+export function addLocalURI(userId, uri) {
   const line = (uri || '').trim()
-  if (!username || !line) return false
-  const lines = loadLocalURIs(username).split('\n').map(l => l.trim()).filter(Boolean)
+  if (!line) return false
+  const lines = loadLocalURIs(userId).split('\n').map(l => l.trim()).filter(Boolean)
   if (lines.includes(line)) return false
   lines.push(line)
-  saveLocalURIs(username, lines.join('\n'))
+  saveLocalURIs(userId, lines.join('\n'))
   return true
 }
 

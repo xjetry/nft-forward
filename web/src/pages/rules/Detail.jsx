@@ -98,7 +98,7 @@ export default function RulesDetail() {
                   nodes={data.nodes || []}
                   bindings={data.bindings}
                   catalog={catalog}
-                  username={user.username}
+                  userId={user.id}
                   onSaved={reload}
                   onClose={() => setEditing(false)}
                 />

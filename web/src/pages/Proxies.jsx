@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { copyToClipboard } from '../lib/clipboard'
-import { exportNames, hostPortKey, relayFor } from '../lib/landing'
+import { exportNames, hostPortKey, relayExportName, relayFor } from '../lib/landing'
 import { combineResources, mapResource } from '../lib/resource'
 import { useLandingCatalog } from '../lib/useLandingCatalog'
 import { useResource } from '../lib/useResource'
@@ -19,31 +19,31 @@ import { Button, Card, CopyText, Empty, IconCopy, Segmented, SensText, Tag, Text
      入口，链接取 relayFor 把落地节点链接的端点换成入口之后的结果。双栈
      规则有两个入口，各算一条。
 
-   中转条目沿用落地节点的名称，所以列表里重名是常态。exportName 是导出成
-   Clash 配置时用的名称，由 exportNames 对整份列表（不是筛选后的）取，保证
-   互不相同：逐条复制与“复制全部”拿到的是同一个名称。 */
+   exportName 是导出成 Clash 配置时用的名称（口径见 lib/landing.js 的
+   relayExportName）。exportNames 对整份列表（不是筛选后的）兜住剩余的重名，
+   所以逐条复制与“复制全部”拿到的是同一个名称。 */
 function listProxies(rules, catalog) {
   const direct = catalog.direct.map((node) => {
     const address = hostPortKey(node.host, node.port)
-    return { key: `direct:${address}`, kind: 'direct', name: node.name, qualifier: '', protocol: node.protocol, address, uri: node.uri, rule: null }
+    return { key: `direct:${address}`, kind: 'direct', name: node.name, exportBase: node.name, protocol: node.protocol, address, uri: node.uri, rule: null }
   })
   const relay = []
   for (const rule of rules) {
     const hit = relayFor(rule, catalog.landingByKey)
     if (!hit) continue
     const entries = [
-      { slot: 'entry', address: rule.entry, uri: hit.relay_uri, qualifier: `经 ${rule.name}` },
-      { slot: 'entry_v6', address: rule.entry_v6, uri: hit.relay_uri_v6, qualifier: `经 ${rule.name} v6` },
+      { slot: 'entry', address: rule.entry, uri: hit.relay_uri, v6: false },
+      { slot: 'entry_v6', address: rule.entry_v6, uri: hit.relay_uri_v6, v6: true },
     ]
-    for (const { slot, address, uri, qualifier } of entries) {
+    for (const { slot, address, uri, v6 } of entries) {
       // relayFor 在入口不是可解析的地址（规则还没有入口）或链接无法改写时
       // 给出 null：这个入口没有可导入的链接。
       if (!uri) continue
-      relay.push({ key: `relay:${rule.id}:${slot}`, kind: 'relay', name: hit.node.name, qualifier, protocol: hit.node.protocol, address, uri, rule })
+      relay.push({ key: `relay:${rule.id}:${slot}`, kind: 'relay', name: hit.node.name, exportBase: relayExportName(hit.node.name, rule.name, v6), protocol: hit.node.protocol, address, uri, rule })
     }
   }
   const list = [...direct, ...relay]
-  const names = exportNames(list)
+  const names = exportNames(list.map(proxy => proxy.exportBase))
   return list.map((proxy, i) => ({ ...proxy, exportName: names[i] }))
 }
 

@@ -83,7 +83,7 @@ export default function MyRuleDetail() {
                   nodes={data.nodes || []}
                   bindings={data.bindings}
                   catalog={catalog}
-                  username={user.username}
+                  userId={user.id}
                   showRate={!!data.show_rate}
                   onSaved={reload}
                   onClose={() => setEditing(false)}

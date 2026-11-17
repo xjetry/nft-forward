@@ -83,7 +83,7 @@ export function AppLayout() {
         sub: version ? <span className="font-mono">{version}</span> : null,
         mark: <IconRoute />,
       }}
-      nav={navFor(user, hasLocalProxies(user.username))}
+      nav={navFor(user, hasLocalProxies(user.id))}
       footer={(collapsed) => (collapsed ? (
         <>
           {displayToggles}
