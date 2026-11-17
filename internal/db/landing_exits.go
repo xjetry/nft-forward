@@ -10,19 +10,21 @@ import (
 // URI is server-internal (relay-URI rewriting); it never serializes into
 // admin-facing JSON.
 type LandingExit struct {
-	UserID        int64  `json:"user_id"`
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	Name          string `json:"name"`
-	NameOverride  string `json:"name_override"`
-	Protocol      string `json:"protocol"`
-	URI           string `json:"-"`
-	Present       bool   `json:"present"`
-	QuotaBytes    int64  `json:"quota_bytes"`
-	UsedBytes     int64  `json:"used_bytes"`
-	UsedBytesUp   int64  `json:"used_bytes_up"`
-	UsedBytesDown int64  `json:"used_bytes_down"`
-	UpdatedAt     int64  `json:"updated_at"`
+	UserID       int64  `json:"user_id"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	Name         string `json:"name"`
+	NameOverride string `json:"name_override"`
+	Protocol     string `json:"protocol"`
+	URI          string `json:"-"`
+	Present      bool   `json:"present"`
+	QuotaBytes   int64  `json:"quota_bytes"`
+	// UsedBytes 与上下行两列是原始字节（accounting.Raw）：到达这个出口的真实字节，
+	// 只在规则末跳记账，不折算、不加权。出口配额 QuotaBytes 与 UsedBytes 同一单位。
+	UsedBytes     int64 `json:"used_bytes"`
+	UsedBytesUp   int64 `json:"used_bytes_up"`
+	UsedBytesDown int64 `json:"used_bytes_down"`
+	UpdatedAt     int64 `json:"updated_at"`
 }
 
 // LandingExitInput is a deduplicated landing node destined for the
