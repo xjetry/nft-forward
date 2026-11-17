@@ -15,7 +15,7 @@ import { Page, PageHeader, TableBox, Toolbar } from '../../components/page'
 import { useBlur } from '../../components/prefs'
 import { ResourceView } from '../../components/ResourceView'
 import {
-  Badge, Button, Card, CardHeader, CardSection, Checkbox, Empty, Field, IconButton, IconEdit, Input, Menu,
+  Alert, Badge, Button, Card, CardHeader, CardSection, Checkbox, Empty, Field, IconButton, IconEdit, Input, Menu,
   Meter, Modal, ModalActions, Segmented, Select, SensText, Spinner, Stat, Tag, TextLink, Textarea, ToggleChip,
   useAction, useConfirm, useToast,
 } from '../../components/ui'
@@ -661,6 +661,10 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
   const [url, setUrl] = useState(user.landing_sub_url || '')
   const [uris, setUris] = useState(user.landing_uris || '')
   const [urlError, setUrlError] = useState(null)
+  // 最近一次保存时订阅没抓到的原因；null 表示抓到了，或来源里没有订阅。
+  // 来源此时已经保存，所以这不是保存失败，而是一条要一直留在表单旁的提醒：
+  // 下面的节点表还是上一次抓到的结果。
+  const [subError, setSubError] = useState(null)
 
   // 落地节点以 host:port 为身份：出口台账、用户侧的节点目录都按它去重并
   // 保留先出现的那个。这里用同一口径，表格行与行内状态才有唯一而稳定的 key。
@@ -675,7 +679,9 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
     setUrlError(null)
     const d = await api.post(`/users/${userId}/landing`, { landing_sub_url: subURL, landing_uris: uris })
     onNodes(d?.landing_nodes || [])
-    toast('落地节点来源已保存')
+    setSubError(d?.sub_error || null)
+    if (d?.sub_error) toast('来源已保存，但订阅地址没有抓到', 'error')
+    else toast('落地节点来源已保存')
     await exits.reload()
   })
 
@@ -696,6 +702,12 @@ function LandingCard({ userId, user, rawNodes, exits, onNodes }) {
           <Field label="节点 URI" optional hint="每行一条，可以与订阅地址同时使用。">
             <Textarea mono rows={8} className={blurred ? 'blur-sm' : undefined} value={uris} onChange={setUris} placeholder={'vless://…\ntrojan://…'} />
           </Field>
+          {subError && (
+            <Alert tone="warn">
+              <p className="break-all">来源已保存，但订阅地址没有抓到：{subError}</p>
+              <p>订阅里的落地节点仍是上一次抓到的结果，面板会定期重新抓取；地址有误的话请改正后再保存。</p>
+            </Alert>
+          )}
           <div>
             <Button type="submit" loading={save.pending}>保存来源</Button>
           </div>

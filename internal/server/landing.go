@@ -141,36 +141,17 @@ func (s *Server) apiSetUserLanding(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	subURL := strings.TrimSpace(body.LandingSubURL)
-	uris := strings.TrimSpace(body.LandingURIs)
-	if subURL != "" && !strings.HasPrefix(subURL, "http://") && !strings.HasPrefix(subURL, "https://") {
-		jsonErr(w, http.StatusBadRequest, "订阅地址须以 http:// 或 https:// 开头")
+	saved, aerr := s.saveUserLandingSource(u.ID, id, body.LandingSubURL, &body.LandingURIs)
+	if aerr != nil {
+		jsonErr(w, aerr.status, aerr.msg)
 		return
 	}
-	if err := db.SetUserLandingSource(s.DB, id, subURL, uris); err != nil {
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	db.WriteAudit(s.DB, u.ID, "user.set_landing", strconv.FormatInt(id, 10), subURL)
-	// Return a fresh preview so the admin sees what the source resolved to,
-	// and materialize it while the resolution is known-good.
-	target, err := db.GetUserByID(s.DB, id)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "来源已保存，但没能读回用户以刷新落地节点: "+err.Error())
-		return
-	}
-	// The source is saved either way — a subscription can be unreachable now
-	// and fine an hour later — but the admin has to be told when it could not
-	// be fetched: the materialized exits then stay on the previous snapshot,
-	// and the preview below holds the manual URIs only.
-	subError := ""
-	if exits, err := s.resolveLandingExits(target, true); err != nil {
-		subError = err.Error()
-	} else {
-		s.syncLandingExits(target, exits)
-	}
-	nodes := s.landingNodesFor(target, false)
-	jsonOK(w, map[string]any{"ok": true, "landing_nodes": nodes, "sub_error": subError})
+	// A fresh preview, so the admin sees what the source resolved to. When the
+	// subscription could not be fetched (sub_error), the preview holds the
+	// manual URIs only.
+	jsonOK(w, map[string]any{
+		"ok": true, "landing_nodes": s.landingNodesFor(saved.User, false), "sub_error": saved.SubError,
+	})
 }
 
 // apiSubFetch proxies a subscription URL fetch so the browser avoids CORS.

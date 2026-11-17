@@ -394,41 +394,63 @@ func (s *Server) resyncAllNodes() (int, int, error) {
 	return synced, failed, nil
 }
 
-// setUserLandingSubURL updates only the subscription source, preserving the
-// user's manual URIs, then rematerializes the landing-exit ledger while the
-// resolution is known-good. An empty subURL clears the subscription source; the
-// same sync pass sweeps empty ledger rows and flips ledger-bearing ones to
-// present=0. The core writes no ResponseWriter so both the SPA and /api/v1 can
-// render its adminError in their own envelope.
-func (s *Server) setUserLandingSubURL(adminID, userID int64, subURL string) *adminError {
+// landingSave is what saving a user's landing source reports besides success.
+type landingSave struct {
+	// User is the user as stored after the save.
+	User *db.User
+	// SubError says why the subscription could not be fetched; "" when it was
+	// fetched or the source has no subscription.
+	SubError string
+}
+
+// saveUserLandingSource stores a user's landing source — the subscription URL
+// and, when uris is non-nil, the manual URIs (nil leaves them as stored) — and
+// rematerializes the landing-exit ledger from it. An empty subURL clears the
+// subscription; the same sync sweeps empty ledger rows and flips
+// ledger-bearing ones to present=0. Shared by the SPA and /api/v1, which
+// render the result in their own envelopes.
+//
+// A subscription that cannot be fetched does not fail the save: it may be
+// unreachable now and fine an hour later, and the periodic sync pass will pick
+// it up then. But the save is not complete either — the ledger stays on its
+// previous snapshot — so the reason is returned in SubError for the caller to
+// pass on.
+func (s *Server) saveUserLandingSource(adminID, userID int64, subURL string, uris *string) (landingSave, *adminError) {
 	subURL = strings.TrimSpace(subURL)
 	if subURL != "" && !strings.HasPrefix(subURL, "http://") && !strings.HasPrefix(subURL, "https://") {
-		return &adminError{http.StatusBadRequest, codeValidation, "订阅地址须以 http:// 或 https:// 开头"}
+		return landingSave{}, &adminError{http.StatusBadRequest, codeValidation, "订阅地址须以 http:// 或 https:// 开头"}
 	}
 	u, err := db.GetUserByID(s.DB, userID)
-	if err != nil {
-		return &adminError{http.StatusNotFound, codeNotFound, "用户不存在"}
+	if errors.Is(err, sql.ErrNoRows) {
+		return landingSave{}, &adminError{http.StatusNotFound, codeNotFound, "用户不存在"}
 	}
-	// The only setter writes both source columns; pass the manual URIs through
-	// unchanged so a sub-url-only update never clobbers them.
-	if err := db.SetUserLandingSource(s.DB, userID, subURL, u.LandingURIs); err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	if err != nil {
+		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
+	}
+	// The only setter writes both source columns; when the caller does not
+	// supply the manual URIs, the stored ones are written back unchanged.
+	storeURIs := u.LandingURIs
+	if uris != nil {
+		storeURIs = strings.TrimSpace(*uris)
+	}
+	if err := db.SetUserLandingSource(s.DB, userID, subURL, storeURIs); err != nil {
+		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, err.Error()}
 	}
 	db.WriteAudit(s.DB, adminID, "user.set_landing", strconv.FormatInt(userID, 10), subURL)
 	// Re-read before resolving: SyncUserLandingExits discards results whose
 	// source snapshot no longer matches the users row, so the freshly written
-	// values must flow into the sync. A failed resolve keeps the old snapshot on
-	// purpose.
+	// values must flow into the sync.
 	target, err := db.GetUserByID(s.DB, userID)
 	if err != nil {
-		return &adminError{http.StatusInternalServerError, codeInternal, "订阅地址已保存，但没能读回用户以刷新落地节点: " + err.Error()}
+		return landingSave{}, &adminError{http.StatusInternalServerError, codeInternal, "来源已保存，但没能读回用户以刷新落地节点: " + err.Error()}
 	}
+	saved := landingSave{User: target}
 	if nodes, err := s.resolveLandingExits(target, true); err != nil {
-		log.Printf("landing: resolve exits for user %d after setting its subscription: %v", userID, err)
+		saved.SubError = err.Error()
 	} else {
 		s.syncLandingExits(target, nodes)
 	}
-	return nil
+	return saved, nil
 }
 
 // setUserEnabled sets the user's enabled state (declarative replacement for the
