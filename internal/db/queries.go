@@ -192,8 +192,10 @@ type RuleHop struct {
 	Comment   string `json:"comment"`
 	// FoldedBytes 是这一跳的折算流量（rule_hops.total_bytes）：按这一跳所在物理节点
 	// 的计费方向折算，双向节点取上下行之和，单向节点取较大的一侧；不乘倍率与费率。
-	// 每一跳都是这个单位，入口跳也一样。RegenerateRule 会把一条规则的跳整体删除重建，
-	// 所以它累计的是这一行建成或属主上次重置以来的流量。
+	// 每一跳都是这个单位，入口跳也一样。它记在“规则的第几跳、哪台物理节点”这一格上：
+	// RegenerateRule 重建跳行时，位置与节点都没变的跳把这个数带到新行上，所以它累计的
+	// 是这台节点换到这个位置以来、或属主上次重置（accounting.zeroUser）以来的流量，
+	// 取两者中较晚的那个起点。
 	FoldedBytes int64 `json:"total_bytes"`
 }
 

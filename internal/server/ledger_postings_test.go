@@ -379,6 +379,80 @@ func TestRuleTrafficSurvivesHeaderEditAndRegeneration(t *testing.T) {
 	check("重建链")
 }
 
+// 改规则之后，规则详情里没动的跳的流量不归零，之后上报的计数接着往上加；换了节点的
+// 那个位置从 0 起。
+//
+// 走的是管理员改规则的接口与规则详情接口：每次改规则，哪怕只改名，rulechange.Update
+// 都会调 db.RegenerateRule 把跳行删除重建。
+func TestHopTrafficSurvivesARuleEdit(t *testing.T) {
+	f := newLedgerFixture(t)
+	hopsOf := func(nodes ...int64) []map[string]any {
+		out := make([]map[string]any, len(nodes))
+		for i, n := range nodes {
+			out[i] = map[string]any{"node_id": n, "mode": "kernel"}
+		}
+		return out
+	}
+	rid := adminCreateRuleID(t, f.s, f.adm, map[string]any{
+		"name": "kept", "proto": "tcp", "exit": "4.4.4.4:443", "hops": hopsOf(f.e1, f.m2),
+	})
+	path := "/api/rules/" + strconv.FormatInt(rid, 10)
+
+	type hop struct {
+		NodeID     int64 `json:"node_id"`
+		ListenPort int   `json:"listen_port"`
+		TotalBytes int64 `json:"total_bytes"`
+	}
+	detail := func() []hop {
+		t.Helper()
+		var body struct {
+			Hops []hop `json:"hops"`
+		}
+		f.getJSON(t, path, &body)
+		return body.Hops
+	}
+	// report 让规则当前的每一跳各报一批：E1、M2、P1 都是双向节点，折算流量 = 上行 + 下行。
+	report := func() {
+		t.Helper()
+		for i, h := range detail() {
+			f.s.Hub.applyCounters(h.NodeID, []wsproto.CounterSample{
+				{Proto: "tcp", ListenPort: h.ListenPort, BytesUp: int64(10 * (i + 1)), BytesDown: int64(20 * (i + 1))},
+			})
+		}
+	}
+	want := func(after string, nodes, bytes []int64) {
+		t.Helper()
+		got := detail()
+		if len(got) != len(nodes) {
+			t.Fatalf("%s：%d 跳，期望 %d", after, len(got), len(nodes))
+		}
+		for i := range got {
+			if got[i].NodeID != nodes[i] || got[i].TotalBytes != bytes[i] {
+				t.Errorf("%s：第 %d 跳是节点 %d、流量 %d，期望节点 %d、流量 %d", after, i, got[i].NodeID, got[i].TotalBytes, nodes[i], bytes[i])
+			}
+		}
+	}
+
+	report()
+	want("第一批计数", []int64{f.e1, f.m2}, []int64{30, 60})
+
+	adminJSON(t, f.s, f.adm, "PUT", path, map[string]any{
+		"name": "kept-renamed", "proto": "tcp", "exit": "4.4.4.4:443", "hops": hopsOf(f.e1, f.m2),
+	})
+	want("只改名", []int64{f.e1, f.m2}, []int64{30, 60})
+
+	report()
+	want("改名后的第二批计数", []int64{f.e1, f.m2}, []int64{60, 120})
+
+	adminJSON(t, f.s, f.adm, "PUT", path, map[string]any{
+		"name": "kept-renamed", "proto": "tcp", "exit": "4.4.4.4:443", "hops": hopsOf(f.e1, f.p1),
+	})
+	want("第二跳换成另一台节点", []int64{f.e1, f.p1}, []int64{60, 0})
+
+	report()
+	want("换节点后的第三批计数", []int64{f.e1, f.p1}, []int64{90, 60})
+}
+
 // 配额回调按属主触发，一批里一个属主只触发一次：同一台物理节点上的两跳分属两个
 // 逻辑段（单点 N 与只含 N 的组合 K），这一批记了他两本授权账、一本落地出口账，回调
 // 仍只来一次。

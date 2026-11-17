@@ -663,10 +663,23 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 	prevPort := map[int64]int{}
 	affected := map[int64]bool{}
 	prevHopComment := map[int64]string{}
+	// keptBytes[i] 是新链第 i 跳从旧行带过来的逐跳流量（rule_hops.total_bytes）。
+	//
+	// 这个数记在“规则的第几跳、哪台物理节点”这一格上，而下面是把这条规则的跳行整体
+	// 删除再插入：不显式带过去，改一次规则名每一跳都会从 0 起。旧行与新行的位置、节点
+	// 都相同才带——位置上换了节点、或节点挪了位置，都是另一格，从 0 起。端口、模式、
+	// 下一跳地址、所属逻辑段变了不算换格。
+	//
+	// 一个位置上至多一行旧行：跳行只在本函数里插入，位置取 0..len-1，插入前先删光
+	// 这条规则的旧行。
+	keptBytes := make([]int64, len(rs))
 	for _, h := range prev {
 		prevPort[h.NodeID] = h.ListenPort
 		affected[h.NodeID] = true
 		prevHopComment[h.NodeID] = h.Comment
+		if h.Position >= 0 && h.Position < len(rs) && rs[h.Position].nodeID == h.NodeID {
+			keptBytes[h.Position] = h.FoldedBytes
+		}
 	}
 
 	if _, err := tx.Exec(`DELETE FROM rule_hops WHERE rule_id=?`, r.ID); err != nil {
@@ -724,8 +737,8 @@ func RegenerateRule(tx DBTX, r *Rule, hops []HopInput, avoid map[int64]int) (str
 		if fwdComment == "" {
 			fwdComment = fmt.Sprintf("链路 %s · 第%d跳", r.Name, i+1)
 		}
-		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,via_node_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment, h.viaNodeID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO rule_hops(rule_id,position,node_id,proto,listen_port,target_host,target_port,mode,comment,via_node_id,total_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			r.ID, i, h.nodeID, r.Proto, ports[i], targetHost, targetPort, h.mode, fwdComment, h.viaNodeID, keptBytes[i]); err != nil {
 			return "", "", nil, err
 		}
 		affected[h.nodeID] = true
